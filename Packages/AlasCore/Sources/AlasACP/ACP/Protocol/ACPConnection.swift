@@ -75,6 +75,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let sessionIndex: ACPSessionIndexSupport?
     /// Where the adapter can cut a fork, when it advertised `_meta.forkPoint`.
     public let forkPoint: ACPForkPointCapability?
+    /// Exact git patches on edits, when it advertised `_meta.diffPatch`.
+    public let diffPatch: ACPDiffPatchCapability?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -96,7 +98,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         supportsSystemPromptAppend: Bool = false,
         systemPromptAppendMaxBytes: Int? = nil,
         sessionIndex: ACPSessionIndexSupport? = nil,
-        forkPoint: ACPForkPointCapability? = nil
+        forkPoint: ACPForkPointCapability? = nil,
+        diffPatch: ACPDiffPatchCapability? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -116,6 +119,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
         self.sessionIndex = sessionIndex
         self.forkPoint = forkPoint
+        self.diffPatch = diffPatch
     }
 }
 
@@ -343,7 +347,8 @@ public final class ACPConnection: @unchecked Sendable {
             contextUsage: true,
             settleAtResult: true,
             codexHooks: codexHooksReviewEnabled ? .init() : nil,
-            forkPoint: .init()
+            forkPoint: .init(),
+            diffPatch: .init()
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
@@ -392,7 +397,8 @@ public final class ACPConnection: @unchecked Sendable {
             supportsSystemPromptAppend: result.supportsSystemPromptAppend,
             systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes,
             sessionIndex: result.meta?.sessionIndex?.support,
-            forkPoint: result.meta?.forkPoint?.capability
+            forkPoint: result.meta?.forkPoint?.capability,
+            diffPatch: result.meta?.diffPatch?.capability
         )
     }
 

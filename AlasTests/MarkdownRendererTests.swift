@@ -4,7 +4,10 @@ import AppKit
 
 @MainActor
 struct MarkdownRendererTests {
-    static func render(_ source: String) throws -> MarkdownRenderResult {
+    static func render(
+        _ source: String,
+        typography: ACPChatTypography = .default
+    ) throws -> MarkdownRenderResult {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let parsed = MarkdownParser.parse(source)
         return MarkdownRenderer().render(
@@ -13,8 +16,15 @@ struct MarkdownRendererTests {
             theme: theme,
             monospacedFontFamily: "SF Mono",
             monospacedFontSize: 13,
-            baseDirectory: URL(fileURLWithPath: "/tmp")
+            baseDirectory: URL(fileURLWithPath: "/tmp"),
+            typography: typography
         )
+    }
+
+    private static func paragraphStyle(of text: String, in s: NSAttributedString) -> NSParagraphStyle? {
+        let range = (s.string as NSString).range(of: text)
+        guard range.location != NSNotFound else { return nil }
+        return s.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
     }
 
     @Test func rendersPlainParagraph() throws {
@@ -52,6 +62,30 @@ struct MarkdownRendererTests {
         let range = (s.string as NSString).range(of: "code")
         let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
         #expect(font?.isFixedPitch == true)
+    }
+
+    @Test func proseAndInlineCodeFollowTypographyNotEditorSize() throws {
+        let typography = ACPChatTypography(fontFamily: "", fontSize: 18)
+        let s = try MarkdownRendererTests.render("text `code`", typography: typography).attributedString
+        let ns = s.string as NSString
+        let body = s.attribute(.font, at: ns.range(of: "text").location, effectiveRange: nil) as? NSFont
+        let code = s.attribute(.font, at: ns.range(of: "code").location, effectiveRange: nil) as? NSFont
+        #expect(body?.pointSize == typography.paragraphSize)
+        #expect(code?.pointSize == typography.codeSize)
+    }
+
+    @Test func headingGapIsTheSameAfterAListAsAfterAParagraph() throws {
+        func gaps(after preceding: String) throws -> (above: CGFloat, below: CGFloat) {
+            let s = try MarkdownRendererTests.render("\(preceding)\n\n## Next\n\nbody").attributedString
+            let before = try #require(MarkdownRendererTests.paragraphStyle(of: "before", in: s))
+            let heading = try #require(MarkdownRendererTests.paragraphStyle(of: "Next", in: s))
+            return (before.paragraphSpacing + heading.paragraphSpacingBefore, heading.paragraphSpacing)
+        }
+        let afterList = try gaps(after: "- a\n- before")
+        let afterParagraph = try gaps(after: "before")
+        #expect(afterList.above == afterParagraph.above)
+        // A heading sits closer to the section it opens than to the one before.
+        #expect(afterParagraph.above > afterParagraph.below)
     }
 
     @Test func consumesSubscriptHTMLTags() throws {
@@ -148,12 +182,16 @@ struct MarkdownRendererTests {
     }
 
     @Test func rendersNestedUnorderedList() throws {
-        let r = try MarkdownRendererTests.render("- a\n  - b")
-        let s = r.attributedString.string
-        // Both items should appear with bullets. Nesting indentation is added
-        // via "  " before deeper bullets; checking presence of both is enough.
-        #expect(s.contains("• a"))
-        #expect(s.contains("• b"))
+        let r = try MarkdownRendererTests.render("- a long parent\n  - b")
+        let s = r.attributedString
+        #expect(s.string.contains("• a"))
+        #expect(s.string.contains("• b"))
+        // The nested bullet starts where the parent's text does, and the
+        // parent's wrapped lines hang under its text, not its bullet.
+        let parent = try #require(MarkdownRendererTests.paragraphStyle(of: "a long parent", in: s))
+        let child = try #require(MarkdownRendererTests.paragraphStyle(of: "b", in: s))
+        #expect(parent.headIndent > parent.firstLineHeadIndent)
+        #expect(child.firstLineHeadIndent == parent.headIndent)
     }
 
     @Test func blockquotePreservesLinkAttributes() throws {

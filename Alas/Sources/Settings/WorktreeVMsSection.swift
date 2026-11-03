@@ -146,7 +146,7 @@ struct WorktreeVMsSection: View {
     private func title(of bundle: VMBundleSummary) -> String {
         switch (bundle.kind, bundle.guest) {
         case (.golden, .macOS):
-            return "macOS base image \(bundle.name)"
+            return bundle.osVersion.map { "macOS base image \($0) (\(bundle.name))" } ?? "macOS base image \(bundle.name)"
         case (.golden, .linux):
             return bundle.name == LinuxGoldenImage.serial
                 ? "Ubuntu base image \(LinuxGoldenImage.release) · \(bundle.name)"

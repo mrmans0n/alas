@@ -25,8 +25,17 @@ struct ACPPermissionCardContent: Equatable {
     let reason: String?
     let defaultToNo: Bool
     let options: [Option]
+    /// The proposed change, shown for review only: it never decides the
+    /// options or the default answer.
+    let diffSections: [ACPToolCallDiffSection]
 
-    init(params: ACPPermissionRequestParams) {
+    /// `existingToolCall` is the transcript row with the request's
+    /// `toolCallId`; its diffs preview a request that carries none (Codex).
+    init(
+        params: ACPPermissionRequestParams,
+        existingToolCall: ACPMessage.ToolCall? = nil,
+        worktreeRoot: String? = nil
+    ) {
         let presentation = ACPPermissionPresentation(metadata: params.metadata)
         var summary: String?
         for block in params.toolCall.content ?? [] {
@@ -45,7 +54,12 @@ struct ACPPermissionCardContent: Equatable {
             defaultToNo: presentation?.defaultToNo ?? false,
             options: params.options.map {
                 Option(optionId: $0.optionId, name: $0.name, kind: $0.kind, description: $0.presentationDescription)
-            }
+            },
+            diffSections: ACPToolCallPresentation.diffSections(
+                ACPToolCallDiff.permissionPreview(request: params.toolCall, existingRow: existingToolCall),
+                status: "pending",
+                worktreeRoot: worktreeRoot
+            )
         )
     }
 
@@ -73,7 +87,8 @@ struct ACPPermissionCardContent: Equatable {
 
     private init(
         heading: String?, kind: String?, mcpServerName: String?, title: String,
-        summary: String?, reason: String?, defaultToNo: Bool, options: [Option]
+        summary: String?, reason: String?, defaultToNo: Bool, options: [Option],
+        diffSections: [ACPToolCallDiffSection] = []
     ) {
         self.heading = Self.nonEmpty(heading)
         self.kind = Self.nonEmpty(kind)
@@ -85,6 +100,7 @@ struct ACPPermissionCardContent: Equatable {
         self.options = options.map {
             Option(optionId: $0.optionId, name: $0.name, kind: $0.kind, description: Self.nonEmpty($0.description))
         }
+        self.diffSections = diffSections
     }
 
     private static func nonEmpty(_ value: String?) -> String? {
@@ -100,10 +116,17 @@ struct ACPPermissionPrompt: View {
     @ObservedObject var session: ACPSession
     let policy: ACPPermissionPolicy
     let scopeKey: String
+    var worktreeRoot: String? = nil
+    @State private var contentCache = ACPPermissionCardContentCache()
 
     var body: some View {
         if let pending = session.transcript.pendingPermission {
-            ACPPermissionCard(content: .init(params: pending.params)) { option in
+            let existing = session.toolCall(
+                id: pending.params.toolCall.toolCallId, sessionId: pending.params.sessionId)
+            ACPPermissionCard(
+                content: contentCache.content(
+                    params: pending.params, existingToolCall: existing, worktreeRoot: worktreeRoot)
+            ) { option in
                 handle(option: option, scopeKey: scopeKey)
             }
         }
@@ -125,6 +148,31 @@ struct ACPPermissionPrompt: View {
                 persistScope: persistScope
             )
         }
+    }
+}
+
+/// Keeps the last card content so a session update that leaves the request,
+/// the row's diffs and the root alone does not re-parse the previewed patches.
+private final class ACPPermissionCardContentCache {
+    private struct Key: Equatable {
+        let params: ACPPermissionRequestParams
+        let rowDiffs: [ACPToolCallDiff]?
+        let worktreeRoot: String?
+    }
+
+    private var key: Key?
+    private var cached: ACPPermissionCardContent?
+
+    func content(
+        params: ACPPermissionRequestParams, existingToolCall: ACPMessage.ToolCall?, worktreeRoot: String?
+    ) -> ACPPermissionCardContent {
+        let key = Key(params: params, rowDiffs: existingToolCall?.diffs, worktreeRoot: worktreeRoot)
+        if self.key == key, let cached { return cached }
+        let content = ACPPermissionCardContent(
+            params: params, existingToolCall: existingToolCall, worktreeRoot: worktreeRoot)
+        self.key = key
+        cached = content
+        return content
     }
 }
 
@@ -221,6 +269,12 @@ struct ACPPermissionCard: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            ForEach(content.diffSections) { section in
+                ACPToolCallDiffSectionView(section: section, collapsedMaxLines: 15)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5))
+            }
             if let summary = content.summary {
                 Text(summary)
                     .font(.system(size: 11.5, design: .monospaced))

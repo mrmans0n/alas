@@ -21,6 +21,7 @@ struct ACPToolCallCard: View {
     @State private var expanded = false
     @State private var expandedContent: String? = nil
     @State private var expandedSyntax = ACPToolCallSyntaxCache()
+    @State private var diffSectionCache = ACPToolCallDiffSectionCache()
     @State private var loadingContentToolCallId: String? = nil
     @State private var isHovering = false
     @Environment(\.theme) private var theme
@@ -190,7 +191,15 @@ struct ACPToolCallCard: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(theme.color("bg-0").opacity(0.55))
             } else {
-                if !displayContent.isEmpty {
+                if !toolCall.diffs.isEmpty {
+                    // Read only here, so a collapsed card never parses its patches.
+                    ForEach(diffSectionCache.sections(
+                        for: toolCall.diffs, status: toolCall.status, worktreeRoot: trustedImageRoot?.path
+                    )) { section in
+                        ACPToolCallDiffSectionView(section: section)
+                    }
+                }
+                if ACPToolCallPresentation.showsContent(displayContent, alongside: toolCall.diffs) {
                     ACPSyntaxHighlightedText(
                         text: displayContent,
                         explicitLanguage: displayContentLanguage,
@@ -218,7 +227,9 @@ struct ACPToolCallCard: View {
     }
 
     private var hasExpandedOutput: Bool {
-        !displayContent.isEmpty || !toolCall.assets.isEmpty || !toolCall.terminalIds.isEmpty
+        // One section per diff: a rejected edit's preview lives only in `diffs`.
+        !toolCall.diffs.isEmpty || !displayContent.isEmpty || !toolCall.assets.isEmpty
+            || !toolCall.terminalIds.isEmpty
     }
 
     private var assetBody: some View {
@@ -262,6 +273,82 @@ struct ACPToolCallCard: View {
 
     private var presentation: ACPToolCallPresentation {
         ACPToolCallPresentation.resolve(toolCall)
+    }
+}
+
+/// The last sections built for a tool call's diffs, so an expanded card does
+/// not re-parse its patches on every render.
+private final class ACPToolCallDiffSectionCache {
+    private struct Key: Equatable {
+        let diffs: [ACPToolCallDiff]
+        let status: String
+        let worktreeRoot: String?
+    }
+
+    private var key: Key?
+    private var cached: [ACPToolCallDiffSection] = []
+
+    func sections(for diffs: [ACPToolCallDiff], status: String, worktreeRoot: String?) -> [ACPToolCallDiffSection] {
+        let key = Key(diffs: diffs, status: status, worktreeRoot: worktreeRoot)
+        if self.key == key { return cached }
+        cached = ACPToolCallPresentation.diffSections(diffs, status: status, worktreeRoot: worktreeRoot)
+        self.key = key
+        return cached
+    }
+}
+
+/// One exact patch in a tool or approval card: a `<Label> · <path>` header
+/// with the counts, then the hunks. Display only; "Show all" expands in place
+/// because there is no file to open.
+struct ACPToolCallDiffSectionView: View {
+    let section: ACPToolCallDiffSection
+    var collapsedMaxLines = 40
+    @State private var showsAll = false
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            switch section.body {
+            case .hunks(let diff):
+                InlineDiffView(
+                    diff: diff,
+                    relativePath: section.path,
+                    maxLines: showsAll ? .max : collapsedMaxLines,
+                    onShowAll: { showsAll = true }
+                )
+            case .unavailable:
+                Text("Change unavailable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .background(theme.color("bg-0").opacity(0.55))
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text(verbatim: "\(section.label.rawValue) · \(section.path)")
+                .foregroundStyle(theme.color("fg-dim"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let note = section.changeNote {
+                Text(verbatim: note)
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 6)
+            if case .hunks = section.body {
+                Text(verbatim: "+\(section.added)").foregroundStyle(theme.color("add"))
+                Text(verbatim: "−\(section.removed)").foregroundStyle(theme.color("del"))
+            }
+        }
+        .font(.system(size: 11, design: .monospaced))
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(theme.color("bg-1"))
     }
 }
 

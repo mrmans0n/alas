@@ -247,3 +247,95 @@ private extension ACPMessage.ToolCallAsset {
             || name.map(imagePath) == true
     }
 }
+
+/// One exact patch as a tool or approval card shows it.
+public struct ACPToolCallDiffSection: Equatable, Identifiable, Sendable {
+    public enum Label: String, Sendable { case proposed = "Proposed", written = "Written" }
+    public enum Body: Equatable, Sendable { case hunks(ParsedDiff), unavailable }
+
+    /// The diff's index in the tool call's `diffs`.
+    public let id: Int
+    public let label: Label
+    /// Relative to the worktree when the file is under it, else as sent.
+    public let path: String
+    /// The old name, displayed like `path`, when the patch renames the file.
+    public let renamedFrom: String?
+    public let change: GitFilePatch.Change?
+    public let added: Int
+    public let removed: Int
+    public let body: Body
+
+    /// What the header says about the file besides its path: "new file",
+    /// "deleted" or "renamed from <old>"; nil for an edit in place.
+    public var changeNote: String? {
+        switch change {
+        case .added: "new file"
+        case .deleted: "deleted"
+        case .renamed: renamedFrom.map { "renamed from \($0)" }
+        case .modified, nil: nil
+        }
+    }
+
+    public init(
+        id: Int, label: Label, path: String, renamedFrom: String?, change: GitFilePatch.Change?,
+        added: Int, removed: Int, body: Body
+    ) {
+        self.id = id
+        self.label = label
+        self.path = path
+        self.renamedFrom = renamedFrom
+        self.change = change
+        self.added = added
+        self.removed = removed
+        self.body = body
+    }
+}
+
+extension ACPToolCallPresentation {
+    /// The sections a card draws for `diffs`, one per diff, in order. A
+    /// section is `.written` only for a tool-call patch on a completed call;
+    /// a started, failed or rejected call and every approval preview show
+    /// `.proposed`. An invalid diff shows `.unavailable` with no counts.
+    public static func diffSections(
+        _ diffs: [ACPToolCallDiff], status: String, worktreeRoot: String?
+    ) -> [ACPToolCallDiffSection] {
+        diffs.enumerated().map { index, diff in
+            let label: ACPToolCallDiffSection.Label =
+                diff.source == .toolCall && status == "completed" ? .written : .proposed
+            let path = displayPath(diff.path, worktreeRoot: worktreeRoot)
+            guard let file = diff.parsed() else {
+                return ACPToolCallDiffSection(
+                    id: index, label: label, path: path, renamedFrom: nil, change: nil,
+                    added: 0, removed: 0, body: .unavailable)
+            }
+            // Header names drop the path's leading slash; restore it so the
+            // old name relativizes like the block path.
+            let renamedFrom = file.change == .renamed ? file.oldPath.map { oldPath in
+                displayPath(diff.path.hasPrefix("/") ? "/" + oldPath : oldPath, worktreeRoot: worktreeRoot)
+            } : nil
+            return ACPToolCallDiffSection(
+                id: index, label: label, path: path, renamedFrom: renamedFrom, change: file.change,
+                added: file.added, removed: file.removed, body: .hunks(file.diff))
+        }
+    }
+
+    /// Whether a card that draws `diffs` as sections must also draw the
+    /// flattened `content`: true when the content has parts the patches do
+    /// not account for, such as a standard diff, text, or a fallback block
+    /// (an approved Claude edit whose final patch could not be built, or one
+    /// file of a Codex change). Content that is exactly the patches' own
+    /// flattened text, or empty, is covered by the sections.
+    public static func showsContent(_ content: String, alongside diffs: [ACPToolCallDiff]) -> Bool {
+        guard !content.isEmpty else { return false }
+        return content != diffs.map(\.flattenedText).joined(separator: "\n")
+    }
+
+    private static func displayPath(_ path: String, worktreeRoot: String?) -> String {
+        guard let worktreeRoot else { return path }
+        var root = worktreeRoot
+        while root.count > 1, root.hasSuffix("/") { root.removeLast() }
+        let prefix = root + "/"
+        guard root != "/", path.hasPrefix(prefix), path.count > prefix.count else { return path }
+        return String(path.dropFirst(prefix.count))
+    }
+}

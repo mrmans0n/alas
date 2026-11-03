@@ -184,6 +184,9 @@ final class WorktreeVMManager {
     private(set) var helpersNeedingUpdate: Set<String> = []
     /// VMs whose helper `updateHelper` is reinstalling.
     private(set) var updatingHelpers: Set<String> = []
+    /// Running Linux VMs whose installed helper was last found unlike the one this build shares.
+    /// Kept until a check compares them again, the helper is updated, or the VM stops.
+    @ObservationIgnored private var linuxHelpersDiffering: Set<String> = []
     /// Why the last helper update of a VM failed, until the next one or dismissal.
     private(set) var helperUpdateFailures: [String: String] = [:]
 
@@ -1163,9 +1166,18 @@ final class WorktreeVMManager {
 
     /// Records what the guest helper of a VM running here answered: missing
     /// or unresponsive, or of another protocol revision, offers an update.
-    func noteHelperCheck(_ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>) {
+    /// `linuxHelperDiffers` is nil from a check that didn't compare the
+    /// installed Linux helper, which keeps the last comparison.
+    func noteHelperCheck(
+        _ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>, linuxHelperDiffers: Bool? = nil
+    ) {
         guard runningVMs[id] != nil else { return }
-        if Self.helperNeedsUpdate(result, guest: VMIdentity.parse(recordID: id).guest) {
+        if let linuxHelperDiffers {
+            if linuxHelperDiffers { linuxHelpersDiffering.insert(id) } else { linuxHelpersDiffering.remove(id) }
+        }
+        let guest = VMIdentity.parse(recordID: id).guest
+        let differs = linuxHelpersDiffering.contains(id)
+        if Self.helperNeedsUpdate(result, guest: guest, linuxHelperDiffers: differs) {
             helpersNeedingUpdate.insert(id)
         } else {
             helpersNeedingUpdate.remove(id)
@@ -1174,20 +1186,29 @@ final class WorktreeVMManager {
 
     /// Whether a helper check result calls for Update helper. A stopped VM
     /// or a cancelled check says nothing about the helper. A Linux helper is
-    /// updated through itself, so only one that answers and can't do
-    /// computer use yet calls for it.
+    /// updated through itself, so only one that answers calls for it: when
+    /// it isn't the helper this build shares (`linuxHelperDiffers`), or
+    /// can't do computer use yet.
     nonisolated static func helperNeedsUpdate(
-        _ result: Result<VMGuestHello, VMGuestClient.Failure>, guest: VMGuestOS = .macOS
+        _ result: Result<VMGuestHello, VMGuestClient.Failure>, guest: VMGuestOS = .macOS,
+        linuxHelperDiffers: Bool = false
     ) -> Bool {
         if guest == .linux {
             guard case .success(let hello) = result, hello.protocolRevision == VMGuestProtocol.revision else { return false }
-            return VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .outdated
+            return linuxHelperDiffers || VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .outdated
         }
         return switch result {
         case .success(let hello): hello.protocolRevision != VMGuestProtocol.revision
         case .failure(.helperMissing), .failure(.helperUnresponsive), .failure(.outdated): true
         case .failure: false
         }
+    }
+
+    /// Whether the Linux helper behind `client` isn't the one this build shares. Only a check that
+    /// ran and found them different says so.
+    func linuxHelperDiffers(_ client: VMGuestClient) async -> Bool {
+        let result = try? await client.run(LinuxGuestSetup.helperDiffersCommand, timeoutSeconds: 10)
+        return result?.exitCode == 1
     }
 
     func dismissHelperUpdateFailure(_ id: String) {
@@ -1232,6 +1253,7 @@ final class WorktreeVMManager {
         switch outcome {
         case .updated:
             helpersNeedingUpdate.remove(id)
+            linuxHelpersDiffering.remove(id)
         case .failed(let reason):
             helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Restart the VM and try again."
         }
@@ -1699,7 +1721,8 @@ final class WorktreeVMManager {
             let build = golden.url.lastPathComponent
             let id = Self.goldenIDPrefix + build
             bundles.append(VMBundleSummary(
-                id: id, kind: .golden, guest: .macOS, name: build, worktreeID: nil, url: golden.url,
+                id: id, kind: .golden, guest: .macOS, name: build,
+                osVersion: GoldenImageInstaller.osVersion(of: golden.url), worktreeID: nil, url: golden.url,
                 runningHere: isBusyHere(id), runningElsewhere: elsewhere(records.first { $0.id == id }?.runOwner),
                 isOrphan: false, leftovers: [], clones: clones(of: build)))
         }
@@ -1969,6 +1992,7 @@ final class WorktreeVMManager {
 
     private func didStop(_ id: String) {
         helpersNeedingUpdate.remove(id)
+        linuxHelpersDiffering.remove(id)
         startedAt.removeValue(forKey: id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }

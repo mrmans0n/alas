@@ -2880,20 +2880,180 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("diff content flattens to a readable text representation")
-    func toolCallUpdateDiff() async {
+    /// A git patch of `/repo/a.txt` replacing line 2, `old` with `new`.
+    nonisolated static func gitPatch(
+        _ path: String = "repo/a.txt", index: Bool = false, eol: String = "\n"
+    ) -> String {
+        "diff --git a/\(path) b/\(path)\n" + (index ? "index 1111111..2222222 100644\n" : "")
+            + "--- a/\(path)\n+++ b/\(path)\n@@ -2 +2 @@\n-old\(eol)+new\(eol)"
+    }
+
+    nonisolated static func patchItem(_ text: String, negotiated: Bool = true) -> ACPToolCallContent {
+        .diff(path: "/repo/a.txt", oldText: nil, newText: "", kind: nil, diffStats: nil,
+              patch: ACPDiffPatchPayload(version: 1, format: "git_patch", text: text, negotiated: negotiated))
+    }
+
+    struct PatchFlattenCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let items: [ACPToolCallContent]
+        let content: String
+        /// One entry per patch-bearing block; nil when valid.
+        let failures: [ACPToolCallDiff.Failure?]
+        /// Whether the card draws the text body as well as any diff sections.
+        let showsContent: Bool
+        var testDescription: String { name }
+    }
+
+    nonisolated static let patchFlattenCases: [PatchFlattenCase] = [
+        .init(name: "standard",
+              items: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n", kind: nil, diffStats: nil)],
+              content: "--- a.swift\n-let x = 1\n+let x = 2", failures: [], showsContent: true),
+        .init(name: "valid", items: [patchItem(gitPatch())], content: "@@ -2 +2 @@\n-old\n+new", failures: [nil],
+              showsContent: false),
+        .init(name: "crlf", items: [patchItem(gitPatch(eol: "\r\n"))],
+              content: "@@ -2 +2 @@\n-old\r\n+new\r", failures: [nil], showsContent: false),
+        .init(name: "unnegotiated", items: [patchItem(gitPatch(), negotiated: false)],
+              content: "Change unavailable: /repo/a.txt", failures: [.notNegotiated], showsContent: false),
+        // One file of a change fell back to a standard block: it must stay visible.
+        .init(name: "patchAndStandard",
+              items: [patchItem(gitPatch()),
+                      .diff(path: "/repo/b.txt", oldText: nil, newText: "b\n", kind: nil, diffStats: nil)],
+              content: "@@ -2 +2 @@\n-old\n+new\n--- /repo/b.txt\n+b", failures: [nil], showsContent: true),
+    ]
+
+    @Test("diff content flattens to text, and a patch block to its hunks or an unavailable notice",
+          arguments: patchFlattenCases)
+    func patchContentFlattens(_ row: PatchFlattenCase) throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.apply(.toolCall(.init(
             toolCallId: "tc-2", title: "edit", kind: "edit", status: "in_progress",
             content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-2", status: "completed",
-            content: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n", kind: nil, diffStats: nil)],
-            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(toolCallId: "tc-2", status: "completed", content: row.items)))
         #expect(session.transcript.messages.count == 1)
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "--- a.swift\n-let x = 1\n+let x = 2")
-        } else { Issue.record("expected toolCall message") }
+        let tc = try #require(session.toolCall(id: "tc-2", sessionId: nil))
+        #expect(tc.content == row.content)
+        #expect(!tc.content.contains("--- /repo/a.txt"))
+        #expect(tc.diffs.map(\.failure) == row.failures)
+        #expect(tc.diffs.allSatisfy { $0.source == .toolCall })
+        #expect(ACPToolCallPresentation.showsContent(tc.content, alongside: tc.diffs) == row.showsContent)
+        if row.failures == [nil] {
+            guard case .diff(_, _, _, _, _, let payload?) = row.items.first else { return }
+            #expect(tc.diffs.first?.patch == payload.text)
+        }
+    }
+
+    @Test("a changed patch replaces the stored diffs even when the flattened text is the same")
+    func changedPatchReplacesDiffs() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(toolCallId: "tc", title: "edit", kind: "edit", status: "in_progress")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc", status: "in_progress", content: [Self.patchItem(Self.gitPatch())])))
+        let written = Self.gitPatch(index: true)
+        session.apply(.toolCallUpdate(.init(toolCallId: "tc", status: "in_progress", content: [Self.patchItem(written)])))
+
+        let tc = try #require(session.toolCall(id: "tc", sessionId: nil))
+        #expect(tc.content == "@@ -2 +2 @@\n-old\n+new")
+        #expect(tc.diffs.count == 1)
+        #expect(tc.diffs.first?.patch == written)
+    }
+
+    enum PriorRow: Sendable { case none, pending, written }
+
+    struct PermissionPreviewCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let prior: PriorRow
+        /// The chosen option's kind; nil when none was chosen.
+        let optionKind: String?
+        let wasCancelled: Bool
+        let final: ACPToolCallUpdate?
+        let sources: [ACPToolCallDiff.Source]
+        let patch: String
+        let status: String
+        let content: String
+        /// Whether the card draws the text body as well as the diff sections.
+        var showsContent = false
+        var testDescription: String { name }
+    }
+
+    nonisolated static let previewPatch = gitPatch()
+    nonisolated static let writtenPatch = gitPatch(index: true)
+
+    nonisolated static let permissionPreviewCases: [PermissionPreviewCase] = [
+        .init(name: "allowedThenWritten", prior: .pending, optionKind: "allow_once", wasCancelled: false,
+              final: .init(toolCallId: "tc", status: "completed", content: [patchItem(writtenPatch)]),
+              sources: [.toolCall], patch: writtenPatch, status: "completed", content: "@@ -2 +2 @@\n-old\n+new"),
+        .init(name: "rejected", prior: .pending, optionKind: "reject_once", wasCancelled: false,
+              final: .init(toolCallId: "tc", status: "failed"),
+              sources: [.permissionRequest], patch: previewPatch, status: "failed", content: ""),
+        .init(name: "cancelled", prior: .pending, optionKind: nil, wasCancelled: true, final: nil,
+              sources: [.permissionRequest], patch: previewPatch, status: "canceled", content: ""),
+        .init(name: "standardFinal", prior: .pending, optionKind: "allow_once", wasCancelled: false,
+              final: .init(toolCallId: "tc", status: "completed", content: [
+                  .diff(path: "/repo/a.txt", oldText: "old\n", newText: "new\n", kind: nil, diffStats: nil),
+              ]),
+              sources: [.permissionRequest], patch: previewPatch, status: "completed",
+              content: "--- /repo/a.txt\n-old\n+new", showsContent: true),
+        // No option and no cancellation: the proposal alone is worth a row.
+        .init(name: "materialized", prior: .none, optionKind: nil, wasCancelled: false, final: nil,
+              sources: [.permissionRequest], patch: previewPatch, status: "pending",
+              content: "@@ -2 +2 @@\n-old\n+new"),
+        .init(name: "writtenThenPreview", prior: .written, optionKind: "allow_once", wasCancelled: false, final: nil,
+              sources: [.toolCall], patch: writtenPatch, status: "in_progress", content: "@@ -2 +2 @@\n-old\n+new"),
+    ]
+
+    @Test("an approval's patch is the row's proposed diff until the tool call reports the written one",
+          arguments: permissionPreviewCases)
+    func permissionPreviewOnRow(_ row: PermissionPreviewCase) throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        switch row.prior {
+        case .none:
+            break
+        case .pending:
+            session.apply(.toolCall(.init(toolCallId: "tc", title: "Edit", kind: "edit", status: "pending")))
+        case .written:
+            session.apply(.toolCall(.init(
+                toolCallId: "tc", title: "Edit", kind: "edit", status: "in_progress",
+                content: [Self.patchItem(Self.writtenPatch)])))
+        }
+        let option = row.optionKind.map { ACPPermissionOption(optionId: $0, name: $0, kind: $0) }
+        let index = session.mergePermissionDecision(
+            toolCall: .init(toolCallId: "tc", title: "Edit", kind: "edit",
+                            content: [Self.patchItem(Self.previewPatch)]),
+            presentation: nil, chosenOption: option, mcpServerName: nil, wasCancelled: row.wasCancelled)
+        #expect(index == 0)
+        if let final = row.final { session.apply(.toolCallUpdate(final)) }
+
+        #expect(session.transcript.messages.count == 1)
+        let tc = try #require(session.toolCall(id: "tc", sessionId: nil))
+        #expect(tc.diffs.map(\.source) == row.sources)
+        #expect(tc.diffs.first?.patch == row.patch)
+        #expect(tc.status == row.status)
+        #expect(tc.content == row.content)
+        #expect(ACPToolCallPresentation.showsContent(tc.content, alongside: tc.diffs) == row.showsContent)
+    }
+
+    @Test("a suppressed replay of a finished edit keeps its stored diffs and content")
+    func replayKeepsStoredDiffs() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc", title: "Edit", kind: "edit", status: "completed",
+            content: [Self.patchItem(Self.writtenPatch)])))
+        let before = try #require(session.toolCall(id: "tc", sessionId: nil))
+        #expect(before.diffs.map(\.source) == [.toolCall])
+
+        // A standard diff and a different patch: neither may reach the row.
+        session.beginSuppressedReplaySideEffects()
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc", status: "completed",
+            content: [
+                .diff(path: "/repo/a.txt", oldText: nil, newText: "new\n", kind: nil, diffStats: nil),
+                Self.patchItem(Self.previewPatch),
+            ])))
+        session.endSuppressedReplaySideEffects()
+
+        let after = try #require(session.toolCall(id: "tc", sessionId: nil))
+        #expect(after.diffs == before.diffs)
+        #expect(after.content == before.content)
     }
 
     @Test("terminal content records terminalIds and drops placeholder from content")

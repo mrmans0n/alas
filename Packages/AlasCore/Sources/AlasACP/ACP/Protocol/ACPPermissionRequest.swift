@@ -42,6 +42,25 @@ public struct ACPPermissionRequestParams: Codable, Equatable, Sendable {
         options = try c.decode([ACPPermissionOption].self, forKey: .options)
         metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
     }
+
+    /// This request with the diff patch payloads in its tool-call content
+    /// marked unnegotiated. Options and `_meta` are unchanged.
+    public func markingDiffPatchesUnnegotiated() -> ACPPermissionRequestParams {
+        guard let content = toolCall.content else { return self }
+        let markedToolCall = ACPPermissionToolCall(
+            toolCallId: toolCall.toolCallId,
+            title: toolCall.title,
+            kind: toolCall.kind,
+            status: toolCall.status,
+            content: content.map { $0.markingDiffPatchUnnegotiated() },
+            locations: toolCall.locations,
+            rawInput: toolCall.rawInput,
+            rawOutput: toolCall.rawOutput,
+            name: toolCall.name,
+            metadata: toolCall.metadata)
+        return ACPPermissionRequestParams(
+            sessionId: sessionId, toolCall: markedToolCall, options: options, metadata: metadata)
+    }
 }
 
 /// Lenient toolCall payload used inside permission requests. Mirrors the

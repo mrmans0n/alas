@@ -1102,6 +1102,20 @@ struct RemoteSessionGatewayTests {
         #expect(mirror.messages.count == (showInTranscript ? 0 : 1))
     }
 
+    @Test func toolCallWireKeepsDiffs() throws {
+        let text = "diff --git a/repo/a.txt b/repo/a.txt\n--- a/repo/a.txt\n+++ b/repo/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let diffs = [ACPToolCallDiff.make(
+            path: "/repo/a.txt", payload: .init(version: 1, format: "git_patch", text: text), source: .toolCall)]
+        let call = ACPMessage.ToolCall(
+            toolCallId: "t1", title: "Edit", status: "completed", content: "@@ -1 +1 @@\n-a\n+b",
+            metadata: AnyCodable(["secret": AnyCodable("x")]), diffs: diffs)
+        let json = try #require(RemoteSessionGateway.toWire(.toolCall(call), index: 0).json)
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(json.utf8))
+        #expect(decoded.diffs == diffs)
+        #expect(decoded.diffs.first?.isValid == true)
+        #expect(decoded.metadata == nil)
+    }
+
     @Test("latest background snapshots suppress older positional rows across tail, backfill and deltas", .timeLimit(.minutes(1)), arguments: [("snapshot", false), ("snapshot", true), ("page", false), ("page", true), ("delta", false), ("delta", true)])
     func latestBackgroundSnapshotsSuppressOlderRows(path: String, latestVisible: Bool) async throws {
         let provider = hosted.provider

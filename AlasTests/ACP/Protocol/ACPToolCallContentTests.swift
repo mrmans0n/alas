@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -31,14 +32,14 @@ struct ACPToolCallContentTests {
     func diffVariant() throws {
         let items = try decode("tool-call-content-diff")
         #expect(items.count == 2)
-        guard case .diff(let path, let old, let new, _, _) = items[0] else {
+        guard case .diff(let path, let old, let new, _, _, _) = items[0] else {
             Issue.record("expected .diff")
             return
         }
         #expect(path == "src/foo.swift")
         #expect(old == "let a = 1\n")
         #expect(new == "let a = 2\n")
-        guard case .diff(_, let old2, _, _, _) = items[1] else {
+        guard case .diff(_, let old2, _, _, _, _) = items[1] else {
             Issue.record("expected .diff")
             return
         }
@@ -50,7 +51,7 @@ struct ACPToolCallContentTests {
         let items = try decode("tool-call-content-diff-stats")
         #expect(items.count == 3)
 
-        guard case .diff(let path, _, _, let kind, let stats) = items[0] else {
+        guard case .diff(let path, _, _, let kind, let stats, _) = items[0] else {
             Issue.record("expected .diff")
             return
         }
@@ -58,19 +59,131 @@ struct ACPToolCallContentTests {
         #expect(kind == "update")
         #expect(stats == ACPDiffStats(added: 12, removed: 3))
 
-        guard case .diff(_, _, _, let kind2, let stats2) = items[1] else {
+        guard case .diff(_, _, _, let kind2, let stats2, _) = items[1] else {
             Issue.record("expected .diff")
             return
         }
         #expect(kind2 == "add")
         #expect(stats2 == nil)
 
-        guard case .diff(_, _, _, let kind3, let stats3) = items[2] else {
+        guard case .diff(_, _, _, let kind3, let stats3, _) = items[2] else {
             Issue.record("expected .diff")
             return
         }
         #expect(kind3 == nil)
         #expect(stats3 == nil)
+    }
+
+    @Test("decodes the diffPatch payload on Claude and Codex diff blocks and drops a malformed one")
+    func diffPatchVariant() throws {
+        let text = "diff --git a/repo/a.txt b/repo/a.txt\n--- a/repo/a.txt\n+++ b/repo/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let patch = #"{"version":1,"format":"git_patch","text":"\#(text.replacingOccurrences(of: "\n", with: "\\n"))"}"#
+        let json = """
+        [
+          {"type":"diff","path":"/repo/a.txt","oldText":null,"newText":"","_meta":{"diffPatch":\(patch)}},
+          {"type":"diff","path":"/repo/a.txt","oldText":null,"newText":"","_meta":{"kind":"update","diffPatch":\(patch)}},
+          {"type":"diff","path":"/repo/b.txt","newText":"b","_meta":{"diffPatch":"x","kind":"add"}},
+          {"type":"diff","path":"/repo/a.txt","newText":"","_meta":{"jetbrains":{"air":{"diffStats":"x"}},"kind":"update","diffPatch":\(patch)}}
+        ]
+        """
+        let items = try JSONDecoder().decode([ACPToolCallContent].self, from: Data(json.utf8))
+        #expect(items.count == 4)
+        let expected = ACPDiffPatchPayload(version: 1, format: "git_patch", text: text)
+
+        guard case .diff(_, let old, let new, let kind, _, let claudePatch) = items[0] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(claudePatch == expected)
+        #expect(old == nil)
+        #expect(new == "")
+        #expect(kind == nil)
+
+        guard case .diff(_, _, _, let codexKind, _, let codexPatch) = items[1] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(codexKind == "update")
+        #expect(codexPatch == expected)
+
+        guard case .diff(_, _, _, let badKind, _, let badPatch) = items[2] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(badPatch == nil)
+        #expect(badKind == "add")
+
+        // Malformed AIR stats must not drop the patch or the kind.
+        guard case .diff(_, _, _, let airKind, let airStats, let airPatch) = items[3] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(airKind == "update")
+        #expect(airStats == nil)
+        #expect(airPatch == expected)
+
+        let encoded = try JSONEncoder().encode(items)
+        #expect(try JSONDecoder().decode([ACPToolCallContent].self, from: encoded) == items)
+        let reencoded = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        let meta = try #require(reencoded[0]["_meta"] as? [String: Any])
+        let diffPatch = try #require(meta["diffPatch"] as? [String: Any])
+        #expect(diffPatch["text"] as? String == text)
+        #expect(diffPatch["negotiated"] == nil)
+    }
+
+    @Test("marking diff patches unnegotiated touches only the patch payloads")
+    func markingUnnegotiatedTouchesOnlyPatches() throws {
+        let patch = ACPDiffPatchPayload(version: 1, format: "git_patch", text: "@@ -1 +1 @@\n-a\n+b\n")
+        let content: [ACPToolCallContent] = [
+            .content(.text("hello")),
+            .diff(path: "/repo/a.txt", oldText: nil, newText: "", kind: "update", diffStats: nil, patch: patch),
+            .terminal(terminalId: "term-1"),
+        ]
+        let acknowledgements = Mutex(0)
+        let params = ACPSessionUpdateParams(
+            sessionId: "s1",
+            update: .toolCallUpdate(.init(toolCallId: "tc", status: "completed", content: content)),
+            durableConsumptionAcknowledgement: { acknowledgements.withLock { $0 += 1 } })
+
+        let markedParams = params.markingDiffPatchesUnnegotiated()
+        #expect(markedParams.sessionId == "s1")
+        markedParams.durableConsumptionAcknowledgement?()
+        #expect(acknowledgements.withLock { $0 } == 1)
+        guard case .toolCallUpdate(let marked) = markedParams.update else {
+            Issue.record("expected .toolCallUpdate")
+            return
+        }
+        #expect(marked.toolCallId == "tc")
+        #expect(marked.status == "completed")
+        let items = try #require(marked.content)
+        #expect(items.count == 3)
+        #expect(items[0] == .content(.text("hello")))
+        #expect(items[2] == .terminal(terminalId: "term-1"))
+        guard case .diff(let path, _, _, let kind, _, let markedPatch) = items[1] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(path == "/repo/a.txt")
+        #expect(kind == "update")
+        #expect(markedPatch?.negotiated == false)
+        #expect(markedPatch?.text == patch.text)
+
+        let meta = AnyCodable(["permission": AnyCodable(["version": AnyCodable(1)] as [String: AnyCodable])])
+        let options = [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
+        let request = ACPPermissionRequestParams(
+            sessionId: "s1", toolCall: .init(toolCallId: "tc", title: "Edit", content: content),
+            options: options, metadata: meta)
+        let markedRequest = request.markingDiffPatchesUnnegotiated()
+        #expect(markedRequest.sessionId == "s1")
+        #expect(markedRequest.options == options)
+        #expect(markedRequest.metadata == meta)
+        #expect(markedRequest.toolCall.title == "Edit")
+        guard case .diff(_, _, _, _, _, let requestPatch)? = markedRequest.toolCall.content?[1] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(requestPatch?.negotiated == false)
+        #expect(markedRequest.toolCall.content?[0] == .content(.text("hello")))
     }
 
     @Test("decodes terminal variant")

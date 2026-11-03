@@ -3624,6 +3624,35 @@ struct ACPSessionRunnerTests {
         #expect(toolCalls.first?.status == "canceled")
     }
 
+    @Test("patches in updates and permission requests count only when this connection negotiated diffPatch",
+          arguments: [false, true])
+    func diffPatchGate(negotiated: Bool) async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.diffPatch = negotiated ? ACPDiffPatchCapability() : nil
+        runner.start()
+        defer { runner.stop() }
+        let patch = [ACPSessionTests.patchItem(ACPSessionTests.gitPatch())]
+        let expected: [ACPToolCallDiff.Failure?] = [negotiated ? nil : .notNegotiated]
+
+        mock.emit(.init(sessionId: "s", update: .toolCall(.init(
+            toolCallId: "call_1", title: "Edit", kind: "edit", status: "in_progress"))))
+        mock.emit(.init(sessionId: "s", update: .toolCallUpdate(.init(
+            toolCallId: "call_1", status: "completed", content: patch))))
+        try await waitUntil { runner.session.toolCall(id: "call_1", sessionId: nil)?.diffs.isEmpty == false }
+        #expect(runner.session.toolCall(id: "call_1", sessionId: nil)?.diffs.map(\.failure) == expected)
+
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "call_2", title: "Edit", kind: "edit", content: patch),
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]))
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+        mock.emitCancelRequest(id: requestId)
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+        try await waitUntil { runner.session.toolCall(id: "call_2", sessionId: nil) != nil }
+        #expect(runner.session.toolCall(id: "call_2", sessionId: nil)?.diffs.map(\.failure) == expected)
+    }
+
     @Test("$/cancel_request for an id that isn't the pending permission is a no-op")
     func cancelRequestIgnoresUnrelatedId() async throws {
         let (runner, mock) = try makeRunner()

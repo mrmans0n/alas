@@ -254,7 +254,7 @@ struct ACPSessionForkManagerTests {
         label: String, advertised: ACPForkPointBoundary?, boundaryIndex: Int, native: Bool
     ) async throws {
         let store = try ACPSessionStore(path: temporaryPath())
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let manager = forkingAgentManager(store: store, forkPoint: advertised)
         let source = manager.createSession(agentId: "claude")
         source.remoteSessionId = "source-remote"
         source.sessionCapabilities = .init(fork: .init())
@@ -302,7 +302,7 @@ struct ACPSessionForkManagerTests {
     @Test("a targeted fork of a native fork of an import counts occurrences from the agent's own history")
     func remoteHistoryStartCarriesThroughNativeForks() async throws {
         let store = try ACPSessionStore(path: temporaryPath())
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let manager = forkingAgentManager(store: store, forkPoint: .message)
         func append(_ messages: [ACPMessage], to session: ACPSession) throws {
             for message in messages {
                 let index = session.transcript.messages.count
@@ -668,12 +668,7 @@ struct ACPSessionForkManagerTests {
         // that path is covered by the runner, so here set the stored list the
         // way attach/hydration leaves it.
         let store = try ACPSessionStore(path: temporaryPath())
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
-            store: store,
-            instanceId: "forker"
-        )
+        let manager = forkingAgentManager(store: store, forkPoint: .message)
         let suggestions = [
             ACPPromptSuggestion(command: "/review", description: "Review"),
         ]
@@ -739,6 +734,43 @@ struct ACPSessionForkManagerTests {
         #expect(try restoredStore.loadSession(id: crossAgentID)?.sessionInstructions == "Codex default.")
         #expect(try restoredStore.loadSession(id: sameAgentID)?.sessionHooks == #"{"Stop":[]}"#)
         #expect(try restoredStore.loadSession(id: crossAgentID)?.sessionHooks == nil)
+    }
+
+    /// A manager whose agents can fork, cutting at `forkPoint` when set, and
+    /// still have every session they're asked to load: a source a native
+    /// fork attaches first stays forkable.
+    private func forkingAgentManager(store: ACPSessionStore, forkPoint: ACPForkPointBoundary?) -> ACPSessionManager {
+        ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = ACPMockClient()
+                client.script(method: "initialize") { _ in
+                    let result = try JSONEncoder().encode(ACPInitializeResult(
+                        protocolVersion: 1,
+                        agentCapabilities: .init(sessionCapabilities: .init(fork: .init())),
+                        authMethods: []
+                    ))
+                    guard let forkPoint else { return result }
+                    var object = try #require(try JSONSerialization.jsonObject(with: result) as? [String: Any])
+                    object["_meta"] = ["forkPoint": ["version": 1, "boundary": forkPoint.rawValue]]
+                    return try JSONSerialization.data(withJSONObject: object)
+                }
+                client.script(method: "session/load") { request in
+                    try JSONEncoder().encode(ACPSessionNewResult(
+                        sessionId: try #require((request.params as? ACPSessionLoadParams)?.sessionId),
+                        availableModels: [],
+                        availableModes: [],
+                        currentModel: nil,
+                        currentMode: nil,
+                        promptSuggestions: []
+                    ))
+                }
+                return ACPConnection(client: client)
+            }
+        )
     }
 
     private func temporaryPath() -> String {
