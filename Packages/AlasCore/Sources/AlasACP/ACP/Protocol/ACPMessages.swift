@@ -277,6 +277,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let sessionIndex: ACPSessionIndexDeclaration
     /// Asks our Claude and Codex adapter forks to fork at a historical message.
     public let forkPoint: ACPForkPointDeclaration
+    /// Asks our Claude and Codex adapter forks for exact git patches on edits.
+    public let diffPatch: ACPDiffPatchDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -288,7 +290,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         settleAtResult: Bool = false,
         sessionIndex: ACPSessionIndexDeclaration = .init(),
         codexHooks: ACPCodexHooksDeclaration? = nil,
-        forkPoint: ACPForkPointDeclaration = .init()
+        forkPoint: ACPForkPointDeclaration = .init(),
+        diffPatch: ACPDiffPatchDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -300,10 +303,11 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.sessionIndex = sessionIndex
         self.codexHooks = codexHooks
         self.forkPoint = forkPoint
+        self.diffPatch = diffPatch
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint
+        case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -324,6 +328,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         codexHooks = try? c.decodeIfPresent(ACPCodexHooksDeclaration.self, forKey: .codexHooks)
         sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
         forkPoint = (try? c.decodeIfPresent(ACPForkPointDeclaration.self, forKey: .forkPoint)) ?? .init()
+        diffPatch = (try? c.decodeIfPresent(ACPDiffPatchDeclaration.self, forKey: .diffPatch)) ?? .init()
     }
 }
 
@@ -413,9 +418,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let codexHooks: ACPCodexHooksCapability?
         /// Fork at a historical message (our Claude and Codex adapter forks).
         public let forkPoint: ACPForkPointAdvertisement?
+        /// Exact git patches on edits (our Claude and Codex adapter forks).
+        public let diffPatch: ACPDiffPatchAdvertisement?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch
             case asyncTasks = "async-tasks"
         }
 
@@ -430,6 +437,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             sessionIndex = try? c.decodeIfPresent(ACPSessionIndexCapability.self, forKey: .sessionIndex)
             codexHooks = try? c.decodeIfPresent(ACPCodexHooksCapability.self, forKey: .codexHooks)
             forkPoint = try? c.decodeIfPresent(ACPForkPointAdvertisement.self, forKey: .forkPoint)
+            diffPatch = try? c.decodeIfPresent(ACPDiffPatchAdvertisement.self, forKey: .diffPatch)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -1416,7 +1424,13 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
     /// ≥ 0.78 (#1122) and codex-acp ≥ 1.12 (#501). `diffStats` is nil when
     /// the adapter can't produce valid counts; callers fall back to
     /// computing their own.
-    case diff(path: String, oldText: String?, newText: String, kind: String?, diffStats: ACPDiffStats?)
+    ///
+    /// `patch` is the raw `_meta.diffPatch` payload of our adapter forks'
+    /// exact-diff extension (see `ACPDiffPatch.swift`). It is kept as sent;
+    /// `ACPToolCallDiff` validates it.
+    case diff(
+        path: String, oldText: String?, newText: String, kind: String?, diffStats: ACPDiffStats?,
+        patch: ACPDiffPatchPayload? = nil)
     case terminal(terminalId: String)
     /// Forward-compatibility bucket so a future spec variant doesn't get
     /// misdecoded as empty text (the previous bug pattern).
@@ -1432,12 +1446,34 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
     private struct DiffMeta: Codable {
         let kind: String?
         let jetbrains: Jetbrains?
+        let diffPatch: ACPDiffPatchPayload?
         struct Jetbrains: Codable { let air: Air? }
         struct Air: Codable { let diffStats: ACPDiffStats? }
 
-        public init(kind: String?, jetbrains: Jetbrains?) {
+        private enum CodingKeys: String, CodingKey {
+            case kind, jetbrains, diffPatch
+        }
+
+        init(kind: String?, jetbrains: Jetbrains?, diffPatch: ACPDiffPatchPayload?) {
             self.kind = kind
             self.jetbrains = jetbrains
+            self.diffPatch = diffPatch
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try c.decodeIfPresent(String.self, forKey: .kind)
+            // Each extension gets its own `try?`: a malformed one must not
+            // drop `kind` or the other extension, let alone the block.
+            jetbrains = (try? c.decodeIfPresent(Jetbrains.self, forKey: .jetbrains)) ?? nil
+            diffPatch = (try? c.decodeIfPresent(ACPDiffPatchPayload.self, forKey: .diffPatch)) ?? nil
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(kind, forKey: .kind)
+            try c.encodeIfPresent(jetbrains, forKey: .jetbrains)
+            try c.encodeIfPresent(diffPatch, forKey: .diffPatch)
         }
     }
 
@@ -1453,7 +1489,8 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
                 oldText: try? c.decode(String.self, forKey: .oldText),
                 newText: try c.decode(String.self, forKey: .newText),
                 kind: meta?.kind,
-                diffStats: meta?.jetbrains?.air?.diffStats)
+                diffStats: meta?.jetbrains?.air?.diffStats,
+                patch: meta?.diffPatch)
         case "terminal":
             self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
         case "text", "resource_link", "image", "resource":
@@ -1473,15 +1510,16 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
         case .content(let b):
             try c.encode("content", forKey: .type)
             try c.encode(b, forKey: .content)
-        case .diff(let path, let old, let new, let kind, let diffStats):
+        case .diff(let path, let old, let new, let kind, let diffStats, let patch):
             try c.encode("diff", forKey: .type)
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(old, forKey: .oldText)
             try c.encode(new, forKey: .newText)
-            if kind != nil || diffStats != nil {
+            if kind != nil || diffStats != nil || patch != nil {
                 let meta = DiffMeta(
                     kind: kind,
-                    jetbrains: diffStats.map { DiffMeta.Jetbrains(air: DiffMeta.Air(diffStats: $0)) })
+                    jetbrains: diffStats.map { DiffMeta.Jetbrains(air: DiffMeta.Air(diffStats: $0)) },
+                    diffPatch: patch)
                 try c.encode(meta, forKey: .meta)
             }
         case .terminal(let id):
@@ -1493,6 +1531,16 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
             // object is acceptable.
             try c.encode("unknown", forKey: .type)
         }
+    }
+
+    /// This item with its patch payload marked as seen on a connection that
+    /// did not negotiate `diffPatch`. Every other item is returned unchanged.
+    public func markingDiffPatchUnnegotiated() -> ACPToolCallContent {
+        guard case .diff(let path, let oldText, let newText, let kind, let diffStats, var patch?) = self else {
+            return self
+        }
+        patch.negotiated = false
+        return .diff(path: path, oldText: oldText, newText: newText, kind: kind, diffStats: diffStats, patch: patch)
     }
 }
 

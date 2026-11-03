@@ -62,6 +62,76 @@ struct ACPPermissionFSTests {
         #expect(content.options.map(\.description) == ["Run this command one time", nil, "Don't run this command"])
     }
 
+    struct DiffPreviewCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let requestContent: [ACPToolCallContent]?
+        let rowDiffs: [ACPToolCallDiff]?
+        let paths: [String]
+        var testDescription: String { name }
+    }
+
+    nonisolated static func previewPatch(_ name: String) -> String {
+        """
+        diff --git a/repo/\(name) b/repo/\(name)
+        --- a/repo/\(name)
+        +++ b/repo/\(name)
+        @@ -1 +1 @@
+        -a
+        +b
+
+        """
+    }
+
+    nonisolated static let requestPatch: [ACPToolCallContent] = [.diff(
+        path: "/repo/a.txt", oldText: nil, newText: "", kind: nil, diffStats: nil,
+        patch: .init(version: 1, format: "git_patch", text: previewPatch("a.txt")))]
+
+    nonisolated static let rowPatch = [ACPToolCallDiff.make(
+        path: "/repo/b.txt", payload: .init(version: 1, format: "git_patch", text: previewPatch("b.txt")),
+        source: .toolCall)]
+
+    nonisolated static let diffPreviewCases: [DiffPreviewCase] = [
+        .init(name: "request patch, no row", requestContent: requestPatch, rowDiffs: nil, paths: ["a.txt"]),
+        .init(name: "Codex: no content, started row", requestContent: nil, rowDiffs: rowPatch, paths: ["b.txt"]),
+        .init(name: "request patch wins over the row", requestContent: requestPatch, rowDiffs: rowPatch,
+              paths: ["a.txt"]),
+        .init(name: "neither", requestContent: nil, rowDiffs: nil, paths: []),
+    ]
+
+    @Test("the approval card previews the request's patch, else the row's, and never changes the answers",
+          arguments: diffPreviewCases)
+    func cardContentDiffPreview(_ row: DiffPreviewCase) {
+        let metadata = AnyCodable([
+            "permission": AnyCodable([
+                "version": AnyCodable(1),
+                "defaultToNo": AnyCodable(true),
+            ] as [String: AnyCodable]),
+        ] as [String: AnyCodable])
+        let options = [
+            ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+            ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once"),
+        ]
+        func params(_ content: [ACPToolCallContent]?) -> ACPPermissionRequestParams {
+            ACPPermissionRequestParams(
+                sessionId: "s",
+                toolCall: ACPPermissionToolCall(toolCallId: "tc-edit", title: "Edit", kind: "edit", content: content),
+                options: options, metadata: metadata)
+        }
+        let existing = row.rowDiffs.map {
+            ACPMessage.ToolCall(toolCallId: "tc-edit", title: "Edit", status: "in_progress", diffs: $0)
+        }
+
+        let content = ACPPermissionCardContent(
+            params: params(row.requestContent), existingToolCall: existing, worktreeRoot: "/repo")
+        #expect(content.diffSections.map(\.path) == row.paths)
+        #expect(content.diffSections.allSatisfy { $0.label == .proposed })
+
+        let bare = ACPPermissionCardContent(params: params(nil))
+        #expect(content.options == bare.options)
+        #expect(content.defaultToNo == bare.defaultToNo)
+        #expect(bare.defaultToNo)
+    }
+
     @Test("unversioned/future _meta.permission is ignored, not surfaced")
     func ignoresUnversionedOrFutureMeta() throws {
         let futureVersion = AnyCodable([

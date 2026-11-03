@@ -282,6 +282,9 @@ public enum ACPMessage: Equatable, Sendable {
         /// a call after it has already reached a terminal state.
         public var executionStartedAt: Date?
         public var executionFinishedAt: Date?
+        /// Exact git patches from the `diffPatch` extension, validated, in
+        /// block order. Empty for adapters that do not send them.
+        public var diffs: [ACPToolCallDiff]
 
         public var executionDuration: TimeInterval? {
             guard let executionStartedAt, let executionFinishedAt else { return nil }
@@ -396,7 +399,7 @@ public enum ACPMessage: Equatable, Sendable {
              assets: [ToolCallAsset] = [],
              locations: [String]? = nil, terminalIds: [String] = [],
              executionStartedAt: Date? = nil, executionFinishedAt: Date? = nil,
-             name: String? = nil)
+             name: String? = nil, diffs: [ACPToolCallDiff] = [])
         {
             self.toolCallId = toolCallId
             self.title = title
@@ -414,6 +417,7 @@ public enum ACPMessage: Equatable, Sendable {
             self.executionStartedAt = executionStartedAt
             self.executionFinishedAt = executionFinishedAt
             self.name = name
+            self.diffs = diffs
         }
 
         // Backwards-compatible decoder: older messages persisted only a
@@ -423,7 +427,7 @@ public enum ACPMessage: Equatable, Sendable {
             case toolCallId, title, kind, status, content, preview,
                  contentSummary, contentLanguage, rawInput, rawOutput, metadata,
                  assets, locations, terminalIds, executionStartedAt, executionFinishedAt,
-                 name
+                 name, diffs
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -444,6 +448,41 @@ public enum ACPMessage: Equatable, Sendable {
             executionStartedAt = try? c.decode(Date.self, forKey: .executionStartedAt)
             executionFinishedAt = try? c.decode(Date.self, forKey: .executionFinishedAt)
             name = try? c.decode(String.self, forKey: .name)
+            diffs = Self.decodeDiffs(c)
+        }
+
+        /// Element by element. A diff with a failure or source this build
+        /// does not know (say, from a newer peer) is kept as an invalid diff
+        /// for its path, so the row shows "Change unavailable" instead of
+        /// losing the file; an unknown source counts as a proposal, so it is
+        /// never labelled written. An entry without a path is skipped.
+        private static func decodeDiffs(_ c: KeyedDecodingContainer<CodingKeys>) -> [ACPToolCallDiff] {
+            guard var items = try? c.nestedUnkeyedContainer(forKey: .diffs) else { return [] }
+            struct Unreadable: Decodable {
+                let path: String?
+                let source: String?
+                init(from decoder: Decoder) {
+                    enum Keys: String, CodingKey { case path, source }
+                    let c = try? decoder.container(keyedBy: Keys.self)
+                    path = try? c?.decodeIfPresent(String.self, forKey: .path)
+                    source = try? c?.decodeIfPresent(String.self, forKey: .source)
+                }
+            }
+            var diffs: [ACPToolCallDiff] = []
+            while !items.isAtEnd {
+                if let diff = try? items.decode(ACPToolCallDiff.self) {
+                    diffs.append(diff)
+                } else if let unreadable = try? items.decode(Unreadable.self) {
+                    guard let path = unreadable.path else { continue }
+                    diffs.append(ACPToolCallDiff(
+                        path: path,
+                        source: unreadable.source.flatMap(ACPToolCallDiff.Source.init(rawValue:)) ?? .permissionRequest,
+                        patch: nil, failure: .malformedHunk, change: nil, added: 0, removed: 0))
+                } else {
+                    break
+                }
+            }
+            return diffs
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -463,6 +502,9 @@ public enum ACPMessage: Equatable, Sendable {
             try c.encodeIfPresent(executionStartedAt, forKey: .executionStartedAt)
             try c.encodeIfPresent(executionFinishedAt, forKey: .executionFinishedAt)
             try c.encodeIfPresent(name, forKey: .name)
+            if !diffs.isEmpty {
+                try c.encode(diffs, forKey: .diffs)
+            }
         }
 
         // Manual Equatable/Hashable: `isContentTruncated` is an in-memory-only
@@ -486,6 +528,7 @@ public enum ACPMessage: Equatable, Sendable {
                 && lhs.executionStartedAt == rhs.executionStartedAt
                 && lhs.executionFinishedAt == rhs.executionFinishedAt
                 && lhs.name == rhs.name
+                && lhs.diffs == rhs.diffs
         }
 
         public func hash(into hasher: inout Hasher) {
@@ -505,6 +548,7 @@ public enum ACPMessage: Equatable, Sendable {
             hasher.combine(executionStartedAt)
             hasher.combine(executionFinishedAt)
             hasher.combine(name)
+            hasher.combine(diffs)
         }
 
         public mutating func replaceContent(_ newContent: String) {

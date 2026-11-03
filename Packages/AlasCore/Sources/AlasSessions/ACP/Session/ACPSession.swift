@@ -244,6 +244,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Where the adapter can cut a fork at an earlier message, from its
     /// `forkPoint` advertisement. Runtime only; relearned on attach.
     @Tracked public var forkPoint: ACPForkPointCapability?
+    /// Whether the adapter attaches exact git patches to edits, from its
+    /// `diffPatch` advertisement. Runtime only; relearned on attach.
+    @Tracked public var diffPatch: ACPDiffPatchCapability?
     /// Whether a foreground turn is running. Installed by the session's
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
@@ -1498,7 +1501,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// context that drove the now-resolved prompt. Returns the touched
     /// index for the caller to persist, or `nil` when there is nothing
     /// worth persisting (no `_meta`, no MCP server name, no recorded
-    /// decision).
+    /// decision, no proposed patch). A request's patches become the row's
+    /// proposed `diffs` unless its tool call already reported written ones.
     ///
     /// When no row exists yet, materializes one from the permission
     /// request's own `toolCall` snapshot instead of dropping the facts:
@@ -1527,10 +1531,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         let facts = Self.permissionDecisionMetadata(
             presentation: presentation, chosenOption: chosenOption, mcpServerName: mcpServerName
         )
+        let proposed = ACPToolCallDiff.diffs(in: toolCall.content ?? [], source: .permissionRequest)
         // A cancellation is itself worth persisting — the row's status
         // going stale is a correctness issue, independent of whether the
-        // adapter also attached any `_meta.permission` presentation.
-        guard facts != nil || wasCancelled else { return nil }
+        // adapter also attached any `_meta.permission` presentation. So is
+        // a proposed patch: it is the only record of what was approved.
+        guard facts != nil || wasCancelled || !proposed.isEmpty else { return nil }
         // The request named a registered child's session, not the root —
         // its resulting row belongs in that child's own transcript. See
         // `ACPSubagentRun.mergePermissionDecision`.
@@ -1539,6 +1545,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
         if let index = updateToolCall(id: toolCallId, { tc in
             if let facts { tc.metadata = Self.mergeMetadata(tc.metadata, facts) }
+            Self.mergeProposedDiffs(from: toolCall.content, into: &tc)
             // `$/cancel_request` cancellation (unlike Stop) never routes
             // through cancelInFlightToolCalls(), so an already-existing row
             // for a canceled permission would otherwise sit indefinitely
@@ -1552,7 +1559,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }) {
             return index
         }
-        return materializeToolCall(fromPermission: toolCall, facts: facts, wasCancelled: wasCancelled)
+        return materializeToolCall(
+            fromPermission: toolCall, facts: facts, wasCancelled: wasCancelled, proposed: proposed)
+    }
+
+    /// Stores a permission request's patches on `tc` as its proposed diffs,
+    /// unless the row already has diffs its tool call reported: a written
+    /// change outranks the proposal. Returns whether `tc.diffs` changed.
+    /// Shared with `ACPSubagentRun`.
+    @discardableResult
+    static func mergeProposedDiffs(from items: [ACPToolCallContent]?, into tc: inout ACPMessage.ToolCall) -> Bool {
+        let proposed = ACPToolCallDiff.diffs(in: items ?? [], source: .permissionRequest)
+        guard !proposed.isEmpty, tc.diffs.allSatisfy({ $0.source == .permissionRequest }),
+              tc.diffs != proposed else { return false }
+        tc.diffs = proposed
+        return true
     }
 
     /// Appends a placeholder tool-call row from a permission request's own
@@ -1565,7 +1586,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// `cancelInFlightToolCalls()` before the permission continuation
     /// resumes, so a row this call first materializes afterward would
     /// otherwise escape that sweep and sit as indefinitely "pending".
-    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable?, wasCancelled: Bool) -> Int {
+    private func materializeToolCall(
+        fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable?, wasCancelled: Bool,
+        proposed: [ACPToolCallDiff]
+    ) -> Int {
         let items = toolCall.content ?? []
         let raw = Self.flatten(items)
         let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")
@@ -1602,7 +1626,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             // still nil — which refuses to set executionFinishedAt either,
             // permanently losing the call's duration.
             executionStartedAt: status == "in_progress" ? Date() : nil,
-            name: toolCall.name)))
+            name: toolCall.name,
+            diffs: proposed)))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         applyToolCallMetadata(toolCall.metadata)
@@ -1888,6 +1913,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
         metadataChanged: Bool,
         to tc: inout ACPMessage.ToolCall
     ) {
+        // Before any fast path: a changed patch can flatten to the same text.
+        // Content without a patch leaves the stored diffs alone.
+        let fresh = ACPToolCallDiff.diffs(in: items, source: .toolCall)
+        if !fresh.isEmpty { tc.diffs = fresh }
         let raw = Self.flatten(items)
         let prefixItemsUnchanged = Self.prefixItemsUnchanged(
             items: items, snapshot: tc.appliedItemsSnapshot, count: tc.appliedItemCount)
@@ -2117,8 +2146,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return true
         case (.terminal(let a), .terminal(let b)):
             return a == b
-        case (.diff(let p1, let o1, let n1, _, _), .diff(let p2, let o2, let n2, _, _)):
-            return p1 == p2 && o1 == o2 && n1 == n2
+        case (.diff(let p1, let o1, let n1, _, _, let patch1), .diff(let p2, let o2, let n2, _, _, let patch2)):
+            return p1 == p2 && o1 == o2 && n1 == n2 && patch1 == patch2
         case (.content(.image(let d1, let u1, let m1)),
               .content(.image(let d2, let u2, let m2))):
             return d1 == d2 && u1 == u2 && m1 == m2
@@ -2318,7 +2347,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             locations: payload.locations?.map(\.path) ?? [],
             terminalIds: terminalIds,
             executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
-            name: payload.name)
+            name: payload.name,
+            diffs: ACPToolCallDiff.diffs(in: items, source: .toolCall))
     }
 
     /// Applies a `tool_call_update` to an existing row, including the
@@ -2661,6 +2691,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
 
     public func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {
         subagents[subagentSessionId]
+    }
+
+    /// The tool-call row `id` in the transcript `sessionId` names: a
+    /// registered child's own transcript, otherwise the root's.
+    public func toolCall(id: String, sessionId: String?) -> ACPMessage.ToolCall? {
+        if let sessionId, let run = subagents[sessionId] { return run.toolCall(id: id) }
+        guard let index = transcript.toolCallIndex(toolCallId: id),
+              case .toolCall(let toolCall) = transcript.messages[index] else { return nil }
+        return toolCall
     }
 
     // MARK: Delegation links
@@ -3558,7 +3597,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 continue
             case .content(.resource(_, _, let text)):
                 out.append(text)
-            case .diff(let path, let old, let new, _, _):
+            case .diff(let path, _, _, _, _, let patch?):
+                // An exact patch shows its hunks, or that it is unavailable;
+                // `ToolCall.diffs` keeps the validated text.
+                out.append(ACPToolCallDiff.flattenedText(path: path, payload: patch))
+            case .diff(let path, let old, let new, _, _, nil):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
                     for line in Self.diffLines(old) {
@@ -3605,7 +3648,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     ) -> Set<Int> {
         var touched: Set<Int> = []
         for item in items {
-            guard case .diff(let path, let oldText, let newText, _, let diffStats?) = item else { continue }
+            guard case .diff(let path, let oldText, let newText, _, let diffStats?, _) = item else { continue }
             let relativePath = Self.relativeToWorktreeRoot(path, worktreeRoot: worktreeRoot)
             guard let index = transcript.messages.lastIndex(where: {
                 if case .fileEdit(_, let edit) = $0 {

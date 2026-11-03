@@ -576,6 +576,54 @@ public struct ACPToolCallUpdate: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - diffPatch gate
+
+extension ACPSessionUpdateParams {
+    /// This notification with every diff patch payload marked unnegotiated.
+    public func markingDiffPatchesUnnegotiated() -> ACPSessionUpdateParams {
+        ACPSessionUpdateParams(
+            sessionId: sessionId,
+            update: update.markingDiffPatchesUnnegotiated(),
+            durableConsumptionAcknowledgement: durableConsumptionAcknowledgement)
+    }
+}
+
+extension ACPSessionUpdate {
+    /// This update with the diff patch payloads in its tool-call content marked
+    /// unnegotiated. Updates without tool-call content are returned unchanged.
+    public func markingDiffPatchesUnnegotiated() -> ACPSessionUpdate {
+        switch self {
+        case .toolCall(let payload):
+            guard let content = payload.content else { return self }
+            return .toolCall(ACPToolCallPayload(
+                toolCallId: payload.toolCallId,
+                title: payload.title,
+                kind: payload.kind,
+                status: payload.status,
+                content: content.map { $0.markingDiffPatchUnnegotiated() },
+                locations: payload.locations,
+                rawInput: payload.rawInput,
+                rawOutput: payload.rawOutput,
+                metadata: payload.metadata,
+                name: payload.name))
+        case .toolCallUpdate(let update):
+            guard let content = update.content else { return self }
+            return .toolCallUpdate(ACPToolCallUpdate(
+                toolCallId: update.toolCallId,
+                status: update.status,
+                content: content.map { $0.markingDiffPatchUnnegotiated() },
+                rawOutput: update.rawOutput,
+                title: update.title,
+                locations: update.locations,
+                rawInput: update.rawInput,
+                metadata: update.metadata,
+                name: update.name))
+        default:
+            return self
+        }
+    }
+}
+
 public struct ACPToolLocation: Codable, Equatable, Sendable {
     public let path: String
     public let line: Int?

@@ -58,6 +58,106 @@ struct ACPMessageTests {
         #expect(back == m)
     }
 
+    struct DiffValidityCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let payload: ACPDiffPatchPayload
+        let failure: ACPToolCallDiff.Failure?
+        var testDescription: String { name }
+    }
+
+    nonisolated static let validPatch = """
+        diff --git a/repo/a.txt b/repo/a.txt
+        index 1234567..89abcde 100644
+        --- a/repo/a.txt
+        +++ b/repo/a.txt
+        @@ -1 +1 @@
+        -a
+        +b
+
+        """
+
+    nonisolated static let diffValidityCases: [DiffValidityCase] = [
+        .init(name: "valid", payload: .init(version: 1, format: "git_patch", text: validPatch), failure: nil),
+        .init(name: "unnegotiated",
+              payload: .init(version: 1, format: "git_patch", text: validPatch, negotiated: false),
+              failure: .notNegotiated),
+        .init(name: "version 2", payload: .init(version: 2, format: "git_patch", text: validPatch),
+              failure: .unsupportedVersion),
+        .init(name: "unified format", payload: .init(version: 1, format: "unified", text: validPatch),
+              failure: .unsupportedFormat),
+        .init(name: "no text", payload: .init(version: 1, format: "git_patch", text: nil), failure: .missingText),
+        .init(name: "other path",
+              payload: .init(version: 1, format: "git_patch",
+                             text: validPatch.replacingOccurrences(of: "repo/a.txt", with: "repo/b.txt")),
+              failure: .pathMismatch),
+    ]
+
+    @Test("a tool-call diff keeps only a negotiated, supported patch that parses for its path",
+          arguments: diffValidityCases)
+    func toolCallDiffValidity(_ row: DiffValidityCase) {
+        let diff = ACPToolCallDiff.make(path: "/repo/a.txt", payload: row.payload, source: .toolCall)
+        #expect(diff.path == "/repo/a.txt")
+        #expect(diff.source == .toolCall)
+        #expect(diff.failure == row.failure)
+        #expect(diff.isValid == (row.failure == nil))
+        if row.failure == nil {
+            #expect(diff.patch == row.payload.text)
+            #expect(diff.added == 1 && diff.removed == 1)
+            #expect(diff.change == .modified)
+            #expect(diff.parsed()?.diff.hunks.count == 1)
+        } else {
+            #expect(diff.patch == nil)
+            #expect(diff.added == 0 && diff.removed == 0)
+            #expect(diff.change == nil)
+            #expect(diff.parsed() == nil)
+        }
+    }
+
+    @Test("tool-call diffs persist through the codec and survive truncation, and stay off the wire when empty")
+    func toolCallDiffsRoundTrip() throws {
+        let diffs = [
+            ACPToolCallDiff.make(
+                path: "/repo/a.txt", payload: .init(version: 1, format: "git_patch", text: Self.validPatch),
+                source: .toolCall),
+            ACPToolCallDiff.make(
+                path: "/repo/b.txt", payload: .init(version: 2, format: "git_patch", text: Self.validPatch),
+                source: .permissionRequest),
+        ]
+        var call = ACPMessage.ToolCall(
+            toolCallId: "tc-diffs", title: "Edit", kind: "edit", status: "completed",
+            content: String(repeating: "x", count: ACPMessage.ToolCall.truncatedTailBytes + 8), diffs: diffs)
+        let message = ACPMessage.toolCall(call)
+        let back = try ACPMessageCodec.decode(kind: message.kind, payload: try ACPMessageCodec.encode(message))
+        #expect(back == message)
+
+        call.truncateForOffWindow()
+        #expect(call.diffs == diffs)
+
+        let plain = ACPMessage.ToolCall(toolCallId: "tc-plain", title: "Run", status: "completed")
+        let encoded = try #require(String(data: try JSONEncoder().encode(plain), encoding: .utf8))
+        #expect(!encoded.contains("\"diffs\""))
+
+        let legacy = #"{"toolCallId":"tc-old","title":"Edit","status":"completed","content":"x"}"#
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(legacy.utf8))
+        #expect(decoded.diffs.isEmpty)
+
+        // A newer peer's unknown failure keeps the file as an invalid diff
+        // and the rest of the array; an unknown source reads as a proposal.
+        let valid = try #require(String(data: try JSONEncoder().encode(diffs[0]), encoding: .utf8))
+        let future = #"{"path":"/repo/c.txt","source":"toolCall","failure":"future","added":0,"removed":0}"#
+        let futureSource = #"{"path":"/repo/d.txt","source":"future","added":0,"removed":0}"#
+        let mixed = #"{"toolCallId":"tc-new","title":"Edit","status":"completed","content":"x","diffs":["#
+            + future + "," + futureSource + "," + valid + "]}"
+        let lenient = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(mixed.utf8))
+        #expect(lenient.diffs == [
+            ACPToolCallDiff(path: "/repo/c.txt", source: .toolCall, patch: nil, failure: .malformedHunk,
+                            change: nil, added: 0, removed: 0),
+            ACPToolCallDiff(path: "/repo/d.txt", source: .permissionRequest, patch: nil, failure: .malformedHunk,
+                            change: nil, added: 0, removed: 0),
+            diffs[0],
+        ])
+    }
+
     @Test("tool call content revision advances only when displayed content changes")
     func toolCallContentRevisionTracksDisplayedContentChanges() {
         var toolCall = ACPMessage.ToolCall(

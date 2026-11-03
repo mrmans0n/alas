@@ -32,10 +32,11 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
+            #expect(meta["diffPatch"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -231,6 +232,24 @@ struct ACPConnectionTests {
             Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
         }
         #expect(try await ACPConnection(client: mock).initialize().sessionIndex == expected)
+    }
+
+    @Test("exact diff patches need version 1 and the git_patch format", arguments: [
+        (#"{"diffPatch":{"version":1,"format":"git_patch"}}"#, true),
+        (#"{"diffPatch":{"version":2,"format":"git_patch"}}"#, false),
+        (#"{"diffPatch":{"version":1,"format":"unified"}}"#, false),
+        (#"{"diffPatch":{"version":1}}"#, false),
+        (#"{"diffPatch":true}"#, false),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["diffPatch"]}}}"#, false),
+        ("{}", false),
+    ] as [(String, Bool)])
+    func diffPatchNegotiation(metadata: String, expected: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        let outcome = try await ACPConnection(client: mock).initialize()
+        #expect((outcome.diffPatch != nil) == expected)
     }
 
     @Test("fork points need version 1 and a known boundary", arguments: [
