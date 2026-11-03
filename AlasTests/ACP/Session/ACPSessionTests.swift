@@ -2895,24 +2895,30 @@ struct ACPSessionTests {
 
     struct PatchFlattenCase: CustomTestStringConvertible, Sendable {
         let name: String
-        let item: ACPToolCallContent
+        let items: [ACPToolCallContent]
         let content: String
         /// One entry per patch-bearing block; nil when valid.
         let failures: [ACPToolCallDiff.Failure?]
+        /// Whether the card draws the text body as well as any diff sections.
+        let showsContent: Bool
         var testDescription: String { name }
     }
 
     nonisolated static let patchFlattenCases: [PatchFlattenCase] = [
         .init(name: "standard",
-              item: .diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n", kind: nil, diffStats: nil),
-              content: "--- a.swift\n-let x = 1\n+let x = 2", failures: []),
-        .init(name: "valid", item: patchItem(gitPatch()), content: "@@ -2 +2 @@\n-old\n+new", failures: [nil]),
-        .init(name: "crlf", item: patchItem(gitPatch(eol: "\r\n")),
-              content: "@@ -2 +2 @@\n-old\r\n+new\r", failures: [nil]),
-        .init(name: "invalid", item: patchItem(gitPatch("repo/b.txt")),
-              content: "Change unavailable: /repo/a.txt", failures: [.pathMismatch]),
-        .init(name: "unnegotiated", item: patchItem(gitPatch(), negotiated: false),
-              content: "Change unavailable: /repo/a.txt", failures: [.notNegotiated]),
+              items: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n", kind: nil, diffStats: nil)],
+              content: "--- a.swift\n-let x = 1\n+let x = 2", failures: [], showsContent: true),
+        .init(name: "valid", items: [patchItem(gitPatch())], content: "@@ -2 +2 @@\n-old\n+new", failures: [nil],
+              showsContent: false),
+        .init(name: "crlf", items: [patchItem(gitPatch(eol: "\r\n"))],
+              content: "@@ -2 +2 @@\n-old\r\n+new\r", failures: [nil], showsContent: false),
+        .init(name: "unnegotiated", items: [patchItem(gitPatch(), negotiated: false)],
+              content: "Change unavailable: /repo/a.txt", failures: [.notNegotiated], showsContent: false),
+        // One file of a change fell back to a standard block: it must stay visible.
+        .init(name: "patchAndStandard",
+              items: [patchItem(gitPatch()),
+                      .diff(path: "/repo/b.txt", oldText: nil, newText: "b\n", kind: nil, diffStats: nil)],
+              content: "@@ -2 +2 @@\n-old\n+new\n--- /repo/b.txt\n+b", failures: [nil], showsContent: true),
     ]
 
     @Test("diff content flattens to text, and a patch block to its hunks or an unavailable notice",
@@ -2922,15 +2928,16 @@ struct ACPSessionTests {
         session.apply(.toolCall(.init(
             toolCallId: "tc-2", title: "edit", kind: "edit", status: "in_progress",
             content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        session.apply(.toolCallUpdate(.init(toolCallId: "tc-2", status: "completed", content: [row.item])))
+        session.apply(.toolCallUpdate(.init(toolCallId: "tc-2", status: "completed", content: row.items)))
         #expect(session.transcript.messages.count == 1)
         let tc = try #require(session.toolCall(id: "tc-2", sessionId: nil))
         #expect(tc.content == row.content)
         #expect(!tc.content.contains("--- /repo/a.txt"))
         #expect(tc.diffs.map(\.failure) == row.failures)
         #expect(tc.diffs.allSatisfy { $0.source == .toolCall })
+        #expect(ACPToolCallPresentation.showsContent(tc.content, alongside: tc.diffs) == row.showsContent)
         if row.failures == [nil] {
-            guard case .diff(_, _, _, _, _, let payload?) = row.item else { return }
+            guard case .diff(_, _, _, _, _, let payload?) = row.items.first else { return }
             #expect(tc.diffs.first?.patch == payload.text)
         }
     }
@@ -2963,6 +2970,8 @@ struct ACPSessionTests {
         let patch: String
         let status: String
         let content: String
+        /// Whether the card draws the text body as well as the diff sections.
+        var showsContent = false
         var testDescription: String { name }
     }
 
@@ -2983,7 +2992,7 @@ struct ACPSessionTests {
                   .diff(path: "/repo/a.txt", oldText: "old\n", newText: "new\n", kind: nil, diffStats: nil),
               ]),
               sources: [.permissionRequest], patch: previewPatch, status: "completed",
-              content: "--- /repo/a.txt\n-old\n+new"),
+              content: "--- /repo/a.txt\n-old\n+new", showsContent: true),
         // No option and no cancellation: the proposal alone is worth a row.
         .init(name: "materialized", prior: .none, optionKind: nil, wasCancelled: false, final: nil,
               sources: [.permissionRequest], patch: previewPatch, status: "pending",
@@ -3020,6 +3029,7 @@ struct ACPSessionTests {
         #expect(tc.diffs.first?.patch == row.patch)
         #expect(tc.status == row.status)
         #expect(tc.content == row.content)
+        #expect(ACPToolCallPresentation.showsContent(tc.content, alongside: tc.diffs) == row.showsContent)
     }
 
     @Test("a suppressed replay of a finished edit keeps its stored diffs and content")

@@ -80,9 +80,14 @@ public struct ACPToolCallDiff: Codable, Equatable, Hashable, Sendable {
     /// its text from the first hunk header without the final newline; for an
     /// invalid one, `Change unavailable: <path>`.
     public static func flattenedText(path: String, payload: ACPDiffPatchPayload) -> String {
+        make(path: path, payload: payload, source: .toolCall).flattenedText
+    }
+
+    /// The text this diff's block flattens to in the tool call's `content`;
+    /// see `flattenedText(path:payload:)`.
+    public var flattenedText: String {
         let unavailable = "Change unavailable: \(path)"
-        let diff = make(path: path, payload: payload, source: .toolCall)
-        guard let text = diff.patch else { return unavailable }
+        guard let text = patch else { return unavailable }
         // Work on scalars: a `\r\n` pair is one Character, and only the
         // final `\n` is dropped.
         let scalars = text.unicodeScalars

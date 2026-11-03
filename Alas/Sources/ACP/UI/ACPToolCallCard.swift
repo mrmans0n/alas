@@ -198,7 +198,8 @@ struct ACPToolCallCard: View {
                     )) { section in
                         ACPToolCallDiffSectionView(section: section)
                     }
-                } else if !displayContent.isEmpty {
+                }
+                if ACPToolCallPresentation.showsContent(displayContent, alongside: toolCall.diffs) {
                     ACPSyntaxHighlightedText(
                         text: displayContent,
                         explicitLanguage: displayContentLanguage,
@@ -333,8 +334,8 @@ struct ACPToolCallDiffSectionView: View {
                 .foregroundStyle(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if let renamedFrom = section.renamedFrom {
-                Text(verbatim: "renamed from \(renamedFrom)")
+            if let note = section.changeNote {
+                Text(verbatim: note)
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)

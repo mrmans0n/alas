@@ -265,6 +265,17 @@ public struct ACPToolCallDiffSection: Equatable, Identifiable, Sendable {
     public let removed: Int
     public let body: Body
 
+    /// What the header says about the file besides its path: "new file",
+    /// "deleted" or "renamed from <old>"; nil for an edit in place.
+    public var changeNote: String? {
+        switch change {
+        case .added: "new file"
+        case .deleted: "deleted"
+        case .renamed: renamedFrom.map { "renamed from \($0)" }
+        case .modified, nil: nil
+        }
+    }
+
     public init(
         id: Int, label: Label, path: String, renamedFrom: String?, change: GitFilePatch.Change?,
         added: Int, removed: Int, body: Body
@@ -306,6 +317,17 @@ extension ACPToolCallPresentation {
                 id: index, label: label, path: path, renamedFrom: renamedFrom, change: file.change,
                 added: file.added, removed: file.removed, body: .hunks(file.diff))
         }
+    }
+
+    /// Whether a card that draws `diffs` as sections must also draw the
+    /// flattened `content`: true when the content has parts the patches do
+    /// not account for, such as a standard diff, text, or a fallback block
+    /// (an approved Claude edit whose final patch could not be built, or one
+    /// file of a Codex change). Content that is exactly the patches' own
+    /// flattened text, or empty, is covered by the sections.
+    public static func showsContent(_ content: String, alongside diffs: [ACPToolCallDiff]) -> Bool {
+        guard !content.isEmpty else { return false }
+        return content != diffs.map(\.flattenedText).joined(separator: "\n")
     }
 
     private static func displayPath(_ path: String, worktreeRoot: String?) -> String {

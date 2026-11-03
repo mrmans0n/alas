@@ -451,16 +451,34 @@ public enum ACPMessage: Equatable, Sendable {
             diffs = Self.decodeDiffs(c)
         }
 
-        /// Element by element: a diff this build cannot read (say, a newer
-        /// peer's failure reason) drops only itself, not the whole array.
+        /// Element by element. A diff with a failure or source this build
+        /// does not know (say, from a newer peer) is kept as an invalid diff
+        /// for its path, so the row shows "Change unavailable" instead of
+        /// losing the file; an unknown source counts as a proposal, so it is
+        /// never labelled written. An entry without a path is skipped.
         private static func decodeDiffs(_ c: KeyedDecodingContainer<CodingKeys>) -> [ACPToolCallDiff] {
             guard var items = try? c.nestedUnkeyedContainer(forKey: .diffs) else { return [] }
-            struct Skipped: Decodable { init(from decoder: Decoder) {} }
+            struct Unreadable: Decodable {
+                let path: String?
+                let source: String?
+                init(from decoder: Decoder) {
+                    enum Keys: String, CodingKey { case path, source }
+                    let c = try? decoder.container(keyedBy: Keys.self)
+                    path = try? c?.decodeIfPresent(String.self, forKey: .path)
+                    source = try? c?.decodeIfPresent(String.self, forKey: .source)
+                }
+            }
             var diffs: [ACPToolCallDiff] = []
             while !items.isAtEnd {
                 if let diff = try? items.decode(ACPToolCallDiff.self) {
                     diffs.append(diff)
-                } else if (try? items.decode(Skipped.self)) == nil {
+                } else if let unreadable = try? items.decode(Unreadable.self) {
+                    guard let path = unreadable.path else { continue }
+                    diffs.append(ACPToolCallDiff(
+                        path: path,
+                        source: unreadable.source.flatMap(ACPToolCallDiff.Source.init(rawValue:)) ?? .permissionRequest,
+                        patch: nil, failure: .malformedHunk, change: nil, added: 0, removed: 0))
+                } else {
                     break
                 }
             }

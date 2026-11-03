@@ -132,7 +132,7 @@ struct ACPToolCallContentTests {
     }
 
     @Test("marking diff patches unnegotiated touches only the patch payloads")
-    func diffPatchGate() throws {
+    func markingUnnegotiatedTouchesOnlyPatches() throws {
         let patch = ACPDiffPatchPayload(version: 1, format: "git_patch", text: "@@ -1 +1 @@\n-a\n+b\n")
         let content: [ACPToolCallContent] = [
             .content(.text("hello")),

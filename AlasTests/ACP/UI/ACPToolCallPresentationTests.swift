@@ -377,6 +377,7 @@ struct ACPToolCallPresentationTests {
         let label: ACPToolCallDiffSection.Label
         let path: String
         var renamedFrom: String? = nil
+        var note: String? = nil
         let available: Bool
         let added: Int
         let removed: Int
@@ -429,7 +430,31 @@ struct ACPToolCallPresentationTests {
                   "+b"
               )),
               status: "completed", label: .written, path: "src/new.txt", renamedFrom: "src/old.txt",
-              available: true, added: 1, removed: 1),
+              note: "renamed from src/old.txt", available: true, added: 1, removed: 1),
+        .init(name: "new file",
+              diff: sectionDiff(.toolCall, text: diffSectionPatch(
+                  "diff --git a/repo/src/a.swift b/repo/src/a.swift",
+                  "new file mode 100644",
+                  "index 0000000..1234567",
+                  "--- /dev/null",
+                  "+++ b/repo/src/a.swift",
+                  "@@ -0,0 +1 @@",
+                  "+b"
+              )),
+              status: "completed", label: .written, path: "src/a.swift", note: "new file",
+              available: true, added: 1, removed: 0),
+        .init(name: "deleted",
+              diff: sectionDiff(.toolCall, text: diffSectionPatch(
+                  "diff --git a/repo/src/a.swift b/repo/src/a.swift",
+                  "deleted file mode 100644",
+                  "index 1234567..0000000",
+                  "--- a/repo/src/a.swift",
+                  "+++ /dev/null",
+                  "@@ -1 +0,0 @@",
+                  "-a"
+              )),
+              status: "completed", label: .written, path: "src/a.swift", note: "deleted",
+              available: true, added: 0, removed: 1),
         .init(name: "outside the worktree",
               diff: sectionDiff(.toolCall, path: "/repo2/a.swift",
                                 text: editPatch.replacingOccurrences(of: "repo/src/a.swift", with: "repo2/a.swift")),
@@ -446,6 +471,7 @@ struct ACPToolCallPresentationTests {
         #expect(section.label == row.label)
         #expect(section.path == row.path)
         #expect(section.renamedFrom == row.renamedFrom)
+        #expect(section.changeNote == row.note)
         #expect(section.added == row.added && section.removed == row.removed)
         if row.available {
             let parsed = try #require(row.diff.parsed())
