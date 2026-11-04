@@ -120,6 +120,30 @@ struct ACPTranscriptCurrentPlanTests {
         #expect(session.transcript.currentPlan == [.init(content: "a", status: "completed")])
     }
 
+    @Test("a checklist plan_update replaces only the row of its own plan id")
+    func identifiedChecklistReplacesItsOwnRow() {
+        let session = makeSession(agentId: "codex")
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "pending")]))))
+        session.apply(.planUpdate(.init(planId: "b", content: .items([.init(content: "b", priority: nil, status: "pending")]))))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "completed")]))))
+
+        let checklists = session.transcript.messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [[.init(content: "a", status: "completed")], [.init(content: "b", status: "pending")]])
+    }
+
+    @Test("plan_removed clears its checklist from the current plan and the plan pill")
+    func removedChecklistLeavesNoCurrentPlan() {
+        let session = makeSession(agentId: "codex")
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "in_progress")]))))
+        #expect(ACPPlanPillState(items: session.transcript.currentPlan) != nil)
+
+        session.apply(.planRemoved(planId: "a"))
+        #expect(session.transcript.currentPlan?.isEmpty != false)
+        #expect(ACPPlanPillState(items: session.transcript.currentPlan) == nil)
+    }
+
     @Test("a turn with only Markdown plans has no current plan")
     func markdownNeverFeedsCurrentPlan() {
         let session = makeSession()
