@@ -627,9 +627,22 @@ impl<D: Driver> Computer<D> {
                 call.check()?;
                 payload["action"] = json!(action);
                 payload["delivery"] = json!(delivery);
-                let read = self.read(call, &window, params, action, true)?;
-                payload["truncated"] = json!(read.truncated);
-                payload["elements"] = Value::Array(read.elements);
+                // The input landed; a failed re-read, such as of a window it closed, must not
+                // report it as failed.
+                match self.read(call, &window, params, action, true) {
+                    Ok(read) => {
+                        payload["truncated"] = json!(read.truncated);
+                        payload["elements"] = Value::Array(read.elements);
+                    }
+                    Err(error) if error == message::CANCELLED => return Err(error),
+                    Err(error) => {
+                        // The refs from before the input are gone either way.
+                        self.record(call, window.id, HashMap::new());
+                        payload["truncated"] = json!(true);
+                        payload["elements"] = json!([]);
+                        payload["post_state_error"] = json!(error);
+                    }
+                }
                 if params.include_screenshot {
                     match self.capture(call, &window, true) {
                         Ok((shot, png, _)) => {
@@ -2223,6 +2236,39 @@ pub(crate) mod tests {
             json!({"pid": PID, "window_id": WINDOW, "element_token": "s00000002:17", "text": "hi"});
         assert_eq!(fake.calls("type_text"), vec![at.clone(), foreground(at)]);
         assert_eq!(result["delivery"], "activation");
+    }
+
+    #[test]
+    fn a_click_that_closes_its_window_still_succeeds() {
+        let fake = Fake::mousepad();
+        fake.script(
+            "get_window_state",
+            vec![fixture("gws_elements"), fixture("gws_bad_window")],
+        );
+        fake.script("click", vec![fixture("click_element")]);
+        let mut computer = new_computer(&fake);
+        inspect(&mut computer, None);
+
+        let result = payload(&computer.perform(
+            SESSION,
+            &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+        ));
+
+        assert_eq!(result["action"], "click");
+        assert_eq!(result["elements"], json!([]));
+        assert_eq!(result["truncated"], true);
+        assert_eq!(
+            result["post_state_error"],
+            "computer_window_not_found: No on-screen window 39845891. Call computer_apps again."
+        );
+        // Its refs went with the window.
+        assert!(
+            error(&computer.perform(
+                SESSION,
+                &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+            ))
+            .contains("e1")
+        );
     }
 
     /// Long text goes in calls of at most 256 characters, never splitting an accent from its

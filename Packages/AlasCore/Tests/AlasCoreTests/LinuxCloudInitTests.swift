@@ -81,6 +81,12 @@ struct LinuxCloudInitTests {
         #expect(mousepad.contains("apt-get -o DPkg::Lock::Timeout=300 update"))
         #expect(mousepad.contains("apt-get -o DPkg::Lock::Timeout=300 install -y mousepad"))
         #expect(commands.last == "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user restart alas-vm-guest || true")
+        // Restarting the helper leaves the apps agents opened, already for the restart that follows.
+        #expect(Array(commands.suffix(4).dropLast()) == [
+            "install -d -m 0755 /etc/systemd/user/alas-vm-guest.service.d",
+            #"printf '[Service]\nKillMode=process\n' > /etc/systemd/user/alas-vm-guest.service.d/keep-apps.conf"#,
+            "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user daemon-reload || true",
+        ])
 
         // The lock screen swallows foreground input, so the screensaver, its locker and DPMS stay off.
         let screensaver = try #require(LinuxGuestSetup.lockerOffFiles.first { $0.path.hasSuffix("/xfce4-screensaver.xml") })
