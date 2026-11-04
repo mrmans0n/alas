@@ -206,13 +206,52 @@ public enum ACPUsageLimitDetector: Sendable {
             return nil
         }
 
+        return limit(
+            resettable: resettable, resetCandidates: candidates,
+            claudeRateLimit: claudeRateLimit, now: now, calendar: calendar
+        )
+    }
+
+    /// A usage limit reported by a structured failure record. A title with a
+    /// known Claude prefix decides resettability as above; any other title
+    /// uses `resettableUnlessClaude`, because Claude's `quota_exhausted` also
+    /// covers billing and account holds, which no reset lifts.
+    /// `resettableUnlessClaude`: pass `session.agentId != ACPManagedAdapterDescriptor.claude.agentID`.
+    public static func detect(
+        failure: ACPSessionFailureRecord,
+        turnAgentText: String?,
+        claudeRateLimit: ACPClaudeRateLimit?,
+        now: Date,
+        calendar: Calendar = .current,
+        resettableUnlessClaude: Bool
+    ) -> ACPUsageLimit? {
+        guard failure.isUsageLimit else { return nil }
+        let title = failure.title
+        let resettable = claudeUsageLimitPrefixes.contains { title.hasPrefix($0) }
+            ? resettableClaudePrefixes.contains { title.hasPrefix($0) }
+            : resettableUnlessClaude
+        let agentText = turnAgentText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return limit(
+            resettable: resettable,
+            resetCandidates: [failure.details, title, agentText].compactMap { $0 },
+            claudeRateLimit: claudeRateLimit, now: now, calendar: calendar
+        )
+    }
+
+    private static func limit(
+        resettable: Bool,
+        resetCandidates: [String],
+        claudeRateLimit: ACPClaudeRateLimit?,
+        now: Date,
+        calendar: Calendar
+    ) -> ACPUsageLimit {
         var resetsAt: Date?
         var source = ACPUsageLimit.ResetSource.unknown
         if let rateLimit = claudeRateLimit, rateLimit.status == "rejected",
            let structured = rateLimit.resetsAt, structured > now {
             resetsAt = structured
             source = .structured
-        } else if let parsed = candidates.lazy
+        } else if let parsed = resetCandidates.lazy
             .compactMap({ ACPUsageLimitResetParser.resetDate(in: $0, now: now, calendar: calendar) })
             .first, parsed > now, parsed.timeIntervalSince(now) <= maxParsedResetAhead {
             resetsAt = parsed

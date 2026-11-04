@@ -317,6 +317,12 @@ struct ACPConnectionTests {
         } else {
             #expect(outcome.failure == .absent)
         }
+
+        mock.script(method: "session/prompt") { _ in
+            Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":"boom"}}"#.utf8)
+        }
+        let unreadable = try await connection.prompt(sessionId: "s", blocks: [])
+        #expect(unreadable.failure == (honored ? .unreadable : .absent))
     }
 
     @Test("fork points need version 1 and a known boundary", arguments: [

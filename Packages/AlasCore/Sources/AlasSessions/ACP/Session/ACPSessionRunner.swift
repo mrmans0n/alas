@@ -2431,6 +2431,19 @@ public final class ACPSessionRunner {
         }
     }
 
+    /// The usage limit a `session/prompt` response's failure record reports,
+    /// read before the turn's bookkeeping ends so this turn's text is in reach.
+    private func typedUsageLimit(_ failure: ACPSessionFailureSignal) -> ACPUsageLimit? {
+        guard case .record(let record) = failure else { return nil }
+        return ACPUsageLimitDetector.detect(
+            failure: record,
+            turnAgentText: [currentTurnLastAgentText(), bufferedAgentText()].compactMap { $0 }.joined(),
+            claudeRateLimit: session.latestClaudeRateLimit,
+            now: Date(),
+            resettableUnlessClaude: session.agentId != ACPManagedAdapterDescriptor.claude.agentID
+        )
+    }
+
     /// A usage limit stopped the active prompt. The prompt itself reached the
     /// agent (it is in the agent's history), so a queued one is consumed like
     /// a success; resuming sends a short continue prompt instead.
@@ -4889,7 +4902,22 @@ extension ACPSessionRunner {
                             self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
                         }
                     }
-                    if isActivePrompt {
+                    let typedUsageLimit = isActivePrompt && completionResult == .limited
+                        ? self.typedUsageLimit(promptOutcome.failure) : nil
+                    if let typedUsageLimit {
+                        self.session.clearRetryStatus()
+                        self.applyUsageLimit(typedUsageLimit, failedQueuedItemId: queuedItemId)
+                        // A direct prompt's fork context and acknowledgement were
+                        // handled above; a queued one's wait for this queue write.
+                        if queuedItemId != nil {
+                            if deliveredForkContext { self.persistForkContextDelivered() }
+                            self.acknowledgeAfterQueuedPersistence(promptAcknowledgement)
+                        }
+                        self.activePromptID = nil
+                        self.emitTurnCompleted(.limited, promptID: promptID, quota: promptOutcome.quota)
+                        self.deferCompletedOutputBoundaryUntilUpdatesDrain()
+                        self.onPromptWorkChanged?()
+                    } else if isActivePrompt {
                         self.session.clearRetryStatus()
                         let completionUserMessageID = promptRecording.messageID
                             ?? recordedUserMessageID

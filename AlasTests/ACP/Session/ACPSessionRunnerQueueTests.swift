@@ -249,6 +249,81 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock).isEmpty, "nothing reaches the outdated agent")
     }
 
+    private static func quotaRecordResponse(title: String, severity: String = "error") throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["stopReason": "end_turn", "_meta": ["sessionFailure": [
+            "version": 1, "id": "t:quota", "revision": 1, "severity": severity,
+            "kind": ACPSessionFailureRecord.quotaExhaustedKind, "title": title,
+        ] as [String: Any]]] as [String: Any])
+    }
+
+    private static func negotiateSessionFailure(_ runner: ACPSessionRunner, _ mock: ACPMockClient) async throws {
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"sessionFailure":{"version":1}}}"#.utf8)
+        }
+        try await runner.connection.initialize()
+    }
+
+    @Test("a quota record enters Limited, consumes the queued prompt and schedules a resume", arguments: ["claude", "codex"])
+    func quotaRecordEntersLimitedAndSchedulesResume(agentID: String) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: agentID, onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        let head = try #require(session.queue.first?.id)
+        runner.persistQueue()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let databasePath = store.path
+        let body = try Self.quotaRecordResponse(title: "You've hit your usage limit.")
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: body, durableConsumptionAcknowledgement: {
+                let queue = try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s")
+                #expect(queue?.map(\.id).contains(head) == false)
+                acknowledgement.record()
+            })
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        try await waitUntil { acknowledgement.recordedCount > 0 }
+
+        runner.flushQueueIfIdle()
+        #expect(completions.map(\.result) == [.limited])
+        #expect(session.usageLimit != nil)
+        #expect(session.usageLimitResumeItem != nil)
+        #expect(session.turnFailure == nil)
+        #expect(!session.queue.map(\.id).contains(head))
+        #expect(Self.sentPromptTexts(mock) == ["first"])
+        #expect(acknowledgement.recordedCount == 1)
+    }
+
+    @Test("a quota record for a Claude billing failure shows Limited and schedules no resume")
+    func quotaRecordOnClaudeBillingSchedulesNoResume() async throws {
+        let (runner, mock, session, _) = try mkRunner(agentID: "claude")
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.quotaRecordResponse(title: "Your credit balance is too low")
+        mock.script(method: "session/prompt") { _ in body }
+        session.enqueue(blocks: [.text("first")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit?.resettable == false)
+        #expect(session.usageLimitResumeItem == nil)
+    }
+
+    @Test("a warning of the quota kind does not limit the session")
+    func quotaKindOnWarningDoesNotLimit() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, _) = try mkRunner(onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.quotaRecordResponse(title: "You've hit your limit", severity: "warning")
+        mock.script(method: "session/prompt") { _ in body }
+        session.enqueue(blocks: [.text("first")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        #expect(completions.map(\.result) == [.completed])
+        #expect(session.usageLimit == nil)
+    }
+
     @Test("a resume that succeeds clears the Limited state and the queue drains")
     func usageLimitResumeSucceeds() async throws {
         let (runner, mock, session, _) = try mkRunner()

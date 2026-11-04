@@ -228,6 +228,40 @@ struct ACPSessionForkRunnerTests {
         #expect(acknowledgement.persistedQueueCounts == [0])
     }
 
+    @Test("a first prompt stopped by a quota record keeps its context delivered and acknowledges once", arguments: [true, false])
+    func quotaRecordFirstPromptKeepsContextDelivered(queued: Bool) async throws {
+        let (runner, mock, session, persistence) = try await makeRunner()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"sessionFailure":{"version":1}}}"#.utf8)
+        }
+        try await runner.connection.initialize()
+        let acknowledgement = ForkPromptAcknowledgementRecorder()
+        let path = persistence.path
+        let sessionID = session.id
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(
+                body: Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:quota","revision":1,"severity":"error","kind":"quota_exhausted","title":"Usage limit exceeded"}}}"#.utf8),
+                durableConsumptionAcknowledgement: {
+                    acknowledgement.recordPersistedForkState(path: path, targetSessionID: sessionID)
+                }
+            )
+        }
+        if queued {
+            session.enqueue(blocks: [.text("Continue")])
+            runner.persistQueue()
+            await runner.flushPersistence()
+            runner.flushQueueIfIdle()
+        } else {
+            runner.sendNow(blocks: [.text("Continue")], queuedItemId: nil)
+        }
+
+        try await waitUntil { session.usageLimit != nil }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.persistedPendingStates == [false])
+        #expect(try await persistence.loadFork(targetSessionID: sessionID)?.contextDeliveryPending == false)
+    }
+
     @Test("failed fork marker persistence leaves queued first prompt unacknowledged")
     func failedForkMarkerPersistenceDoesNotAcknowledgeQueuedPrompt() async throws {
         let (runner, mock, session, persistence) = try await makeRunner()

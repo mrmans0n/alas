@@ -48,6 +48,7 @@ struct ACPPromptQuotaTests {
         let json = Data(#"{"stopReason":"end_turn","_meta":{"quota":{"token_count":{"totalTokens":7}},"sessionFailure":"boom"}}"#.utf8)
         let result = try JSONDecoder().decode(ACPSessionPromptResult.self, from: json)
         #expect(result.quota?.tokenCount?.totalTokens == 7)
+        #expect(result.stopReason.rawValue == .string("end_turn"))
         #expect(result.failure == .unreadable)
     }
 
