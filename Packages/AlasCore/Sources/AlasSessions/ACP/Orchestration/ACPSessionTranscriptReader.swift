@@ -76,7 +76,9 @@ public enum ACPSessionTranscriptReader: Sendable {
             case .visualAid(let visual):
                 append("tool", visual.transcriptSummary)
             case .planDocument(_, let document):
-                if let text = planText(document) { append("agent", text) }
+                // A removed plan keeps its slot, so paged reads that
+                // started before the removal don't skip the next entry.
+                append(document.hidden ? "system" : "agent", planText(document) ?? "Plan removed.")
             case .thought, .plan:
                 continue
             }

@@ -29,12 +29,23 @@ struct ACPSessionTranscriptReaderTests {
 
         let result = ACPSessionTranscriptReader.entries(messages)
 
-        #expect(result.map(\.role) == ["user", "tool", "tool", "agent", "tool", "agent", "agent"])
+        #expect(result.map(\.role) == ["user", "tool", "tool", "agent", "tool", "agent", "agent", "system"])
         #expect(result.map(\.text) == [
             "Fix the parser", "Bash [completed]", "Edited Sources/Parser.swift (+3 -1)", "    let indented = true\n",
-            "visual aid: Layouts (answered: b)", "# Plan", "Plan file: /p.md",
+            "visual aid: Layouts (answered: b)", "# Plan", "Plan file: /p.md", "Plan removed.",
         ])
-        #expect(result.map(\.index) == [0, 1, 2, 3, 4, 5, 6])
+        #expect(result.map(\.index) == [0, 1, 2, 3, 4, 5, 6, 7])
+    }
+
+    @Test("hiding a plan between paged reads keeps later entries at their offsets")
+    func hiddenPlanKeepsReadOffsets() {
+        let user = ACPMessage.user(id: UUID(), text: "Plan it", attachments: [])
+        let tool = ACPMessage.toolCall(.init(toolCallId: "t1", title: "Read", status: "completed", content: "", name: "Read"))
+        let answer = ACPMessage.agent(id: UUID(), StreamingText("Answer"))
+        let before = ACPSessionTranscriptReader.entries([user, .planDocument(id: UUID(), .markdownFixture), tool, answer])
+        let after = ACPSessionTranscriptReader.entries([user, .planDocument(id: UUID(), .hiddenFixture), tool, answer])
+
+        #expect(after.map(\.text)[2...] == before.map(\.text)[2...])
     }
 
     @Test("the last agent text is the latest agent message or shown plan")
