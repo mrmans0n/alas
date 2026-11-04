@@ -200,6 +200,92 @@ struct AppStateRepoIconTests {
         #expect(second.imagePath != first.imagePath)
     }
 
+    @Test func sidebarAnswersFromMemoryUntilARecheckIsDue() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let state = state(staging: fixture.staging)
+        state.repoIconRenderCache.recheckInterval = .infinity
+        let local = project(path: fixture.checkout.path)
+
+        let first = state.sidebarIcon(for: local)
+        #expect(first.mode == .image)
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes + Data([0x00]))
+
+        #expect(state.sidebarIcon(for: local) == first)
+        // A new app icon is not a file change: it applies immediately.
+        let recoloured = project(path: fixture.checkout.path, icon: .default(color: "#ff0000"))
+        #expect(state.sidebarIcon(for: recoloured).color == "#ff0000")
+    }
+
+    /// A repo icon replaced, removed, or appearing where there was none.
+    @Test(arguments: [("replaced", true), ("removed", true), ("added", false)])
+    func sidebarPicksUpARepoFileChangeOnARecheck(change: String, startsWithIcon: Bool) async throws {
+        let fixture = try Fixture()
+        if startsWithIcon { try fixture.writeIcon("icon.png", bytes: Self.pngBytes) }
+        let state = state(staging: fixture.staging)
+        let cache = state.repoIconRenderCache
+        cache.recheckInterval = 0
+        let local = project(path: fixture.checkout.path)
+        let first = state.sidebarIcon(for: local)
+
+        switch change {
+        case "removed": try FileManager.default.removeItem(at: fixture.alas.appendingPathComponent("icon.png"))
+        default: try fixture.writeIcon("icon.png", bytes: Self.pngBytes + Data([0x00]))
+        }
+        // The first read after the change only schedules the re-check.
+        #expect(state.sidebarIcon(for: local) == first)
+        await cache.waitForRecheck()
+
+        #expect(cache.revision == 1)
+        #expect(state.sidebarIcon(for: local) == state.effectiveIcon(for: local))
+        #expect(state.sidebarIcon(for: local) != first)
+    }
+
+    /// The only render after an edit comes before the re-check is due. Its stale
+    /// answer still gets corrected, with no further render to prompt it.
+    @Test func aStaleAnswerIsCorrectedWithoutAnotherRender() async throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let state = state(staging: fixture.staging)
+        let cache = state.repoIconRenderCache
+        cache.recheckInterval = 0.2
+        let local = project(path: fixture.checkout.path)
+        let first = state.sidebarIcon(for: local)
+
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes + Data([0x00]))
+        #expect(state.sidebarIcon(for: local) == first)
+        await cache.waitForRecheck()
+
+        #expect(cache.revision == 1)
+        #expect(state.sidebarIcon(for: local) != first)
+    }
+
+    /// A config that starts naming an image adds that file to what is watched,
+    /// so later edits to the image still reach the sidebar.
+    @Test func sidebarWatchesAnImageAConfigStartsNaming() async throws {
+        let fixture = try Fixture()
+        let state = state(staging: fixture.staging)
+        let cache = state.repoIconRenderCache
+        cache.recheckInterval = 0
+        let local = project(path: fixture.checkout.path)
+        _ = state.sidebarIcon(for: local)
+
+        func settledIcon() async -> ProjectIcon {
+            _ = state.sidebarIcon(for: local)
+            await cache.waitForRecheck()
+            return state.sidebarIcon(for: local)
+        }
+
+        try fixture.writeIcon("logo.png", bytes: Self.pngBytes)
+        try fixture.writeConfig(#"{"version": 1, "icon": {"image": "logo.png"}}"#)
+        let named = await settledIcon()
+        #expect(named.mode == .image)
+
+        try fixture.writeIcon("logo.png", bytes: Self.pngBytes + Data([0x00]))
+        let edited = await settledIcon()
+        #expect(edited.imagePath != named.imagePath)
+    }
+
     @Test("an unknown repo default agent falls through to the global one")
     func unknownRepoDefaultAgentFallsThroughToGlobal() throws {
         let fixture = try Fixture()

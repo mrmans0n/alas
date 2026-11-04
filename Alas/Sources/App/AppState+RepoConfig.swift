@@ -63,6 +63,25 @@ extension AppState {
         return resolution.icon
     }
 
+    /// `effectiveIcon(for:)` for render paths that run on scroll frames: answers
+    /// from memory and picks up repo file edits within a few seconds.
+    func sidebarIcon(for project: ProjectConfig) -> ProjectIcon {
+        guard project.host == nil, !RepoIconResolver.iconIsExplicit(project.icon) else { return project.icon }
+        return repoIconRenderCache.icon(
+            for: project,
+            watched: { [repoConfigStore] project in
+                let root = URL(fileURLWithPath: project.path, isDirectory: true)
+                let alas = root.appendingPathComponent(".alas", isDirectory: true)
+                let image = repoConfigStore.config(worktreeRoot: root)?.icon?.image
+                let configured = image.flatMap(RepoConfig.sanitizedIconPath).map { alas.appendingPathComponent($0).path }
+                return [root.appendingPathComponent(RepoConfig.relativePath).path]
+                    + RepoConfigStore.discoveredIconExtensions.map { alas.appendingPathComponent("icon.\($0)").path }
+                    + (configured.map { [$0] } ?? [])
+            },
+            resolve: { [weak self] project in self?.effectiveIcon(for: project) ?? project.icon }
+        )
+    }
+
     /// Records trust decisions for a batch of repo-defined MCP servers.
     func approveRepoMCPServers(projectId: String, servers: [ProjectMCPServer]) {
         for server in servers {

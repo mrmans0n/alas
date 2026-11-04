@@ -26,7 +26,7 @@ struct SidebarHeaderCountPlusButton: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
-            .onHover { plusHovering = $0 }
+            .sidebarHover { plusHovering = $0 }
             .help(help)
             .opacity(rowHovering ? 1 : 0)
             .allowsHitTesting(rowHovering)

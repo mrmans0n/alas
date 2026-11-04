@@ -248,7 +248,7 @@ struct RepoGroupView: View {
             Divider()
             Button("Remove Project…", role: .destructive, action: onRemoveProject)
         }
-        .onHover { hovering = $0 }
+        .sidebarHover { hovering = $0 }
         .draggable(ProjectDragId(id: project.id))
         .dropDestination(for: ProjectDragId.self) { items, _ in
             guard let draggedId = items.first?.id, draggedId != project.id else { return false }

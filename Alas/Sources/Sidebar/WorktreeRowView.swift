@@ -418,7 +418,7 @@ struct WorktreeRowView: View {
         .aiBeam(isActive: isNamingBranch, cornerRadius: 9)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
-        .onHover { hovering = $0 }
+        .sidebarHover { hovering = $0 }
         .onTapGesture {
             if !isPending {
                 onTap()

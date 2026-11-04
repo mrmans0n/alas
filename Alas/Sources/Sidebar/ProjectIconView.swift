@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct ProjectIconView: View {
@@ -128,7 +129,7 @@ struct ProjectIconView: View {
 
     private func loadImage() -> NSImage? {
         guard let imagePath = icon.imagePath else { return nil }
-        return NSImage(contentsOf: ProjectIconImageStaging.url(for: imagePath))
+        return ProjectIconThumbnails.image(imagePath: imagePath, dimension: size.dimension)
     }
 
     nonisolated static func accessibilityLabel(project: ProjectConfig) -> String {
@@ -217,4 +218,36 @@ struct ProjectIconGradientPreset {
         .init("Deep Sea", ["#0f2027", "#203a43", "#2c5364"], .down),
         .init("Ember", ["#cb2d3e", "#ef473a"]),
     ]
+}
+
+/// Decoded project icons at the size they are drawn. Rows mount and unmount as
+/// a lazy list scrolls, and a repo's icon can be a 512px PNG drawn at 19pt, so
+/// reading it in `body` would decode it on the main thread at every mount and
+/// leave Core Animation to resample it on every commit. Staged file names carry
+/// a hash of their content, so an entry can never go stale.
+@MainActor
+enum ProjectIconThumbnails {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(imagePath: String, dimension: CGFloat) -> NSImage? {
+        // Keyed on the path as stored: building its URL stats the disk.
+        let key = "\(Int(dimension))@\(imagePath)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = decode(ProjectIconImageStaging.url(for: imagePath), dimension: dimension) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    private static func decode(_ url: URL, dimension: CGFloat) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceShouldCacheImmediately: true,
+                  // Sharp on the 2x displays Macs ship with; a 3x mirror is rare.
+                  kCGImageSourceThumbnailMaxPixelSize: Int(dimension * 2),
+              ] as CFDictionary)
+        else { return NSImage(contentsOf: url) }
+        return NSImage(cgImage: thumbnail, size: NSSize(width: thumbnail.width / 2, height: thumbnail.height / 2))
+    }
 }
