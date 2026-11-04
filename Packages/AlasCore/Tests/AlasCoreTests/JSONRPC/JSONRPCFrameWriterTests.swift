@@ -33,7 +33,8 @@ struct JSONRPCFrameWriterTests {
         let first = Task { await writer.writeFrame(Data("first".utf8), authorize: { true }) }
         defer { gate.signal() }
         try await eventually { entered.withLock { $0 } }
-        let ordinary = Task.detached { Result { try writer.send(Data("ordinary".utf8)) } }
+        // A blocking send waits off the cooperative pool, which every other test shares.
+        let ordinary = Task { await BlockingWork.run { Result { try writer.send(Data("ordinary".utf8)) } } }
         let next = Task { await writer.writeFrame(Data("next".utf8), authorize: { true }) }
         writer.close()
         gate.signal()
@@ -86,17 +87,24 @@ struct JSONRPCFrameWriterTests {
         try await eventually { claimed.withLock { $0 } }
         let ordinaryStarted = Mutex(false)
         let ordinaryFinished = Mutex(false)
-        let ordinary = Task.detached {
-            ordinaryStarted.withLock { $0 = true }
-            let result = Result { try transport.send(Data("ordinary".utf8)) }
-            ordinaryFinished.withLock { $0 = true }
-            return result
+        // Blocking sends and terminate wait off the cooperative pool, which every other test shares.
+        let ordinary = Task {
+            await BlockingWork.run {
+                ordinaryStarted.withLock { $0 = true }
+                let result = Result { try transport.send(Data("ordinary".utf8)) }
+                ordinaryFinished.withLock { $0 = true }
+                return result
+            }
         }
         defer { ordinary.cancel() }
         try await eventually { ordinaryStarted.withLock { $0 } }
         let terminated = Mutex(false)
-        let stopping = Task.detached { transport.terminate()
-        terminated.withLock { $0 = true } }
+        let stopping = Task {
+            await BlockingWork.run {
+                transport.terminate()
+                terminated.withLock { $0 = true }
+            }
+        }
         defer { stopping.cancel() }
         try await eventually { terminated.withLock { $0 } && finished.withLock { $0 } && completed.withLock { $0 != nil } && ordinaryFinished.withLock { $0 } }
         if case .writeUncertain? = completed.withLock({ $0 }) {} else { Issue.record("Interrupted pipe write was not uncertain") }
