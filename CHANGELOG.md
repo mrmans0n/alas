@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-11-04
+
+### ✨ Features
+
+- Pause idle macOS worktree VMs, resume their saved state, create and restore clean points, run per-project guest setup scripts, and inspect or clean up VM disk use from Settings (#2333, #2337).
+- Show negotiated exact Git patches in agent tool rows and approval cards, including proposed and written states, change kinds, and line counts (#2338).
+
+### 🐛 Fixes
+
+- Make Linux VM computer use reliable after captures and with running apps, report incomplete non-ASCII ref typing, refresh stale guest helpers, and reserve system shortcuts for active takeovers (#2340).
+- Skip macOS 27.2 first-login panes when creating new VM base images (#2342).
+- Match Markdown preview typography to chat settings and improve spacing, list indentation, code blocks, and hard line breaks (#2341).
+- Detect installed agent harnesses during SSH host setup, and keep long setup errors readable, scrollable, selectable, and copyable (#2335, #2336).
+- Attach detached source sessions before attempting a native fork instead of prematurely falling back to a transcript import (#2334).
+
+### 🏗️ Internal
+
+- Continue the disabled-by-default ACP 2 runtime foundation with fresh attachment bootstrap, durable session projection, and coordinated interactive request decisions (#2332, #2339, #2343).
+
 ## [0.23.0] - 2026-11-03
 
 ### ✨ Features
