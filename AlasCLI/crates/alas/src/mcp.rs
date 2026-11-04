@@ -614,6 +614,7 @@ fn all_tool_definitions() -> Vec<Value> {
     tools.extend(preview_tool_definitions());
     tools.extend(computer_tool_definitions());
     tools.extend(vm_tool_definitions());
+    tools.extend(device_tool_definitions());
     tools.extend(workspace_tool_definitions());
     tools
 }
@@ -868,6 +869,125 @@ fn vm_tools_without_vm() -> Vec<Value> {
 /// The longest `vm_run` command accepted.
 const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 
+/// The buttons `device_button` presses.
+const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
+
+const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Device tab. `device_user_active` means they took over: wait for them to hand it back. `device_disabled` means device control is off in Alas's settings.";
+
+fn device_tool_definitions() -> Vec<Value> {
+    let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });
+    let include_screenshot = json!({ "type": "boolean", "description": "Also return a screenshot taken after the action. Default: false." });
+    let coordinate = json!({ "type": "number", "minimum": 0 });
+    vec![
+        json!({
+            "name": "device_list",
+            "description": "List the iOS simulators on this Mac: udid, name, runtime, and state (booted or shutdown).",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "device_open",
+            "description": format!("Open an iOS simulator for this session: boot it if it is shut down (this can take a minute), and show it in the Device tab of this worktree. Call it before the other device_* tools. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": { "udid": udid },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_snapshot",
+            "description": "Read the simulator screen's accessibility elements: ref, role, label, value, id and frame in screen points, plus the screen size. Refs such as s2e3 are valid until the next device_snapshot of the same device. Prefer this over screenshots to find what to tap.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "query": { "type": "string", "maxLength": 256, "description": "Only elements whose role, label, value or id contain this text." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Default: 200." }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_screenshot",
+            "description": "Capture a PNG of the simulator screen (long edge at most 1280 px), with its width and height. x/y arguments of device_tap and device_swipe are pixels in the latest screenshot of the device.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": { "udid": udid },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_tap",
+            "description": format!("Tap the simulator screen: on an element ref from the latest device_snapshot, or at x/y pixels in the latest device_screenshot. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "ref": { "type": "string", "description": "An element ref such as s2e3. Use instead of x/y." },
+                    "x": coordinate,
+                    "y": coordinate,
+                    "include_screenshot": include_screenshot
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_swipe",
+            "description": format!("Swipe on the simulator screen: a direction across the middle of the screen (up scrolls content up), or from one point to another in pixels of the latest device_screenshot. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
+                    "from_x": coordinate,
+                    "from_y": coordinate,
+                    "to_x": coordinate,
+                    "to_y": coordinate,
+                    "duration_ms": { "type": "integer", "minimum": 50, "maximum": 5000, "description": "Default: 300." },
+                    "include_screenshot": include_screenshot
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_type",
+            "description": format!("Type ASCII text into the focused field of the simulator, as key presses on a US keyboard; \\n presses Return. Tap the field first. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "text": { "type": "string", "minLength": 1, "maxLength": DEVICE_TYPE_MAX_BYTES },
+                    "include_screenshot": include_screenshot
+                },
+                "required": ["udid", "text"]
+            }
+        }),
+        json!({
+            "name": "device_button",
+            "description": format!("Press a hardware button on the simulator. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "name": { "type": "string", "enum": DEVICE_BUTTONS },
+                    "include_screenshot": include_screenshot
+                },
+                "required": ["udid", "name"]
+            }
+        }),
+    ]
+}
+
+/// The longest `device_type` text accepted.
+const DEVICE_TYPE_MAX_BYTES: usize = 4096;
+
 /// The input schema shared by the actions that operate a window and return a
 /// fresh read of it.
 fn computer_action_schema(extra: Value, required: &[&str]) -> Value {
@@ -1099,6 +1219,7 @@ fn is_headless_hidden(name: &str) -> bool {
         || name.starts_with("preview_")
         || name.starts_with("computer_")
         || name.starts_with("vm_")
+        || name.starts_with("device_")
         || matches!(name, "open" | "worktree_switch")
 }
 
@@ -1682,6 +1803,88 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 vm: optional_vm(args)?,
             })
         }
+        "device_list" => {
+            reject_arguments(args, name, &[])?;
+            Ok(Command::Device(alas_client::DeviceCommand::List))
+        }
+        "device_open" => {
+            reject_arguments(args, name, &["udid"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Open {
+                udid: required_limited_string(args, "udid", 64)?,
+            }))
+        }
+        "device_snapshot" => {
+            reject_arguments(args, name, &["udid", "query", "limit"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Snapshot {
+                udid: required_limited_string(args, "udid", 64)?,
+                query: optional_limited_string(args, "query", 256)?,
+                limit: optional_bounded_u64(args, "limit", 1, 1000)?.unwrap_or(200),
+            }))
+        }
+        "device_screenshot" => {
+            reject_arguments(args, name, &["udid"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Screenshot {
+                udid: required_limited_string(args, "udid", 64)?,
+            }))
+        }
+        "device_tap" => {
+            reject_arguments(args, name, &["udid", "ref", "x", "y", "include_screenshot"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Tap {
+                udid: required_limited_string(args, "udid", 64)?,
+                target: device_target(args)?,
+                include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
+        "device_swipe" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "udid",
+                    "direction",
+                    "from_x",
+                    "from_y",
+                    "to_x",
+                    "to_y",
+                    "duration_ms",
+                    "include_screenshot",
+                ],
+            )?;
+            Ok(Command::Device(alas_client::DeviceCommand::Swipe {
+                udid: required_limited_string(args, "udid", 64)?,
+                gesture: device_swipe(args)?,
+                duration_ms: optional_bounded_u64(args, "duration_ms", 50, 5000)?.unwrap_or(300),
+                include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
+        "device_type" => {
+            reject_arguments(args, name, &["udid", "text", "include_screenshot"])?;
+            let text = match args.get("text") {
+                Some(Value::String(text)) if !text.is_empty() && text.len() <= DEVICE_TYPE_MAX_BYTES => {
+                    text.clone()
+                }
+                _ => {
+                    return Err(format!(
+                        "text must be a non-empty string of at most {DEVICE_TYPE_MAX_BYTES} bytes"
+                    ))
+                }
+            };
+            Ok(Command::Device(alas_client::DeviceCommand::Type {
+                udid: required_limited_string(args, "udid", 64)?,
+                text,
+                include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
+        "device_button" => {
+            reject_arguments(args, name, &["udid", "name", "include_screenshot"])?;
+            let button = optional_enum(args, "name", DEVICE_BUTTONS)?
+                .ok_or_else(|| "missing required argument 'name'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::Button {
+                udid: required_limited_string(args, "udid", 64)?,
+                name: button.to_string(),
+                include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
         "preview_open" => {
             let url = optional_limited_string(args, "url", 8192)?;
@@ -2042,6 +2245,77 @@ fn optional_limited_string_raw(
     }
 }
 
+/// A finite, non-negative coordinate.
+fn optional_coordinate(args: &Value, key: &str) -> Result<Option<f64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 0.0 && *value <= 100_000.0)
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be a number from 0 to 100000")),
+    }
+}
+
+/// An `s<snapshot>e<element>` ref from `device_snapshot`.
+fn optional_device_ref(args: &Value, key: &str) -> Result<Option<String>, String> {
+    let valid = |value: &str| {
+        let Some(rest) = value.strip_prefix('s') else {
+            return false;
+        };
+        let Some((snapshot, element)) = rest.split_once('e') else {
+            return false;
+        };
+        [snapshot, element].iter().all(|digits| {
+            (1..=9).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    };
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if valid(value) => Ok(Some(value.clone())),
+        Some(_) => Err(format!("{key} must be a ref such as s2e3 from device_snapshot")),
+    }
+}
+
+/// Exactly one of `ref` or both `x` and `y`.
+fn device_target(args: &Value) -> Result<alas_client::DeviceTarget, String> {
+    let reference = optional_device_ref(args, "ref")?;
+    let x = optional_coordinate(args, "x")?;
+    let y = optional_coordinate(args, "y")?;
+    match (reference, x, y) {
+        (Some(reference), None, None) => Ok(alas_client::DeviceTarget::Ref(reference)),
+        (None, Some(x), Some(y)) => Ok(alas_client::DeviceTarget::Point { x, y }),
+        (Some(_), _, _) => Err("pass either 'ref' or 'x' and 'y', not both".into()),
+        _ => Err("pass 'ref', or both 'x' and 'y'".into()),
+    }
+}
+
+/// Exactly one of `direction` or all four point coordinates.
+fn device_swipe(args: &Value) -> Result<alas_client::DeviceSwipe, String> {
+    let direction = optional_enum(args, "direction", &["up", "down", "left", "right"])?;
+    let points = [
+        optional_coordinate(args, "from_x")?,
+        optional_coordinate(args, "from_y")?,
+        optional_coordinate(args, "to_x")?,
+        optional_coordinate(args, "to_y")?,
+    ];
+    match (direction, points) {
+        (Some(direction), [None, None, None, None]) => {
+            Ok(alas_client::DeviceSwipe::Direction(direction.to_string()))
+        }
+        (None, [Some(from_x), Some(from_y), Some(to_x), Some(to_y)]) => {
+            Ok(alas_client::DeviceSwipe::Points {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            })
+        }
+        (Some(_), _) => Err("pass either 'direction' or the from/to points, not both".into()),
+        _ => Err("pass 'direction', or all of from_x, from_y, to_x and to_y".into()),
+    }
+}
+
 /// An `eN` ref: `^e[1-9][0-9]{0,4}$`.
 fn optional_computer_ref(args: &Value, key: &str) -> Result<Option<String>, String> {
     match args.get(key) {
@@ -2337,6 +2611,7 @@ fn tool_result(command: &Command, resp: Response) -> Value {
         command,
         Command::Preview(alas_client::PreviewCommand::Capture { .. })
     ) || matches!(command, Command::Computer(computer, _) if computer.includes_screenshot())
+        || matches!(command, Command::Device(device) if device.includes_screenshot())
     {
         if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
             return result;
@@ -2386,6 +2661,7 @@ fn success_message(command: &Command) -> String {
         Command::Preview(_) => "Preview command completed.".into(),
         Command::Computer(..) => "Computer command completed.".into(),
         Command::VmRun { .. } | Command::VmStatus { .. } => "OK".into(),
+        Command::Device(_) => "Done.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -2499,7 +2775,10 @@ fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
         || matches!(
             command,
-            Command::Computer(..) | Command::VmRun { .. } | Command::VmStatus { .. }
+            Command::Computer(..)
+                | Command::VmRun { .. }
+                | Command::VmStatus { .. }
+                | Command::Device(..)
         )
         || publishes(command)
         || matches!(command, Command::SessionWait { .. })
@@ -3348,6 +3627,8 @@ mod tests {
             "computer_apps",
             "vm_run",
             "vm_status",
+            "device_list",
+            "device_tap",
             "worktree_switch",
             "workspace_list",
             "workspace_focus",
@@ -3649,6 +3930,14 @@ mod tests {
                 "computer_wait",
                 "vm_run",
                 "vm_status",
+                "device_list",
+                "device_open",
+                "device_snapshot",
+                "device_screenshot",
+                "device_tap",
+                "device_swipe",
+                "device_type",
+                "device_button",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4376,6 +4665,126 @@ mod tests {
         assert_eq!(content[1]["type"], json!("text"));
         assert!(content[1]["text"].as_str().unwrap().contains("\"url\""));
         assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+    }
+
+    #[test]
+    fn device_tools_validate_arguments_and_map_to_commands() {
+        use alas_client::{DeviceCommand, DeviceSwipe, DeviceTarget};
+        let map = |name: &str, args: Value| command_for_tool(name, &args, "/wt");
+        assert_eq!(
+            map("device_list", json!({})).unwrap(),
+            Command::Device(DeviceCommand::List)
+        );
+        assert_eq!(
+            map("device_snapshot", json!({ "udid": "U" })).unwrap(),
+            Command::Device(DeviceCommand::Snapshot {
+                udid: "U".into(),
+                query: None,
+                limit: 200
+            })
+        );
+        assert_eq!(
+            map("device_tap", json!({ "udid": "U", "ref": "s2e13" })).unwrap(),
+            Command::Device(DeviceCommand::Tap {
+                udid: "U".into(),
+                target: DeviceTarget::Ref("s2e13".into()),
+                include_screenshot: false
+            })
+        );
+        assert_eq!(
+            map(
+                "device_tap",
+                json!({ "udid": "U", "x": 10, "y": 20.5, "include_screenshot": true })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Tap {
+                udid: "U".into(),
+                target: DeviceTarget::Point { x: 10.0, y: 20.5 },
+                include_screenshot: true
+            })
+        );
+        assert_eq!(
+            map("device_swipe", json!({ "udid": "U", "direction": "up" })).unwrap(),
+            Command::Device(DeviceCommand::Swipe {
+                udid: "U".into(),
+                gesture: DeviceSwipe::Direction("up".into()),
+                duration_ms: 300,
+                include_screenshot: false
+            })
+        );
+        assert_eq!(
+            map("device_type", json!({ "udid": "U", "text": " " })).unwrap(),
+            Command::Device(DeviceCommand::Type {
+                udid: "U".into(),
+                text: " ".into(),
+                include_screenshot: false
+            })
+        );
+        let ok = map("device_button", json!({ "udid": "U", "name": "home" })).unwrap();
+        assert!(runs_on_worker(&ok));
+        for (name, args, error) in [
+            ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
+            ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
+            ("device_tap", json!({ "udid": "U", "x": 1 }), "pass 'ref', or both 'x' and 'y'"),
+            ("device_tap", json!({ "udid": "U", "ref": "e1" }), "ref must be a ref such as s2e3 from device_snapshot"),
+            ("device_swipe", json!({ "udid": "U", "direction": "up", "from_x": 1 }), "pass either 'direction' or the from/to points, not both"),
+            ("device_button", json!({ "udid": "U", "name": "volume" }), "name must be one of home, lock, siri, side_button, app_switcher"),
+            ("device_snapshot", json!({ "udid": "U", "limit": 0 }), "limit must be an integer from 1 to 1000"),
+            ("device_snapshot", json!({ "udid": "U", "limit": 1001 }), "limit must be an integer from 1 to 1000"),
+            ("device_type", json!({ "udid": "U", "text": "" }), "text must be a non-empty string of at most 4096 bytes"),
+            ("device_open", json!({}), "missing required argument 'udid'"),
+        ] {
+            assert_eq!(map(name, args).unwrap_err(), error, "{name}");
+        }
+    }
+
+    #[test]
+    fn device_screenshots_return_mcp_images() {
+        let line = json!({
+            "width": 589,
+            "height": 1280,
+            "image": { "mime_type": "image/png", "data": "iVBORw0KGgo=" }
+        })
+        .to_string();
+        for request in [
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"device_screenshot","arguments":{"udid":"U"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"device_button","arguments":{"udid":"U","name":"home","include_screenshot":true}}}"#,
+        ] {
+            let reply = handle_line(request, "/wt", |_| {
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![line.clone()]),
+                    error: None,
+                    exit_code: None,
+                })
+            })
+            .unwrap();
+            let content = reply["result"]["content"].as_array().unwrap();
+            assert_eq!(content[0]["type"], json!("image"));
+            assert_eq!(content[0]["data"], json!("iVBORw0KGgo="));
+            assert!(content[1]["text"].as_str().unwrap().contains("\"width\""));
+            assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+        }
+    }
+
+    #[test]
+    fn device_tools_mark_what_they_change_and_stay_out_of_relays_and_workspace_mode() {
+        let tools = tool_definitions();
+        let annotation = |name: &str, hint: &str| {
+            tools.iter().find(|tool| tool["name"] == json!(name)).unwrap()["annotations"][hint]
+                .clone()
+        };
+        for name in ["device_list", "device_snapshot", "device_screenshot"] {
+            assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
+        }
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button"] {
+            assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
+        }
+        for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {
+            assert!(super::tool_definitions_for_mode(scope)
+                .iter()
+                .all(|tool| !tool["name"].as_str().unwrap().starts_with("device_")));
+        }
     }
 
     #[test]
