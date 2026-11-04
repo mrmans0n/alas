@@ -106,7 +106,8 @@ struct MergeView3Way: View {
                     wordMarks: marks.local,
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
-                    coordinator: coordinator
+                    coordinator: coordinator,
+                    editHistory: model
                 )
                 MergeActionGutter(
                     side: .localToResult,
@@ -129,7 +130,9 @@ struct MergeView3Way: View {
                     endsWithNewline: lastRegionEndsWithNewline,
                     onEditFullText: { newText in
                         model.applyEditedFullText(newText, showBase: showBase)
-                    }
+                    },
+                    editHistory: model,
+                    focusToken: model.actionEditCount
                 )
                 MergeActionGutter(
                     side: .resultToRemote,
@@ -149,7 +152,8 @@ struct MergeView3Way: View {
                     wordMarks: marks.remote,
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
-                    coordinator: coordinator
+                    coordinator: coordinator,
+                    editHistory: model
                 )
                 MergeConflictMinimap(
                     conflictCount: model.conflictCount,

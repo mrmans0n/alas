@@ -196,6 +196,161 @@ struct MergeConflictTabModelTests {
         #expect(model.resultText.contains("feature line"))
     }
 
+    // MARK: - Undo
+
+    private static let undoConflicts = """
+    head
+    <<<<<<< HEAD
+    a-ours
+    =======
+    a-theirs
+    >>>>>>> feature
+    middle
+    <<<<<<< HEAD
+    b-ours
+    =======
+    b-theirs
+    >>>>>>> feature
+    tail
+
+    """
+
+    /// A model with two conflicts and no git behind it, and a clock the test moves.
+    private final class UndoClock: @unchecked Sendable { var date = Date(timeIntervalSince1970: 0) }
+
+    private static func undoModel(clock: UndoClock = UndoClock()) -> MergeConflictTabModel {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService(),
+            now: { clock.date }
+        )
+        model.resultText = undoConflicts
+        model.reparse()
+        return model
+    }
+
+    enum UndoableEdit: String, CaseIterable, Sendable {
+        case local, remote, both, blockLocal, blockRemote, typing, proposal
+    }
+
+    @Test(arguments: UndoableEdit.allCases)
+    func undoAndRedoRestoreEveryKindOfEdit(edit: UndoableEdit) throws {
+        let model = Self.undoModel()
+        let regions = model.regions
+        switch edit {
+        case .local: model.acceptLocal()
+        case .remote: model.acceptRemote()
+        case .both: model.acceptBoth()
+        case .blockLocal: model.acceptLocal(for: try #require(model.allConflictBlocks().last))
+        case .blockRemote: model.acceptRemote(for: try #require(model.allConflictBlocks().last))
+        case .typing: model.applyEditedFullText("head!\na-ours\na-theirs\nmiddle\nb-ours\nb-theirs\ntail\n")
+        case .proposal:
+            model.setAgentProposalForTesting("all merged\n")
+            model.applyAgentProposal()
+        }
+        let edited = model.resultText
+        #expect(edited != Self.undoConflicts)
+
+        model.undo()
+        #expect(model.resultText == Self.undoConflicts)
+        #expect(model.regions == regions)
+        #expect(!model.canUndo)
+
+        model.redo()
+        #expect(model.resultText == edited)
+        #expect(!model.canRedo)
+    }
+
+    @Test func undoingAPerBlockAcceptLandsOnTheReopenedConflict() throws {
+        let model = Self.undoModel()
+        #expect(model.currentConflictIndex == 0)
+        model.acceptLocal(for: try #require(model.allConflictBlocks().last))
+        #expect(model.currentConflictIndex == 0)
+
+        model.undo()
+        #expect(model.currentConflictIndex == 1)
+
+        model.redo()
+        #expect(model.currentConflictIndex == 0)
+        #expect(model.conflictCount == 1)
+    }
+
+    @Test func stepsUndoInOrderAcrossAcceptsAndTyping() {
+        let model = Self.undoModel()
+        model.acceptLocal()
+        let afterAccept = model.resultText
+        model.applyEditedFullText("head!\na-ours\nmiddle\nb-ours\nb-theirs\ntail\n")
+        let afterTyping = model.resultText
+        #expect(afterTyping != afterAccept)
+
+        model.undo()
+        #expect(model.resultText == afterAccept)
+        model.undo()
+        #expect(model.resultText == Self.undoConflicts)
+        model.redo()
+        model.redo()
+        #expect(model.resultText == afterTyping)
+    }
+
+    @Test func typingUndoesInGroupsSplitByPausesAndActions() {
+        let clock = UndoClock()
+        let model = Self.undoModel(clock: clock)
+        model.acceptLocal()
+        model.acceptLocal()
+        let start = model.resultText
+        #expect(start == "head\na-ours\nmiddle\nb-ours\ntail\n")
+
+        model.applyEditedFullText("head1\na-ours\nmiddle\nb-ours\ntail\n")
+        clock.date += 0.5
+        model.applyEditedFullText("head12\na-ours\nmiddle\nb-ours\ntail\n")
+        let firstGroup = model.resultText
+        clock.date += 5
+        model.applyEditedFullText("head123\na-ours\nmiddle\nb-ours\ntail\n")
+
+        model.undo()
+        #expect(model.resultText == firstGroup)
+        model.undo()
+        #expect(model.resultText == start)
+    }
+
+    @Test func aNewEditDropsRedoAndAnUnchangedOneRecordsNothing() {
+        let model = Self.undoModel()
+        model.acceptLocal()
+        model.undo()
+        #expect(model.canRedo)
+
+        model.applyEditedFullText(
+            "head\na-ours\na-theirs\nmiddle\nb-ours\nb-theirs\ntail\n"
+        )
+        #expect(model.canRedo, "The same text is no edit, so redo survives it")
+        #expect(!model.canUndo)
+
+        model.acceptRemote()
+        #expect(!model.canRedo)
+    }
+
+    @Test func aPendingProposalHoldsUndoBack() {
+        let model = Self.undoModel()
+        model.acceptLocal()
+        model.setAgentProposalForTesting("all merged\n")
+        let text = model.resultText
+
+        #expect(!model.canUndo)
+        model.undo()
+        #expect(model.resultText == text)
+
+        model.discardAgentProposal()
+        #expect(model.canUndo)
+    }
+
+    @Test func reloadingClearsTheHistory() async {
+        let model = Self.undoModel()
+        model.acceptLocal()
+        await model.load()
+        #expect(!model.canUndo)
+    }
+
     @Test func nextAndPreviousNavigateConflicts() {
         let model = MergeConflictTabModel(
             worktreePath: URL(fileURLWithPath: "/tmp/unused"),
@@ -588,32 +743,6 @@ struct MergeConflictTabModelTests {
         #expect(!flat.contains(">>>>>>>"))
         #expect(flat.contains("main line"))
         #expect(flat.contains("feature line"))
-    }
-
-    @Test func resetToInitialStackRestoresBothHunks() async throws {
-        let repo = try await Self.conflictedRepo(.singleConflict)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let model = MergeConflictTabModel(
-            worktreePath: repo,
-            relativePath: "a.txt",
-            gitService: GitService()
-        )
-        await model.load()
-        let block = try #require(model.allConflictBlocks().first)
-        let localBefore = block.local
-        let remoteBefore = block.remote
-        let labelLocal = block.localLabel
-        let labelRemote = block.remoteLabel
-        model.acceptLocal(for: block)
-        #expect(model.conflictCount == 0)
-        model.appendConflictBlock(
-            originalLocal: localBefore,
-            originalRemote: remoteBefore,
-            originalBase: nil,
-            originalLocalLabel: labelLocal,
-            originalRemoteLabel: labelRemote
-        )
-        #expect(model.conflictCount == 1)
     }
 
     @Test func acceptForBlockShiftsLaterCursorDownByOne() async throws {

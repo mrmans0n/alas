@@ -74,6 +74,10 @@ struct MergeConflictTabView: View {
                         set: { model.wordDiffMode = $0 }
                     ),
                     baseAvailable: model.hasBase,
+                    canUndo: model.canUndo,
+                    canRedo: model.canRedo,
+                    onUndo: { model.undo() },
+                    onRedo: { model.redo() },
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
                     onAskAgentResolve: {

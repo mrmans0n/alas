@@ -23,6 +23,10 @@ struct MergeResultPane: NSViewRepresentable {
     /// Pushed by the view when the user types. Receives the full new
     /// buffer text so the model can reconcile inserts AND deletes.
     let onEditFullText: (String) -> Void
+    let editHistory: MergeConflictTabModel
+    /// A change gives this pane the keyboard: an accept came from a gutter button, and ⌘Z
+    /// should undo it next.
+    let focusToken: Int
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -38,12 +42,18 @@ struct MergeResultPane: NSViewRepresentable {
         scroll.documentView = textView
         context.coordinator.scrollBridge = MergePaneScrollBridge(scroll: scroll, source: .result, coordinator: coordinator)
         context.coordinator.onEditFullText = onEditFullText
+        context.coordinator.lastFocusToken = focusToken
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? MergeCodeTextView else { return }
         context.coordinator.onEditFullText = onEditFullText
+        textView.editHistory = editHistory
+        if context.coordinator.lastFocusToken != focusToken {
+            context.coordinator.lastFocusToken = focusToken
+            textView.window?.makeFirstResponder(textView)
+        }
         let metrics = MergePaneMetrics(fontFamily: codeFontFamily, fontSize: codeFontSize)
         let palette = MergePalette(theme: theme)
         // Scroll-only updates re-run updateNSView. Skip the O(file size)
@@ -69,7 +79,7 @@ struct MergeResultPane: NSViewRepresentable {
             )
             if storage.string == rendered.text {
                 // The model echoed the user's own edit back: restyle in
-                // place so the cursor and undo stack survive.
+                // place so the cursor survives.
                 MergePaneText.applyAttributes(attributed, to: storage)
             } else {
                 let oldSelection = textView.selectedRange()
@@ -91,10 +101,6 @@ struct MergeResultPane: NSViewRepresentable {
         coordinator.contentTopInset = MergePaneMetrics.contentInset.height
     }
 
-    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
-        coordinator.editorUndoManager.removeAllActions()
-    }
-
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     @MainActor
@@ -108,12 +114,10 @@ struct MergeResultPane: NSViewRepresentable {
             let theme: Theme
         }
 
-        let editorUndoManager = UndoManager()
+        var lastFocusToken = 0
         var onEditFullText: ((String) -> Void)?
         var lastKey: CacheKey?
         fileprivate var scrollBridge: MergePaneScrollBridge?
-
-        func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
 
         /// Called by AppKit when the user types. Emits the full new
         /// buffer text — the model is responsible for diffing back to

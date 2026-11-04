@@ -62,6 +62,33 @@ final class MergeConflictTabModel {
     /// persisted — same lifetime semantics as `showBase`.
     var wordDiffMode: MergeWordDiff.Mode = .words
 
+    /// What undo and redo restore. `regions` is kept beside the text so a restore needs no
+    /// reparse, and the cursor so undoing a per-block accept lands on the reopened conflict.
+    private struct EditSnapshot {
+        let resultText: String
+        let regions: [ConflictRegion]
+        let currentConflictIndex: Int?
+    }
+
+    /// The one history for accepts, typing and agent proposals, in the order they happened.
+    /// The result pane's text view keeps none: an accept replaces its text, which would leave
+    /// its own offsets pointing at the wrong characters.
+    private var undoStack: [EditSnapshot] = []
+    private var redoStack: [EditSnapshot] = []
+    /// When the last typing edit landed, while another may still join its undo step.
+    @ObservationIgnored private var lastTypingAt: Date?
+    @ObservationIgnored private let now: () -> Date
+    private static let undoLimit = 100
+    /// Typing with pauses shorter than this undoes as one step.
+    private static let typingGroupWindow: TimeInterval = 1
+
+    /// Counts edits made by an action rather than by typing, so the view can give the result
+    /// pane the keyboard after one and ⌘Z reaches this history.
+    private(set) var actionEditCount = 0
+
+    var canUndo: Bool { !undoStack.isEmpty && agentProposal == nil }
+    var canRedo: Bool { !redoStack.isEmpty && agentProposal == nil }
+
     let worktreePath: URL
     let relativePath: String
     private let gitService: GitService
@@ -72,12 +99,14 @@ final class MergeConflictTabModel {
         worktreePath: URL,
         relativePath: String,
         gitService: GitService,
-        agentBinaryUnavailable: @escaping (AgentExecutionTarget) async -> Void = { _ in }
+        agentBinaryUnavailable: @escaping (AgentExecutionTarget) async -> Void = { _ in },
+        now: @escaping () -> Date = Date.init
     ) {
         self.worktreePath = worktreePath
         self.relativePath = relativePath
         self.gitService = gitService
         self.agentBinaryUnavailable = agentBinaryUnavailable
+        self.now = now
     }
 
     /// Number of unresolved conflict regions currently in `resultText`.
@@ -108,6 +137,7 @@ final class MergeConflictTabModel {
     func load() async {
         loadGeneration += 1
         cancelExplanation()
+        clearEditHistory()
         do {
             let file = try await gitService.conflictedFile(
                 worktreePath: worktreePath,
@@ -149,12 +179,7 @@ final class MergeConflictTabModel {
     /// Call after any mutation of `resultText` (typed by user or via accept actions).
     func reparse() {
         regions = ConflictMarkerParser.parse(resultText)
-        if let explainingKey, !regions.contains(where: { region in
-            if case .conflict(let block) = region { return Self.conflictKey(for: block) == explainingKey }
-            return false
-        }) {
-            cancelExplanation()
-        }
+        cancelExplanationIfItsConflictIsGone()
         let total = conflictCount
         guard total > 0 else {
             currentConflictIndex = nil
@@ -169,6 +194,66 @@ final class MergeConflictTabModel {
         } else {
             currentConflictIndex = 0
         }
+    }
+
+    private func cancelExplanationIfItsConflictIsGone() {
+        if let explainingKey, !regions.contains(where: { region in
+            if case .conflict(let block) = region { return Self.conflictKey(for: block) == explainingKey }
+            return false
+        }) {
+            cancelExplanation()
+        }
+    }
+
+    // MARK: - Undo
+
+    /// Undoes the latest step. A pending agent proposal blocks it, since applying one replaces
+    /// the text the proposal is shown against.
+    func undo() {
+        guard canUndo, let snapshot = undoStack.popLast() else { return }
+        redoStack.append(currentSnapshot)
+        restore(snapshot)
+    }
+
+    func redo() {
+        guard canRedo, let snapshot = redoStack.popLast() else { return }
+        undoStack.append(currentSnapshot)
+        restore(snapshot)
+    }
+
+    private var currentSnapshot: EditSnapshot {
+        EditSnapshot(resultText: resultText, regions: regions, currentConflictIndex: currentConflictIndex)
+    }
+
+    private func restore(_ snapshot: EditSnapshot) {
+        resultText = snapshot.resultText
+        regions = snapshot.regions
+        currentConflictIndex = snapshot.currentConflictIndex
+        lastTypingAt = nil
+        cancelExplanationIfItsConflictIsGone()
+    }
+
+    private func clearEditHistory() {
+        undoStack = []
+        redoStack = []
+        lastTypingAt = nil
+    }
+
+    /// Runs `edit` and, when it changed the text, makes it an undo step. Typing soon after
+    /// other typing joins that step.
+    private func recordingUndo(typing: Bool = false, _ edit: () -> Void) {
+        let before = currentSnapshot
+        edit()
+        guard resultText != before.resultText else { return }
+        redoStack = []
+        let date = now()
+        let joins = typing && lastTypingAt.map { date.timeIntervalSince($0) < Self.typingGroupWindow } == true
+        if !joins {
+            undoStack.append(before)
+            if undoStack.count > Self.undoLimit { undoStack.removeFirst() }
+        }
+        lastTypingAt = typing ? date : nil
+        if !typing { actionEditCount += 1 }
     }
 
     // MARK: - Helpers
@@ -273,36 +358,6 @@ final class MergeConflictTabModel {
         // If saved == acceptedOrdinal, leave reparse()'s post-state alone.
     }
 
-    /// Appends a new conflict block at the end of the buffer. Called by
-    /// the gutter context-menu "reset this conflict" action when the user
-    /// wants to undo an accept without manually rewriting markers. The
-    /// originals are passed in because the model no longer holds them once
-    /// the conflict has been resolved. Note: this always appends to the end
-    /// of the buffer regardless of the original position of the conflict —
-    /// for use cases where positional fidelity is not required.
-    func appendConflictBlock(
-        originalLocal: String,
-        originalRemote: String,
-        originalBase: String?,
-        originalLocalLabel: String,
-        originalRemoteLabel: String
-    ) {
-        var marker = "<<<<<<< \(originalLocalLabel)\n"
-        marker += originalLocal
-        if !originalLocal.hasSuffix("\n") { marker += "\n" }
-        if let base = originalBase, !base.isEmpty {
-            marker += "||||||| ancestor\n"
-            marker += base
-            if !base.hasSuffix("\n") { marker += "\n" }
-        }
-        marker += "=======\n"
-        marker += originalRemote
-        if !originalRemote.hasSuffix("\n") { marker += "\n" }
-        marker += ">>>>>>> \(originalRemoteLabel)\n"
-        resultText.append(marker)
-        reparse()
-    }
-
     /// Pushes an edit on visual row `row` to the underlying region.
     /// Maps row -> (region index, sub-position) via the same layout
     /// algorithm the view uses, then rewrites that region's stored
@@ -388,6 +443,10 @@ final class MergeConflictTabModel {
     /// `serializeRegionsWithMarkers` and `reparse()` is called so each
     /// block's `lineRangeInMerged` reflects the new line counts.
     func applyEditedFullText(_ newText: String, showBase: Bool = false) {
+        recordingUndo(typing: true) { reconcileEditedFullText(newText, showBase: showBase) }
+    }
+
+    private func reconcileEditedFullText(_ newText: String, showBase: Bool) {
         let oldBuffer = renderMarkerlessBuffer(showBase: showBase)
         // Try the single-region fast path first.
         if applyEditedFullTextSingleRegion(newText: newText, oldBuffer: oldBuffer, showBase: showBase) {
@@ -877,6 +936,10 @@ final class MergeConflictTabModel {
     /// (which should already include any trailing newlines required). Updates
     /// regions + currentConflictIndex.
     private func replaceCurrentConflictBlock(with replacement: String) {
+        recordingUndo { spliceCurrentConflictBlock(with: replacement) }
+    }
+
+    private func spliceCurrentConflictBlock(with replacement: String) {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
@@ -1083,9 +1146,11 @@ final class MergeConflictTabModel {
     /// No-op when there's no proposal.
     func applyAgentProposal() {
         guard let proposal = agentProposal else { return }
-        resultText = proposal
         agentProposal = nil
-        reparse()
+        recordingUndo {
+            resultText = proposal
+            reparse()
+        }
     }
 
     /// Discards the pending agent proposal without changing `resultText`.
