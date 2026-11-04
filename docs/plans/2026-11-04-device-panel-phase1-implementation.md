@@ -69,7 +69,7 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     public func stop() async
     public func touch(_ phase: TouchPhase, x: Double, y: Double)
     public func key(usage: UInt32, down: Bool)
-    public func button(_ name: String) async
+    public func button(_ name: String)
 }
 ```
 
@@ -164,7 +164,7 @@ let package = Package(
 )
 ```
 
-- [ ] **Step 5: Write the facade.** `ThirdParty/serve-sim-native/Sources/ServeSimCore/AlasSimulatorSession.swift`:
+- [ ] **Step 5: Write the facade.** `ThirdParty/serve-sim-native/Sources/ServeSimCore/AlasSimulatorSession.swift`. `HIDInjector` is an actor, so input goes through one `AsyncStream` to keep each touch's begin, moves and end in order:
 
 ```swift
 import CoreVideo
@@ -172,19 +172,44 @@ import Foundation
 
 /// Alas's entry point into the vendored serve-sim code: one booted
 /// simulator's screen and input. Not from upstream; sync.sh leaves it alone.
-///
-/// Callers serialize calls per session (Alas's XPC connection does).
 public final class AlasSimulatorSession: @unchecked Sendable {
     public enum TouchPhase: String, Sendable {
         case begin, move, end
     }
 
+    private enum Input: Sendable {
+        case touch(TouchPhase, x: Double, y: Double)
+        case key(usage: UInt32, down: Bool)
+        case button(String)
+    }
+
     public let udid: String
     private let capture = FrameCapture()
     private let hid = HIDInjector()
+    /// `HIDInjector` is an actor. Input goes through one stream so a touch's
+    /// begin, moves and end reach it in the order they were sent.
+    private let input: AsyncStream<Input>.Continuation
 
     public init(udid: String) {
         self.udid = udid
+        let (stream, continuation) = AsyncStream.makeStream(of: Input.self)
+        input = continuation
+        Task { [hid] in
+            for await event in stream {
+                switch event {
+                case .touch(let phase, let x, let y):
+                    await hid.sendTouch(type: phase.rawValue, x: x, y: y, screenWidth: 0, screenHeight: 0)
+                case .key(let usage, let down):
+                    await hid.sendKey(type: down ? "down" : "up", usage: usage)
+                case .button(let name):
+                    await hid.sendButton(button: name, deviceUDID: udid)
+                }
+            }
+        }
+    }
+
+    deinit {
+        input.finish()
     }
 
     /// Starts capture, then input. `onFrame` runs on a capture queue with an
@@ -197,23 +222,24 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     }
 
     public func stop() async {
+        input.finish()
         await capture.stop()
     }
 
     /// `x` and `y` run from 0 to 1 across the portrait screen, from its top left.
     public func touch(_ phase: TouchPhase, x: Double, y: Double) {
-        hid.sendTouch(type: phase.rawValue, x: x, y: y, screenWidth: 0, screenHeight: 0)
+        input.yield(.touch(phase, x: x, y: y))
     }
 
     /// `usage` is a USB HID keyboard usage (page 0x07).
     public func key(usage: UInt32, down: Bool) {
-        hid.sendKey(type: down ? "down" : "up", usage: usage)
+        input.yield(.key(usage: usage, down: down))
     }
 
     /// One of serve-sim's button names: `home`, `lock`, `siri`,
     /// `side_button`, `app_switcher`, `swipe_home`.
-    public func button(_ name: String) async {
-        await hid.sendButton(button: name, deviceUDID: udid)
+    public func button(_ name: String) {
+        input.yield(.button(name))
     }
 }
 ```
@@ -946,8 +972,7 @@ final class SimServiceHandler: NSObject, SimServiceProtocol, @unchecked Sendable
     }
 
     func button(udid: String, name: String) {
-        guard let session = session(udid) else { return }
-        Task { await session.button(name) }
+        session(udid)?.button(name)
     }
 
     func stopAll() {
