@@ -58,7 +58,7 @@ jobs:
     # Ghostty 1.4 requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
     # Build once; test runners queue only after products and the plan are published.
-    timeout-minutes: 110
+    timeout-minutes: 125
     # "Re-run failed jobs" skips a successful builder, so later attempts must
     # download the products and plan from the attempt that published them.
     outputs:
@@ -130,6 +130,14 @@ jobs:
       - name: Test AlasCore
         # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
         # the app build starts.
+        #
+        # One cooperative thread: a test that blocks it hangs here every
+        # time, instead of stalling every other test on a small runner
+        # and failing one run in three.
+        # It normally takes under 8 minutes, compile included.
+        timeout-minutes: 15
+        env:
+          LIBDISPATCH_COOPERATIVE_POOL_STRICT: "1"
         run: swift test --package-path Packages/AlasCore
 
       - name: Test Swift test inventory harness
