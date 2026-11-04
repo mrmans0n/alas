@@ -1239,7 +1239,6 @@ private final class FrameSinkBridge: NSObject, SimFrameSink {
     }
 
     func frame(udid: String, surface: IOSurface) {
-        nonisolated(unsafe) let surface = surface
         DispatchQueue.main.async { [weak client] in
             MainActor.assumeIsolated { client?.deliver(udid: udid, surface: surface) }
         }
