@@ -20,13 +20,14 @@ public enum ACPMessageWire: Sendable, Equatable {
     case plan([ACPMessage.PlanItem])
     case planDocument(ACPPlanDocument)
     case systemNotice(text: String)
+    case failureIncident(ACPFailureIncident)
     case visualAid(ACPVisualAid)
 
     public var isAgentSideProgress: Bool {
         switch self {
         case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             return true
-        case .user, .systemNotice:
+        case .user, .systemNotice, .failureIncident:
             return false
         }
     }
@@ -64,7 +65,8 @@ public enum ACPMessageWire: Sendable, Equatable {
         case "visual_aid":
             return .visualAid(try decoder.decode(ACPVisualAid.self, from: payload))
         case "system":
-            return .systemNotice(text: try decoder.decode(TextPayload.self, from: payload).text)
+            let p = try decoder.decode(ACPSystemRowPayload.self, from: payload)
+            return p.failureIncident.map(ACPMessageWire.failureIncident) ?? .systemNotice(text: p.text)
         default:
             return .systemNotice(text: "(unknown message kind: \(kind))")
         }
@@ -91,6 +93,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return .planDocument(id: UUID(), document)
         case .systemNotice(let text):
             return .systemNotice(id: UUID(), text: text)
+        case .failureIncident(let incident):
+            return .failureIncident(id: UUID(), incident)
         case .visualAid(let visual):
             return .visualAid(visual)
         }
@@ -152,6 +156,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return document == existingDocument ? existing : .planDocument(id: id, document)
         case let (.systemNotice(text), .systemNotice(id, existingText)):
             return text == existingText ? existing : .systemNotice(id: id, text: text)
+        case let (.failureIncident(incident), .failureIncident(id, existingIncident)):
+            return incident == existingIncident ? existing : .failureIncident(id: id, incident)
         case let (.visualAid(visual), .visualAid(existingVisual)):
             return visual == existingVisual ? existing : .visualAid(visual)
         default:

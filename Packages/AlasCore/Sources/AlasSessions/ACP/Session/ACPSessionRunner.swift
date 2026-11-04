@@ -1448,17 +1448,18 @@ public final class ACPSessionRunner {
                 params.update,
                 tracksRetryStatus: !suppressingLoadReplay,
                 worktreeRoot: worktreePath
-            )
+            ).union(session.applySessionFailureUpdate(
+                info,
+                replaying: suppressingLoadReplay,
+                promptActive: activePromptID != nil
+            ))
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
         }
         if suppressingLoadReplay {
             if let dirty = preAppliedSessionInfoDirty {
-                persistIndices(
-                    dirty,
-                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
-                )
+                persistSessionInfoRows(dirty, of: params.update, acknowledging: durableConsumptionAcknowledgement)
             } else {
                 // `.toolCall`/`.toolCallUpdate` reconciliation (pre-existing)
                 // and root-level subagent lifecycle reconciliation both
@@ -1505,10 +1506,7 @@ public final class ACPSessionRunner {
             return
         }
         if let dirty = preAppliedSessionInfoDirty {
-            persistIndices(
-                dirty,
-                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
-            )
+            persistSessionInfoRows(dirty, of: params.update, acknowledging: durableConsumptionAcknowledgement)
         } else {
             let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundary
                 .map { appliedUpdateCount <= $0.updateCount } ?? false
@@ -1885,6 +1883,23 @@ public final class ACPSessionRunner {
             completion?(succeeded)
         })
         return true
+    }
+
+    /// A redelivered failure record writes nothing but still waits for the
+    /// queue: its first delivery's row can be unwritten, and this ack would
+    /// pass that update.
+    private func persistSessionInfoRows(
+        _ dirty: Set<Int>,
+        of update: ACPSessionUpdate,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        if dirty.isEmpty, session.sessionFailure != nil,
+           case .sessionInfoUpdate(let info) = update,
+           ACPSessionFailureSignal.from(metadata: info.metadata).isPresent {
+            acknowledgeAfterQueuedPersistence(acknowledgement)
+        } else {
+            persistIndices(dirty, completion: persistenceCompletion(acknowledging: acknowledgement))
+        }
     }
 
     private func persistenceCompletion(

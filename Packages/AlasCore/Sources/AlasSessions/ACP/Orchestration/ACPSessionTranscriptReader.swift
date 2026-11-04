@@ -79,7 +79,7 @@ public enum ACPSessionTranscriptReader: Sendable {
                 // A removed plan keeps its slot, so paged reads that
                 // started before the removal don't skip the next entry.
                 append(document.hidden ? "system" : "agent", planText(document) ?? "Plan removed.")
-            case .thought, .plan:
+            case .thought, .plan, .failureIncident:
                 continue
             }
         }

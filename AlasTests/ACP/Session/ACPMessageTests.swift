@@ -594,6 +594,80 @@ extension ACPMessageTests {
     }
 }
 
+extension ACPMessageTests {
+    @Test func failureIncidentRoundTrips() throws {
+        let incident = try ACPFailureIncident.fixture(
+            details: "Details", reason: "server_error", actions: ["retry", "future"], endedTurn: true)
+        let message = ACPMessage.failureIncident(id: UUID(), incident)
+        #expect(message.kind == "system")
+
+        let decoded = try ACPMessageCodec.decode(kind: message.kind, payload: ACPMessageCodec.encode(message))
+        guard case .failureIncident(_, let decodedIncident) = decoded else {
+            Issue.record("expected a failure incident, got \(decoded)")
+            return
+        }
+        #expect(decodedIncident == incident)
+        #expect(decodedIncident.record.reason == "server_error")
+        #expect(decodedIncident.record.actions == ["retry", "future"])
+    }
+
+    @Test func failureIncidentReadsAsTitleOnOlderBuilds() throws {
+        struct OlderBuildPayload: Decodable { let text: String }
+        let payload = try ACPMessageCodec.encode(.failureIncident(id: UUID(), .fixture(title: "Stored title", details: "Details")))
+        #expect(try JSONDecoder().decode(OlderBuildPayload.self, from: payload).text == "Stored title")
+    }
+
+    @Test(arguments: [
+        #"{"endedTurn":false,"record":{"version":2,"id":"f1","revision":1,"title":"Future"}}"#,
+        #""not an object""#,
+    ])
+    func systemRowWithBadIncidentFallsBackToText(storedIncident: String) throws {
+        let payload = Data(#"{"text":"Stored title","failureIncident":\#(storedIncident)}"#.utf8)
+        guard case .systemNotice(_, let text) = try ACPMessageCodec.decode(kind: "system", payload: payload) else {
+            Issue.record("expected a system notice")
+            return
+        }
+        #expect(text == "Stored title")
+    }
+
+    @Test func systemNoticeRowsStayNotices() throws {
+        let payload = Data(#"{"text":"x"}"#.utf8)
+        guard case .systemNotice(_, let text) = try ACPMessageCodec.decode(kind: "system", payload: payload) else {
+            Issue.record("expected a system notice")
+            return
+        }
+        #expect(text == "x")
+        #expect(try ACPMessageCodec.encode(.systemNotice(id: UUID(), text: "x")) == payload)
+    }
+}
+
+extension ACPSessionFailureRecord {
+    static func fixture(
+        id: String = "f1", revision: Int = 1, title: String = "Failed", severity: String = "error",
+        details: String? = nil, reason: String? = nil, actions: [String] = []
+    ) throws -> ACPSessionFailureRecord {
+        var json: [String: Any] = [
+            "version": 1, "id": id, "revision": revision, "category": "service", "severity": severity,
+            "title": title, "actions": actions,
+        ]
+        json["details"] = details
+        json["reason"] = reason
+        return try JSONDecoder().decode(ACPSessionFailureRecord.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+}
+
+extension ACPFailureIncident {
+    static func fixture(
+        id: String = "f1", revision: Int = 1, title: String = "Failed", severity: String = "error",
+        details: String? = nil, reason: String? = nil, actions: [String] = [], endedTurn: Bool = false
+    ) throws -> ACPFailureIncident {
+        try ACPFailureIncident(
+            record: .fixture(id: id, revision: revision, title: title, severity: severity,
+                             details: details, reason: reason, actions: actions),
+            endedTurn: endedTurn)
+    }
+}
+
 extension ACPPlanDocument {
     static let markdownFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Plan", file: nil, hidden: false)
     static let fileFixture = ACPPlanDocument(

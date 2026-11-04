@@ -384,6 +384,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             }
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
+        case .failureIncident(_, let incident):
+            ACPSystemNoticeView(text: incident.record.title)
         case .visualAid(let visual):
             ACPVisualAidCard(
                 visual: visual, form: session.visualAidForm(for: visual),

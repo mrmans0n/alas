@@ -59,7 +59,7 @@ public struct ACPSessionFailureRecord: Codable, Equatable, Sendable {
     public let title: String
     public let details: String?
     public let reason: String?
-    public let actions: [String]
+    public var actions: [String]
     public let kind: String?
 
     /// An unrecognized category reads as `.unknown`.

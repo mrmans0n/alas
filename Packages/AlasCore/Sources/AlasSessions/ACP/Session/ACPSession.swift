@@ -5,6 +5,9 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasACP
+import os
+
+private let sessionFailureLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-session-failure")
 
 /// Narrow observable holder for the rapidly-mutating composer draft.
 /// Keystrokes update this object instead of `ACPSession` so the transcript
@@ -1408,11 +1411,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // `lastContentTouchIndex` from that in-progress row. Every other
         // kind this switch can return IS real content, so excluding just
         // plan rows here (rather than allowlisting kinds) stays correct as
-        // new update kinds are added.
+        // new update kinds are added. A failure incident is no content either.
         let contentTouches = touched.filter { i in
             guard transcript.messages.indices.contains(i) else { return false }
             switch transcript.messages[i] {
-            case .plan, .planDocument: return false
+            case .plan, .planDocument, .failureIncident: return false
             default: return true
             }
         }
@@ -2634,6 +2637,65 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
     }
 
+    /// Applies a `session_info_update`'s failure record, when negotiated.
+    /// Returns the rows to persist. `promptActive` is the runner's view of
+    /// whether a prompt is running.
+    @discardableResult
+    public func applySessionFailureUpdate(_ info: ACPSessionInfoUpdate, replaying: Bool, promptActive: Bool) -> Set<Int> {
+        guard sessionFailure != nil else { return [] }
+        switch ACPSessionFailureSignal.from(metadata: info.metadata) {
+        case .absent:
+            return []
+        case .unreadable:
+            sessionFailureLogger.error("session \(self.id, privacy: .public): unreadable sessionFailure on session_info_update")
+            return []
+        case .record(let record):
+            return applyFailureRecord(record, endedTurn: false, replaying: replaying)
+        }
+    }
+
+    /// Upserts the incident row of `record.id` and returns the rows to persist.
+    /// A higher revision rewrites the row in place; a lower one changes
+    /// nothing, and an equal one can only set `endedTurn`. Titles are never
+    /// compared, and lifecycle, `turnFailure` and `lastError` are untouched.
+    /// Like a notice, this keeps the completed-output boundary and the content
+    /// touch: the incident is not output.
+    @discardableResult
+    public func applyFailureRecord(_ record: ACPSessionFailureRecord, endedTurn: Bool, replaying: Bool) -> Set<Int> {
+        if let index = transcript.failureIncidentIndex(id: record.id),
+           case .failureIncident(let rowId, let stored) = transcript.messages[index] {
+            if replaying {
+                suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, index + 1)
+            }
+            let updated: ACPFailureIncident
+            if record.revision > stored.record.revision {
+                updated = ACPFailureIncident(record: record, endedTurn: stored.endedTurn || endedTurn)
+            } else if record.revision == stored.record.revision, endedTurn, !stored.endedTurn {
+                updated = ACPFailureIncident(record: stored.record, endedTurn: true)
+            } else {
+                return []
+            }
+            transcript.replaceMessage(at: index, with: .failureIncident(id: rowId, updated))
+            return [index]
+        }
+        let row = ACPMessage.failureIncident(id: UUID(), ACPFailureIncident(record: record, endedTurn: endedTurn))
+        guard replaying else {
+            // Held output keeps its place ahead of the incident, and has to be
+            // persisted with it.
+            let flushed = flushPendingReplayCandidates()
+            transcript.appendMessage(row)
+            didAppendTranscriptMessage()
+            return flushed.union([transcript.messages.count - 1])
+        }
+        // Stored rows are keyed by array position, so the whole shifted suffix
+        // is rewritten. See `registerSubagent`.
+        let index = min(suppressedReplayInsertionCursor, transcript.messages.count)
+        transcript.insertMessage(row, at: index)
+        didAppendTranscriptMessage()
+        suppressedReplayInsertionCursor = index + 1
+        return Set(index..<transcript.messages.count)
+    }
+
     public func appendSystemNotice(_ text: String) {
         // A system notice closes the current output run; materialise any held
         // replay candidate first so it keeps its place ahead of the notice.
@@ -3208,7 +3270,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             case .agent, .thought:
                 transcript.completedOutputBoundaryMessageIds.insert(message.stableId)
                 continue
-            case .plan, .planDocument:
+            // A record often lands right after the output it failed, so it
+            // must not hide that output from the boundary.
+            case .plan, .planDocument, .failureIncident:
                 continue
             default:
                 return

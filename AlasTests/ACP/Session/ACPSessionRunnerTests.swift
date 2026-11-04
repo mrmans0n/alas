@@ -2336,6 +2336,124 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "hello world")
     }
 
+    // MARK: - Failure incidents
+
+    /// Seeds only the session, so every stored row is one the update wrote.
+    private func makeIncidentRunner(seed: [ACPMessage] = [], replaying: Bool) throws -> (ACPSessionRunner, ACPSession, ACPSessionStore) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.sessionFailure = .init()
+        session.transcript.messages = seed
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: replaying
+        )
+        return (runner, session, store)
+    }
+
+    private func user(_ text: String) -> ACPMessage { .user(id: UUID(), text: text, attachments: []) }
+    private func agent(_ text: String) -> ACPMessage { .agent(id: UUID(), StreamingText(text)) }
+
+    private func applyInfo(_ info: ACPSessionInfoUpdate, to runner: ACPSessionRunner) {
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+    }
+
+    @Test func replayInsertsUnknownIncidentAtCursor() async throws {
+        let (runner, session, store) = try makeIncidentRunner(
+            seed: [user("q1"), agent("a1"), user("q2"), agent("a2")], replaying: true)
+
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .userMessageChunk(.text("q1"))))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.text("a1"))))
+        applyInfo(failureInfo(id: "f", revision: 1, title: "replayed"), to: runner)
+        await runner.flushPersistence()
+
+        #expect(session.transcript.failureIncidentIndex(id: "f") == 2)
+        let rows = try store.loadMessages(sessionId: "s").sorted { $0.seq < $1.seq }
+        #expect(rows.map(\.seq) == [2, 3, 4])
+        #expect(rows.map(\.kind) == ["system", "user", "agent"])
+    }
+
+    @Test func replayedKnownIncidentAdvancesCursor() async throws {
+        let (runner, session, _) = try makeIncidentRunner(
+            seed: [user("q1"), agent("a1"), .failureIncident(id: UUID(), .fixture(id: "known")), user("q2"), agent("a2")],
+            replaying: true)
+
+        applyInfo(failureInfo(id: "known", revision: 1, title: "Failed"), to: runner)
+        applyInfo(failureInfo(id: "new", revision: 1, title: "second"), to: runner)
+        await runner.flushPersistence()
+
+        #expect(session.transcript.failureIncidentIndex(id: "known") == 2)
+        #expect(session.transcript.failureIncidentIndex(id: "new") == 3)
+    }
+
+    @Test func replayedLowerRevisionKeepsRow() async throws {
+        let stored = ACPMessage.failureIncident(id: UUID(), try .fixture(id: "f", revision: 2, title: "stored", endedTurn: true))
+        let (runner, session, store) = try makeIncidentRunner(seed: [stored], replaying: true)
+
+        applyInfo(failureInfo(id: "f", revision: 1, title: "older"), to: runner)
+        await runner.flushPersistence()
+
+        #expect(session.transcript.messages == [stored])
+        #expect(try store.loadMessages(sessionId: "s").isEmpty)
+    }
+
+    @Test func liveIncidentPersistsBeforeAcknowledging() async throws {
+        let (runner, _, store) = try makeIncidentRunner(replaying: false)
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "live")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        let row = try #require(try store.loadMessages(sessionId: "s").first)
+        guard case .failureIncident(_, let incident) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) else {
+            Issue.record("expected a stored failure incident")
+            return
+        }
+        #expect(incident.record.title == "live")
+    }
+
+    @Test func redeliveredIncidentAcknowledgesAfterTheEarlierWrite() async throws {
+        let (runner, _, store) = try makeIncidentRunner(replaying: false)
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        applyInfo(failureInfo(id: "f", revision: 1, title: "live"), to: runner)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "live")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadMessages(sessionId: "s").count == 1)
+    }
+
+    @Test func unreadableFailureStillAppliesTheTitle() async throws {
+        let (runner, session, store) = try makeIncidentRunner(replaying: false)
+
+        applyInfo(.init(title: "New title", metadata: AnyCodable(["sessionFailure": AnyCodable("boom")])), to: runner)
+        await runner.flushPersistence()
+
+        #expect(session.title == "New title")
+        #expect(session.transcript.messages.isEmpty)
+        #expect(try store.loadMessages(sessionId: "s").isEmpty)
+    }
+
     @Test("incoming update is acknowledged only after message persistence")
     func incomingUpdateAcknowledgesAfterPersistence() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

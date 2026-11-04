@@ -22,7 +22,7 @@ private extension ACPMessage {
         case .fileEdit(let id, _): id
         case .visualAid(let visual): visual.id
         case .plan(let id, _), .planDocument(let id, _): id
-        case .systemNotice(let id, _): id
+        case .systemNotice(let id, _), .failureIncident(let id, _): id
         case .toolCall(let toolCall): toolCall.toolCallId
         }
     }
@@ -310,6 +310,8 @@ private struct ACPSubagentMessageRow: View {
             }
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
+        case .failureIncident(_, let incident):
+            ACPSystemNoticeView(text: incident.record.title)
         case .visualAid(let visual):
             Label(visual.title, systemImage: "rectangle.on.rectangle")
                 .font(.callout)

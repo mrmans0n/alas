@@ -38,6 +38,8 @@ extension ACPSession {
                 total &+= UInt64(document.file?.path.utf8.count ?? 0)
             case .systemNotice(_, let text):
                 total &+= UInt64(text.utf8.count)
+            case .failureIncident(_, let incident):
+                total &+= UInt64(incident.displayText.utf8.count)
             case .visualAid(let visual):
                 total &+= UInt64(visual.title.utf8.count + visual.html.utf8.count)
             }
