@@ -7,6 +7,25 @@ import AlasCore
 
 @MainActor
 struct ACPV2SessionBootstrapTests {
+    @Test func runtimeInstallationHookRunsBeforeStartupAndCanWithdrawIt() async throws {
+        let persistence = try await Self.persistence()
+        let transport = BootstrapTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        var installed = false
+        var inbound = 0
+        let bootstrap = try ACPV2SessionBootstrap(attachment: .init(stdioClient: client), fence: Self.fence, persistence: persistence,
+            deadline: .now.advanced(by: .seconds(60)), isCurrent: { true }, onRequest: { _ in },
+            onInbound: { _ in inbound += 1 }, onRuntimeCreated: { runtime in #expect(runtime.status == .idle)
+            installed = true
+            runtime.stop() })
+        defer { bootstrap.stop()
+        transport.terminate() }
+        _ = try await bootstrap.initialize()
+        await #expect(throws: (any Error).self) { try await bootstrap.createSession(.init(cwd: "/w", mcpServers: [])) }
+        #expect(installed && inbound == 0)
+    }
+
     @Test func setupAndReplayPopulateProjectionWithoutLiveCompletion() async throws {
         let persistence = try await Self.persistence()
         let transport = BootstrapTransport()
@@ -479,13 +498,15 @@ private actor BootstrapBindingGate: ACPV2FreshSessionBindingPersisting {
     }
 }
 
-private final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrameWriting, @unchecked Sendable {
+final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrameWriting, @unchecked Sendable {
     static let blocker = Data("blocker".utf8)
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
     private let continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let blocked = Mutex(false), attempted = Mutex(false), settled = Mutex(false)
     let bytes = Mutex<[Data]>([])
     let release = DispatchSemaphore(value: 0)
+    private let writeSettled = DispatchSemaphore(value: 0)
+    func waitForWriteSettlement() -> Bool { writeSettled.wait(timeout: .now() + 10) == .success }
     private var writer: JSONRPCFrameWriter!
     init() {
         let input = AsyncStream<JSONRPCStdioTransport.Incoming>.makeStream()
@@ -497,6 +518,7 @@ private final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSON
             self.bytes.withLock { $0.append(frame) }
         }
     }
+    func emit(_ bytes: Data) { continuation.yield(.frame(bytes, onConsumed: nil)) }
     func start() throws {}
     func send(_ frame: Data) throws {
         attempted.withLock { $0 = true }
@@ -506,7 +528,8 @@ private final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSON
     func writeFrame(_ frame: Data, authorize: @escaping @Sendable () -> Bool) async -> JSONRPCFrameWriteResult {
         if frame != Self.blocker { attempted.withLock { $0 = true } }
         let result = await writer.writeFrame(frame, authorize: authorize)
-        if frame != Self.blocker { settled.withLock { $0 = true } }
+        if frame != Self.blocker { settled.withLock { $0 = true }
+        writeSettled.signal() }
         return result
     }
     func terminate() { writer.close()

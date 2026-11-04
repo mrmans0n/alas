@@ -9,9 +9,16 @@ struct HostSessionsTests {
     /// The host's session verbs drive an agent end to end: a session is
     /// created and connected, takes a prompt, has its permission request
     /// answered once, and is stopped, renamed and archived.
-    @Test func sessionVerbsDriveAnAgent() async throws {
+    @Test(.timeLimit(.minutes(1))) func sessionVerbsDriveAnAgent() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
+        var attaching: Task<UUID?, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
+        let prompts = AsyncStream<Void>.makeStream()
+        fixture.agent.script(method: "session/prompt") { _ in prompts.continuation.yield(())
+        return Data("null".utf8) }
+        defer { prompts.continuation.finish() }
         let sessions = fixture.host.sessions
 
         await #expect(throws: SessionRefusal.agentUnavailable) {
@@ -20,10 +27,18 @@ struct HostSessionsTests {
         let created = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app)
         #expect(created.owner == .worktree(fixture.worktree.id))
         let id = created.id
-        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
-
+        _ = await (try #require(attaching)).value
+        try #require(sessions.isWriter(id))
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        let session = try #require(manager.liveSession(for: id))
+        let permissions = AsyncStream<Void>.makeStream()
+        let permissionChanges = session.transcript.$pendingPermission.signal.observe { value in if value != nil { permissions.continuation.yield(()) } }
+        defer { permissionChanges.cancel()
+        permissions.continuation.finish() }
+        var permissionEvents = permissions.stream.makeAsyncIterator()
+        var promptEvents = prompts.stream.makeAsyncIterator()
         try await sessions.send(id, prompt: "hello", caller: .app)
-        try await eventually { fixture.agent.sent.contains { $0.method == "session/prompt" } }
+        _ = try #require(await promptEvents.next())
         await #expect(throws: SessionRefusal.invalidSetting) {
             try await sessions.setConfigOption(id, configID: "no-such-option", value: .string("x"), caller: .app)
         }
@@ -44,8 +59,8 @@ struct HostSessionsTests {
                 ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once"),
             ]
         ))
-        let manager = try #require(fixture.core.sessionManagers.values.first)
-        try await eventually { await manager.liveSession(for: id)?.transcript.pendingPermission != nil }
+        _ = try #require(await permissionEvents.next())
+        #expect(manager.permissionPolicy(for: id)?.pendingPermissionRequestID == requestID)
         await #expect(throws: SessionRefusal.invalidAnswer) {
             try await sessions.answerPermission(id, requestID: requestID, optionID: "maybe", caller: .app)
         }
@@ -60,7 +75,7 @@ struct HostSessionsTests {
             do { try await answer.value } catch SessionRefusal.notPending { refused += 1 }
         }
         #expect(refused == 1)
-        try await eventually { fixture.agent.permissionResponses[requestID] != nil }
+        #expect(fixture.agent.permissionResponses[requestID] != nil)
 
         // A late reply to that request does not answer the next one, though
         // it offers the same option.
@@ -73,7 +88,8 @@ struct HostSessionsTests {
             ),
             options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
         ))
-        try await eventually { await manager.permissionPolicy(for: id)?.pendingPermissionRequestID == nextID }
+        _ = try #require(await permissionEvents.next())
+        #expect(manager.permissionPolicy(for: id)?.pendingPermissionRequestID == nextID)
         await #expect(throws: SessionRefusal.notPending) {
             try await sessions.answerPermission(id, requestID: requestID, optionID: "allow", caller: .app)
         }
@@ -366,26 +382,31 @@ struct HostSessionsTests {
 
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
-    @Test func aRejectedRemotePromptCarriesItsReason() async throws {
+    @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
+        var attaching: Task<Void, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
         let sessions = fixture.host.sessions
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        await (try #require(attaching)).value
         let manager = try #require(fixture.core.sessionManagers.values.first)
-        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
-        // The gateway refuses a non-writer's prompt at once, with no reason.
-        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        #expect(manager.liveSession(for: id)?.agentState == .ready)
+        #expect(sessions.isWriter(id))
         fixture.agent.script(method: "session/prompt") { _ in throw JSONRPCError(code: -32603, message: "boom", data: nil) }
-        let sent = Mutex<[RemoteServerMessage]>([])
-        let gateway = RemoteSessionGateway(host: fixture.host) { message in sent.withLock { $0.append(message) } }
-        defer { gateway.close() }
-
+        let responses = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host) { responses.continuation.yield($0) }
+        defer { gateway.close()
+        responses.continuation.finish() }
         await gateway.handle(.sendPrompt(sessionId: id, text: "hi", attachments: [], intent: "auto"))
-        try await eventually {
-            sent.withLock {
-                $0.contains { if case .promptRejected(id, let reason) = $0 { reason?.hasPrefix("prompt failed:") == true } else { false } }
+        for await message in responses.stream {
+            if case .promptRejected(let rejectedID, let reason) = message, rejectedID == id {
+                #expect(reason?.hasPrefix("prompt failed:") == true)
+                return
             }
         }
+        Issue.record("Missing prompt rejection")
     }
 
     @Test(arguments: [
@@ -544,13 +565,23 @@ struct HostSessionsTests {
     /// After another instance takes the session over, whatever this one still
     /// holds is refused: a setting the session drops, and an answer that would
     /// resume the agent beside the new writer.
-    @Test func settingsLostToATakeoverAreRefused() async throws {
+    @Test(.timeLimit(.minutes(1))) func settingsLostToATakeoverAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
+        var attaching: Task<UUID?, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
         let sessions = fixture.host.sessions
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
-        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        _ = await (try #require(attaching)).value
+        try #require(sessions.isWriter(id))
         let manager = try #require(fixture.core.sessionManagers.values.first)
+        let session = try #require(manager.liveSession(for: id))
+        let permissions = AsyncStream<Void>.makeStream()
+        let permissionChanges = session.transcript.$pendingPermission.signal.observe { value in if value != nil { permissions.continuation.yield(()) } }
+        defer { permissionChanges.cancel()
+        permissions.continuation.finish() }
+        var incoming = permissions.stream.makeAsyncIterator()
         fixture.agent.emitPermission(id: .number(9), params: ACPPermissionRequestParams(
             sessionId: "agent-1",
             toolCall: ACPPermissionToolCall(
@@ -559,7 +590,13 @@ struct HostSessionsTests {
             ),
             options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
         ))
-        try await eventually { await manager.permissionPolicy(for: id)?.pendingPermissionRequestID == .number(9) }
+        _ = try #require(await incoming.next())
+        #expect(manager.permissionPolicy(for: id)?.pendingPermissionRequestID == .number(9))
+        // Hold background observation off while testing the write-side lease
+        // fence against a manager that still believes it owns the session.
+        let heartbeat = manager._heartbeatTasks[id]
+        heartbeat?.cancel()
+        await heartbeat?.value
 
         // Another instance takes the lease while this one still believes it holds it.
         let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)

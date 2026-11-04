@@ -6,6 +6,50 @@ import AlasCore
 
 @MainActor
 struct ACPV2ResponseOwnerTests {
+    @Test(arguments: ["request", "response"])
+    func inspectionPagesPastOversizedIntentsWithoutLosingUnrelatedRequests(oversized: String) async throws {
+        let fixture = try await ResponseFixture()
+        defer { fixture.transport.terminate() }
+        let payload = String(repeating: "x", count: 1_048_600)
+        var historicalFrame: [String: LSPJSONValue] = ["jsonrpc": .string("2.0"), "id": .number("9"), "method": .string("peer/request")]
+        if oversized == "request" { historicalFrame["params"] = .object(["subject": .string(payload)]) }
+        let delivery = ACPV2InboundDelivery(frame: try LSPJSONValue.object(historicalFrame).encodedData(), connectionID: fixture.client.updateConnectionID, source: .stdio)
+        let historical = try await fixture.persistence.retainV2Inbound(delivery, to: fixture.stream, fence: fixture.fence).record
+        _ = try await fixture.persistence.registerV2ResponseIntent(id: UUID(), request: historical, in: fixture.stream,
+            frame: LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": .number("9"), "result": oversized == "response" ? .string(payload) : .null]).encodedData(), fence: fixture.fence)
+        let later = try await fixture.persistence.retainV2Inbound(.init(frame: Data(#"{"jsonrpc":"2.0","id":10,"method":"peer/request"}"#.utf8), connectionID: fixture.client.updateConnectionID, source: .stdio), to: fixture.stream, fence: fixture.fence).record
+        _ = try await fixture.persistence.registerV2ResponseIntent(id: UUID(), request: later, in: fixture.stream,
+            frame: Data(#"{"jsonrpc":"2.0","id":10,"result":null}"#.utf8), fence: fixture.fence)
+        let page = try await fixture.persistence.loadV2ResponseIntentPage(stream: fixture.stream)
+        #expect(page.containsOversizedRecord && page.records.count == 1 && !page.isAtEnd)
+        let next = try #require(page.next)
+        #expect(try await fixture.persistence.loadV2ResponseIntentPage(stream: fixture.stream, after: next).records.map(\.request.ordinal) == [later.ordinal])
+        let owner = try fixture.owner()
+        #expect(try await owner.inspect(request: fixture.request, delivery: fixture.delivery) == .available)
+        let chosen = try await fixture.persistence.registerV2ResponseIntent(id: UUID(), request: fixture.request, in: fixture.stream,
+            frame: LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": .number("7"), "result": .string(payload)]).encodedData(), fence: fixture.fence).value
+        #expect(try await owner.inspect(request: fixture.request, delivery: fixture.delivery) == .alreadyChosen(chosen))
+        #expect(fixture.transport.frames.withLock { $0 }.isEmpty)
+    }
+
+    @Test(arguments: ["available", "intent", "removed", "read-failure"])
+    func responseInspectionObservesAuthorityWithoutWriting(reason: String) async throws {
+        let fixture = try await ResponseFixture()
+        defer { fixture.transport.terminate() }
+        if reason == "intent" { _ = try await fixture.persistence.registerV2ResponseIntent(id: UUID(), request: fixture.request, in: fixture.stream, frame: ResponseFixture.answer, fence: fixture.fence) }
+        if reason == "removed" { await fixture.client.shutdown() }
+        let owner = try fixture.owner(journal: ResponseJournal(base: fixture.persistence, fail: reason == "read-failure" ? "inspection" : nil))
+        let result = try await owner.inspect(request: fixture.request, delivery: fixture.delivery)
+        switch reason {
+        case "available": #expect(result == .available)
+        case "removed": #expect(result == .unavailable)
+        case "read-failure": #expect(result == .observationLost)
+        default: guard case .alreadyChosen = result else { Issue.record("Missing chosen evidence")
+        return }
+        }
+        #expect(fixture.transport.frames.withLock { $0 }.isEmpty)
+    }
+
     @Test func exactResponseCommitsBeforeHandoffAndCopiedCallsNeverWriteAgain() async throws {
         let fixture = try await ResponseFixture()
         defer { fixture.transport.terminate() }
@@ -334,6 +378,12 @@ actor ResponseJournal: ACPV2ResponseLedgerPersisting {
     let corruptFact: Bool
     private(set) var reached = false
     private var waiter: CheckedContinuation<Void, Never>?
+    private let reachedEvents = AsyncStream<Void>.makeStream()
+    func waitUntilReached() async {
+        if reached { return }
+        var incoming = reachedEvents.stream.makeAsyncIterator()
+        _ = await incoming.next()
+    }
     init(base: ACPSessionPersistence, hold: String? = nil, fail: String? = nil, corruptFact: Bool = false) { self.base = base
     self.hold = hold
     self.fail = fail
@@ -343,9 +393,15 @@ actor ResponseJournal: ACPV2ResponseLedgerPersisting {
     private func pause(_ phase: String) async {
         guard hold == phase, !reached else { return }
         reached = true
+        reachedEvents.continuation.yield(())
         await withCheckedContinuation { waiter = $0 }
     }
     private func check(_ phase: String) throws { if fail == phase { throw ACPV2ResponseOwner.Failure.persistence(message: "injected") } }
+    func loadV2ResponseIntentPage(stream: ACPV2InboundLedgerStream, after: ACPV2ResponseLedgerContinuation?, maxRecords: Int, maxBytes: Int) async throws -> ACPV2ResponseLedgerPage<ACPV2ResponseIntent> {
+        try check("inspection")
+        await pause("inspection")
+        return try await base.loadV2ResponseIntentPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
     func registerV2ResponseIntent(id: UUID, request: ACPV2InboundLedgerRecord, in stream: ACPV2InboundLedgerStream,
         frame: Data, fence: ACPSessionLeaseFence) async throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent> {
         try check("intent")

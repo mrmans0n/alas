@@ -86,6 +86,9 @@ public final class ACPV2SessionBootstrap {
     private let waitUntilDeadline: @Sendable () async throws -> Void
     private let isCurrent: @MainActor () -> Bool
     private let onRequest: @MainActor (ACPV2AttachmentRuntime.Request) -> Void
+    private let onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)?
+    private let onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)?
+    private let onRuntimeCreated: (@MainActor (ACPV2AttachmentRuntime) throws -> Void)?
     private let onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)?
     private var active = true
     private var operationID: UUID?
@@ -102,7 +105,10 @@ public final class ACPV2SessionBootstrap {
         journals: ACPV2AttachmentRuntime.Journals? = nil,
         isCurrent: @escaping @MainActor () -> Bool,
         onRequest: @escaping @MainActor (ACPV2AttachmentRuntime.Request) -> Void,
-        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws {
+        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil,
+        onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)? = nil,
+        onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)? = nil,
+        onRuntimeCreated: (@MainActor (ACPV2AttachmentRuntime) throws -> Void)? = nil) throws {
         guard !fence.sessionId.isEmpty, info.name == "alas", !info.version.isEmpty,
               attachment.localSessionId.map({ $0.utf8.elementsEqual(fence.sessionId.utf8) }) ?? true else { throw Failure.unavailable }
         self.attachment = attachment
@@ -116,6 +122,9 @@ public final class ACPV2SessionBootstrap {
         self.isCurrent = isCurrent
         self.onRequest = onRequest
         self.onCanonicalChange = onCanonicalChange
+        self.onInbound = onInbound
+        self.onLifecycleChange = onLifecycleChange
+        self.onRuntimeCreated = onRuntimeCreated
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
@@ -171,8 +180,10 @@ public final class ACPV2SessionBootstrap {
             let runtime = try ACPV2AttachmentRuntime(sessionId: self.fence.sessionId, upstreamSessionId: result.sessionId,
                 attachment: self.attachment.runtime, fence: self.fence, journals: self.journals,
                 isCurrent: { [weak self] in self?.current() == true }, onRequest: self.onRequest,
-                onCanonicalChange: self.onCanonicalChange)
+                onCanonicalChange: self.onCanonicalChange, onInbound: self.onInbound, onLifecycleChange: self.onLifecycleChange)
             self.runtime = runtime
+            try self.onRuntimeCreated?(runtime)
+            try self.requireCurrent(token)
             try runtime.establishFreshSessionDefault()
             guard runtime.start() else { throw Failure.unavailable }
             if runtime.status != .ready {
