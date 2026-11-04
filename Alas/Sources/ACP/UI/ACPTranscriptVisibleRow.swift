@@ -8,7 +8,8 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
 
     var id: String { stableId }
 
-    /// Messages that never become a row: the toolbar pill renders plans, hidden background
+    /// Messages that never become a row: the toolbar pill renders plans, removed or empty plan
+    /// documents show nothing, hidden background
     /// tasks are not shown, a visual aid's answer prompt is shown by its answered card, and an
     /// embedded visual's `visual_show` chip gives way to the visual itself. `hiddenToolCallIds`
     /// comes from `ACPToolCallPresentation.hiddenVisualShowToolCallIds`, computed once per row build.
@@ -16,6 +17,8 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
         switch message {
         case .plan:
             true
+        case .planDocument(_, let document):
+            document.display == nil
         case .toolCall(let toolCall):
             ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false
                 || hiddenToolCallIds.contains(toolCall.toolCallId)

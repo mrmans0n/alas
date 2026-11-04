@@ -68,7 +68,8 @@ public enum ACPRequestAnswers {
             scopeKey: scopeKey(for: pending.params),
             optionId: optionId,
             decision: option.kind.hasPrefix("allow") ? .allow : .deny,
-            persistScope: persistScope
+            // A plan review is never remembered, whatever the option implies.
+            persistScope: pending.params.toolCall.isPlanReview ? nil : persistScope
         )
     }
 

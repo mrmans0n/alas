@@ -536,4 +536,119 @@ struct ACPMessageTests {
         #expect(try ACPMessageCodec.decode(kind: message.kind, payload: payload) == message)
         #expect(try ACPMessageWire.decode(kind: message.kind, payload: payload) == .visualAid(visual))
     }
+
+    @Test("plan rows persist under the plan kind and decode back", arguments: PlanRowCase.all)
+    func planRowsRoundTrip(row: PlanRowCase) throws {
+        let payload = try ACPMessageCodec.encode(row.message)
+        #expect(row.message.kind == "plan")
+        #expect(String(decoding: payload, as: UTF8.self) == row.payload)
+        let decoded = try ACPMessageCodec.decode(kind: "plan", payload: payload)
+        #expect(decoded.withPlanRowID(row.id) == row.message)
+    }
+
+    @Test("plan payloads without a document kind and id stay checklists", arguments: [
+        (#"{"items":[{"content":"a","status":"pending"}]}"#, [ACPMessage.PlanItem(content: "a", status: "pending")]),
+        (#"{"items":[],"kind":"markdown"}"#, []),
+        (#"{"items":[],"planId":"p"}"#, []),
+    ])
+    func legacyPlanPayloadIsChecklist(payload: String, items: [ACPMessage.PlanItem]) throws {
+        let decoded = try ACPMessageCodec.decode(kind: "plan", payload: Data(payload.utf8))
+        guard case .plan(_, let decodedItems) = decoded else {
+            Issue.record("expected a checklist, got \(decoded)")
+            return
+        }
+        #expect(decodedItems == items)
+    }
+}
+
+extension ACPMessageTests {
+    @Test("a plan document row shows its Markdown and its file, and nothing once hidden", arguments: [
+        (ACPPlanDocument.markdownFixture, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil), nil),
+        (.fileFixture, .init(markdown: nil, showsFile: true, filePath: "/p.md"), "/p.md"),
+        (ACPPlanDocument(planId: "plan-mode:t", kind: .markdown, markdown: "# A", file: .init(path: "/a.md", sha256: "s")),
+         .init(markdown: "# A", showsFile: true, filePath: "/a.md"), "/a.md"),
+        // A peer's file plan arrives without its host path.
+        (ACPPlanDocument(planId: "p", kind: .file, markdown: nil, file: nil),
+         .init(markdown: nil, showsFile: true, filePath: nil), nil),
+        // Shown, but never opened: the plan file reader would refuse it.
+        (ACPPlanDocument(planId: "p", kind: .file, markdown: nil, file: .init(path: "/a/../etc/b.md", sha256: nil)),
+         .init(markdown: nil, showsFile: true, filePath: "/a/../etc/b.md"), nil),
+        (.hiddenFixture, nil, nil),
+        (.markdown("p", ""), nil, nil),
+    ] as [(ACPPlanDocument, ACPPlanDocument.Display?, String?)])
+    func display(document: ACPPlanDocument, expected: ACPPlanDocument.Display?, openable: String?) {
+        #expect(document.display == expected)
+        #expect(document.display?.openableFilePath == openable)
+        #expect(ACPTranscriptVisibleRow.isHidden(.planDocument(id: UUID(), document)) == (expected == nil))
+    }
+
+    @Test("a plan document collapses to one line while its own review is parked", arguments: [
+        ("item_1", ACPPlanDocument.Display(markdown: nil, showsFile: false, filePath: nil, isUnderReview: true)),
+        ("item_2", ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
+        (nil, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
+    ] as [(String?, ACPPlanDocument.Display)])
+    func displayUnderReview(reviewedPlanId: String?, expected: ACPPlanDocument.Display) {
+        #expect(ACPPlanDocument.markdownFixture.display(underReview: reviewedPlanId) == expected)
+        // A removed plan stays hidden even while a review names it.
+        #expect(ACPPlanDocument.hiddenFixture.display(underReview: reviewedPlanId) == nil)
+    }
+}
+
+extension ACPPlanDocument {
+    static let markdownFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Plan", file: nil, hidden: false)
+    static let fileFixture = ACPPlanDocument(
+        planId: "p", kind: .file, markdown: nil, file: .init(path: "/p.md", sha256: "abc"), hidden: false)
+    static let hiddenFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Old", file: nil, hidden: true)
+
+    static func markdown(_ planId: String, _ text: String, hidden: Bool = false) -> ACPPlanDocument {
+        ACPPlanDocument(planId: planId, kind: .markdown, markdown: text, file: nil, hidden: hidden)
+    }
+}
+
+extension ACPSessionUpdate {
+    /// A standard Markdown `plan_update`.
+    static func markdownPlan(_ planId: String, _ text: String) -> ACPSessionUpdate {
+        .planUpdate(.init(planId: planId, content: .markdown(text)))
+    }
+}
+
+extension [ACPMessage] {
+    var planDocuments: [ACPPlanDocument] {
+        compactMap { if case .planDocument(_, let document) = $0 { document } else { nil } }
+    }
+}
+
+struct PlanRowCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let message: ACPMessage
+    let payload: String
+    var testDescription: String { name }
+
+    var id: UUID {
+        switch message {
+        case .plan(let id, _), .planDocument(let id, _): id
+        default: UUID()
+        }
+    }
+
+    static let all: [PlanRowCase] = [
+        .init(name: "checklist", message: .plan(id: UUID(), [.init(content: "a", status: "pending")]),
+              payload: #"{"items":[{"content":"a","status":"pending"}]}"#),
+        .init(name: "markdown", message: .planDocument(id: UUID(), .markdownFixture),
+              payload: ##"{"items":[],"kind":"markdown","markdown":"# Plan","planId":"item_1"}"##),
+        .init(name: "file", message: .planDocument(id: UUID(), .fileFixture),
+              payload: #"{"file":{"path":"\/p.md","sha256":"abc"},"items":[],"kind":"file","planId":"p"}"#),
+        .init(name: "hidden", message: .planDocument(id: UUID(), .hiddenFixture),
+              payload: ##"{"hidden":true,"items":[],"kind":"markdown","markdown":"# Old","planId":"item_1"}"##),
+    ]
+}
+
+private extension ACPMessage {
+    func withPlanRowID(_ id: UUID) -> ACPMessage {
+        switch self {
+        case .plan(_, let items): .plan(id: id, items)
+        case .planDocument(_, let document): .planDocument(id: id, document)
+        default: self
+        }
+    }
 }

@@ -51,6 +51,8 @@ struct ACPMessageList: View {
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
+    /// Opens a plan's file by its path on the session's host.
+    var onOpenPlanFile: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
@@ -105,7 +107,8 @@ struct ACPMessageList: View {
                 collapsesFinishedToolCalls: collapsesFinishedToolCalls,
                 upstreamReferences: upstreamReferences,
                 promptCardContext: promptCardContext,
-                visualAidActions: visualAidActions
+                visualAidActions: visualAidActions,
+                onOpenPlanFile: onOpenPlanFile
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail
