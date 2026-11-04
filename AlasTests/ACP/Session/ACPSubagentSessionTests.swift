@@ -829,8 +829,9 @@ struct ACPSubagentSessionTests {
         #expect(second == "second task")
     }
 
-    @Test("a child's replayed shared plan id in two turns rewrites each turn's own row")
-    func childReplayedSharedPlanIdFollowsTheCursor() {
+    @Test("a child's replayed shared plan id in two turns gives each turn's own row its last snapshot",
+          arguments: [1, 2])
+    func childReplayedSharedPlanIdFollowsTheCursor(snapshotsPerTurn: Int) {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
         run.restore(messages: [
             .user(id: UUID(), text: "First", attachments: []),
@@ -841,12 +842,14 @@ struct ACPSubagentSessionTests {
         run.beginReplayReconciliation()
 
         run.applyReplayed(.userMessageChunk(.text("First")))
-        run.applyReplayed(.markdownPlan("plan-mode", "new 1"))
+        for n in 1...snapshotsPerTurn { run.applyReplayed(.markdownPlan("plan-mode", "first \(n)")) }
         run.applyReplayed(.userMessageChunk(.text("Second")))
-        run.applyReplayed(.markdownPlan("plan-mode", "new 2"))
+        for n in 1...snapshotsPerTurn { run.applyReplayed(.markdownPlan("plan-mode", "second \(n)")) }
 
         #expect(run.messages.count == 4)
-        #expect(run.messages.planDocuments == [.markdown("plan-mode", "new 1"), .markdown("plan-mode", "new 2")])
+        #expect(run.messages.planDocuments == [
+            .markdown("plan-mode", "first \(snapshotsPerTurn)"), .markdown("plan-mode", "second \(snapshotsPerTurn)"),
+        ])
     }
 
     /// A checklist or a Markdown plan between two persisted prompts.

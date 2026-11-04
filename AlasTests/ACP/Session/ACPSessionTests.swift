@@ -1819,8 +1819,9 @@ struct ACPSessionTests {
         #expect(session.transcript.messages.planDocuments == [expected])
     }
 
-    @Test("replaying Claude's shared plan id in two turns rewrites each turn's own row")
-    func replayedSharedPlanIdFollowsTheCursor() {
+    @Test("replaying Claude's shared plan id in two turns gives each turn's own row its last snapshot",
+          arguments: [1, 2])
+    func replayedSharedPlanIdFollowsTheCursor(snapshotsPerTurn: Int) {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.transcript.replaceMessages(with: [
             .user(id: UUID(), text: "First", attachments: []),
@@ -1831,10 +1832,16 @@ struct ACPSessionTests {
         session.beginSuppressedReplaySideEffects()
 
         #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("First"))).isEmpty)
-        #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "new 1")) == [1])
+        for n in 1...snapshotsPerTurn {
+            #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "first \(n)")) == [1])
+        }
         #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("Second"))).isEmpty)
-        #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "new 2")) == [3])
-        #expect(session.transcript.messages.planDocuments == [.markdown("plan-mode", "new 1"), .markdown("plan-mode", "new 2")])
+        for n in 1...snapshotsPerTurn {
+            #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "second \(n)")) == [3])
+        }
+        #expect(session.transcript.messages.planDocuments == [
+            .markdown("plan-mode", "first \(snapshotsPerTurn)"), .markdown("plan-mode", "second \(snapshotsPerTurn)"),
+        ])
     }
 
     @Test("permanent Codex error clears retryable status")

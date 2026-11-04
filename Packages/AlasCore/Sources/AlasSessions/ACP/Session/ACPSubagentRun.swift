@@ -1065,20 +1065,26 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
 
     /// The newest `.planDocument` row for `planId`, at any position. When
     /// replaying, Claude's shared id, reused by a row in each turn, resolves to
-    /// the first row at or after `cursor` instead, so an older turn's replay
-    /// neither lands on a later turn's row nor moves the cursor past it.
+    /// the row of the turn being replayed (from the last user row the cursor
+    /// passed up to the next one), else the first row at or after `cursor`, so
+    /// every snapshot of an older turn lands on that turn's row, never a later one.
     private func planDocumentIndex(planId: String, replayingAt cursor: Int? = nil) -> Int? {
-        if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId,
-           let index = messages.indices.dropFirst(max(cursor, 0)).first(where: {
-               if case .planDocument(_, let document) = messages[$0] { return document.planId == planId }
-               return false
-           }) {
-            return index
-        }
-        return messages.lastIndex {
-            if case .planDocument(_, let document) = $0 { return document.planId == planId }
+        func isMatch(_ message: ACPMessage) -> Bool {
+            if case .planDocument(_, let document) = message { return document.planId == planId }
             return false
         }
+        if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId {
+            let start = min(max(cursor, 0), messages.count)
+            if let turnStart = lastUserIndex(before: start) {
+                let turnEnd = messages[(turnStart + 1)...].firstIndex {
+                    if case .user = $0 { return true }
+                    return false
+                } ?? messages.count
+                if let index = messages[(turnStart + 1)..<turnEnd].firstIndex(where: isMatch) { return index }
+            }
+            if let index = messages[start...].firstIndex(where: isMatch) { return index }
+        }
+        return messages.lastIndex(where: isMatch)
     }
 
     private func replacePlanDocument(at index: Int, with document: ACPPlanDocument) -> Set<Int> {
