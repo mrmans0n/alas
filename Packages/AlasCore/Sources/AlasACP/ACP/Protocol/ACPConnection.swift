@@ -79,6 +79,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let diffPatch: ACPDiffPatchCapability?
     /// The approved plan's file and digest, when it advertised `_meta.planFile`.
     public let planFile: ACPPlanFileCapability?
+    /// Structured failure incidents, when it advertised `_meta.sessionFailure`.
+    public let sessionFailure: ACPSessionFailureCapability?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -102,7 +104,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         sessionIndex: ACPSessionIndexSupport? = nil,
         forkPoint: ACPForkPointCapability? = nil,
         diffPatch: ACPDiffPatchCapability? = nil,
-        planFile: ACPPlanFileCapability? = nil
+        planFile: ACPPlanFileCapability? = nil,
+        sessionFailure: ACPSessionFailureCapability? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -124,6 +127,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.forkPoint = forkPoint
         self.diffPatch = diffPatch
         self.planFile = planFile
+        self.sessionFailure = sessionFailure
     }
 }
 
@@ -133,11 +137,19 @@ public struct ACPPromptOutcome: Sendable {
     public let acknowledgement: ACPDurableConsumptionAcknowledgement?
     public let quota: ACPPromptQuota?
     public let stopReason: ACPStopReason
+    /// `_meta.sessionFailure` of the response; `.absent` unless negotiated.
+    public let failure: ACPSessionFailureSignal
 
-    public init(acknowledgement: ACPDurableConsumptionAcknowledgement?, quota: ACPPromptQuota?, stopReason: ACPStopReason = .init()) {
+    public init(
+        acknowledgement: ACPDurableConsumptionAcknowledgement?,
+        quota: ACPPromptQuota?,
+        stopReason: ACPStopReason = .init(),
+        failure: ACPSessionFailureSignal = .absent
+    ) {
         self.acknowledgement = acknowledgement
         self.quota = quota
         self.stopReason = stopReason
+        self.failure = failure
     }
 }
 
@@ -193,6 +205,8 @@ public final class ACPConnection: @unchecked Sendable {
     public var mcpStartupAwaitTimeoutMs: Int?
     /// The session index the agent advertised on `initialize`, if any.
     public private(set) var negotiatedSessionIndex: ACPSessionIndexSupport?
+    /// Whether the agent advertised `_meta.sessionFailure` on `initialize`.
+    public private(set) var negotiatedSessionFailure = false
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
@@ -340,6 +354,7 @@ public final class ACPConnection: @unchecked Sendable {
     public func initialize(brokerOperationKey: String? = nil) async throws -> ACPInitializeOutcome {
         codexHooksReviewToken = nil
         negotiatedCodexHooks = false
+        negotiatedSessionFailure = false
         guard client.sessionUpdateProtocolVersion == protocolSelection.requestedVersion else {
             throw ACPProtocolNegotiationError.sessionSupportUnavailable(version: client.sessionUpdateProtocolVersion.rawValue)
         }
@@ -353,7 +368,8 @@ public final class ACPConnection: @unchecked Sendable {
             codexHooks: codexHooksReviewEnabled ? .init() : nil,
             forkPoint: .init(),
             diffPatch: .init(),
-            planFile: .init()
+            planFile: .init(),
+            sessionFailure: .init()
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
@@ -383,6 +399,7 @@ public final class ACPConnection: @unchecked Sendable {
             && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)
             && result.meta?.codexHooks?.isSupported == true
         negotiatedSessionIndex = result.meta?.sessionIndex?.support
+        negotiatedSessionFailure = result.meta?.sessionFailure?.capability != nil
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -404,7 +421,8 @@ public final class ACPConnection: @unchecked Sendable {
             sessionIndex: result.meta?.sessionIndex?.support,
             forkPoint: result.meta?.forkPoint?.capability,
             diffPatch: result.meta?.diffPatch?.capability,
-            planFile: result.meta?.planFile?.capability
+            planFile: result.meta?.planFile?.capability,
+            sessionFailure: result.meta?.sessionFailure?.capability
         )
     }
 
@@ -749,12 +767,13 @@ public final class ACPConnection: @unchecked Sendable {
                 throw error
             }
             let result = try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body)
+            let failure = negotiatedSessionFailure ? result?.failure ?? .absent : .absent
             if acknowledgeDurableConsumption {
                 resp.acknowledgeDurableConsumption()
-                return ACPPromptOutcome(acknowledgement: nil, quota: result?.quota, stopReason: result?.stopReason ?? .init())
+                return ACPPromptOutcome(acknowledgement: nil, quota: result?.quota, stopReason: result?.stopReason ?? .init(), failure: failure)
             }
             return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement,
-                quota: result?.quota, stopReason: result?.stopReason ?? .init())
+                quota: result?.quota, stopReason: result?.stopReason ?? .init(), failure: failure)
         }
     }
 

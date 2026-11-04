@@ -4853,7 +4853,7 @@ extension ACPSessionRunner {
                     // after the `isActivePrompt` block, mirroring the pre-existing cleanup point.
                     let wasCancelled = self.cancelledPromptIDs.contains(promptID)
                     let completionResult: ACPTurnCompletion.Result = wasCancelled
-                        ? .cancelled : promptOutcome.stopReason.v1Result
+                        ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure)
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -5137,7 +5137,7 @@ extension ACPSessionRunner {
                     // it on supersession strands the spinner forever.
                     self.reportSupersededTurnUsage(
                         promptID, quota: promptOutcome.quota,
-                        result: wasCancelled ? .cancelled : promptOutcome.stopReason.v1Result)
+                        result: wasCancelled ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure))
                     onCompleted?(isActivePrompt && !wasCancelled)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
