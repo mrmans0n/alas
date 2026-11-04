@@ -3,6 +3,23 @@ import Testing
 import AlasCore
 
 struct ACPV2SessionStateTests {
+    @Test func permissionToolSubjectsShareToolPatchSemanticsWithoutChangingForeground() throws {
+        let context = ACPV2SessionState.Context(sessionID: "s", connectionID: UUID())
+        var state = ACPV2SessionState(context: context)
+        _ = try state.apply(event(#"{"sessionUpdate":"tool_call_update","toolCallId":"t","title":"A","name":"keep"}"#), source: .live, context: context)
+        let request = try ACPV2InteractiveRequest.decode(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s","title":"Approve","options":[{"optionId":"yes","name":"Yes","kind":"allow_once"}],"subject":{"type":"tool_call","toolCall":{"toolCallId":"t","title":"B","status":null}}}}"#.utf8), upstreamSessionId: "s", support: .init())
+        guard case .permission(let permission) = request.classification else { Issue.record("Missing permission")
+        return }
+        let patch = try #require(permission.subject?.toolCallUpdate)
+        _ = state.applyPermissionToolCall(patch, context: context)
+        #expect(state.activity.toolCall(id: "t")?.title == "B")
+        #expect(state.activity.toolCall(id: "t")?.name == "keep")
+        #expect(state.activity.toolCall(id: "t")?.status == nil)
+        #expect(state.order == [.toolCall("t")])
+        #expect(state.latestStateObservation == nil && state.lifecycle.foreground == .unknown)
+        #expect(state.lifecycle.lastForegroundCompletion == nil)
+    }
+
     @Test func uncertaintyIsSubmissionScopedAndCannotDowngradeAcceptedFacts() throws {
         let context = ACPV2SessionState.Context(sessionID: "s", connectionID: UUID())
         var state = ACPV2SessionState(context: context)

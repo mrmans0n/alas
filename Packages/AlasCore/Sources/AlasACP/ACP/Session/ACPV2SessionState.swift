@@ -91,6 +91,20 @@ public struct ACPV2SessionState: Sendable {
         return Reduction(event: event, disposition: .applied, effects: effects)
     }
 
+    public mutating func applyPermissionToolCall(_ patch: ACPV2SessionUpdateEnvelope.ToolCallUpdate, context: Context) -> [Effect] {
+        guard context == self.context else { return [] }
+        let start = activity.order.count
+        let effects = activity.applyToolCall(patch, context: context).map(Effect.activity)
+        order += activity.order.dropFirst(start).map { key in
+            switch key {
+            case .toolCall(let id): .toolCall(id)
+            case .plan(let id): .plan(id)
+            case .terminal(let id): .terminal(id)
+            }
+        }
+        return effects
+    }
+
     @discardableResult
     public mutating func register(requestID: Int, localRowID: UUID, context: Context) -> SubmissionReduction {
         guard context == self.context else {

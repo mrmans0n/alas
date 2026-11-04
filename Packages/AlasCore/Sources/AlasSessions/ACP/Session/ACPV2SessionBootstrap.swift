@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import AlasACP
+import AlasCode
 import AlasPlatform
 
 public protocol ACPV2FreshSessionBindingPersisting: Sendable {
@@ -28,6 +29,12 @@ public final class ACPV2SessionBootstrap {
         public let binding: ACPV2FreshSessionBinding
         public let runtime: ACPV2AttachmentRuntime
     }
+    public struct InstallationContext: Sendable {
+        public let result: ACPV2SessionNewResult
+        public let binding: ACPV2FreshSessionBinding
+        public let runtime: ACPV2AttachmentRuntime
+        public let connectionID: UUID
+    }
     public struct Attachment: Sendable {
         private enum Client: Sendable { case stdio(ACPStdioClient), broker(ACPBrokerClient) }
         private let client: Client
@@ -36,8 +43,8 @@ public final class ACPV2SessionBootstrap {
         fileprivate let source: ACPV2InboundLedgerSource
         fileprivate let localSessionId: String?
         @MainActor
-        public init(stdioClient: ACPStdioClient) throws {
-            runtime = try .init(stdioClient: stdioClient)
+        public init(stdioClient: ACPStdioClient, orderedIntake: ACPV2OrderedIntake? = nil) throws {
+            runtime = try .init(stdioClient: stdioClient, orderedIntake: orderedIntake)
             claim = try stdioClient.claimV2Bootstrap()
             source = .stdio(connectionID: stdioClient.updateConnectionID)
             client = .stdio(stdioClient)
@@ -88,6 +95,8 @@ public final class ACPV2SessionBootstrap {
     private let onRequest: @MainActor (ACPV2AttachmentRuntime.Request) -> Void
     private let onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)?
     private let onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)?
+    private let interactionSupport: ACPV2InteractiveRequest.Support
+    private let onInstalling: (@MainActor (InstallationContext) throws -> Void)?
     private let onRuntimeCreated: (@MainActor (ACPV2AttachmentRuntime) throws -> Void)?
     private let onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)?
     private var active = true
@@ -108,7 +117,10 @@ public final class ACPV2SessionBootstrap {
         onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil,
         onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)? = nil,
         onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)? = nil,
-        onRuntimeCreated: (@MainActor (ACPV2AttachmentRuntime) throws -> Void)? = nil) throws {
+        onRuntimeCreated: (@MainActor (ACPV2AttachmentRuntime) throws -> Void)? = nil,
+        interactionSupport: ACPV2InteractiveRequest.Support = .init(),
+        onInstalling: (@MainActor (InstallationContext) throws -> Void)? = nil) throws {
+        guard (!interactionSupport.form && !interactionSupport.url) || interactionSupport.elicitation else { throw Failure.unavailable }
         guard !fence.sessionId.isEmpty, info.name == "alas", !info.version.isEmpty,
               attachment.localSessionId.map({ $0.utf8.elementsEqual(fence.sessionId.utf8) }) ?? true else { throw Failure.unavailable }
         self.attachment = attachment
@@ -125,6 +137,8 @@ public final class ACPV2SessionBootstrap {
         self.onInbound = onInbound
         self.onLifecycleChange = onLifecycleChange
         self.onRuntimeCreated = onRuntimeCreated
+        self.onInstalling = onInstalling
+        self.interactionSupport = interactionSupport
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
@@ -140,7 +154,7 @@ public final class ACPV2SessionBootstrap {
         try requireCurrent()
         setStatus(.initializing)
         return try await perform { token in
-            let response = try await self.attachment.send(.initialize(.init(info: self.info)), operationKey: operationKey, token: token)
+            let response = try await self.attachment.send(.initialize(.init(info: self.info, capabilities: self.clientCapabilities)), operationKey: operationKey, token: token)
             self.initializationResponse = response
             try self.requireCurrent(token)
             let value = try ACPInitializationResult.decode(from: response.body, requestedVersion: .v2, supportedVersions: [.v1, .v2])
@@ -184,8 +198,13 @@ public final class ACPV2SessionBootstrap {
             self.runtime = runtime
             try self.onRuntimeCreated?(runtime)
             try self.requireCurrent(token)
-            try runtime.establishFreshSessionDefault()
-            guard runtime.start() else { throw Failure.unavailable }
+            try self.onInstalling?(.init(result: result, binding: binding, runtime: runtime, connectionID: self.attachment.runtime.connectionID))
+            try self.requireCurrent(token)
+            if self.attachment.runtime.usesOrderedIntake { try await runtime.startFreshOrdered() }
+            else {
+                try runtime.establishFreshSessionDefault()
+                guard runtime.start() else { throw Failure.unavailable }
+            }
             if runtime.status != .ready {
                 for await _ in runtime.observations {
                     try self.requireCurrent(token)
@@ -199,6 +218,13 @@ public final class ACPV2SessionBootstrap {
             self.monitor(runtime)
             return Installed(result: result, response: response, binding: binding, runtime: runtime)
         }
+    }
+
+    private var clientCapabilities: [String: [String: LSPJSONValue]] {
+        var modes: [String: LSPJSONValue] = [:]
+        if interactionSupport.form { modes["form"] = .object([:]) }
+        if interactionSupport.url { modes["url"] = .object([:]) }
+        return modes.isEmpty ? [:] : ["elicitation": modes]
     }
 
     public func stop() {

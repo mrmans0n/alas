@@ -102,6 +102,7 @@ public final class ACPV2SessionUpdateOwner {
     public struct CanonicalPublication: Sendable {
         public enum SubmissionSource: Sendable { case registration, snapshot, live, localUncertainty }
         public enum Change: Sendable {
+            case permissionSubject(origin: ACPV2InboundLedgerRecord, effects: [ACPV2SessionState.Effect])
             case update(Application)
             case submission(SubmissionApplication, source: SubmissionSource)
             case setupDefault(ACPV2SessionState.Reduction)
@@ -172,7 +173,8 @@ public final class ACPV2SessionUpdateOwner {
 
     /// A fresh-session default precedes ingress and cannot overwrite an event.
     public func establishFreshSessionDefault() throws {
-        guard !started, status == .idle else { throw Failure.invalidAttachment }
+        guard !didEstablishDefault, (!started && status == .idle) || (orderedPrepared && status == .live && lastAppliedOrdinal == 0) else { throw Failure.invalidAttachment }
+        didEstablishDefault = true
         let event = try ACPV2SessionUpdateEnvelope(rawValue: .object([
             "sessionId": .string(state.context.sessionID),
             "update": .object(["sessionUpdate": .string("state_update"), "state": .string("idle")]),
@@ -214,61 +216,111 @@ public final class ACPV2SessionUpdateOwner {
     private func run(_ deliveries: AsyncStream<ACPV2SessionUpdateDelivery>) async {
         defer { observationContinuation.finish() }
         do {
-            try requireCurrent()
-            guard attachment.localSessionId == nil || attachment.localSessionId == sessionId,
-                  fence.sessionId == sessionId else { throw Failure.invalidAttachment }
-            status = .restoring
-            publish()
-            let registered = try await storage(.registration) {
-                try await self.journal.registerV2UpdateJournal(sessionId: self.sessionId,
-                    upstreamSessionId: self.state.context.sessionID, source: self.attachment.source, fence: self.fence)
-            }
-            try requireCurrent()
-            stream = registered
-            try await restoreSubmissions()
-            try requireCurrent()
-            var after: ACPV2UpdateJournalContinuation?
-            repeat {
-                let page = try await storage(.replay) {
-                    try await self.journal.loadV2UpdateJournalPage(stream: registered, after: after,
-                        maxRecords: 128, maxBytes: 1_048_576)
-                }
-                try requireCurrent()
-                hasKnownMissingPrefix = page.hasKnownMissingPrefix
-                for record in page.records { try apply(record, source: .snapshot) }
-                after = page.next
-            } while after != nil
-            status = .live
-            publish()
-            for await delivery in deliveries {
-                try requireCurrent()
-                try validate(delivery)
-                let receipt = try await storage(.append) {
-                    try await self.journal.appendV2Update(delivery, to: registered, fence: self.fence)
-                }
-                try requireCurrent()
-                if receipt.record.ordinal > lastAppliedOrdinal {
-                    let source: ACPSessionLifecycle.StateSource
-                    if let cursor = delivery.brokerProvenance?.cursor,
-                       let boundary = attachment.historicalThroughCursor, cursor <= boundary { source = .snapshot }
-                    else { source = .live }
-                    try apply(receipt.record, source: source)
-                }
-                // No await or external observer callback can invalidate this
-                // attachment between the authority check and explicit consume.
-                try requireCurrent()
-                delivery.acknowledgeDurableConsumption()
-            }
-            try requireCurrent()
-            status = .observationLost
-            invalidateSubmissions()
-            loseCanonicalObservation(updatingState: true)
-            publish()
+            try await prepare(fresh: false)
+            for await delivery in deliveries { try await process(delivery) }
+            try finishOrderedInput()
+
         } catch {
             guard status != .stopped else { return }
             if case .blocked = status { return }
             block((error as? Failure) ?? .interpretation(ordinal: lastAppliedOrdinal + 1, message: error.localizedDescription))
         }
+    }
+
+    private var appliedSubjectOrigins = Set<UUID>()
+
+    func applyPermissionSubject(_ request: ACPV2InteractiveRequest, origin: ACPV2InboundLedgerRecord) throws {
+        try requireCurrent()
+        guard orderedPrepared, origin.connectionID == state.context.connectionID,
+              request.rawValue == (try origin.decodeHeader()).rawValue else { throw Failure.invalidAttachment }
+        guard case .permission(let permission) = request.classification,
+              permission.sessionID.utf8.elementsEqual(state.context.sessionID.utf8),
+              let patch = permission.subject?.toolCallUpdate,
+              appliedSubjectOrigins.insert(origin.receiptID).inserted else { return }
+        let effects = state.applyPermissionToolCall(patch, context: state.context)
+        try canonical(.permissionSubject(origin: origin, effects: effects))
+        publish()
+    }
+
+    private var orderedPrepared = false
+    private var orderedProcessing = false
+    private var didEstablishDefault = false
+
+    func prepareFreshOrdered() async throws {
+        guard !started, status == .idle, case .stdio = attachment.source else { throw Failure.invalidAttachment }
+        started = true
+        do { try await prepare(fresh: true)
+        orderedPrepared = true }
+        catch { block((error as? Failure) ?? .invalidAttachment)
+        throw error }
+    }
+
+    func processOrdered(_ delivery: ACPV2SessionUpdateDelivery) async throws {
+        guard orderedPrepared, !orderedProcessing else { throw Failure.invalidAttachment }
+        orderedProcessing = true
+        defer { orderedProcessing = false }
+        do { try await process(delivery) }
+        catch { block((error as? Failure) ?? .interpretation(ordinal: lastAppliedOrdinal + 1, message: String(describing: error)))
+        throw error }
+    }
+
+    private func prepare(fresh: Bool) async throws {
+        try requireCurrent()
+        guard attachment.localSessionId == nil || attachment.localSessionId == sessionId,
+              fence.sessionId == sessionId else { throw Failure.invalidAttachment }
+        status = .restoring
+        publish()
+        let registered = try await storage(.registration) {
+            try await self.journal.registerV2UpdateJournal(sessionId: self.sessionId,
+                upstreamSessionId: self.state.context.sessionID, source: self.attachment.source, fence: self.fence)
+        }
+        try requireCurrent()
+        stream = registered
+        try await restoreSubmissions(fresh: fresh)
+        try requireCurrent()
+        var after: ACPV2UpdateJournalContinuation?
+        repeat {
+            let page = try await storage(.replay) {
+                try await self.journal.loadV2UpdateJournalPage(stream: registered, after: after,
+                    maxRecords: 128, maxBytes: 1_048_576)
+            }
+            try requireCurrent()
+            guard !fresh || (page.records.isEmpty && !page.hasKnownMissingPrefix) else { throw Failure.invalidAttachment }
+            hasKnownMissingPrefix = page.hasKnownMissingPrefix
+            for record in page.records { try apply(record, source: .snapshot) }
+            after = page.next
+        } while after != nil
+        status = .live
+        publish()
+    }
+
+    private func process(_ delivery: ACPV2SessionUpdateDelivery) async throws {
+        guard let registered = stream else { throw Failure.invalidAttachment }
+        try requireCurrent()
+        try validate(delivery)
+        let receipt = try await storage(.append) {
+            try await self.journal.appendV2Update(delivery, to: registered, fence: self.fence)
+        }
+        try requireCurrent()
+        if receipt.record.ordinal > lastAppliedOrdinal {
+            let source: ACPSessionLifecycle.StateSource
+            if let cursor = delivery.brokerProvenance?.cursor,
+               let boundary = attachment.historicalThroughCursor, cursor <= boundary { source = .snapshot }
+            else { source = .live }
+            try apply(receipt.record, source: source)
+        }
+        // No await or external observer callback can invalidate this
+        // attachment between the authority check and explicit consume.
+        try requireCurrent()
+        delivery.acknowledgeDurableConsumption()
+    }
+
+    func finishOrderedInput() throws {
+        try requireCurrent()
+        status = .observationLost
+        invalidateSubmissions()
+        loseCanonicalObservation(updatingState: true)
+        publish()
     }
 
     private func validate(_ delivery: ACPV2SessionUpdateDelivery) throws {
@@ -410,7 +462,7 @@ public final class ACPV2SessionUpdateOwner {
         publish()
     }
 
-    private func restoreSubmissions() async throws {
+    private func restoreSubmissions(fresh: Bool = false) async throws {
         guard let submissions else { return }
         guard submissions.sender.v2PromptEndpoint == promptEndpoint else { throw Failure.submission(.invalidRequest) }
         var after: ACPV2SubmissionContinuation?
@@ -420,6 +472,7 @@ public final class ACPV2SessionUpdateOwner {
                     source: self.submissionSource, after: after, maxRecords: 128, maxBytes: 1_048_576)
             }
             try requireCurrent()
+            guard !fresh || page.records.isEmpty else { throw Failure.invalidAttachment }
             for record in page.records { try applySubmission(record, source: .snapshot) }
             after = page.next
         } while after != nil
