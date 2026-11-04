@@ -852,6 +852,38 @@ struct ACPSubagentSessionTests {
         ])
     }
 
+    @Test("a child's checklists with different ids in one turn keep their own rows, live or replayed",
+          arguments: [false, true])
+    func childChecklistsKeepTheirOwnRows(replayed: Bool) {
+        func checklist(_ id: String, _ status: String = "pending") -> ACPSessionUpdate {
+            .planUpdate(.init(planId: id, content: .items([.init(content: id, priority: nil, status: status)])))
+        }
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        if replayed {
+            run.restore(messages: [
+                .user(id: UUID(), text: "Go", attachments: []),
+                .plan(id: UUID(), [.init(content: "a", status: "pending")]),
+                .plan(id: UUID(), [.init(content: "b", status: "pending")]),
+            ], createdAts: Array(repeating: Date(), count: 3))
+            run.beginReplayReconciliation()
+            for update in [.userMessageChunk(.text("Go")), checklist("a"), checklist("a"), checklist("b")] {
+                run.applyReplayed(update)
+            }
+            run.endReplayReconciliation()
+        } else {
+            for update in [.userMessageChunk(.text("Go")), checklist("a"), checklist("b")] { run.apply(update) }
+        }
+        func checklists() -> [[ACPMessage.PlanItem]] {
+            run.messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        }
+        let b = [ACPMessage.PlanItem(content: "b", status: "pending")]
+
+        run.apply(checklist("a", "completed"))
+        #expect(checklists() == [[.init(content: "a", status: "completed")], b])
+        run.apply(.planRemoved(planId: "a"))
+        #expect(checklists() == [[], b])
+    }
+
     /// A checklist or a Markdown plan between two persisted prompts.
     private static func replayPlanRow(markdown: Bool) -> ACPMessage {
         markdown ? .planDocument(id: UUID(), .markdown("m", "# Plan"))

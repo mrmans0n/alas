@@ -1899,7 +1899,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 // A repeated snapshot keeps the row its id already holds in
                 // this turn instead of consuming the next persisted checklist.
                 if let mapped = checklistRowIndex(planId: plan.planId),
-                   replayedTurnRange(before: suppressedReplayInsertionCursor)?.contains(mapped) == true {
+                   transcript.messages.replayedTurnRange(before: suppressedReplayInsertionCursor)?.contains(mapped) == true {
                     matchedIndex = mapped
                     break
                 }
@@ -4548,26 +4548,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return false
         }
         if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId {
-            if let turn = replayedTurnRange(before: cursor),
+            if let turn = messages.replayedTurnRange(before: cursor),
                let index = messages[turn].firstIndex(where: isMatch) { return index }
             if let index = messages[min(max(cursor, 0), messages.count)...].firstIndex(where: isMatch) { return index }
         }
         return messages.lastIndex(where: isMatch)
-    }
-
-    /// The rows of the turn being replayed: after the last user row before
-    /// `cursor`, up to the next user row. Nil before the first user row.
-    private func replayedTurnRange(before cursor: Int) -> Range<Int>? {
-        let messages = transcript.messages
-        let start = min(max(cursor, 0), messages.count)
-        guard let turnStart = messages[..<start].lastIndex(where: Self.isUserRow) else { return nil }
-        let turnEnd = messages[(turnStart + 1)...].firstIndex(where: Self.isUserRow) ?? messages.count
-        return (turnStart + 1)..<turnEnd
-    }
-
-    private static func isUserRow(_ message: ACPMessage) -> Bool {
-        if case .user = message { return true }
-        return false
     }
 
     /// A checklist overwrites the current turn's checklist in place (one
@@ -4597,11 +4582,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     private func checklistRowIndex(planId: String) -> Int? {
-        guard let rowId = checklistRowIds[planId] else { return nil }
-        return transcript.messages.lastIndex {
-            if case .plan(let id, _) = $0 { return id == rowId }
-            return false
-        }
+        transcript.messages.checklistIndex(rowId: checklistRowIds[planId])
     }
 
     /// `plan_removed` empties the plan's checklist row, which takes it out of

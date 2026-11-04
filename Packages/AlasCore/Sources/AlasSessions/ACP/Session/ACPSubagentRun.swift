@@ -106,6 +106,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// instead of always the highest unused one. Advanced past whichever
     /// row every reconciled update (matched OR recovered) resolves to.
     private var replayCursor = 0
+    /// The `.plan` row each `plan_update` checklist id owns, as in
+    /// `ACPSession`. Runtime only: rebuilt from replayed `plan_update`s.
+    private var checklistRowIds: [String: UUID] = [:]
     /// Array index of the id-less run of each kind CURRENTLY open for
     /// replay, if any — id-less rows have no identity beyond "the trailing
     /// row of this kind" (mirroring `legacyTrailingIndex`), so a SECOND
@@ -414,7 +417,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         case .planUpdate(let plan):
             // A checklist replaces the id's document, as in the parent transcript.
             if case .items(let entries) = plan.content {
-                let touched = applyChecklist(entries, at: timestamp)
+                let touched = applyChecklist(entries, planId: plan.planId, at: timestamp)
                 return touched.union(hidePlanDocuments(planId: plan.planId))
             }
             // The same placement as the parent transcript's own plan documents.
@@ -429,12 +432,13 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             guard let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content) else {
                 return []
             }
+            let cleared = dropChecklist(planId: plan.planId)
             switch placement {
-            case .replace(let index): return replacePlanDocument(at: index, with: document)
-            case .append: return [append(.planDocument(id: UUID(), document), at: timestamp)]
+            case .replace(let index): return cleared.union(replacePlanDocument(at: index, with: document))
+            case .append: return cleared.union([append(.planDocument(id: UUID(), document), at: timestamp)])
             }
         case .planRemoved(let planId):
-            return hidePlanDocuments(planId: planId)
+            return hidePlanDocuments(planId: planId).union(clearChecklist(planId: planId))
         case .sessionConfigOptionsUpdate:
             // An observation, not a row: `ACPSession.applySubagentSessionFacts`
             // records it, knowing whether it is live or replayed.
@@ -512,7 +516,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         case .planUpdate(let plan):
             if case .items(let entries) = plan.content {
                 // Hidden after the plan lands: a recovered row shifts indices.
-                let touched = applyReplayedPlan(entries, at: timestamp)
+                let touched = applyReplayedPlan(entries, planId: plan.planId, at: timestamp)
                 return touched.union(hidePlanDocuments(planId: plan.planId))
             }
             guard ACPSession.isPlanContentUpdate(update) else { return [] }
@@ -527,9 +531,11 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                   let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content)
             else { return [] }
             replayCursor = max(replayCursor, index + 1)
-            return replacePlanDocument(at: index, with: document)
+            // Unlike the parent, child replay rewrites checklists, so a later
+            // snapshot refills whatever this or a removal empties.
+            return replacePlanDocument(at: index, with: document).union(dropChecklist(planId: plan.planId))
         case .planRemoved(let planId):
-            return hidePlanDocuments(planId: planId)
+            return hidePlanDocuments(planId: planId).union(clearChecklist(planId: planId))
         case .toolCallUpdate:
             // `.toolCallUpdate`'s own live handling already looks its
             // target up by id at any position, so it needs no bespoke
@@ -1061,14 +1067,33 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// A checklist overwrites the current turn's checklist in place (one
     /// after the latest prompt), mirroring `ACPTranscript.currentPlanMessageIndex`;
     /// otherwise a second turn's checklist would overwrite the first turn's.
-    private func applyChecklist(_ entries: [ACPPlanEntry], at timestamp: Date) -> Set<Int> {
+    /// A `plan_update` checklist (`planId`) overwrites only the current turn's
+    /// row of its own id, as in the parent transcript.
+    private func applyChecklist(_ entries: [ACPPlanEntry], planId: String? = nil, at timestamp: Date) -> Set<Int> {
         let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
-        if let index = lastPlanIndex(), index > (lastUserIndex() ?? -1),
-           case .plan(let existingId, _) = messages[index] {
+        let index = planId.map { messages.checklistIndex(rowId: checklistRowIds[$0]) } ?? lastPlanIndex()
+        if let index, index > (lastUserIndex() ?? -1), case .plan(let existingId, _) = messages[index] {
             messages[index] = .plan(id: existingId, items)
             return [index]
         }
-        return [append(.plan(id: UUID(), items), at: timestamp)]
+        let rowId = UUID()
+        if let planId { checklistRowIds[planId] = rowId }
+        return [append(.plan(id: rowId, items), at: timestamp)]
+    }
+
+    /// `plan_removed` empties the id's checklist row; a later snapshot refills it.
+    private func clearChecklist(planId: String) -> Set<Int> {
+        guard let index = messages.checklistIndex(rowId: checklistRowIds[planId]),
+              case .plan(let id, let items) = messages[index], !items.isEmpty else { return [] }
+        messages[index] = .plan(id: id, [])
+        return [index]
+    }
+
+    /// A Markdown or file snapshot empties the id's checklist and releases it.
+    private func dropChecklist(planId: String) -> Set<Int> {
+        let cleared = clearChecklist(planId: planId)
+        checklistRowIds[planId] = nil
+        return cleared
     }
 
     /// The newest `.planDocument` row for `planId`, at any position. When
@@ -1082,15 +1107,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             return false
         }
         if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId {
-            let start = min(max(cursor, 0), messages.count)
-            if let turnStart = lastUserIndex(before: start) {
-                let turnEnd = messages[(turnStart + 1)...].firstIndex {
-                    if case .user = $0 { return true }
-                    return false
-                } ?? messages.count
-                if let index = messages[(turnStart + 1)..<turnEnd].firstIndex(where: isMatch) { return index }
-            }
-            if let index = messages[start...].firstIndex(where: isMatch) { return index }
+            if let turn = messages.replayedTurnRange(before: cursor),
+               let index = messages[turn].firstIndex(where: isMatch) { return index }
+            if let index = messages[min(max(cursor, 0), messages.count)...].firstIndex(where: isMatch) { return index }
         }
         return messages.lastIndex(where: isMatch)
     }
@@ -1133,7 +1152,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// before the next `.user` row (if any) — reconciling in place when
     /// found, or recovering a plan that never reached storage at all via
     /// `insertRecovered`, exactly like every other row kind already does.
-    private func applyReplayedPlan(_ entries: [ACPPlanEntry], at timestamp: Date) -> Set<Int> {
+    ///
+    /// An identified checklist (`planId`) rewrites the row its id already
+    /// holds in this turn; otherwise it takes the next plan row the cursor has
+    /// not passed, so a second id in the turn never claims the first id's row.
+    private func applyReplayedPlan(_ entries: [ACPPlanEntry], planId: String? = nil,
+                                   at timestamp: Date) -> Set<Int> {
         // A plan closes whatever prompt run is open, exactly like the live
         // path (an intervening plan makes the prior user row non-trailing,
         // so `userIndex`/`legacyTrailingUserIndex` stop matching it) —
@@ -1148,19 +1172,33 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         openIdentifiedUserRun = nil
         let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
         let turnStart = (lastUserIndex(before: replayCursor) ?? -1) + 1
-        for index in turnStart..<messages.count {
+        if let planId, let mapped = messages.checklistIndex(rowId: checklistRowIds[planId]),
+           messages.replayedTurnRange(before: replayCursor)?.contains(mapped) == true,
+           case .plan(let existingId, _) = messages[mapped] {
+            messages[mapped] = .plan(id: existingId, items)
+            replayCursor = max(replayCursor, mapped + 1)
+            return [mapped]
+        }
+        func recover() -> Set<Int> {
+            let rowId = UUID()
+            if let planId { checklistRowIds[planId] = rowId }
+            return [insertRecovered(.plan(id: rowId, items), at: timestamp)]
+        }
+        let start = planId == nil ? turnStart : max(turnStart, min(replayCursor, messages.count))
+        for index in start..<messages.count {
             switch messages[index] {
             case .user:
-                return [insertRecovered(.plan(id: UUID(), items), at: timestamp)]
+                return recover()
             case .plan(let existingId, _):
                 messages[index] = .plan(id: existingId, items)
                 replayCursor = max(replayCursor, index + 1)
+                if let planId { checklistRowIds[planId] = existingId }
                 return [index]
             default:
                 continue
             }
         }
-        return [insertRecovered(.plan(id: UUID(), items), at: timestamp)]
+        return recover()
     }
 
     /// The nearest `.user` row strictly before `limit`, if any.

@@ -126,6 +126,31 @@ public enum ACPPlanDocumentPlacement: Equatable, Sendable {
     }
 }
 
+/// Plan-row lookups shared by the parent transcript and child runs.
+extension Array where Element == ACPMessage {
+    /// The `.plan` row a `plan_update` checklist id owns, by the row's id.
+    func checklistIndex(rowId: UUID?) -> Int? {
+        guard let rowId else { return nil }
+        return lastIndex {
+            if case .plan(let id, _) = $0 { return id == rowId }
+            return false
+        }
+    }
+
+    /// The rows of the turn being replayed: after the last user row before
+    /// `cursor`, up to the next user row. Nil before the first user row.
+    func replayedTurnRange(before cursor: Int) -> Range<Int>? {
+        func isUser(_ message: ACPMessage) -> Bool {
+            if case .user = message { return true }
+            return false
+        }
+        let start = Swift.min(Swift.max(cursor, 0), count)
+        guard let turnStart = self[..<start].lastIndex(where: isUser) else { return nil }
+        let turnEnd = self[(turnStart + 1)...].firstIndex(where: isUser) ?? count
+        return (turnStart + 1)..<turnEnd
+    }
+}
+
 extension ACPPlanDocument {
     /// The document a Markdown or file plan update produces, or nil for a
     /// checklist or an unknown plan type, which have no document row.
