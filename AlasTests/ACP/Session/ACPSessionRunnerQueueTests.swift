@@ -558,6 +558,45 @@ struct ACPSessionRunnerQueueTests {
         #expect(Set(keys).count == 3)
     }
 
+    /// The retry's acknowledgement waits for the row that says its failure is over.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
+    func retryAcknowledgesAfterClearingItsFailure(committed: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        runner.start()
+        defer { runner.stop() }
+        let body = try Self.failedTurnResponse()
+        mock.script(method: "session/prompt") { _ in body }
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "s")
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        let head = try #require(session.queue.first)
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+
+        if !committed {
+            try store.db.exec("""
+            CREATE TRIGGER reject_incident BEFORE INSERT ON messages WHEN NEW.kind = 'system'
+            BEGIN SELECT RAISE(ABORT, 'incident write failed'); END;
+            """)
+        }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8),
+                        durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        runner.forceSendQueuedItem(id: head.id)
+        try await waitUntil { completions.count == 2 }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.recordedCount == (committed ? 1 : 0))
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func heldItemRetriesOnlyByHand() async throws {
         var completions: [ACPTurnCompletion] = []

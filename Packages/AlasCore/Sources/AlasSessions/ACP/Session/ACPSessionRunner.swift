@@ -2505,12 +2505,23 @@ public final class ACPSessionRunner {
         guard case .record(let record) = failure else { return acknowledgement }
         flushStreamingPersist()
         let dirty = session.applyFailureRecord(record, endedTurn: endedTurn, replaying: false)
+        return persistIncidentRows(
+            dirty.isEmpty && acknowledgement != nil ? unconfirmedIncidentRow(id: record.id) : dirty,
+            acknowledging: acknowledgement)
+    }
+
+    /// Persists incident rows and returns `acknowledgement` gated on that
+    /// write. The persistence pipeline is serial, so the result can be handed
+    /// to a later queue write.
+    private func persistIncidentRows(
+        _ rows: Set<Int>,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) -> ACPDurableConsumptionAcknowledgement? {
+        guard !rows.isEmpty else { return acknowledgement }
         guard let acknowledgement else {
-            persistIndices(dirty)
+            persistIndices(rows)
             return nil
         }
-        let rows = dirty.isEmpty ? unconfirmedIncidentRow(id: record.id) : dirty
-        guard !rows.isEmpty else { return acknowledgement }
         let rowWritten = OSAllocatedUnfairLock(initialState: false)
         persistIndices(rows, completion: { persisted in
             rowWritten.withLock { $0 = persisted }
@@ -4986,11 +4997,18 @@ extension ACPSessionRunner {
                     let wasCancelled = self.cancelledPromptIDs.contains(promptID)
                     let completionResult: ACPTurnCompletion.Result = wasCancelled
                         ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure)
-                    let promptAcknowledgement = !reportsFailure ? promptOutcome.acknowledgement : self.applyResponseFailure(
+                    var promptAcknowledgement = !reportsFailure ? promptOutcome.acknowledgement : self.applyResponseFailure(
                         promptOutcome.failure,
                         promptID: promptID,
                         endedTurn: Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
                         acknowledging: promptOutcome.acknowledgement)
+                    // A retried item or a wake records no user row, so its success
+                    // has to close the failure it follows. A superseded prompt's
+                    // result says nothing about the last turn.
+                    if isActivePrompt, completionResult == .completed {
+                        promptAcknowledgement = self.persistIncidentRows(
+                            self.session.clearTrailingTurnFailures(), acknowledging: promptAcknowledgement)
+                    }
                     // A failed turn delivered its one-time context only if it shows
                     // model work; otherwise the next prompt carries it again.
                     // Read here: the floor goes when the turn ends.

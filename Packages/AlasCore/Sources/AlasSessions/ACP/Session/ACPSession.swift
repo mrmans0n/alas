@@ -2713,6 +2713,25 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return Set(index..<transcript.messages.count)
     }
 
+    /// A turn completed, so the failures `trailingTurnFailure` would report no
+    /// longer describe the last turn. The rows stay. Returns the rows to persist.
+    public func clearTrailingTurnFailures() -> Set<Int> {
+        var dirty = Set<Int>()
+        for index in transcript.messages.indices.reversed() {
+            switch transcript.messages[index] {
+            case .user:
+                return dirty
+            case .failureIncident(let rowId, var incident) where incident.reportsTurnFailure:
+                incident.endedTurn = false
+                transcript.replaceMessage(at: index, with: .failureIncident(id: rowId, incident))
+                dirty.insert(index)
+            default:
+                continue
+            }
+        }
+        return dirty
+    }
+
     public func appendSystemNotice(_ text: String) {
         // A system notice closes the current output run; materialise any held
         // replay candidate first so it keeps its place ahead of the notice.

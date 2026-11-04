@@ -160,17 +160,16 @@ public enum ACPSessionTranscriptReader: Sendable {
         return nil
     }
 
-    /// The title of the latest row after the last user row with `endedTurn`,
-    /// severity error and not a usage limit: a stored transcript's record that
-    /// its last turn failed. A background error never set `endedTurn`, so it
-    /// does not count.
+    /// The title of the latest row after the last user row that reports a
+    /// turn failure: a stored transcript's record that its last turn failed.
+    /// A background error never set `endedTurn`, so it does not count, and a
+    /// later completed turn clears it.
     public static func trailingTurnFailure(_ messages: [ACPMessage]) -> String? {
         for message in messages.reversed() {
             switch message {
             case .user:
                 return nil
-            case .failureIncident(_, let incident)
-                where incident.endedTurn && incident.record.severity == .error && !incident.record.isUsageLimit:
+            case .failureIncident(_, let incident) where incident.reportsTurnFailure:
                 return incident.record.title
             default:
                 continue

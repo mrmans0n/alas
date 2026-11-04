@@ -8,6 +8,8 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
     public var record: ACPSessionFailureRecord
     /// Set once a prompt response carried it as an error ending the turn. Never set by
     /// `session_info_update` or replay, so a background error is not a turn failure.
+    /// Cleared when a later turn completes: a retry or a wake records no user row
+    /// that would otherwise close this failure.
     public var endedTurn: Bool
 
     public init(record: ACPSessionFailureRecord, endedTurn: Bool = false) {
@@ -23,6 +25,11 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         record = try c.decode(ACPSessionFailureRecord.self, forKey: .record)
         endedTurn = try c.decodeIfPresent(Bool.self, forKey: .endedTurn) ?? false
+    }
+
+    /// Whether this row says its turn failed, rather than that it hit a usage limit.
+    public var reportsTurnFailure: Bool {
+        endedTurn && record.severity == .error && !record.isUsageLimit
     }
 
     /// The title, then a blank line and the details when present.
