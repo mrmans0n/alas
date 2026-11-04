@@ -36,7 +36,7 @@ final class DeviceScreenNSView: NSView {
     private var token: UUID?
     private var screenSize = CGSize.zero
     private var lastTouch: DeviceScreenPoint?
-    private var heldModifiers: Set<UInt16> = []
+    private var heldKeys = HeldSimulatorKeys()
     var onStopped: (String) -> Void = { _ in }
 
     override init(frame: NSRect) {
@@ -159,33 +159,35 @@ final class DeviceScreenNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard !event.modifierFlags.contains(.command),
-              let usage = HIDKeyboardUsage.usage(forKeyCode: event.keyCode) else {
+              HIDKeyboardUsage.usage(forKeyCode: event.keyCode) != nil else {
             super.keyDown(with: event)
             return
         }
-        // The simulator repeats a held key itself.
-        guard !event.isARepeat, let udid else { return }
-        client?.key(udid: udid, usage: usage, down: true)
+        // Repeats come back nil: the simulator repeats a held key itself.
+        if let key = heldKeys.keyDown(event.keyCode, command: false) { sendKey(key) }
     }
 
     override func keyUp(with event: NSEvent) {
-        guard !event.modifierFlags.contains(.command),
-              let usage = HIDKeyboardUsage.usage(forKeyCode: event.keyCode) else {
+        guard let key = heldKeys.keyUp(event.keyCode) else {
             super.keyUp(with: event)
             return
         }
-        guard let udid else { return }
-        client?.key(udid: udid, usage: usage, down: false)
+        sendKey(key)
     }
 
     override func flagsChanged(with event: NSEvent) {
-        guard let usage = HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode), let udid else {
+        guard HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode) != nil else {
             super.flagsChanged(with: event)
             return
         }
-        let down = heldModifiers.insert(event.keyCode).inserted
-        if !down { heldModifiers.remove(event.keyCode) }
-        client?.key(udid: udid, usage: usage, down: down)
+        if let key = heldKeys.modifierChanged(event.keyCode, modifierFlags: event.modifierFlags.rawValue) {
+            sendKey(key)
+        }
+    }
+
+    private func sendKey(_ key: HeldSimulatorKeys.Event) {
+        guard let udid else { return }
+        client?.key(udid: udid, usage: key.usage, down: key.down)
     }
 
     override func resignFirstResponder() -> Bool {
@@ -193,15 +195,9 @@ final class DeviceScreenNSView: NSView {
         return super.resignFirstResponder()
     }
 
-    /// Lifts a touch or modifier still down, so none stays stuck in the simulator.
+    /// Lifts a touch, key or modifier still down, so none stays stuck in the simulator.
     private func releaseHeldInput() {
-        guard let udid else { return }
         if let last = lastTouch { send("end", last) }
-        for keyCode in heldModifiers {
-            if let usage = HIDKeyboardUsage.usage(forModifierKeyCode: keyCode) {
-                client?.key(udid: udid, usage: usage, down: false)
-            }
-        }
-        heldModifiers.removeAll()
+        heldKeys.releaseAll().forEach(sendKey)
     }
 }
