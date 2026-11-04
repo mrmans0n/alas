@@ -100,4 +100,36 @@ struct WorktreeSidebarFilterTests {
     @Test func moveHighlightWithNoMatchesClearsIt() {
         #expect(WorktreeSidebarFilter.moveHighlight(from: "a", by: 1, in: []) == nil)
     }
+
+    /// slot = 32. A tall list never pads; a short one tracks the viewport both
+    /// ways, including when the window outgrows the list or the list shrinks.
+    @Test(arguments: [
+        (stored: 0, viewport: 500, content: 5000, expected: nil),
+        (stored: 500, viewport: 450, content: 5000, expected: nil),
+        (stored: 0, viewport: 500, content: 300, expected: 500),
+        (stored: 500, viewport: 600, content: 532, expected: 600),
+        (stored: 500, viewport: 450, content: 532, expected: 450),
+        (stored: 500, viewport: 500, content: 300, expected: nil),
+    ] as [(stored: CGFloat, viewport: CGFloat, content: CGFloat, expected: CGFloat?)])
+    func viewportPaddingOnlyTracksShortLists(
+        stored: CGFloat, viewport: CGFloat, content: CGFloat, expected: CGFloat?
+    ) {
+        #expect(WorktreeSidebarFilter.viewportHeightToPadTo(
+            stored: stored, viewportHeight: viewport, contentHeight: content, slot: 32
+        ) == expected)
+    }
+
+    @Test(arguments: [
+        (offset: 1000, content: 2000, shrink: 500, expected: nil), // exactly at the new end
+        (offset: 1400, content: 2000, shrink: 500, expected: 1000), // past it
+        (offset: 200, content: 2000, shrink: 500, expected: nil), // stays valid
+        (offset: 100, content: 800, shrink: 700, expected: 0), // nothing left to scroll
+    ] as [(offset: CGFloat, content: CGFloat, shrink: CGFloat, expected: CGFloat?)])
+    func scrollsToTheClampedOffsetOnlyWhenContentShrinksPastIt(
+        offset: CGFloat, content: CGFloat, shrink: CGFloat, expected: CGFloat?
+    ) {
+        #expect(WorktreeSidebarFilter.offsetBeforeShrinking(
+            offset: offset, viewportHeight: 500, contentHeight: content, shrink: shrink
+        ) == expected)
+    }
 }

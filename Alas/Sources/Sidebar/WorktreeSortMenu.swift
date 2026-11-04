@@ -178,7 +178,7 @@ private struct NativeContextMenuModifier<MenuItems: View>: ViewModifier {
     func body(content: Content) -> some View {
         if mountsWhileHovered {
             content
-                .onHover { hovering = $0 }
+                .sidebarHover { hovering = $0 }
                 .overlay { if hovering || AssistiveTechnologyStatus.shared.drivesShowMenu { host } }
         } else {
             content.overlay { host }

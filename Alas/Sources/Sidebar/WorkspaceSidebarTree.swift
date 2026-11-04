@@ -137,7 +137,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     WorkspaceRepositoryPile(
                         workspace: workspace,
                         projects: Array(projects.values),
-                        icon: { state.effectiveIcon(for: $0) }
+                        icon: { state.sidebarIcon(for: $0) }
                     )
                     Text(workspace.name)
                         .font(.system(size: 12.5, weight: .semibold))
@@ -170,7 +170,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
                 .buttonStyle(.plain)
-                .onHover { plusHoveringWorkspaceID = $0 ? workspace.id : nil }
+                .sidebarHover { plusHoveringWorkspaceID = $0 ? workspace.id : nil }
                 .help("New checkout in \(workspace.name)")
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
@@ -198,7 +198,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
+        .sidebarHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
             Button("New checkout...", systemImage: "plus") { model.creatingCheckout = workspace }
             Button("Edit workspace...", systemImage: "pencil") { model.editingWorkspace = workspace }
@@ -274,7 +274,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                 }
             }
-            .onHover { hoveringCheckoutID = $0 ? checkout.id : nil }
+            .sidebarHover { hoveringCheckoutID = $0 ? checkout.id : nil }
             .contextMenu {
                 Button("Checkout details...", systemImage: "info.circle") { model.inspectedCheckout = checkout }
                 Divider()
@@ -299,7 +299,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     } label: {
                         HStack(spacing: 7) {
                             if let project = projects[member.projectID] {
-                                ProjectIconView(icon: state.effectiveIcon(for: project), fallbackName: project.name, size: .sidebar)
+                                ProjectIconView(icon: state.sidebarIcon(for: project), fallbackName: project.name, size: .sidebar)
                             } else {
                                 Icon(name: "folder", size: 12)
                             }
