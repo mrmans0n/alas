@@ -368,6 +368,9 @@ public final class ACPSessionRunner {
     /// `session/fork` is in flight. New prompts remain queued until the
     /// target adapter has created the branch.
     private var nativeForkBarrierActive = false
+    /// What an explicit Retry sends, in memory only: the latest finished prompt
+    /// when it failed, as the user wrote it. A new runner starts with none.
+    private var retryablePrompt: (failure: ACPRetryableFailure, blocks: [ACPContentBlock], draft: ACPComposerDraft?)?
     public var onUnexpectedDisconnect: (() -> Void)?
 
     /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
@@ -4648,6 +4651,7 @@ extension ACPSessionRunner {
         discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
         session.clearRetryStatus()
+        clearRetryablePrompt()
         let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
@@ -5088,6 +5092,16 @@ extension ACPSessionRunner {
                         // Ahead of the consumption below, whose write stores the hold.
                         let heldNext = failureMessage != nil && !keepsFailedHead
                             && self.session.holdNextQueuedPrompt(after: queuedItemId)
+                        // Read before the consumption below. A kept head has its own
+                        // Retry, and a wake or a resume is not the user's prompt.
+                        let failedItem = queuedItemId.flatMap { id in self.session.queue.first { $0.id == id } }
+                        let isUserPrompt = normalUserTurn && delegatedSource == nil && !keepsFailedHead
+                            && failedItem?.backgroundTaskWake == nil && failedItem?.usageLimit == nil
+                        if failureMessage != nil, isUserPrompt, case .record(let record) = promptOutcome.failure {
+                            let failure = ACPRetryableFailure(incidentId: record.id, promptID: promptID)
+                            self.retryablePrompt = (failure, blocks, draft)
+                            self.session.setRetryableFailure(failure)
+                        }
                         if keepsFailedHead, let failureMessage {
                             // A retry under the same key would replay this failure
                             // from the broker instead of reaching the agent.
@@ -5249,14 +5263,7 @@ extension ACPSessionRunner {
                                 self.session.lastError = "prompt failed: \(errorMessage)"
                             }
                             if let authReason {
-                                self.session.setupState = .needsAuth(
-                                    methods: self.session.authMethods,
-                                    reason: authReason
-                                )
-                                self.session.agentState = .failed(authReason)
-                                Task { @MainActor in
-                                    await self.onAuthRequired?(self, authReason)
-                                }
+                                self.enterAuthRequired(reason: authReason)
                             }
                             self.activePromptID = nil
                             self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage), promptID: promptID)
@@ -5286,6 +5293,7 @@ extension ACPSessionRunner {
         turnPublicationGeneration += 1
         discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()
+        clearRetryablePrompt()
         let promptID = session.allocatePromptID()
         if let previous = activePromptID { promptLifecycle.forget(previous) }
         activePromptID = promptID
@@ -5735,6 +5743,74 @@ extension ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// The runner's half of the policy's input. It cannot see `isMirror`, which
+    /// the manager fills in, and a runner is never a peer's.
+    public func failureActionContext(incidentId: String) -> ACPFailureActionContext {
+        let needsAuth = if case .needsAuth = session.setupState { true } else { false }
+        return ACPFailureActionContext(
+            // Keyed on the prompt this runner holds: the session outlives its runner.
+            isRetryTarget: session.retryableFailure?.incidentId == incidentId
+                && session.retryableFailure == retryablePrompt?.failure,
+            agentReady: session.agentState == .ready && !needsAuth && !stopped && isConnectionCurrent()
+                && !nativeForkBarrierActive && !session.holdsPromptsForDelegatedSelection,
+            promptActive: hasRunningPromptWork,
+            holdsWriteLease: holdsLeaseForWrite(),
+            isMirror: false,
+            hasUncertainDelivery: session.queue.contains(where: \.deliveryUncertain) || session.directTurnInFlight,
+            isPeer: false
+        )
+    }
+
+    /// An explicit click only. Sends the failed prompt again as a new turn under a
+    /// new operation key, so a broker cannot replay the failure. It records a new
+    /// user row and leaves the queue alone: a held successor stays held.
+    @discardableResult
+    public func retryFailedPrompt(incidentId: String) -> Bool {
+        guard let index = session.transcript.failureIncidentIndex(id: incidentId),
+              case .failureIncident(_, let incident) = session.transcript.messages[index],
+              ACPFailureActionPolicy.visibleActions(
+                rawActions: incident.record.actions, context: failureActionContext(incidentId: incidentId)
+              ).contains(.retry),
+              let prompt = retryablePrompt
+        else { return false }
+        clearRetryablePrompt()
+        sendNow(
+            blocks: prompt.blocks,
+            queuedItemId: nil,
+            brokerOperationKey: "failure-retry-\(UUID().uuidString)",
+            recordUserPrompt: true,
+            normalUserTurn: true,
+            draft: prompt.draft
+        )
+        return true
+    }
+
+    /// Enters the auth flow the way a JSON-RPC auth error does. Ignored while a
+    /// turn runs: the flow stands the runner down and restores a `.sending` head
+    /// as plain pending, so the delivered prompt would go out again on reconnect.
+    public func requestSignIn(reason: String) {
+        guard !hasRunningPromptWork else { return }
+        enterAuthRequired(reason: reason)
+    }
+
+    private var hasRunningPromptWork: Bool {
+        activePromptID != nil || session.transcript.streamingState != .idle || steerInProgress || detachedSteeringTurn
+            || session.transcript.hasBlockingUserInput
+    }
+
+    private func enterAuthRequired(reason: String) {
+        session.setupState = .needsAuth(methods: session.authMethods, reason: reason)
+        session.agentState = .failed(reason)
+        Task { @MainActor in
+            await self.onAuthRequired?(self, reason)
+        }
+    }
+
+    private func clearRetryablePrompt() {
+        retryablePrompt = nil
+        session.clearRetryableFailure()
+    }
+
     /// True when this runner may write — it still holds the session lease.
     /// When `ownerInstanceId` is nil (tests that construct a runner directly
     /// without a lease), gating is disabled and writes always proceed.

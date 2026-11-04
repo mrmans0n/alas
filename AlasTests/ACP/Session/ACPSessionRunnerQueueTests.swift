@@ -529,6 +529,7 @@ struct ACPSessionRunnerQueueTests {
 
         #expect(Self.sentPromptTexts(mock).count == 1)
         #expect(acknowledgement.recordedCount == 1)
+        #expect(!runner.failureActionContext(incidentId: "t:error").isRetryTarget, "a resume or a wake is not the user's prompt")
         if row == .wakeWithModelWork {
             #expect(!session.queue.contains { $0.id == head.id })
             #expect(session.backgroundTasks[0].wakeDelivered)

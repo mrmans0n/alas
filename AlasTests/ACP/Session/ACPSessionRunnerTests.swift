@@ -2529,10 +2529,11 @@ struct ACPSessionRunnerTests {
 
     private static func failedPromptResponse(
         title: String = "Model overloaded", kind: String? = nil, severity: String = "error", category: String = "service",
-        stopReason: String = "end_turn", ack: @escaping @Sendable () -> Void = {}
+        stopReason: String = "end_turn", actions: [String] = [], ack: @escaping @Sendable () -> Void = {}
     ) throws -> ACPResponse {
         var record: [String: Any] = [
             "version": 1, "id": "t:error", "revision": 1, "severity": severity, "category": category, "title": title,
+            "actions": actions,
         ]
         record["kind"] = kind
         let body = try JSONSerialization.data(withJSONObject: [
@@ -2560,6 +2561,203 @@ struct ACPSessionRunnerTests {
         session.transcript.messages.compactMap {
             if case .failureIncident(_, let incident) = $0 { incident } else { nil }
         }
+    }
+
+    // MARK: - Retrying a failed prompt
+
+    private static let succeededPrompt = Data(#"{"stopReason":"end_turn"}"#.utf8)
+
+    private func sentPrompts(_ mock: ACPMockClient) -> [ACPRequest] {
+        mock.sent.filter { $0.method == "session/prompt" }
+    }
+
+    private func scriptRetryableFailure(_ mock: ACPMockClient) {
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse(actions: ["retry"]) }
+    }
+
+    /// Every write settled and the turn's boundary applied, so `promptActive` reads false.
+    private func settleToIdle(_ runner: ACPSessionRunner, _ session: ACPSession) async throws {
+        try await waitUntil { session.transcript.streamingState == .idle }
+        await runner.flushPersistence()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func retrySendsANewPromptWithANewKey() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse(actions: ["retry"]) }
+        let item = UUID()
+        session.enqueue(id: item, blocks: [.text("hello")])
+        session.normalQueuedTurnIDs.insert(item)
+        session.enqueue(blocks: [.text("next")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.retryableFailure != nil }
+        try await settleToIdle(runner, session)
+        let userRows = session.transcript.messages.filter { if case .user = $0 { true } else { false } }.count
+
+        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
+        #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+        #expect(!runner.retryFailedPrompt(incidentId: "t:error"), "a click sends once")
+        try await waitUntil { self.sentPrompts(mock).count == 2 }
+        try await settleToIdle(runner, session)
+
+        let sent = sentPrompts(mock)
+        let prompts = sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }
+        #expect(prompts.count == 2)
+        #expect(prompts.first == prompts.last)
+        let keys = sent.map(\.brokerOperationKey)
+        #expect(keys.allSatisfy { $0 != nil })
+        #expect(keys.first != keys.last)
+        #expect(session.transcript.messages.filter { if case .user = $0 { true } else { false } }.count == userRows + 1)
+        #expect(session.retryableFailure == nil)
+        #expect(session.queue.count == 1, "the held successor stays held")
+        #expect(session.queue.first?.lastError != nil)
+    }
+
+    @Test func retryIsNeverAutomatic() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse(actions: ["retry"]) }
+        try await sendAndSettle(runner)
+        try await settleToIdle(runner, session)
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(runner.failureActionContext(incidentId: "t:error").isRetryTarget)
+        #expect(sentPrompts(mock).count == 1)
+    }
+
+    @Test func retryRefusedWithoutAdapterAction() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse() }
+        try await sendAndSettle(runner)
+        try await settleToIdle(runner, session)
+        #expect(runner.failureActionContext(incidentId: "t:error").isRetryTarget)
+        #expect(!runner.retryFailedPrompt(incidentId: "t:error"))
+        await runner.flushPersistence()
+        #expect(sentPrompts(mock).count == 1)
+    }
+
+    @Test func retryRefusedWhileUncertain() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse(actions: ["retry"]) }
+        try await sendAndSettle(runner)
+        try await settleToIdle(runner, session)
+        session.enqueue(blocks: [.text("maybe delivered")])
+        session.queue[0].markDeliveryUncertain()
+
+        #expect(runner.failureActionContext(incidentId: "t:error").hasUncertainDelivery)
+        #expect(!runner.retryFailedPrompt(incidentId: "t:error"))
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(sentPrompts(mock).count == 1)
+        #expect(session.queue.count == 1)
+    }
+
+    enum RetryTargetRow: CaseIterable {
+        case sessionUpdate, replayed, rehydratedInNewRunner, usageLimit, delegated, superseded, latestDirect, afterNewerSend
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: RetryTargetRow.allCases)
+    func retryTargetLimits(_ row: RetryTargetRow) async throws {
+        let (runner, mock, session, store) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        var reader = runner
+        switch row {
+        case .sessionUpdate:
+            mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(failureInfo(id: "t:error", revision: 1, title: "Boom"))))
+            try await waitUntil { !self.incidents(in: session).isEmpty }
+        case .replayed:
+            session.applySessionFailureUpdate(failureInfo(id: "t:error", revision: 1, title: "Boom"), replaying: true, promptActive: false)
+            #expect(!incidents(in: session).isEmpty)
+        case .rehydratedInNewRunner:
+            scriptRetryableFailure(mock)
+            try await sendAndSettle(runner)
+            #expect(session.retryableFailure != nil, "the session object outlives its runner")
+            reader = ACPSessionRunner(
+                session: session, connection: ACPConnection(client: ACPMockClient()), store: store, sessionId: "s",
+                worktreePath: FileManager.default.temporaryDirectory.path)
+        case .usageLimit:
+            mock.scriptResponse(method: "session/prompt") { _ in
+                try Self.failedPromptResponse(kind: ACPSessionFailureRecord.quotaExhaustedKind, actions: ["retry"])
+            }
+            try await sendAndSettle(runner)
+        case .delegated:
+            scriptRetryableFailure(mock)
+            var finished = false
+            runner.sendNow(
+                blocks: [.text("hello")], queuedItemId: nil,
+                delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "m"),
+                onPromptFinished: { _ in finished = true })
+            try await waitUntil { finished }
+        case .superseded:
+            let answered = AsyncGate()
+            let respond = AsyncGate()
+            var calls = 0
+            mock.scriptResponse(method: "session/prompt") { _ in
+                calls += 1
+                guard calls == 1 else { return ACPResponse(body: Self.succeededPrompt) }
+                await answered.open()
+                await respond.wait()
+                return try Self.failedPromptResponse(actions: ["retry"])
+            }
+            runner.sendNow(blocks: [.text("first")], queuedItemId: nil)
+            await answered.wait()
+            try await sendAndSettle(runner)
+            await respond.open()
+            try await waitUntil { !self.incidents(in: session).isEmpty }
+        case .latestDirect:
+            scriptRetryableFailure(mock)
+            try await sendAndSettle(runner)
+        case .afterNewerSend:
+            scriptRetryableFailure(mock)
+            try await sendAndSettle(runner)
+            mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
+            try await sendAndSettle(runner)
+        }
+        #expect(reader.failureActionContext(incidentId: "t:error").isRetryTarget == (row == .latestDirect))
+    }
+
+    /// Standing down mid-turn restores a `.sending` head as plain pending, which
+    /// would send a delivered prompt again after the reconnect.
+    @Test(.timeLimit(.minutes(1)))
+    func signInWaitsForTheTurnToEnd() async throws {
+        var authRequests: [String] = []
+        let (runner, mock, session, _) = try await makeFailureRunner(onAuthRequired: { _, reason in
+            await MainActor.run { authRequests.append(reason) }
+        })
+        runner.start()
+        defer { runner.stop() }
+        let answered = AsyncGate()
+        let respond = AsyncGate()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await answered.open()
+            await respond.wait()
+            return ACPResponse(body: Self.succeededPrompt)
+        }
+        var finished = false
+        runner.sendNow(blocks: [.text("hello")], queuedItemId: nil, onPromptFinished: { _ in finished = true })
+        await answered.wait()
+        runner.requestSignIn(reason: "Sign in again")
+        if case .needsAuth = session.setupState { Issue.record("a running turn must not stand down") }
+
+        await respond.open()
+        try await waitUntil { finished }
+        try await settleToIdle(runner, session)
+        runner.requestSignIn(reason: "Sign in again")
+        guard case .needsAuth(_, let reason) = session.setupState else {
+            Issue.record("an idle session enters the auth flow")
+            return
+        }
+        #expect(reason == "Sign in again")
+        #expect(session.agentState == .failed("Sign in again"))
+        try await waitUntil { authRequests == ["Sign in again"] }
     }
 
     @Test func bufferedTextStaysAheadOfResponseIncident() async throws {

@@ -480,6 +480,50 @@ public final class ACPSessionManager: ChangeTracking {
         return await runner.userCancel()
     }
 
+    // MARK: - Failure incident actions
+
+    /// Nil only for an unknown session. A session with no runner still gets a
+    /// context, since Sign in and New session are wanted exactly then.
+    public func failureActionContext(sessionId: ACPSession.ID, incidentId: String) -> ACPFailureActionContext? {
+        guard sessions[sessionId] != nil else { return nil }
+        let mirror = isMirror(sessionId: sessionId)
+        guard let runner = runners[sessionId] else {
+            return ACPFailureActionContext(
+                isRetryTarget: false, agentReady: false, promptActive: false, holdsWriteLease: false,
+                isMirror: mirror, hasUncertainDelivery: false, isPeer: false)
+        }
+        var context = runner.failureActionContext(incidentId: incidentId)
+        context.isMirror = mirror
+        context.agentReady = context.agentReady && admitsFailureRetry(sessionId: sessionId)
+        return context
+    }
+
+    /// An explicit click only; the runner re-checks its half of the policy.
+    @discardableResult
+    public func retryFailedPrompt(sessionId: ACPSession.ID, incidentId: String) -> Bool {
+        guard !isMirror(sessionId: sessionId), admitsFailureRetry(sessionId: sessionId),
+              let runner = runners[sessionId]
+        else { return false }
+        return runner.retryFailedPrompt(incidentId: incidentId)
+    }
+
+    /// With no runner there is nothing to stand down, so the banner just appears.
+    public func requestSignIn(sessionId: ACPSession.ID, reason: String) {
+        guard let session = sessions[sessionId], !isMirror(sessionId: sessionId) else { return }
+        if let runner = runners[sessionId] {
+            runner.requestSignIn(reason: reason)
+        } else if session.agentState != .spawning {
+            session.setupState = .needsAuth(methods: session.authMethods, reason: reason)
+            session.agentState = .failed(reason)
+        }
+    }
+
+    /// What `submit` refuses or waits on before a prompt, for a retry that skips it.
+    private func admitsFailureRetry(sessionId: ACPSession.ID) -> Bool {
+        !isDisposed && !mergingForks.contains(sessionId) && admitsNewWork()
+            && modelModeSelectionTails[sessionId] == nil
+    }
+
     public func persistGoalDraft(_ objective: String, for session: ACPSession) {
         guard !isDisposed, sessions[session.id] === session, session.goalDraft != objective else { return }
         session.goalDraft = objective
@@ -6898,6 +6942,7 @@ extension ACPSessionManager {
         session.diffPatch = nil
         session.planFile = nil
         session.sessionFailure = nil
+        session.clearRetryableFailure()
         session.availableProviders = []
         session.agentState = .spawning
 

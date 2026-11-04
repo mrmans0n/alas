@@ -242,6 +242,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var lastError: String?
     /// Runtime-only state reported by Codex while its current turn retries.
     @Tracked public private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
+    /// The incident whose failed prompt can be sent again by an explicit click.
+    /// Runtime only: set by the runner that holds the prompt, never persisted.
+    @Tracked public private(set) var retryableFailure: ACPRetryableFailure?
     @Tracked public var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
     @Tracked public var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
     /// Runtime-only loading state of an Alas action's prompt card (Ship) that
@@ -4347,6 +4350,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func clearRetryStatus() {
         guard retryStatus != nil else { return }
         retryStatus = nil
+    }
+
+    func setRetryableFailure(_ failure: ACPRetryableFailure) {
+        retryableFailure = failure
+    }
+
+    public func clearRetryableFailure() {
+        guard retryableFailure != nil else { return }
+        retryableFailure = nil
     }
 
     /// Starts one recovery incident. Returns false when the same disconnect

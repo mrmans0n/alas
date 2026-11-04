@@ -999,6 +999,14 @@ private struct ACPSessionView: View {
                         title: visual.title)
                 )
             }),
+            failureIncidentActions: .driven(by: manager, session: session, newSession: {
+                if let checkout = state.workspaceCheckout(for: owner) {
+                    Task { _ = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: session.agentId) }
+                } else {
+                    state.openNewACPSession(
+                        agentID: session.agentId, owner: owner ?? .worktree(worktree.id), projectId: worktree.projectId)
+                }
+            }),
             onOpenPlanFile: { path in
                 // Read-only Markdown preview; a remote worktree's file opens
                 // through its virtual path (a local path is unchanged).

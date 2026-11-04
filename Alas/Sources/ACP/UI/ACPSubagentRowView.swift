@@ -311,7 +311,8 @@ private struct ACPSubagentMessageRow: View {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         case .failureIncident(_, let incident):
-            ACPSystemNoticeView(text: incident.record.title)
+            // A child's turn is not this surface's to retry.
+            ACPFailureIncidentCard(incident: incident, actions: .readOnly)
         case .visualAid(let visual):
             Label(visual.title, systemImage: "rectangle.on.rectangle")
                 .font(.callout)
