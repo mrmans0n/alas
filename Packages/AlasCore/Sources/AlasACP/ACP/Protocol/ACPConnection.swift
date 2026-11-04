@@ -399,7 +399,9 @@ public final class ACPConnection: @unchecked Sendable {
             && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)
             && result.meta?.codexHooks?.isSupported == true
         negotiatedSessionIndex = result.meta?.sessionIndex?.support
-        negotiatedSessionFailure = result.meta?.sessionFailure?.capability != nil
+        // The extension is ACP v1 only.
+        let sessionFailure = negotiatedProtocolVersion == .v1 ? result.meta?.sessionFailure?.capability : nil
+        negotiatedSessionFailure = sessionFailure != nil
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -422,7 +424,7 @@ public final class ACPConnection: @unchecked Sendable {
             forkPoint: result.meta?.forkPoint?.capability,
             diffPatch: result.meta?.diffPatch?.capability,
             planFile: result.meta?.planFile?.capability,
-            sessionFailure: result.meta?.sessionFailure?.capability
+            sessionFailure: sessionFailure
         )
     }
 

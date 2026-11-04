@@ -5,7 +5,7 @@ import AlasACP
 /// record id. It is never agent output: not progress, not last-agent text,
 /// and it does not close a run of output.
 public struct ACPFailureIncident: Codable, Equatable, Sendable {
-    public var record: ACPSessionFailureRecord
+    public let record: ACPSessionFailureRecord
     /// Set once a prompt response carried it as an error ending the turn. Never set by
     /// `session_info_update` or replay, so a background error is not a turn failure.
     /// Cleared when a later turn ends other than failed or cancelled: a retry or a
@@ -25,6 +25,11 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         record = try c.decode(ACPSessionFailureRecord.self, forKey: .record)
         endedTurn = try c.decodeIfPresent(Bool.self, forKey: .endedTurn) ?? false
+    }
+
+    /// This incident for a surface that cannot act on it.
+    public func strippingActions() -> ACPFailureIncident {
+        ACPFailureIncident(record: record.strippingActions(), endedTurn: endedTurn)
     }
 
     /// Whether this row says its turn failed, rather than that it hit a usage limit.

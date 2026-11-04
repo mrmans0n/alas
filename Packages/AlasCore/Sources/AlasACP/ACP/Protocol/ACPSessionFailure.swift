@@ -59,7 +59,7 @@ public struct ACPSessionFailureRecord: Codable, Equatable, Sendable {
     public let title: String
     public let details: String?
     public let reason: String?
-    public var actions: [String]
+    public let actions: [String]
     public let kind: String?
 
     /// An unrecognized category reads as `.unknown`.
@@ -98,12 +98,31 @@ public struct ACPSessionFailureRecord: Codable, Equatable, Sendable {
         reason = try? c.decodeIfPresent(String.self, forKey: .reason)
         kind = try? c.decodeIfPresent(String.self, forKey: .kind)
         if case .array(let values)? = try? c.decodeIfPresent(LSPJSONValue.self, forKey: .actions) {
-            actions = values.compactMap { value in
-                if case .string(let action) = value { action } else { nil }
+            actions = values.compactMap { value -> String? in
+                guard case .string(let action) = value else { return nil }
+                return action
             }
         } else {
             actions = []
         }
+    }
+
+    private init(strippingActionsFrom record: ACPSessionFailureRecord) {
+        version = record.version
+        id = record.id
+        revision = record.revision
+        category = record.category
+        severity = record.severity
+        title = record.title
+        details = record.details
+        reason = record.reason
+        actions = []
+        kind = record.kind
+    }
+
+    /// This record for a surface that cannot act on it.
+    public func strippingActions() -> ACPSessionFailureRecord {
+        ACPSessionFailureRecord(strippingActionsFrom: self)
     }
 }
 
