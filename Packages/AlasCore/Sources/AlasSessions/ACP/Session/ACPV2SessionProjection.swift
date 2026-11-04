@@ -111,6 +111,7 @@ public final class ACPV2SessionProjection {
                 effects = application.effects
                 let id = application.record.registration.sequence
                 submissions[id] = publication.state.lifecycle.submission(id)
+            case .permissionSubject(_, let changes): effects = changes
             case .setupDefault(let result): effects = result.effects
             case .observationLost(let loss): effects = loss
             observing = false

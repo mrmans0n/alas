@@ -7,6 +7,88 @@ import AlasCore
 
 @MainActor
 struct ACPV2AttachmentRuntimeTests {
+    @Test func orderedRuntimeCannotInstallTwoConsumers() async throws {
+        let fixture = try await RuntimeFixture(ordered: true)
+        let runtime = try fixture.runtime()
+        defer { runtime.stop()
+        fixture.transport.terminate() }
+        #expect(throws: (any Error).self) { try fixture.runtime() }
+        #expect(fixture.offers.isEmpty && fixture.transport.writes.withLock { $0 }.isEmpty)
+    }
+
+    @Test func permissionSubjectPrecedesOfferAndIsNeverReappliedAfterLaterUpdate() async throws {
+        let fixture = try await RuntimeFixture(ordered: true)
+        let journal = ResponseJournal(base: fixture.persistence, hold: "inspection")
+        var titles: [String] = []
+        var offered = false
+        let coordinator = ACPV2RequestDecisionCoordinator(upstreamSessionId: "upstream", support: .init(), isCurrent: { true }, onEvent: { event in
+            if case .offer = event { offered = true
+            #expect(titles.last == "C") }
+        })
+        let runtime = try fixture.runtime(journals: .init(persistence: fixture.persistence, responses: journal), onCanonicalChange: { publication in
+            if let title = publication.state.activity.toolCall(id: "t")?.title { titles.append(title) }
+        }, onInbound: coordinator.receive, onLifecycleChange: coordinator.runtimeDidChange)
+        defer { coordinator.stop()
+        runtime.stop()
+        fixture.transport.terminate()
+        Task { await journal.release() } }
+        try coordinator.bind(to: runtime)
+        try await runtime.startFreshOrdered()
+        func update(_ title: String) {
+            fixture.transport.emit(Data("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"upstream\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"\(title)\"}}}".utf8))
+        }
+        update("A")
+        fixture.transport.emit(Data(#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"upstream","title":"Approve","options":[{"optionId":"yes","name":"Yes","kind":"allow_once"}],"subject":{"type":"tool_call","toolCall":{"toolCallId":"t","title":"B"}}}}"#.utf8))
+        update("C")
+        try await eventually { await MainActor.run { titles.last == "C" } }
+        try await eventually { await journal.reached }
+        #expect(titles == ["A", "B", "C"] && !offered)
+        await journal.release()
+        try await eventually { await MainActor.run { offered } }
+        #expect(titles == ["A", "B", "C"])
+        let stream = try await fixture.persistence.registerV2UpdateJournal(sessionId: "local", upstreamSessionId: "upstream", source: .stdio(connectionID: fixture.client.updateConnectionID), fence: fixture.fence)
+        #expect(try await fixture.persistence.loadV2UpdateJournalPage(stream: stream).records.count == 2)
+    }
+
+    @Test func orderedRuntimeWaitsForEachCommitBeforeTheNextCapture() async throws {
+        let fixture = try await RuntimeFixture(ordered: true)
+        let gate = RuntimeUpdateGate(base: fixture.persistence, operation: .append)
+        let runtime = try fixture.runtime(journals: .init(persistence: fixture.persistence, updates: gate))
+        defer { runtime.stop()
+        fixture.transport.terminate()
+        Task { await gate.release() } }
+        try await runtime.startFreshOrdered()
+        let count = fixture.consumed
+        func update(_ state: String) {
+            fixture.transport.emit(Data("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"upstream\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":\"\(state)\"}}}".utf8), consumed: { count.value.withLock { $0 += 1 } })
+        }
+        update("running")
+        fixture.request(id: 7)
+        update("idle")
+        try await eventually { await gate.entered }
+        #expect(fixture.offers.isEmpty && fixture.consumed.value.withLock { $0 } == 0)
+        await gate.release()
+        try await eventually { fixture.consumed.value.withLock { $0 } == 3 }
+        #expect(fixture.offers.count == 1 && runtime.state.lifecycle.foreground == .idle)
+    }
+
+    @Test(arguments: ["update", "inbound"])
+    func orderedPreparationRejectsHistoricalState(kind: String) async throws {
+        let fixture = try await RuntimeFixture(ordered: true)
+        if kind == "update" {
+            let stream = try await fixture.persistence.registerV2UpdateJournal(sessionId: "local", upstreamSessionId: "upstream", source: .stdio(connectionID: fixture.client.updateConnectionID), fence: fixture.fence)
+            _ = try await fixture.persistence.appendV2Update(.init(frame: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8), connectionID: fixture.client.updateConnectionID), to: stream, fence: fixture.fence)
+        } else {
+            let stream = try await fixture.persistence.registerV2InboundLedger(sessionId: "local", upstreamSessionId: "upstream", source: .stdio(connectionID: fixture.client.updateConnectionID), fence: fixture.fence)
+            _ = try await fixture.persistence.retainV2Inbound(.init(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"peer/request"}"#.utf8), connectionID: fixture.client.updateConnectionID, source: .stdio), to: stream, fence: fixture.fence)
+        }
+        let runtime = try fixture.runtime()
+        defer { runtime.stop()
+        fixture.transport.terminate() }
+        await #expect(throws: (any Error).self) { try await runtime.startFreshOrdered() }
+        #expect(runtime.state.latestStateObservation == nil && fixture.offers.isEmpty)
+    }
+
     @Test func retainedInboundCallbacksPreserveRequestsNotificationsAndDiagnostics() async throws {
         let fixture = try await RuntimeFixture()
         let historical = try await fixture.persistence.registerV2InboundLedger(sessionId: "local", upstreamSessionId: "upstream", source: .stdio(connectionID: fixture.client.updateConnectionID), fence: fixture.fence)
@@ -456,6 +538,7 @@ struct ACPV2AttachmentRuntimeTests {
 private final class RuntimeFixture {
     let transport = RuntimeTransport()
     let client: ACPStdioClient
+    let intake: ACPV2OrderedIntake?
     let persistence: ACPSessionPersistence
     let fence = ACPSessionLeaseFence(sessionId: "local", ownerInstance: "A", token: "owner")
     let consumed = RuntimeCount()
@@ -464,8 +547,9 @@ private final class RuntimeFixture {
     var offers: [ACPV2AttachmentRuntime.Request] = []
     var onOffer: ((ACPV2AttachmentRuntime.Request) -> Void)?
 
-    init() async throws {
+    init(ordered: Bool = false) async throws {
         client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        intake = ordered ? try client.claimV2OrderedIntake() : nil
         persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("attachment-runtime-\(UUID()).sqlite").path)
         try await persistence.upsertSession(.init(id: "local", agentId: "fixture", title: "Runtime", autoRun: false, createdAt: 1,
             updatedAt: 1, lastOpenedAt: 1, archived: false))
@@ -476,7 +560,7 @@ private final class RuntimeFixture {
         onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil,
         onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)? = nil,
         onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)? = nil) throws -> ACPV2AttachmentRuntime {
-        try .init(sessionId: "local", upstreamSessionId: "upstream", attachment: .init(stdioClient: client), fence: fence,
+        try .init(sessionId: "local", upstreamSessionId: "upstream", attachment: intake.map { try ACPV2AttachmentRuntime.Attachment(stdioClient: client, orderedIntake: $0) } ?? .init(stdioClient: client), fence: fence,
             journals: journals ?? .init(persistence: persistence), isCurrent: { [weak self] in self?.onCurrentCheck?()
             return self?.current == true },
             onRequest: { [weak self] offer in self?.offers.append(offer)
@@ -579,7 +663,7 @@ private actor RuntimeFaultingInbound: ACPV2InboundLedgerPersisting {
     }
 }
 
-private final class RuntimeSubmissionGate: ACPV2SubmissionPersisting, Sendable {
+final class RuntimeSubmissionGate: ACPV2SubmissionPersisting, Sendable {
     let base: ACPSessionPersistence
     let entered = Mutex(false)
     private let waiter = Mutex<CheckedContinuation<Void, Never>?>(nil)

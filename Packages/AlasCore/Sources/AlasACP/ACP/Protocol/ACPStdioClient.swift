@@ -58,6 +58,8 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     private var pending: [JSONRPCID: Pending] = [:]
     private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
     private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
+    private var didStart = false
+    private var orderedIntake: ACPV2OrderedIntake?
     private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
@@ -219,7 +221,31 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         ACPStdioClient(transport: transport)
     }
 
+    public func claimV2OrderedIntake() throws -> ACPV2OrderedIntake {
+        try stateLock.withLock {
+            guard sessionUpdateProtocolVersion == .v2, transport is any JSONRPCFrameWriting,
+                  !didStart, !didDrainPending, orderedIntake == nil else { throw ACPV2BootstrapClaimError.unavailable }
+            try bootstrapClaims.validateUnclaimed()
+            let intake = ACPV2OrderedIntake(connectionID: updateConnectionID)
+            orderedIntake = intake
+            v2UpdatesCont.finish()
+            v2InboundCont.finish()
+            rawRPCDiagnosticsCont.finish()
+            return intake
+        }
+    }
+
+    public func validateV2Intake(_ intake: ACPV2OrderedIntake?) throws {
+        try stateLock.withLock {
+            guard orderedIntake === intake, !didDrainPending else { throw ACPV2BootstrapClaimError.unavailable }
+        }
+    }
+
     public func start() throws {
+        try stateLock.withLock {
+            guard !didStart, !didDrainPending else { throw ACPClientError.notRunning }
+            didStart = true
+        }
         try transport.start()
         dispatchTask = Task { [weak self] in
             guard let self else { return }
@@ -566,11 +592,18 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         defer { stateLock.unlock() }
         guard !didDrainPending else { return }
         _yieldedUpdateCount += 1
-        v2UpdatesCont.yield(.init(frame: data, connectionID: updateConnectionID, durableConsumptionAcknowledgement: onConsumed))
+        let delivery = ACPV2SessionUpdateDelivery(frame: data, connectionID: updateConnectionID, durableConsumptionAcknowledgement: onConsumed)
+        if let orderedIntake { orderedIntake.continuation.yield(.update(delivery)) }
+        else { v2UpdatesCont.yield(delivery) }
     }
 
     private func publishRPCDiagnostic(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) {
-        rawRPCDiagnosticsCont.yield(rpcDelivery(data, source: .diagnostic, onConsumed: onConsumed))
+        let delivery = rpcDelivery(data, source: .diagnostic, onConsumed: onConsumed)
+        stateLock.withLock {
+            guard !didDrainPending else { return }
+            if let orderedIntake { orderedIntake.continuation.yield(.diagnostic(delivery)) }
+            else { rawRPCDiagnosticsCont.yield(delivery) }
+        }
     }
 
     private func finishLegacyMethodStreams() {
@@ -594,7 +627,8 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         let delivery = ACPV2InboundDelivery(frame: data, connectionID: updateConnectionID, source: .stdio,
             durableConsumptionAcknowledgement: acknowledgement)
         if let requestID { v2Replies.register(delivery, id: requestID) }
-        v2InboundCont.yield(delivery)
+        if let orderedIntake { orderedIntake.continuation.yield(.inbound(delivery)) }
+        else { v2InboundCont.yield(delivery) }
     }
 
     private func rpcDelivery(_ data: Data, source: ACPRawRPCDelivery.Source,
@@ -971,6 +1005,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
             return
         }
         didDrainPending = true
+        orderedIntake?.continuation.finish()
         v2UpdatesCont.finish()
         rawRPCDiagnosticsCont.finish()
         v2InboundCont.finish()

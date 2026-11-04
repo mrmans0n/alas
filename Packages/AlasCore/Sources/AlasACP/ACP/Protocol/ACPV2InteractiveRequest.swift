@@ -23,6 +23,7 @@ public struct ACPV2InteractiveRequest: Sendable {
         }
         public struct Subject: Sendable {
             public enum Kind: Sendable { case toolCall, command, unknown(String) }
+            public let toolCallUpdate: ACPV2SessionUpdateEnvelope.ToolCallUpdate?
             public let kind: Kind
             public let rawValue: LSPJSONValue
         }
@@ -110,11 +111,13 @@ public struct ACPV2InteractiveRequest: Sendable {
                 let details = try object(raw)
                 let type = try string(details, "type")
                 let kind: Permission.Subject.Kind
+                var patch: ACPV2SessionUpdateEnvelope.ToolCallUpdate?
                 switch type {
                 case "tool_call":
                     var tool = try object(details["toolCall"])
                     tool["sessionUpdate"] = .string("tool_call_update")
-                    _ = try ACPV2SessionUpdateEnvelope(rawValue: .object(["sessionId": .string(sessionID), "update": .object(tool)]))
+                    let event = try ACPV2SessionUpdateEnvelope(rawValue: .object(["sessionId": .string(sessionID), "update": .object(tool)]))
+                    if case .toolCall(let value) = event.payload { patch = value }
                     kind = .toolCall
                 case "command":
                     _ = try string(details, "command")
@@ -122,7 +125,7 @@ public struct ACPV2InteractiveRequest: Sendable {
                     kind = .command
                 default: kind = .unknown(type)
                 }
-                subject = .init(kind: kind, rawValue: raw)
+                subject = .init(toolCallUpdate: patch, kind: kind, rawValue: raw)
             }
             guard sessionID.utf8.elementsEqual(session.utf8) else { return .unsupported(.wrongSession) }
             let description: String? = if case .string(let value)? = fields["description"] { value } else { nil }

@@ -72,6 +72,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     private(set) var v2ProjectionEpoch: UUID?
     private var legacyProjectors: Set<UUID> = []
 
+    func validateFreshV2ProjectionDestination() throws {
+        guard v2ProjectionEpoch == nil, legacyProjectors.isEmpty, transcript.messages.isEmpty else { throw ACPV2SessionProjection.Failure.invalidDestination }
+    }
+
     func reserveV2Projection(epoch: UUID) throws {
         guard v2ProjectionEpoch == nil, legacyProjectors.isEmpty else { throw ACPV2SessionProjection.Failure.invalidDestination }
         v2ProjectionEpoch = epoch

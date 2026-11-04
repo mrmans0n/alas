@@ -3,11 +3,15 @@ import Testing
 
 struct RightPaneTabTests {
     @Test(arguments: [
-        (false, [RightPaneTab.changes, .files, .agent, .run, .schedules]),
-        (true, [RightPaneTab.files, .agent, .run, .schedules]),
+        (false, false, [RightPaneTab.changes, .files, .agent, .run, .schedules]),
+        (true, false, [RightPaneTab.files, .agent, .run, .schedules]),
+        (false, true, [RightPaneTab.changes, .files, .agent, .run, .schedules, .device]),
+        (true, true, [RightPaneTab.files, .agent, .run, .schedules, .device]),
     ])
-    func availableTabsDropChangesOnlyForFolders(isFolder: Bool, expected: [RightPaneTab]) {
-        #expect(RightPaneTab.available(isFolder: isFolder) == expected)
+    func availableTabsDropChangesForFoldersAndAddDeviceWhenEnabled(
+        isFolder: Bool, devicePanel: Bool, expected: [RightPaneTab]
+    ) {
+        #expect(RightPaneTab.available(isFolder: isFolder, devicePanel: devicePanel) == expected)
     }
 
     @Test(arguments: [
