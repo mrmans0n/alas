@@ -83,6 +83,7 @@ struct RightPaneRail: View {
         case .agent:   return "Agent"
         case .run:     return "Run"
         case .schedules: return "Schedules"
+        case .device:  return "Device"
         }
     }
 
@@ -93,6 +94,7 @@ struct RightPaneRail: View {
         case .agent:   return "cpu"
         case .run:     return "play"
         case .schedules: return "clock"
+        case .device:  return "iphone"
         }
     }
 }

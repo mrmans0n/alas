@@ -1,0 +1,14 @@
+AccessibilityBridge
+CoreDeviceBridge
+CoreDeviceDisplayInfo
+CoreDeviceHIDServices
+CoreDeviceHingeReadback
+CoreDeviceState
+CoreDeviceStateReadback
+DeviceStateDelivery
+FrameCapture
+HIDInjector
+PixelBufferUtils
+SimDisplay
+SimFrameworks
+Xcode

@@ -1,0 +1,114 @@
+import AlasCore
+import Foundation
+import IOSurface
+
+/// Alas's side of AlasSimService: one XPC connection, with each device's
+/// frames fanned out to the screens showing it.
+@MainActor
+final class SimulatorStreamClient {
+    private struct Screen {
+        let onFrame: @MainActor (IOSurface) -> Void
+        let onStop: @MainActor (String) -> Void
+    }
+
+    private var connection: NSXPCConnection?
+    private var subscriptions = StreamSubscriptions()
+    private var screens: [String: [UUID: Screen]] = [:]
+
+    func subscribe(
+        udid: String,
+        onFrame: @escaping @MainActor (IOSurface) -> Void,
+        onStop: @escaping @MainActor (String) -> Void
+    ) -> UUID {
+        let token = UUID()
+        screens[udid, default: [:]][token] = Screen(onFrame: onFrame, onStop: onStop)
+        if subscriptions.add(udid) == .start { start(udid) }
+        return token
+    }
+
+    func unsubscribe(udid: String, token: UUID) {
+        screens[udid]?[token] = nil
+        if screens[udid]?.isEmpty == true { screens[udid] = nil }
+        if subscriptions.remove(udid) == .stop { service()?.stopStream(udid: udid) }
+    }
+
+    func touch(udid: String, phase: String, point: DeviceScreenPoint) {
+        service()?.touch(udid: udid, phase: phase, x: point.x, y: point.y)
+    }
+
+    func key(udid: String, usage: UInt32, down: Bool) {
+        service()?.key(udid: udid, usage: usage, down: down)
+    }
+
+    func button(udid: String, name: String) {
+        service()?.button(udid: udid, name: name)
+    }
+
+    fileprivate func deliver(udid: String, surface: IOSurface) {
+        screens[udid]?.values.forEach { $0.onFrame(surface) }
+    }
+
+    private func stopped(udid: String, reason: String) {
+        screens[udid]?.values.forEach { $0.onStop(reason) }
+    }
+
+    private func start(_ udid: String) {
+        service()?.startStream(udid: udid) { [weak self] error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.stopped(udid: udid, reason: error) }
+            }
+        }
+    }
+
+    /// The service crashed or was killed. launchd starts it again on the next
+    /// message, which Retry sends.
+    private func connectionInterrupted() {
+        for udid in subscriptions.active {
+            stopped(udid: udid, reason: "The simulator stream stopped.")
+        }
+    }
+
+    private func service() -> SimServiceProtocol? {
+        let connection = self.connection ?? connect()
+        return connection.remoteObjectProxyWithErrorHandler { _ in } as? SimServiceProtocol
+    }
+
+    private func connect() -> NSXPCConnection {
+        let connection = NSXPCConnection(serviceName: SimServiceName.bundleIdentifier)
+        connection.remoteObjectInterface = NSXPCInterface(with: SimServiceProtocol.self)
+        connection.exportedInterface = NSXPCInterface(with: SimFrameSink.self)
+        connection.exportedObject = FrameSinkBridge(client: self)
+        connection.interruptionHandler = { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.connectionInterrupted() }
+            }
+        }
+        connection.invalidationHandler = { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.connection = nil
+                    self?.connectionInterrupted()
+                }
+            }
+        }
+        connection.resume()
+        self.connection = connection
+        return connection
+    }
+}
+
+/// Receives frames on the XPC queue and hands them to the main actor.
+private final class FrameSinkBridge: NSObject, SimFrameSink {
+    private weak var client: SimulatorStreamClient?
+
+    init(client: SimulatorStreamClient) {
+        self.client = client
+    }
+
+    func frame(udid: String, surface: IOSurface) {
+        DispatchQueue.main.async { [weak client] in
+            MainActor.assumeIsolated { client?.deliver(udid: udid, surface: surface) }
+        }
+    }
+}

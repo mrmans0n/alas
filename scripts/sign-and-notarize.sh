@@ -156,6 +156,7 @@ sign_embedded_app() {
 }
 
 sign_embedded_app "$app_path/Contents/Resources/alas-vm-guest/Alas VM Guest.app" "Alas VM Guest"
+sign_embedded_app "$app_path/Contents/XPCServices/AlasSimService.xpc" "Alas simulator service"
 
 echo "==> Signing $app_path"
 codesign \

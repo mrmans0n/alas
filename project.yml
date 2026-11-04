@@ -43,6 +43,9 @@ packages:
   Lottie:
     url: https://github.com/airbnb/lottie-spm
     exactVersion: 4.6.1
+  # serve-sim's simulator capture and input code; see ThirdParty/serve-sim-native/README.md.
+  ServeSimNative:
+    path: ThirdParty/serve-sim-native
 
 targets:
   Alas:
@@ -56,6 +59,7 @@ targets:
         excludes:
           - "ComputerUseKit/**"
           - "VMGuest/**"
+          - "SimService/**"
       - path: Alas/Resources/Themes
         buildPhase: resources
       - path: Alas/Resources/CodeThemes
@@ -147,6 +151,11 @@ targets:
         copy:
           destination: resources
           subpath: alas-host
+      # Loads the private simulator frameworks for the Device tab, out of
+      # process, so a crash in them ends the stream instead of Alas.
+      - target: AlasSimService
+        embed: true
+        codeSign: false
       - package: MLXSwift
         product: MLX
       - package: MLXSwiftLM
@@ -229,6 +238,43 @@ targets:
         ARCHS: $(ALAS_APP_ARCHS)
         ALAS_APP_ARCHS: $(ARCHS_STANDARD)
         PRODUCT_NAME: alas-host
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SKIP_INSTALL: YES
+
+  # The Device tab's simulator stream. An XPC service, because XPC is how an
+  # IOSurface crosses to another process.
+  AlasSimService:
+    type: xpc-service
+    platform: macOS
+    sources:
+      - path: Alas/Sources/SimService
+      - path: Alas/Sources/Devices/SimServiceProtocol.swift
+      - path: ThirdParty/serve-sim-native/LICENSE
+        buildPhase: resources
+      - path: ThirdParty/serve-sim-native/NOTICE
+        buildPhase: resources
+    info:
+      path: Alas/Resources/SimService/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleName: AlasSimService
+        CFBundleDisplayName: AlasSimService
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "15.0"
+        XPCService:
+          ServiceType: Application
+    dependencies:
+      - package: ServeSimNative
+        product: ServeSimCore
+    settings:
+      base:
+        ARCHS: $(ALAS_APP_ARCHS)
+        ALAS_APP_ARCHS: $(ARCHS_STANDARD)
+        PRODUCT_NAME: AlasSimService
+        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.simservice
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"

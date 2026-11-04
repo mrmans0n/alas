@@ -42,6 +42,8 @@ enum RightPaneToolbarModel {
             case 1:  return runningScriptNames[0]
             default: return "\(runningScriptNames.count) running"
             }
+        case .device:
+            return "iOS Simulator"
         }
     }
 
@@ -51,7 +53,7 @@ enum RightPaneToolbarModel {
             return (totalAdd == 0 && totalDel == 0) ? .none : .diffTotals(add: totalAdd, del: totalDel)
         case .files:
             return .search
-        case .agent, .run, .schedules:
+        case .agent, .run, .schedules, .device:
             return .none
         }
     }
