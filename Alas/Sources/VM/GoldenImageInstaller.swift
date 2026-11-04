@@ -336,6 +336,23 @@ final class GoldenImageInstaller: ObservableObject {
         try Data(bundle.url.lastPathComponent.utf8).write(to: bundle.sealedMarker, options: .atomic)
     }
 
+    /// The macOS version a base image installed, beside its disk. Older base images have none.
+    nonisolated static func osVersionURL(of bundleURL: URL) -> URL {
+        bundleURL.appendingPathComponent("os-version")
+    }
+
+    /// "27.0", "27.2", "27.2.1": the minor version always, the patch only when there is one.
+    nonisolated static func osVersionText(major: Int, minor: Int, patch: Int) -> String {
+        patch > 0 ? "\(major).\(minor).\(patch)" : "\(major).\(minor)"
+    }
+
+    /// The macOS version base image `bundleURL` installed; nil for one installed before it was kept.
+    nonisolated static func osVersion(of bundleURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: osVersionURL(of: bundleURL)) else { return nil }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
     #if arch(arm64)
     /// Install errors that blame the restore image itself, so the cached
     /// download must not be reused.
@@ -392,23 +409,6 @@ final class GoldenImageInstaller: ObservableObject {
             }
         }
         return destination
-    }
-
-    /// The macOS version a base image installed, beside its disk. Older base images have none.
-    nonisolated static func osVersionURL(of bundleURL: URL) -> URL {
-        bundleURL.appendingPathComponent("os-version")
-    }
-
-    /// "27.0", "27.2", "27.2.1": the minor version always, the patch only when there is one.
-    nonisolated static func osVersionText(major: Int, minor: Int, patch: Int) -> String {
-        patch > 0 ? "\(major).\(minor).\(patch)" : "\(major).\(minor)"
-    }
-
-    /// The macOS version base image `bundleURL` installed; nil for one installed before it was kept.
-    nonisolated static func osVersion(of bundleURL: URL) -> String? {
-        guard let data = try? Data(contentsOf: osVersionURL(of: bundleURL)) else { return nil }
-        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
     }
 
     private func createBundle(at url: URL, hardwareModel: VZMacHardwareModel) throws -> VMBundle {
