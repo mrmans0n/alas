@@ -1637,6 +1637,44 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(response.sessions.first?.lastAgentText == "Parser fixed.")
     }
 
+    /// A JSON-RPC failure ends here too, so it needs no incident row to be reported.
+    @Test func waitReportsLiveTurnFailure() async throws {
+        let fixture = try makeOutcomeFixture()
+        let child = try await insertLiveChild(fixture, messages: [.agent(id: UUID(), StreamingText("Partial."))])
+        child.turnFailure = "prompt failed: boom"
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == true)
+        #expect(response.sessions.first?.failure == "prompt failed: boom")
+    }
+
+    @Test func waitReportsStoredTurnFailure() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        let store = try ACPSessionStore(path: fixture.sessionPath)
+        try store.upsertSession(.init(id: "child", agentId: "codex", title: "Child",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "Fix it", attachments: []),
+            .failureIncident(id: UUID(), try .fixture(title: "Model overloaded", endedTurn: true)),
+        ]
+        for (seq, message) in messages.enumerated() {
+            try store.appendMessage(sessionId: "child", id: "m\(seq)", kind: message.kind,
+                                    seq: Int64(seq), payload: try ACPMessageCodec.encode(message), createdAt: 1)
+        }
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == true)
+        #expect(response.sessions.first?.failure == "Model overloaded")
+    }
+
     @Test("interrupting a running child this instance does not drive reports no cancellation")
     func interruptWithoutWriterLease() async throws {
         let fixture = try makeOutcomeFixture()

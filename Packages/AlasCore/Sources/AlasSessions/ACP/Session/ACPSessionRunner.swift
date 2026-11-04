@@ -5346,10 +5346,10 @@ extension ACPSessionRunner {
                     // hands UI state to its successor turn, this callback is the
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
-                    self.reportSupersededTurnUsage(
-                        promptID, quota: promptOutcome.quota,
-                        result: wasCancelled ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure))
-                    onCompleted?(isActivePrompt && !wasCancelled)
+                    let result: ACPTurnCompletion.Result = wasCancelled
+                        ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure)
+                    self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota, result: result)
+                    onCompleted?(isActivePrompt && !wasCancelled && !result.isFailedOrLimited)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
 #endif

@@ -37,6 +37,60 @@ struct ACPSessionTranscriptReaderTests {
         #expect(result.map(\.index) == [0, 1, 2, 3, 4, 5, 6, 7])
     }
 
+    private func incident(
+        title: String = "Model overloaded", details: String? = nil, revision: Int = 1, severity: String = "error",
+        kind: String? = nil, endedTurn: Bool = false
+    ) throws -> ACPMessage {
+        let record = try ACPSessionFailureRecord.fixture(
+            revision: revision, title: title, severity: severity, details: details, kind: kind)
+        return .failureIncident(id: UUID(), ACPFailureIncident(record: record, endedTurn: endedTurn))
+    }
+
+    @Test("a failure incident reads as a system entry, keeps its slot across revisions and is not agent text")
+    func failureIncidentReadsAsSystem() throws {
+        let answer = ACPMessage.agent(id: UUID(), StreamingText("Partial."))
+        let later = ACPMessage.user(id: UUID(), text: "Again", attachments: [])
+        let first = try incident(details: "Try later.")
+        let revised = try incident(title: "Still overloaded", revision: 2)
+
+        let entries = ACPSessionTranscriptReader.entries([answer, first, later])
+
+        #expect(entries.map(\.role) == ["agent", "system", "user"])
+        #expect(entries[1].text == "Model overloaded\n\nTry later.")
+        #expect(ACPSessionTranscriptReader.entries([answer, revised, later]).map(\.index) == entries.map(\.index))
+        #expect(ACPSessionTranscriptReader.lastAgentText([answer, first]) == "Partial.")
+    }
+
+    enum TrailingFailure: CaseIterable {
+        case endedTurnError, backgroundErrorAfterSuccess, warning, usageLimit, olderFailureThenNewTurn, noIncident
+    }
+
+    @Test(arguments: TrailingFailure.allCases)
+    func trailingTurnFailure(_ row: TrailingFailure) throws {
+        let user = ACPMessage.user(id: UUID(), text: "Fix it", attachments: [])
+        let answer = ACPMessage.agent(id: UUID(), StreamingText("Done."))
+        let messages: [ACPMessage]
+        var expected: String?
+        switch row {
+        case .endedTurnError:
+            // Text after the incident is the same turn's: only a user row starts another.
+            messages = [user, try incident(details: "Try later.", endedTurn: true), answer]
+            expected = "Model overloaded"
+        case .backgroundErrorAfterSuccess:
+            messages = [user, answer, try incident()]
+        case .warning:
+            messages = [user, try incident(severity: "warning", endedTurn: true)]
+        case .usageLimit:
+            messages = [user, try incident(kind: ACPSessionFailureRecord.quotaExhaustedKind, endedTurn: true)]
+        case .olderFailureThenNewTurn:
+            messages = [user, try incident(endedTurn: true), user, answer]
+        case .noIncident:
+            messages = [user, answer]
+        }
+
+        #expect(ACPSessionTranscriptReader.trailingTurnFailure(messages) == expected)
+    }
+
     @Test("hiding a plan between paged reads keeps later entries at their offsets")
     func hiddenPlanKeepsReadOffsets() {
         let user = ACPMessage.user(id: UUID(), text: "Plan it", attachments: [])

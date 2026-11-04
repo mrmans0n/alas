@@ -654,7 +654,7 @@ extension ACPMessageTests {
 extension ACPSessionFailureRecord {
     static func fixture(
         id: String = "f1", revision: Int = 1, title: String = "Failed", severity: String = "error",
-        details: String? = nil, reason: String? = nil, actions: [String] = []
+        details: String? = nil, reason: String? = nil, actions: [String] = [], kind: String? = nil
     ) throws -> ACPSessionFailureRecord {
         var json: [String: Any] = [
             "version": 1, "id": id, "revision": revision, "category": "service", "severity": severity,
@@ -662,6 +662,7 @@ extension ACPSessionFailureRecord {
         ]
         json["details"] = details
         json["reason"] = reason
+        json["kind"] = kind
         return try JSONDecoder().decode(ACPSessionFailureRecord.self, from: JSONSerialization.data(withJSONObject: json))
     }
 }

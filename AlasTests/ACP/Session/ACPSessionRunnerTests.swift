@@ -845,11 +845,9 @@ struct ACPSessionRunnerTests {
         #expect(turns.isEmpty)
 
         mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
-        var recoveryDelivered: Bool?
-        let accepted = runner.sendRecoveryContext("restore", onCompleted: { recoveryDelivered = $0 })
+        let accepted = runner.sendRecoveryContext("restore")
         #expect(accepted)
         await recoveryProcessed.wait()
-        #expect(recoveryDelivered == true)
         await runner.waitForTurnPublicationForTesting(promptID: 1)
         #expect(turns.isEmpty)
 
@@ -2496,6 +2494,7 @@ struct ACPSessionRunnerTests {
     private func makeFailureRunner(
         isConnectionCurrent: @escaping () -> Bool = { true },
         coalesceNanos: UInt64 = 16_000_000,
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil
     ) async throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
@@ -2520,6 +2519,7 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onAuthRequired: onAuthRequired,
+            onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
             isConnectionCurrent: isConnectionCurrent,
             incomingUpdateCoalesceNanos: coalesceNanos
@@ -2798,6 +2798,78 @@ struct ACPSessionRunnerTests {
         try await waitUntil { session.retryStatus?.incidentId == "new" }
         await respond.open()
         try await waitUntil { finished }
+    }
+
+    enum TurnFailureSignal: CaseIterable {
+        case none, warning, readable, unreadable, usageLimit
+    }
+
+    private static func promptResponse(_ signal: TurnFailureSignal) throws -> ACPResponse {
+        switch signal {
+        case .none: ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8))
+        case .warning: try failedPromptResponse(severity: "warning")
+        case .readable: try failedPromptResponse()
+        case .unreadable: unreadablePromptResponse(ack: {})
+        case .usageLimit: try failedPromptResponse(kind: ACPSessionFailureRecord.quotaExhaustedKind)
+        }
+    }
+
+    /// The single end-to-end pin for what suggestions, schedules and delegated reports read from a failed turn.
+    @Test(arguments: [
+        (TurnFailureSignal.readable, ACPTurnCompletion.Result.failed("Model overloaded"), ACPChildOutcomeDisposition.wake),
+        (.unreadable, .failed(ACPSessionFailureSignal.unreadableMessage), .wake),
+        (.usageLimit, .limited, .notice),
+    ])
+    func failedTurnIsNeverReportedAsSuccess(
+        signal: TurnFailureSignal, expected: ACPTurnCompletion.Result, disposition: ACPChildOutcomeDisposition
+    ) async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, _, _) = try await makeFailureRunner(
+            onSuccessfulTurn: { turns.append($0) }, onTurnCompleted: { completions.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.promptResponse(signal) }
+
+        try await sendAndSettle(runner)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+
+        #expect(turns.isEmpty)
+        let result = try #require(completions.last?.result)
+        #expect(result == expected)
+        #expect(RunScheduleOutcome(result).isFailure)
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: result, lastParentReportAt: nil, turnStartedAt: 0) == disposition)
+    }
+
+    @Test func warningOnlyTurnStillPublishesSuggestion() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock, _, _) = try await makeFailureRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse(severity: "warning") }
+
+        try await sendAndSettle(runner)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+
+        #expect(turns.map(\.promptID) == [0])
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (TurnFailureSignal.none, true),
+        (.warning, true),
+        (.readable, false),
+        (.unreadable, false),
+        (.usageLimit, false),
+    ])
+    func recoveryCompletionReflectsFailure(signal: TurnFailureSignal, delivered expected: Bool) async throws {
+        let (runner, mock, _, _) = try await makeFailureRunner()
+        mock.scriptResponse(method: "session/prompt") { _ in try Self.promptResponse(signal) }
+        var delivered: Bool?
+
+        let accepted = runner.sendRecoveryContext("restore", onCompleted: { delivered = $0 })
+        #expect(accepted)
+        try await waitUntil { delivered != nil }
+
+        #expect(delivered == expected)
     }
 
     @Test("a recovery prompt's record acknowledges only after its row is saved", arguments: [true, false])

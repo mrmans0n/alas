@@ -11,7 +11,7 @@ import AlasACP
 ///
 /// A transcript becomes a flat list of entries: user and agent messages
 /// verbatim, tool calls and file edits as one-line summaries, system notices
-/// as text. A Markdown or file plan is agent output (Codex sends its plan
+/// and failure incidents as text. A Markdown or file plan is agent output (Codex sends its plan
 /// only that way once plans are negotiated), so it reads as an agent entry;
 /// thoughts and checklists are internal state and are left out. Entry
 /// indices only grow as a session runs, so a caller can page with them.
@@ -79,7 +79,10 @@ public enum ACPSessionTranscriptReader: Sendable {
                 // A removed plan keeps its slot, so paged reads that
                 // started before the removal don't skip the next entry.
                 append(document.hidden ? "system" : "agent", planText(document) ?? "Plan removed.")
-            case .thought, .plan, .failureIncident:
+            case .failureIncident(_, let incident):
+                // A new revision rewrites this row in place, so offsets hold.
+                append("system", incident.displayText)
+            case .thought, .plan:
                 continue
             }
         }
@@ -153,6 +156,25 @@ public enum ACPSessionTranscriptReader: Sendable {
                   !text.isEmpty
             else { continue }
             return String(text.suffix(ACPTurnCompletion.lastAgentTextLimit))
+        }
+        return nil
+    }
+
+    /// The title of the latest row after the last user row with `endedTurn`,
+    /// severity error and not a usage limit: a stored transcript's record that
+    /// its last turn failed. A background error never set `endedTurn`, so it
+    /// does not count.
+    public static func trailingTurnFailure(_ messages: [ACPMessage]) -> String? {
+        for message in messages.reversed() {
+            switch message {
+            case .user:
+                return nil
+            case .failureIncident(_, let incident)
+                where incident.endedTurn && incident.record.severity == .error && !incident.record.isUsageLimit:
+                return incident.record.title
+            default:
+                continue
+            }
         }
         return nil
     }
