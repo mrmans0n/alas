@@ -2615,6 +2615,84 @@ struct ACPSessionRunnerTests {
         #expect(session.queue.first?.lastError != nil)
     }
 
+    /// A constant key would pass the test above, but the second retry would
+    /// replay the first one's failure from the broker.
+    @Test func everyRetryHasItsOwnKey() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        scriptRetryableFailure(mock)
+        try await sendAndSettle(runner)
+        for attempt in 2...3 {
+            try await settleToIdle(runner, session)
+            #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+            try await waitUntil { self.sentPrompts(mock).count == attempt && session.retryableFailure != nil }
+        }
+        let keys = sentPrompts(mock).dropFirst().compactMap(\.brokerOperationKey)
+        #expect(keys.count == 2)
+        #expect(Set(keys).count == 2)
+    }
+
+    @Test func retryResendsAnAttachmentAndItsPlacement() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        scriptRetryableFailure(mock)
+        let uri = "file:///tmp/shot.png"
+        let image = ACPMessage.Attachment(uri: uri, name: "shot.png", mimeType: "image/png")
+        var finished = false
+        runner.sendNow(
+            blocks: ACPSessionRunner.blocks(text: "look ", attachments: [image]), queuedItemId: nil,
+            draft: ACPComposerDraft(segments: [.text("look "), .image(uri: uri, mimeType: "image/png")]),
+            onPromptFinished: { _ in finished = true })
+        try await waitUntil { finished }
+        try await settleToIdle(runner, session)
+
+        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
+        #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+        try await waitUntil { self.sentPrompts(mock).count == 2 }
+        try await settleToIdle(runner, session)
+
+        let prompts = sentPrompts(mock).compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }
+        #expect(prompts.count == 2)
+        #expect(prompts.first == prompts.last)
+        #expect(prompts.last?.contains(.resourceLink(uri: uri, name: "shot.png")) == true)
+        let userAttachments = session.transcript.messages.compactMap { message -> [ACPMessage.Attachment]? in
+            if case .user(_, _, _, let attachments, _, _) = message { attachments } else { nil }
+        }
+        #expect(userAttachments.count == 2)
+        #expect(userAttachments.last == [image])
+        #expect(userAttachments.last?.first?.textOffset == 5)
+    }
+
+    /// The head is `.sending` before anything else says so: `sendNow` runs only
+    /// once its queue write lands. A retry there would race it to the agent.
+    @Test(.timeLimit(.minutes(1)))
+    func retryRefusedWhileAQueuedPromptDispatches() async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        scriptRetryableFailure(mock)
+        try await sendAndSettle(runner)
+        try await settleToIdle(runner, session)
+
+        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
+        let written = AsyncGate()
+        runner.beforePersistenceForTesting = { await written.wait() }
+        session.enqueue(blocks: [.text("next")])
+        runner.flushQueueIfIdle()
+        #expect(session.queue.first?.status == .sending)
+
+        #expect(runner.failureActionContext(incidentId: "t:error").promptActive)
+        #expect(!runner.retryFailedPrompt(incidentId: "t:error"))
+        await written.open()
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        let prompts = sentPrompts(mock).compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }
+        #expect(prompts.count == 2)
+        #expect(prompts.last == [.text("next")])
+    }
+
     @Test func retryIsNeverAutomatic() async throws {
         let (runner, mock, session, _) = try await makeFailureRunner()
         runner.start()
@@ -2758,6 +2836,21 @@ struct ACPSessionRunnerTests {
         #expect(reason == "Sign in again")
         #expect(session.agentState == .failed("Sign in again"))
         try await waitUntil { authRequests == ["Sign in again"] }
+    }
+
+    @Test func signInWaitsForBackgroundWork() async throws {
+        var authRequests = 0
+        let (runner, _, session, _) = try await makeFailureRunner(onAuthRequired: { _, _ in
+            await MainActor.run { authRequests += 1 }
+        })
+        session.settlesAtResult = true
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        try #require(session.activity.backgroundWorking)
+
+        #expect(runner.failureActionContext(incidentId: "t:error").hasBackgroundWork)
+        runner.requestSignIn(reason: "Sign in again")
+        if case .needsAuth = session.setupState { Issue.record("running children must not stand down") }
+        #expect(authRequests == 0)
     }
 
     @Test func bufferedTextStaysAheadOfResponseIncident() async throws {

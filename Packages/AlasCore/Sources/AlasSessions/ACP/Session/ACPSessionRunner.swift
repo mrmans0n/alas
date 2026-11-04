@@ -4134,6 +4134,7 @@ extension ACPSessionRunner {
         onPromptFinished: (@MainActor (Bool) -> Void)?,
         recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
+        clearRetryablePrompt()
         let dispatchHandoff = onDispatchRegistered.map(ACPRequestHandoff.init)
         // A force-steered item may keep provenance from an earlier failed
         // send; that dispatch does not describe this steered delivery.
@@ -5752,12 +5753,14 @@ extension ACPSessionRunner {
             isRetryTarget: session.retryableFailure?.incidentId == incidentId
                 && session.retryableFailure == retryablePrompt?.failure,
             agentReady: session.agentState == .ready && !needsAuth && !stopped && isConnectionCurrent()
-                && !nativeForkBarrierActive && !session.holdsPromptsForDelegatedSelection,
+                && !backgroundCancellationInProgress && !nativeForkBarrierActive
+                && !session.holdsPromptsForDelegatedSelection,
             promptActive: hasRunningPromptWork,
             holdsWriteLease: holdsLeaseForWrite(),
             isMirror: false,
             hasUncertainDelivery: session.queue.contains(where: \.deliveryUncertain) || session.directTurnInFlight,
-            isPeer: false
+            isPeer: false,
+            hasBackgroundWork: session.activity.backgroundWorking
         )
     }
 
@@ -5785,17 +5788,20 @@ extension ACPSessionRunner {
         return true
     }
 
-    /// Enters the auth flow the way a JSON-RPC auth error does. Ignored while a
-    /// turn runs: the flow stands the runner down and restores a `.sending` head
-    /// as plain pending, so the delivered prompt would go out again on reconnect.
+    /// Enters the auth flow the way a JSON-RPC auth error does. Ignored while work
+    /// runs, for a click that lands as it starts: the flow stands the runner down,
+    /// which kills running children and restores a `.sending` head as plain
+    /// pending, so the delivered prompt would go out again on reconnect.
     public func requestSignIn(reason: String) {
-        guard !hasRunningPromptWork else { return }
+        guard !hasRunningPromptWork, !session.activity.backgroundWorking else { return }
         enterAuthRequired(reason: reason)
     }
 
+    /// A `.sending` head counts before `activePromptID` does: its `sendNow` runs
+    /// only once its queue write lands.
     private var hasRunningPromptWork: Bool {
         activePromptID != nil || session.transcript.streamingState != .idle || steerInProgress || detachedSteeringTurn
-            || session.transcript.hasBlockingUserInput
+            || session.transcript.hasBlockingUserInput || session.queue.first?.status == .sending
     }
 
     private func enterAuthRequired(reason: String) {

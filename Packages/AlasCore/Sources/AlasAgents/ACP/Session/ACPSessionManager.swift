@@ -485,11 +485,11 @@ public final class ACPSessionManager: ChangeTracking {
     /// Nil only for an unknown session. A session with no runner still gets a
     /// context, since Sign in and New session are wanted exactly then.
     public func failureActionContext(sessionId: ACPSession.ID, incidentId: String) -> ACPFailureActionContext? {
-        guard sessions[sessionId] != nil else { return nil }
+        guard let session = sessions[sessionId] else { return nil }
         let mirror = isMirror(sessionId: sessionId)
         guard let runner = runners[sessionId] else {
             return ACPFailureActionContext(
-                isRetryTarget: false, agentReady: false, promptActive: false, holdsWriteLease: false,
+                isRetryTarget: false, agentReady: false, promptActive: session.agentState == .spawning, holdsWriteLease: false,
                 isMirror: mirror, hasUncertainDelivery: false, isPeer: false)
         }
         var context = runner.failureActionContext(incidentId: incidentId)

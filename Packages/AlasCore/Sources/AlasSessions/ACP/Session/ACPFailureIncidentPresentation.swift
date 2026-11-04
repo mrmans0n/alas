@@ -23,17 +23,20 @@ public struct ACPFailureActionContext: Equatable, Sendable {
     public var isRetryTarget: Bool
     /// The agent can take a prompt: ready, signed in, and not behind a barrier.
     public var agentReady: Bool
-    /// A prompt is running or about to, including one being steered.
+    /// A prompt is running or about to, including one being steered or a
+    /// queued head waiting on its write. Without a runner: the agent is spawning.
     public var promptActive: Bool
     public var holdsWriteLease: Bool
     public var isMirror: Bool
     /// Any queue item with `deliveryUncertain`, or a direct turn still marked in flight.
     public var hasUncertainDelivery: Bool
     public var isPeer: Bool
+    /// Children or an autonomous cycle still run with no prompt active.
+    public var hasBackgroundWork: Bool
 
     public init(
         isRetryTarget: Bool, agentReady: Bool, promptActive: Bool, holdsWriteLease: Bool,
-        isMirror: Bool, hasUncertainDelivery: Bool, isPeer: Bool
+        isMirror: Bool, hasUncertainDelivery: Bool, isPeer: Bool, hasBackgroundWork: Bool = false
     ) {
         self.isRetryTarget = isRetryTarget
         self.agentReady = agentReady
@@ -42,6 +45,7 @@ public struct ACPFailureActionContext: Equatable, Sendable {
         self.isMirror = isMirror
         self.hasUncertainDelivery = hasUncertainDelivery
         self.isPeer = isPeer
+        self.hasBackgroundWork = hasBackgroundWork
     }
 
     /// A surface that only displays transcripts.
@@ -69,8 +73,8 @@ public enum ACPFailureActionPolicy {
             return context.isRetryTarget && context.agentReady && !context.promptActive
                 && context.holdsWriteLease && !context.hasUncertainDelivery
         case .login:
-            // Signing in stands the runner down, so it waits for the turn to end.
-            return !context.promptActive
+            // Signing in stands the runner down, so it waits for running work to end.
+            return !context.promptActive && !context.hasBackgroundWork
         case .newSession:
             return true
         }

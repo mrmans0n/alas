@@ -46,10 +46,12 @@ struct ACPFailureIncidentPresentationTests {
         #expect(!ACPFailureActionPolicy.visibleActions(rawActions: ["retry"], context: context).contains(.retry))
     }
 
-    @Test func signInHiddenWhilePromptActive() {
+    /// Signing in stands the runner down, which would end the work still running.
+    @Test(arguments: [false, true])
+    func signInHiddenWhileWorkRuns(background: Bool) {
         var context = Self.permissive
-        context.promptActive = true
-        let actions = ACPFailureActionPolicy.visibleActions(rawActions: ["retry", "login", "new_session"], context: context)
+        if background { context.hasBackgroundWork = true } else { context.promptActive = true }
+        let actions = ACPFailureActionPolicy.visibleActions(rawActions: ["login", "new_session"], context: context)
         #expect(actions == [.newSession])
     }
 
