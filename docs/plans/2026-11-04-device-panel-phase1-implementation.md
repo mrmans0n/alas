@@ -1091,7 +1091,7 @@ codesign -dv "$APP/Contents/XPCServices/AlasSimService.xpc" 2>&1 | grep flags
 ls "$APP/Contents/XPCServices/AlasSimService.xpc/Contents/Resources"
 ```
 
-Expected: `AlasSimService.xpc`; `io.nlopez.alas.simservice`, `Application`, `AlasSimService`; flags include `runtime`; `LICENSE NOTICE`.
+Expected: `AlasSimService.xpc`; `io.nlopez.alas.simservice`, `Application`, `AlasSimService`; `LICENSE NOTICE`. Debug builds are ad hoc without the `runtime` flag, like the app and `alas-host`; `sign-and-notarize.sh` adds `--options runtime` for releases, and the spike showed the frameworks still load under it.
 
 - [ ] **Step 11: Commit.**
 
