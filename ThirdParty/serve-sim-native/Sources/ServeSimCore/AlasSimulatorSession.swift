@@ -9,6 +9,8 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     }
 
     private enum Input: Sendable {
+        /// Point touch input at the panel capture shows.
+        case selectScreen
         case touch(TouchPhase, x: Double, y: Double)
         case key(usage: UInt32, down: Bool)
         case button(String)
@@ -18,16 +20,40 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     private let capture = FrameCapture()
     private let hid = HIDInjector()
     /// `HIDInjector` is an actor. Input goes through one stream so a touch's
-    /// begin, moves and end reach it in the order they were sent.
+    /// begin, moves and end reach it in the order they were sent, and a panel
+    /// change lands between gestures rather than inside one.
     private let input: AsyncStream<Input>.Continuation
+    private let inputEvents: AsyncStream<Input>
+    private var unsubscribeScreenChanges: (@Sendable () async -> Void)?
 
     public init(udid: String) {
         self.udid = udid
-        let (stream, continuation) = AsyncStream.makeStream(of: Input.self)
-        input = continuation
-        Task { [hid] in
-            for await event in stream {
+        (inputEvents, input) = AsyncStream.makeStream(of: Input.self)
+    }
+
+    deinit {
+        input.finish()
+    }
+
+    /// Starts capture, then input. `onFrame` runs on a capture queue with an
+    /// IOSurface-backed `420v` copy of each new frame, taken from a pool.
+    /// Input sent before this returns waits until input is ready.
+    public func start(onFrame: @escaping @Sendable (CVPixelBuffer) -> Void) async throws {
+        try await capture.start(deviceUDID: udid) { pixelBuffer, _, _, _ in
+            onFrame(pixelBuffer)
+        }
+        try await hid.setup(deviceUDID: udid)
+        // setup() targets the profile's sole panel, which a two-panel device
+        // lacks: until a panel is selected its touches go nowhere.
+        let input = self.input
+        unsubscribeScreenChanges = await capture.subscribeScreenChanges { input.yield(.selectScreen) }
+        input.yield(.selectScreen)
+        Task { [capture, hid, udid, inputEvents] in
+            for await event in inputEvents {
                 switch event {
+                case .selectScreen:
+                    // Nil keeps the sole-panel fallback for ordinary devices.
+                    await hid.setScreen(screenID: try? await capture.activeScreenID())
                 case .touch(let phase, let x, let y):
                     await hid.sendTouch(type: phase.rawValue, x: x, y: y, screenWidth: 0, screenHeight: 0)
                 case .key(let usage, let down):
@@ -39,21 +65,9 @@ public final class AlasSimulatorSession: @unchecked Sendable {
         }
     }
 
-    deinit {
-        input.finish()
-    }
-
-    /// Starts capture, then input. `onFrame` runs on a capture queue with an
-    /// IOSurface-backed `420v` copy of each new frame, taken from a pool.
-    public func start(onFrame: @escaping @Sendable (CVPixelBuffer) -> Void) async throws {
-        try await capture.start(deviceUDID: udid) { pixelBuffer, _, _, _ in
-            onFrame(pixelBuffer)
-        }
-        try await hid.setup(deviceUDID: udid)
-    }
-
     public func stop() async {
         input.finish()
+        await unsubscribeScreenChanges?()
         await capture.stop()
     }
 
