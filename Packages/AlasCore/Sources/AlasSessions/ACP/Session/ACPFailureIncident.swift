@@ -8,8 +8,8 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
     public var record: ACPSessionFailureRecord
     /// Set once a prompt response carried it as an error ending the turn. Never set by
     /// `session_info_update` or replay, so a background error is not a turn failure.
-    /// Cleared when a later turn completes: a retry or a wake records no user row
-    /// that would otherwise close this failure.
+    /// Cleared when a later turn ends other than failed or cancelled: a retry or a
+    /// wake records no user row that would otherwise close this failure.
     public var endedTurn: Bool
 
     public init(record: ACPSessionFailureRecord, endedTurn: Bool = false) {

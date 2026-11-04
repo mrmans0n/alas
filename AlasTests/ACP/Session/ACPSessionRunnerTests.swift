@@ -2790,6 +2790,7 @@ struct ACPSessionRunnerTests {
             try await sendAndSettle(runner)
             await respond.open()
             try await waitUntil { !self.incidents(in: session).isEmpty }
+            #expect(incidents(in: session).map(\.endedTurn) == [false], "its turn is not the one that just ended")
         case .latestDirect:
             scriptRetryableFailure(mock)
             try await sendAndSettle(runner)

@@ -163,7 +163,7 @@ public enum ACPSessionTranscriptReader: Sendable {
     /// The title of the latest row after the last user row that reports a
     /// turn failure: a stored transcript's record that its last turn failed.
     /// A background error never set `endedTurn`, so it does not count, and a
-    /// later completed turn clears it.
+    /// later turn that the agent took clears it.
     public static func trailingTurnFailure(_ messages: [ACPMessage]) -> String? {
         for message in messages.reversed() {
             switch message {

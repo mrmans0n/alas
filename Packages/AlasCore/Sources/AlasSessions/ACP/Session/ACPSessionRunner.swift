@@ -5005,12 +5005,12 @@ extension ACPSessionRunner {
                     var promptAcknowledgement = !reportsFailure ? promptOutcome.acknowledgement : self.applyResponseFailure(
                         promptOutcome.failure,
                         promptID: promptID,
-                        endedTurn: Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
+                        endedTurn: isActivePrompt && Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
                         acknowledging: promptOutcome.acknowledgement)
-                    // A retried item or a wake records no user row, so its success
+                    // A retried item or a wake records no user row, so its result
                     // has to close the failure it follows. A superseded prompt's
                     // result says nothing about the last turn.
-                    if isActivePrompt, completionResult == .completed {
+                    if isActivePrompt, completionResult.closesEarlierTurnFailure {
                         promptAcknowledgement = self.persistIncidentRows(
                             self.session.clearTrailingTurnFailures(), acknowledging: promptAcknowledgement)
                     }
@@ -5353,7 +5353,7 @@ extension ACPSessionRunner {
                         self.acknowledgeBehindQueuedPersistence(self.applyResponseFailure(
                             promptOutcome.failure,
                             promptID: promptID,
-                            endedTurn: Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
+                            endedTurn: isActivePrompt && Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
                             acknowledging: promptOutcome.acknowledgement))
                     }
                     // See the matching comment in sendNow: always accumulate

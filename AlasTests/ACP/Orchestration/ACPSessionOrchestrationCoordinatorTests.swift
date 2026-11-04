@@ -1655,6 +1655,24 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(response.sessions.first?.failure == "prompt failed: boom")
     }
 
+    /// A failure is rewritten only when a turn ends. While the child runs it
+    /// describes the last turn, and a parent reading it would give up on this one.
+    @Test(arguments: [false, true])
+    func waitReportsNoFailureWhileTheChildRuns(fromRow: Bool) async throws {
+        let fixture = try makeOutcomeFixture()
+        let row = ACPMessage.failureIncident(id: UUID(), try .fixture(title: "Model overloaded", endedTurn: true))
+        let child = try await insertLiveChild(fixture, messages: fromRow ? [row] : [])
+        if !fromRow { child.turnFailure = "prompt failed: boom" }
+        child.transcript.streamingState = .streaming
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == false)
+        #expect(response.sessions.first?.failure == nil)
+    }
+
     @Test func waitReportsStoredTurnFailure() async throws {
         let fixture = try makeOutcomeFixture()
         try await insertReadyChild(fixture.persistence)
@@ -1689,14 +1707,17 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )).sessions.first?.failure
     }
 
-    /// A retried item or a wake records no user row, so only the retry's own result can close the failure.
+    /// A retried item or a wake records no user row, so only the retry's own
+    /// result can close the failure. A cancelled retry says nothing about it.
     @Test(.timeLimit(.minutes(1)), arguments: [
-        (RetriedHead.resume, "end_turn", String?.none),
-        (.wake, "end_turn", nil),
-        (.wake, "cancelled", "Model overloaded"),
-        (.wake, "max_tokens", "Model overloaded"),
+        (RetriedHead.resume, #"{"stopReason":"end_turn"}"#, String?.none),
+        (.wake, #"{"stopReason":"end_turn"}"#, nil),
+        (.wake, #"{"stopReason":"max_tokens"}"#, nil),
+        (.wake, #"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:limit","revision":1,"severity":"error","title":"Limit","kind":"quota_exhausted"}}}"#, nil),
+        (.wake, #"{"stopReason":"cancelled"}"#, "Model overloaded"),
+        (.wake, #"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:again","revision":1,"severity":"error","title":"Still overloaded"}}}"#, "Still overloaded"),
     ])
-    func waitFollowsARetriedTurn(head: RetriedHead, stopReason: String, expected: String?) async throws {
+    func waitFollowsARetriedTurn(head: RetriedHead, retriedResponse: String, expected: String?) async throws {
         let fixture = try makeOutcomeFixture()
         let session = try await insertLiveChild(fixture, messages: [])
         let store = try ACPSessionStore(path: fixture.sessionPath)
@@ -1742,7 +1763,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await runner.flushPersistence()
         #expect(try await waitFailure(fixture) == "Model overloaded")
 
-        let retried = Data(#"{"stopReason":"\#(stopReason)"}"#.utf8)
+        let retried = Data(retriedResponse.utf8)
         mock.script(method: "session/prompt") { _ in retried }
         runner.forceSendQueuedItem(id: item.id)
         try await waitUntil { completions.count == 2 }

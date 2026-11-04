@@ -2720,7 +2720,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return Set(index..<transcript.messages.count)
     }
 
-    /// A turn completed, so the failures `trailingTurnFailure` would report no
+    /// A later turn ended, so the failures `trailingTurnFailure` would report no
     /// longer describe the last turn. The rows stay. Returns the rows to persist.
     public func clearTrailingTurnFailures() -> Set<Int> {
         var dirty = Set<Int>()
