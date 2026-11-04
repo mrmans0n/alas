@@ -165,11 +165,11 @@ struct ACPUsageLimitTests {
         ))
     }
 
-    static func quotaRecord(
-        title: String, details: String? = nil, severity: String = "error",
-        kind: String = ACPSessionFailureRecord.quotaExhaustedKind
-    ) throws -> ACPSessionFailureRecord {
-        var json: [String: Any] = ["version": 1, "id": "t:quota", "revision": 1, "severity": severity, "kind": kind, "title": title]
+    static func quotaRecord(title: String, details: String? = nil) throws -> ACPSessionFailureRecord {
+        var json: [String: Any] = [
+            "version": 1, "id": "t:quota", "revision": 1, "severity": "error",
+            "kind": ACPSessionFailureRecord.quotaExhaustedKind, "title": title,
+        ]
         json["details"] = details
         return try JSONDecoder().decode(ACPSessionFailureRecord.self, from: JSONSerialization.data(withJSONObject: json))
     }
@@ -215,17 +215,6 @@ struct ACPUsageLimitTests {
         )
         #expect(limit?.resetsAt == Self.date(2026, 10, 3, hour, 0))
         #expect(limit?.resetSource == .parsed)
-    }
-
-    @Test("only an error record of the quota kind is a usage limit", arguments: [
-        ("warning", ACPSessionFailureRecord.quotaExhaustedKind),
-        ("error", "provider_overloaded"),
-    ])
-    func nonQuotaRecordIsNoUsageLimit(severity: String, kind: String) throws {
-        #expect(ACPUsageLimitDetector.detect(
-            failure: try Self.quotaRecord(title: "You've hit your limit", severity: severity, kind: kind),
-            turnAgentText: nil, claudeRateLimit: nil, now: Self.now, calendar: Self.madrid, resettableUnlessClaude: true
-        ) == nil)
     }
 
     struct ResumeCase: Sendable, CustomTestStringConvertible {

@@ -2447,7 +2447,13 @@ public final class ACPSessionRunner {
     /// A usage limit stopped the active prompt. The prompt itself reached the
     /// agent (it is in the agent's history), so a queued one is consumed like
     /// a success; resuming sends a short continue prompt instead.
-    private func applyUsageLimit(_ detected: ACPUsageLimit, failedQueuedItemId: UUID?) {
+    /// `acknowledging` waits for this consumption's own durable write.
+    private func applyUsageLimit(
+        _ detected: ACPUsageLimit,
+        failedQueuedItemId: UUID?,
+        deliveredForkContext: Bool = false,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
         var previous = session.usageLimit
         var consumedWake: QueuedPrompt?
         if let failedQueuedItemId, session.queue.first?.id == failedQueuedItemId {
@@ -2473,9 +2479,13 @@ public final class ACPSessionRunner {
         if let consumedWake {
             persistBackgroundWakeAndQueue(
                 rows: markBackgroundWakesDelivered(for: consumedWake),
-                consuming: consumedWake)
+                consuming: consumedWake,
+                deliveredForkContext: deliveredForkContext,
+                acknowledging: acknowledgement)
+        } else if deliveredForkContext {
+            persistForkContextDeliveredAndQueue(acknowledging: acknowledgement)
         } else {
-            persistQueue()
+            persistQueue(acknowledging: acknowledgement)
         }
     }
 
@@ -4906,13 +4916,14 @@ extension ACPSessionRunner {
                         ? self.typedUsageLimit(promptOutcome.failure) : nil
                     if let typedUsageLimit {
                         self.session.clearRetryStatus()
-                        self.applyUsageLimit(typedUsageLimit, failedQueuedItemId: queuedItemId)
                         // A direct prompt's fork context and acknowledgement were
                         // handled above; a queued one's wait for this queue write.
-                        if queuedItemId != nil {
-                            if deliveredForkContext { self.persistForkContextDelivered() }
-                            self.acknowledgeAfterQueuedPersistence(promptAcknowledgement)
-                        }
+                        self.applyUsageLimit(
+                            typedUsageLimit,
+                            failedQueuedItemId: queuedItemId,
+                            deliveredForkContext: queuedItemId != nil && deliveredForkContext,
+                            acknowledging: queuedItemId != nil ? promptAcknowledgement : nil
+                        )
                         self.activePromptID = nil
                         self.emitTurnCompleted(.limited, promptID: promptID, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain()

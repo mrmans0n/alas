@@ -293,8 +293,35 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.usageLimitResumeItem != nil)
         #expect(session.turnFailure == nil)
         #expect(!session.queue.map(\.id).contains(head))
+        #expect(!session.queue.contains { $0.status == .sending })
         #expect(Self.sentPromptTexts(mock) == ["first"])
         #expect(acknowledgement.recordedCount == 1)
+    }
+
+    @Test("a quota record on a wake acknowledges only once its delivery is saved", arguments: [true, false])
+    func quotaRecordWakeAcknowledgesAfterDeliverySave(committed: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "s")
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        if !committed { try rejectWakeDeliveryWrites(in: store) }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let body = try Self.quotaRecordResponse(title: "You've hit your usage limit.")
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: body, durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+
+        #expect(session.usageLimit != nil)
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(acknowledgement.recordedCount == (committed ? 1 : 0))
     }
 
     @Test("a quota record for a Claude billing failure shows Limited and schedules no resume")
