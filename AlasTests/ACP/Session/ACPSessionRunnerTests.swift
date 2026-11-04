@@ -2596,41 +2596,28 @@ struct ACPSessionRunnerTests {
         try await settleToIdle(runner, session)
         let userRows = session.transcript.messages.filter { if case .user = $0 { true } else { false } }.count
 
-        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
         #expect(runner.retryFailedPrompt(incidentId: "t:error"))
         #expect(!runner.retryFailedPrompt(incidentId: "t:error"), "a click sends once")
-        try await waitUntil { self.sentPrompts(mock).count == 2 }
+        try await waitUntil { self.sentPrompts(mock).count == 2 && session.retryableFailure != nil }
+        try await settleToIdle(runner, session)
+
+        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Self.succeededPrompt) }
+        #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+        try await waitUntil { self.sentPrompts(mock).count == 3 }
         try await settleToIdle(runner, session)
 
         let sent = sentPrompts(mock)
         let prompts = sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }
-        #expect(prompts.count == 2)
-        #expect(prompts.first == prompts.last)
-        let keys = sent.map(\.brokerOperationKey)
-        #expect(keys.allSatisfy { $0 != nil })
-        #expect(keys.first != keys.last)
-        #expect(session.transcript.messages.filter { if case .user = $0 { true } else { false } }.count == userRows + 1)
+        #expect(prompts.count == 3)
+        #expect(prompts.allSatisfy { $0 == prompts.first })
+        // A constant retry key would replay the previous retry's failure from the broker.
+        let keys = sent.compactMap(\.brokerOperationKey)
+        #expect(keys.count == 3)
+        #expect(Set(keys).count == 3)
+        #expect(session.transcript.messages.filter { if case .user = $0 { true } else { false } }.count == userRows + 2)
         #expect(session.retryableFailure == nil)
         #expect(session.queue.count == 1, "the held successor stays held")
         #expect(session.queue.first?.lastError != nil)
-    }
-
-    /// A constant key would pass the test above, but the second retry would
-    /// replay the first one's failure from the broker.
-    @Test func everyRetryHasItsOwnKey() async throws {
-        let (runner, mock, session, _) = try await makeFailureRunner()
-        runner.start()
-        defer { runner.stop() }
-        scriptRetryableFailure(mock)
-        try await sendAndSettle(runner)
-        for attempt in 2...3 {
-            try await settleToIdle(runner, session)
-            #expect(runner.retryFailedPrompt(incidentId: "t:error"))
-            try await waitUntil { self.sentPrompts(mock).count == attempt && session.retryableFailure != nil }
-        }
-        let keys = sentPrompts(mock).dropFirst().compactMap(\.brokerOperationKey)
-        #expect(keys.count == 2)
-        #expect(Set(keys).count == 2)
     }
 
     @Test func retryResendsAnAttachmentAndItsPlacement() async throws {
@@ -2803,10 +2790,10 @@ struct ACPSessionRunnerTests {
         #expect(reader.failureActionContext(incidentId: "t:error").isRetryTarget == (row == .latestDirect))
     }
 
-    /// Standing down mid-turn restores a `.sending` head as plain pending, which
-    /// would send a delivered prompt again after the reconnect.
-    @Test(.timeLimit(.minutes(1)))
-    func signInWaitsForTheTurnToEnd() async throws {
+    /// Standing down kills running children and restores a `.sending` head as
+    /// plain pending, which would send a delivered prompt again after the reconnect.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func signInWaitsForRunningWork(background: Bool) async throws {
         var authRequests: [String] = []
         let (runner, mock, session, _) = try await makeFailureRunner(onAuthRequired: { _, reason in
             await MainActor.run { authRequests.append(reason) }
@@ -2821,14 +2808,25 @@ struct ACPSessionRunnerTests {
             return ACPResponse(body: Self.succeededPrompt)
         }
         var finished = false
-        runner.sendNow(blocks: [.text("hello")], queuedItemId: nil, onPromptFinished: { _ in finished = true })
-        await answered.wait()
+        if background {
+            session.settlesAtResult = true
+            session.registerSubagent(.init(subagentSessionId: "child"))
+            #expect(runner.failureActionContext(incidentId: "t:error").hasBackgroundWork)
+        } else {
+            runner.sendNow(blocks: [.text("hello")], queuedItemId: nil, onPromptFinished: { _ in finished = true })
+            await answered.wait()
+        }
         runner.requestSignIn(reason: "Sign in again")
-        if case .needsAuth = session.setupState { Issue.record("a running turn must not stand down") }
+        if case .needsAuth = session.setupState { Issue.record("running work must not stand down") }
 
-        await respond.open()
-        try await waitUntil { finished }
+        if background {
+            session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        } else {
+            await respond.open()
+            try await waitUntil { finished }
+        }
         try await settleToIdle(runner, session)
+        #expect(authRequests.isEmpty)
         runner.requestSignIn(reason: "Sign in again")
         guard case .needsAuth(_, let reason) = session.setupState else {
             Issue.record("an idle session enters the auth flow")
@@ -2837,21 +2835,6 @@ struct ACPSessionRunnerTests {
         #expect(reason == "Sign in again")
         #expect(session.agentState == .failed("Sign in again"))
         try await waitUntil { authRequests == ["Sign in again"] }
-    }
-
-    @Test func signInWaitsForBackgroundWork() async throws {
-        var authRequests = 0
-        let (runner, _, session, _) = try await makeFailureRunner(onAuthRequired: { _, _ in
-            await MainActor.run { authRequests += 1 }
-        })
-        session.settlesAtResult = true
-        session.registerSubagent(.init(subagentSessionId: "child"))
-        try #require(session.activity.backgroundWorking)
-
-        #expect(runner.failureActionContext(incidentId: "t:error").hasBackgroundWork)
-        runner.requestSignIn(reason: "Sign in again")
-        if case .needsAuth = session.setupState { Issue.record("running children must not stand down") }
-        #expect(authRequests == 0)
     }
 
     @Test func bufferedTextStaysAheadOfResponseIncident() async throws {
@@ -2966,29 +2949,27 @@ struct ACPSessionRunnerTests {
         #expect(incidents(in: session).map(\.endedTurn) == [false])
     }
 
-    @Test func unreadableRecordFailsWithBanner() async throws {
+    @Test("a readable record shows its row and keeps an earlier banner; an unreadable one fails with a banner", arguments: [
+        (true, String?.none, String?.none, "Model overloaded"),
+        (true, "earlier", "earlier", "Model overloaded"),
+        (false, nil, "prompt failed: \(ACPSessionFailureSignal.unreadableMessage)", ACPSessionFailureSignal.unreadableMessage),
+    ])
+    func failedRecordBanner(readable: Bool, earlier: String?, banner: String?, failure: String) async throws {
         var completions: [ACPTurnCompletion] = []
         let (runner, mock, session, _) = try await makeFailureRunner(onTurnCompleted: { completions.append($0) })
+        session.lastError = earlier
         let acknowledgement = DurableAcknowledgementRecorder()
         mock.scriptResponse(method: "session/prompt") { _ in
-            Self.unreadablePromptResponse(ack: { acknowledgement.record() })
+            if readable { return try Self.failedPromptResponse(ack: { acknowledgement.record() }) }
+            return Self.unreadablePromptResponse(ack: { acknowledgement.record() })
         }
-        try await sendAndSettle(runner)
-        #expect(completions.map(\.result) == [.failed(ACPSessionFailureSignal.unreadableMessage)])
-        #expect(session.lastError == "prompt failed: \(ACPSessionFailureSignal.unreadableMessage)")
-        #expect(incidents(in: session).isEmpty)
-        #expect(acknowledgement.recordedCount == 1)
-    }
-
-    @Test("a readable record shows its row, not a banner, and keeps an earlier banner", arguments: [nil, "earlier"] as [String?])
-    func readableRecordSetsNoBanner(earlier: String?) async throws {
-        let (runner, mock, session, _) = try await makeFailureRunner()
-        session.lastError = earlier
-        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse() }
         let delivered = try await sendAndSettle(runner)
         #expect(delivered == true, "the draft is not reinstated")
-        #expect(session.lastError == earlier)
-        #expect(session.turnFailure == "Model overloaded")
+        #expect(completions.map(\.result) == [.failed(failure)])
+        #expect(session.lastError == banner)
+        #expect(session.turnFailure == failure)
+        #expect(incidents(in: session).count == (readable ? 1 : 0))
+        #expect(acknowledgement.recordedCount == 1)
     }
 
     @Test func failedTurnKeepsUsageLimit() async throws {

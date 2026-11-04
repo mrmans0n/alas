@@ -98,7 +98,7 @@ public struct ACPFailureIncidentPresentation: Equatable, Sendable {
         let isError = record.severity == .error
         return Self(
             title: record.title,
-            details: record.details.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 },
+            details: record.details,
             categoryLabel: categoryLabel(record.knownCategory),
             severityLabel: isError ? "Error" : "Warning",
             tone: isError ? .error : (isActiveRetry ? .warningActive : .muted),

@@ -8,14 +8,13 @@ struct ACPFailureIncidentPresentationTests {
         isMirror: false, hasUncertainDelivery: false, isPeer: false)
 
     private static func incident(
-        category: String = "service", severity: String = "error", details: String? = nil, kind: String? = nil,
+        category: String = "service", severity: String = "error", kind: String? = nil,
         actions: [String] = []
     ) throws -> ACPFailureIncident {
         var record: [String: Any] = [
             "version": 1, "id": "t:error", "revision": 1, "category": category, "severity": severity,
             "title": "Model overloaded", "actions": actions,
         ]
-        record["details"] = details
         record["kind"] = kind
         let data = try JSONSerialization.data(withJSONObject: record)
         return ACPFailureIncident(record: try JSONDecoder().decode(ACPSessionFailureRecord.self, from: data))
@@ -93,14 +92,6 @@ struct ACPFailureIncidentPresentationTests {
             try Self.incident(severity: severity), context: Self.permissive, isActiveRetry: isActiveRetry)
         #expect(presentation.tone == tone)
         #expect(presentation.severityLabel == label)
-    }
-
-    @Test(arguments: [("Try again", "Try again"), (" \n ", nil)] as [(String, String?)])
-    func presentationDetails(raw: String, details: String?) throws {
-        let presentation = ACPFailureIncidentPresentation.make(
-            try Self.incident(details: raw), context: Self.permissive, isActiveRetry: false)
-        #expect(presentation.title == "Model overloaded")
-        #expect(presentation.details == details)
     }
 
     @Test(arguments: [
