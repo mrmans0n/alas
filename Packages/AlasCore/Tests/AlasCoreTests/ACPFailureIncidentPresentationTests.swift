@@ -46,6 +46,13 @@ struct ACPFailureIncidentPresentationTests {
         #expect(!ACPFailureActionPolicy.visibleActions(rawActions: ["retry"], context: context).contains(.retry))
     }
 
+    @Test func signInHiddenWhilePromptActive() {
+        var context = Self.permissive
+        context.promptActive = true
+        let actions = ACPFailureActionPolicy.visibleActions(rawActions: ["retry", "login", "new_session"], context: context)
+        #expect(actions == [.newSession])
+    }
+
     @Test func actionsNeverInferredFromCategory() throws {
         for incident in [try Self.incident(category: "service"), try Self.incident(kind: "rate_limited")] {
             let presentation = ACPFailureIncidentPresentation.make(incident, context: Self.permissive, isActiveRetry: false)

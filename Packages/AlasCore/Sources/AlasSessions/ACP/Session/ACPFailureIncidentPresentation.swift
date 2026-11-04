@@ -68,7 +68,10 @@ public enum ACPFailureActionPolicy {
         case .retry:
             return context.isRetryTarget && context.agentReady && !context.promptActive
                 && context.holdsWriteLease && !context.hasUncertainDelivery
-        case .login, .newSession:
+        case .login:
+            // Signing in stands the runner down, so it waits for the turn to end.
+            return !context.promptActive
+        case .newSession:
             return true
         }
     }
