@@ -102,4 +102,14 @@ struct ACPFailureIncidentPresentationTests {
         #expect(presentation.title == "Model overloaded")
         #expect(presentation.details == details)
     }
+
+    @Test(arguments: [
+        (String?.none, "Retrying"),
+        ("Model overloaded", "Retrying — Model overloaded"),
+        ("Retrying Claude, attempt 2 of 5.", "Retrying Claude, attempt 2 of 5."),
+        ("retrying soon", "retrying soon"),
+    ])
+    func retryBannerSaysRetryingOnce(detail: String?, text: String) {
+        #expect(ACPRetryStatus(turnId: nil, detail: detail).bannerText == text)
+    }
 }

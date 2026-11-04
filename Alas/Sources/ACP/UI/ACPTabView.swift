@@ -1803,7 +1803,7 @@ private struct ACPSessionView: View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
                 .foregroundStyle(theme.color("warn"))
-            Text(retry.detail.map { "Retrying — \($0)" } ?? "Retrying")
+            Text(retry.bannerText)
                 .font(.system(size: 12))
                 .textSelection(.enabled)
                 .foregroundStyle(theme.color("fg"))

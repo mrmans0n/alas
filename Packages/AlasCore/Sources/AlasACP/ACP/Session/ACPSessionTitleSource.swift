@@ -61,6 +61,13 @@ public struct ACPRetryStatus: Equatable, Sendable {
         self.detail = detail
         self.incidentId = incidentId
     }
+
+    /// The banner's line. An adapter's detail may already say it is retrying.
+    public var bannerText: String {
+        guard let detail else { return "Retrying" }
+        let saysRetrying = detail.range(of: "retrying", options: [.anchored, .caseInsensitive]) != nil
+        return saysRetrying ? detail : "Retrying — \(detail)"
+    }
 }
 
 public enum ACPConnectionRecoveryState: Equatable, Sendable {
