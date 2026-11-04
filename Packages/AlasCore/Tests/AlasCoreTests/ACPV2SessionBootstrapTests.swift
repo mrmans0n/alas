@@ -437,7 +437,7 @@ struct ACPV2SessionBootstrapTests {
     }
 }
 
-private final class BootstrapTransport: JSONRPCStdioTransporting, JSONRPCFrameWriting, Sendable {
+final class BootstrapTransport: JSONRPCStdioTransporting, JSONRPCFrameWriting, Sendable {
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
     let continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let frames = Mutex<[Data]>([])
@@ -504,9 +504,15 @@ final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrame
     private let continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let blocked = Mutex(false), attempted = Mutex(false), settled = Mutex(false)
     let bytes = Mutex<[Data]>([])
+    let onWrite = Mutex<(@Sendable (Data) -> Void)?>(nil)
     let release = DispatchSemaphore(value: 0)
     private let writeSettled = DispatchSemaphore(value: 0)
     func waitForWriteSettlement() -> Bool { writeSettled.wait(timeout: .now() + 10) == .success }
+    func resetWriteProbe() {
+        attempted.withLock { $0 = false }
+        settled.withLock { $0 = false }
+        while writeSettled.wait(timeout: .now()) == .success {}
+    }
     private var writer: JSONRPCFrameWriter!
     init() {
         let input = AsyncStream<JSONRPCStdioTransport.Incoming>.makeStream()
@@ -516,6 +522,7 @@ final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrame
             if frame == Self.blocker { self.blocked.withLock { $0 = true }
             self.release.wait() }
             self.bytes.withLock { $0.append(frame) }
+            self.onWrite.withLock { $0 }?(frame)
         }
     }
     func emit(_ bytes: Data) { continuation.yield(.frame(bytes, onConsumed: nil)) }

@@ -3,6 +3,7 @@ import Testing
 @_spi(Testing) @testable import AlasCore
 @_spi(Testing) @testable import AlasHostCore
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct AlasHostTests {
     /// A worktree's snapshot carries the operation holding it and whether it
@@ -614,23 +615,22 @@ struct AlasHostTests {
         )
     }
 
-    /// The subscription's next batch, or nil if none arrives in time.
+    /// The subscription's next batch, bounded by the suite's test deadline.
     private static func next(_ subscription: HostSubscription) async -> [HostEvent]? {
         await next(subscription) { _ in true }
     }
 
-    /// The first batch `matches` accepts, skipping others, or nil if none
-    /// arrives in time.
+    /// Wait for the actual event rather than cancelling a live subscription
+    /// after a short scheduling window. Test cancellation releases its waiter.
     private static func next(_ subscription: HostSubscription, where matches: ([HostEvent]) -> Bool) async -> [HostEvent]? {
-        let timeout = Task { @MainActor in
-            try await Task.sleep(for: .seconds(5))
-            subscription.cancel()
+        await withTaskCancellationHandler {
+            while !Task.isCancelled, let events = await subscription.next() {
+                if matches(events) { return events }
+            }
+            return nil
+        } onCancel: {
+            Task { @MainActor in subscription.cancel() }
         }
-        defer { timeout.cancel() }
-        while let events = await subscription.next() {
-            if matches(events) { return events }
-        }
-        return nil
     }
 }
 

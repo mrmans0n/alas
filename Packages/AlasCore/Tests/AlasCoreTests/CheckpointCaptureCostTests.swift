@@ -36,7 +36,9 @@ struct CheckpointCaptureCostTests {
         let fixture = try await Fixture.make()
         defer { fixture.remove() }
         // Stat never changes, so only the racy-window re-read can see the edit.
-        let fileSystem = RecordingFileSystem(freezingIdentities: true)
+        // Future timestamps stay conservatively racy even when a busy runner
+        // delays capture beyond the real file's two-second racy window.
+        let fileSystem = RecordingFileSystem(shiftingTimesBy: 3600, freezingIdentities: true)
         let edited = Data("EDITED\n".utf8)
         let attempts = AttemptLog()
         let service = WorktreeCheckpointService(

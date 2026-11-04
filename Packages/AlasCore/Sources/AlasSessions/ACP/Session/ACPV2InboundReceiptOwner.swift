@@ -157,57 +157,96 @@ public final class ACPV2InboundReceiptOwner {
         transform: @Sendable (S.Element) -> ACPV2InboundDelivery) async where S.Element: Sendable {
         defer { continuation.finish() }
         do {
-            try requireCurrent()
-            guard !sessionId.isEmpty, !upstreamSessionId.isEmpty, fence.sessionId.utf8.elementsEqual(sessionId.utf8),
-                  attachment.localSessionId.map({ $0.utf8.elementsEqual(sessionId.utf8) }) ?? true else { throw Failure.invalidAttachment }
-            status = .restoring
-            publish()
-            let registered = try await storage(.registration) {
-                try await self.journal.registerV2InboundLedger(sessionId: self.sessionId, upstreamSessionId: self.upstreamSessionId,
-                    source: self.attachment.source, fence: self.fence)
-            }
-            try requireCurrent()
-            try validate(registered)
-            stream = registered
-            try onStreamRegistered?(registered)
-            try requireCurrent()
-            hasKnownMissingPrefix = (registered.initialBrokerCursor?.rawValue ?? 0) > 0
-            var after: ACPV2InboundLedgerContinuation?
-            repeat {
-                let page = try await storage(.replay) {
-                    try await self.journal.loadV2InboundLedgerPage(stream: registered, after: after, maxRecords: 128, maxBytes: 1_048_576)
-                }
-                try requireCurrent()
-                try validate(page, stream: registered)
-                for record in page.records { try retainObservation(record, origin: .historical) }
-                after = page.next
-            } while after != nil
-            status = .receiving
-            publish()
-            for try await value in deliveries {
-                try requireCurrent()
-                let delivery = transform(value)
-                guard delivery.connectionID == attachment.connectionID else { throw Failure.deliveryMismatch }
-                try validate(delivery.source)
-                let receipt = try await storage(.retention) {
-                    try await self.journal.retainV2Inbound(delivery, to: registered, fence: self.fence)
-                }
-                try requireCurrent()
-                try validate(receipt, delivery: delivery)
-                try retainObservation(receipt.record, origin: receipt.wasInserted ? .inserted : .duplicate)
-                try requireCurrent()
-                try onRetained?(delivery, receipt)
-                try requireCurrent()
-                delivery.acknowledgeDurableConsumption()
-            }
-            try requireCurrent()
-            status = .observationLost
-            publish()
+            try await prepare(fresh: false)
+            for try await value in deliveries { try await process(transform(value)) }
+            try finishOrderedInput()
+
         } catch {
             guard status != .stopped else { return }
             status = .blocked((error as? Failure) ?? .input(message: error.localizedDescription))
             publish()
         }
+    }
+
+    private var orderedPrepared = false
+    private var orderedProcessing = false
+
+    func prepareFreshOrdered() async throws {
+        guard !started, status == .idle, case .stdio = attachment.source else { throw Failure.invalidAttachment }
+        started = true
+        do { try await prepare(fresh: true)
+        orderedPrepared = true }
+        catch { failOrdered(error)
+        throw error }
+    }
+
+    func processOrdered(_ delivery: ACPV2InboundDelivery) async throws {
+        guard orderedPrepared, !orderedProcessing else { throw Failure.invalidAttachment }
+        orderedProcessing = true
+        defer { orderedProcessing = false }
+        do { try await process(delivery) }
+        catch { failOrdered(error)
+        throw error }
+    }
+
+    private func failOrdered(_ error: any Error) {
+        guard status != .stopped else { return }
+        status = .blocked((error as? Failure) ?? .input(message: String(describing: error)))
+        publish()
+    }
+
+    private func prepare(fresh: Bool) async throws {
+        try requireCurrent()
+        guard !sessionId.isEmpty, !upstreamSessionId.isEmpty, fence.sessionId.utf8.elementsEqual(sessionId.utf8),
+              attachment.localSessionId.map({ $0.utf8.elementsEqual(sessionId.utf8) }) ?? true else { throw Failure.invalidAttachment }
+        status = .restoring
+        publish()
+        let registered = try await storage(.registration) {
+            try await self.journal.registerV2InboundLedger(sessionId: self.sessionId, upstreamSessionId: self.upstreamSessionId,
+                source: self.attachment.source, fence: self.fence)
+        }
+        try requireCurrent()
+        try validate(registered)
+        stream = registered
+        try onStreamRegistered?(registered)
+        try requireCurrent()
+        hasKnownMissingPrefix = (registered.initialBrokerCursor?.rawValue ?? 0) > 0
+        var after: ACPV2InboundLedgerContinuation?
+        repeat {
+            let page = try await storage(.replay) {
+                try await self.journal.loadV2InboundLedgerPage(stream: registered, after: after, maxRecords: 128, maxBytes: 1_048_576)
+            }
+            try requireCurrent()
+            try validate(page, stream: registered)
+            guard !fresh || (page.records.isEmpty && !hasKnownMissingPrefix) else { throw Failure.invalidAttachment }
+            for record in page.records { try retainObservation(record, origin: .historical) }
+            after = page.next
+        } while after != nil
+        status = .receiving
+        publish()
+    }
+
+    private func process(_ delivery: ACPV2InboundDelivery) async throws {
+        guard let registered = stream else { throw Failure.invalidAttachment }
+        try requireCurrent()
+        guard delivery.connectionID == attachment.connectionID else { throw Failure.deliveryMismatch }
+        try validate(delivery.source)
+        let receipt = try await storage(.retention) {
+            try await self.journal.retainV2Inbound(delivery, to: registered, fence: self.fence)
+        }
+        try requireCurrent()
+        try validate(receipt, delivery: delivery)
+        try retainObservation(receipt.record, origin: receipt.wasInserted ? .inserted : .duplicate)
+        try requireCurrent()
+        try onRetained?(delivery, receipt)
+        try requireCurrent()
+        delivery.acknowledgeDurableConsumption()
+    }
+
+    func finishOrderedInput() throws {
+        try requireCurrent()
+        status = .observationLost
+        publish()
     }
 
     private func validate(_ value: ACPV2InboundLedgerStream) throws {
