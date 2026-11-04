@@ -3120,7 +3120,7 @@ function renderMessage(m, sid, open) {
   if (m.kind === "user" || m.kind === "agent") {
     node = el("div", "msg md m-" + m.kind);
     node.innerHTML = md(m.text);            // markdown-rendered like the native pane
-  } else if (m.kind === "systemNotice") {
+  } else if (m.kind === "systemNotice" || m.kind === "failureIncident") {
     node = el("div", "msg m-systemNotice", m.text || "");
   } else if (m.kind === "thought") {
     node = thoughtCard(m.text || "");

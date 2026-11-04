@@ -630,6 +630,16 @@ extension ACPMessageTests {
         #expect(text == "Stored title")
     }
 
+    @Test func storedIncidentWithoutEndedTurnStaysAnIncident() throws {
+        let stored = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ACPSessionFailureRecord.fixture()))
+        let payload = try JSONSerialization.data(withJSONObject: ["text": "Failed", "failureIncident": ["record": stored]])
+        guard case .failureIncident(_, let incident) = try ACPMessageCodec.decode(kind: "system", payload: payload) else {
+            Issue.record("expected a failure incident")
+            return
+        }
+        #expect(!incident.endedTurn)
+    }
+
     @Test func systemNoticeRowsStayNotices() throws {
         let payload = Data(#"{"text":"x"}"#.utf8)
         guard case .systemNotice(_, let text) = try ACPMessageCodec.decode(kind: "system", payload: payload) else {

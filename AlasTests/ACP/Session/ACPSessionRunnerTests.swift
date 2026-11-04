@@ -2405,42 +2405,35 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadMessages(sessionId: "s").isEmpty)
     }
 
-    @Test func liveIncidentPersistsBeforeAcknowledging() async throws {
-        let (runner, _, store) = try makeIncidentRunner(replaying: false)
+    @Test("an incident's ack waits for its row, live and on replay, first delivery or redelivered", arguments: [
+        (false, false),
+        (false, true),
+        (true, false),
+        (true, true),
+    ])
+    func incidentAcknowledgesAfterItsWrite(replaying: Bool, redelivered: Bool) async throws {
+        let (runner, _, store) = try makeIncidentRunner(replaying: replaying)
         let acknowledgement = DurableAcknowledgementRecorder()
 
+        if redelivered {
+            applyInfo(failureInfo(id: "f", revision: 1, title: "first"), to: runner)
+        }
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "s",
-            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "live")),
+            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "first")),
             durableConsumptionAcknowledgement: { acknowledgement.record() }
         ))
 
         #expect(!acknowledgement.wasRecorded)
         await runner.flushPersistence()
         #expect(acknowledgement.wasRecorded)
-        let row = try #require(try store.loadMessages(sessionId: "s").first)
-        guard case .failureIncident(_, let incident) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) else {
+        let rows = try store.loadMessages(sessionId: "s")
+        try #require(rows.count == 1)
+        guard case .failureIncident(_, let incident) = try ACPMessageCodec.decode(kind: rows[0].kind, payload: rows[0].payload) else {
             Issue.record("expected a stored failure incident")
             return
         }
-        #expect(incident.record.title == "live")
-    }
-
-    @Test func redeliveredIncidentAcknowledgesAfterTheEarlierWrite() async throws {
-        let (runner, _, store) = try makeIncidentRunner(replaying: false)
-        let acknowledgement = DurableAcknowledgementRecorder()
-
-        applyInfo(failureInfo(id: "f", revision: 1, title: "live"), to: runner)
-        runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "s",
-            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "live")),
-            durableConsumptionAcknowledgement: { acknowledgement.record() }
-        ))
-
-        #expect(!acknowledgement.wasRecorded)
-        await runner.flushPersistence()
-        #expect(acknowledgement.wasRecorded)
-        #expect(try store.loadMessages(sessionId: "s").count == 1)
+        #expect(incident.record.title == "first")
     }
 
     @Test func unreadableFailureStillAppliesTheTitle() async throws {

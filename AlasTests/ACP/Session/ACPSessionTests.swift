@@ -1291,38 +1291,15 @@ struct ACPSessionTests {
         }
     }
 
-    @Test(arguments: [
-        ([1, 2], "call 1", [[0], [0]]),
-        ([2, 1], "call 0", [[0], []]),
-        ([1, 1], "call 0", [[0], []]),
-    ] as [([Int], String, [Set<Int>])])
-    func incidentUpsertRevisions(revisions: [Int], expectedTitle: String, expectedDirty: [Set<Int>]) throws {
-        let session = negotiatedSession()
-        var dirty: [Set<Int>] = []
-        var stableId: String?
-        var createdAt: Date?
-        for (call, revision) in revisions.enumerated() {
-            dirty.append(session.applySessionFailureUpdate(
-                failureInfo(id: "f", revision: revision, title: "call \(call)"), replaying: false, promptActive: false))
-            let row = try #require(session.transcript.messages.first)
-            #expect(row.stableId == stableId ?? row.stableId)
-            let rowCreatedAt = session.transcript.createdAt(forMessageAt: 0)
-            #expect(rowCreatedAt == createdAt ?? rowCreatedAt)
-            stableId = row.stableId
-            createdAt = rowCreatedAt
-        }
-        #expect(dirty == expectedDirty)
-        #expect(session.transcript.messages.count == 1)
-        #expect(incidents(session).map(\.record.title) == [expectedTitle])
-    }
-
-    @Test("endedTurn is sticky, and only it changes on an equal revision", arguments: [
+    @Test("endedTurn is sticky, and only it changes on an equal or lower revision", arguments: [
         // stored revision and flag, incoming revision and flag; expected title, flag, dirty
         (1, false, 2, true, "incoming", true, Set([0])),
         (1, true, 2, false, "incoming", true, Set([0])),
         (1, false, 1, true, "stored", true, Set([0])),
         (1, true, 1, true, "stored", true, Set<Int>()),
-        (2, false, 1, true, "stored", false, Set<Int>()),
+        (2, false, 1, true, "stored", true, Set([0])),
+        (2, true, 1, true, "stored", true, Set<Int>()),
+        (2, false, 1, false, "stored", false, Set<Int>()),
     ] as [(Int, Bool, Int, Bool, String, Bool, Set<Int>)])
     func incidentEndedTurnFlag(storedRevision: Int, storedFlag: Bool, revision: Int, flag: Bool,
                                title: String, expectedFlag: Bool, expectedDirty: Set<Int>) throws {
@@ -1336,9 +1313,11 @@ struct ACPSessionTests {
         #expect(incidents(session).map(\.endedTurn) == [expectedFlag])
     }
 
-    @Test func upsertStaysInPlaceAfterLaterRows() {
+    @Test func upsertStaysInPlaceAfterLaterRows() throws {
         let session = negotiatedSession()
         session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "first"), replaying: false, promptActive: false)
+        let stableId = try #require(session.transcript.messages.first).stableId
+        let createdAt = session.transcript.createdAt(forMessageAt: 0)
         session.apply(.agentMessageChunk(.text("later")))
 
         let dirty = session.applySessionFailureUpdate(
@@ -1347,6 +1326,8 @@ struct ACPSessionTests {
         #expect(dirty == [0])
         #expect(session.transcript.failureIncidentIndex(id: "f") == 0)
         #expect(incidents(session).map(\.record.title) == ["second"])
+        #expect(session.transcript.messages[0].stableId == stableId)
+        #expect(session.transcript.createdAt(forMessageAt: 0) == createdAt)
         guard case .agent = session.transcript.messages[1] else {
             Issue.record("expected the agent row to stay after the incident")
             return
@@ -1374,16 +1355,18 @@ struct ACPSessionTests {
         #expect(incidents(session).map(\.record.title) == ["second"])
     }
 
-    @Test func recordsIgnoredWithoutNegotiation() {
+    @Test("no row without negotiation, or from the JetBrains form of the field", arguments: [
+        (false, false),
+        (true, true),
+    ])
+    func updateAddsNoRow(negotiated: Bool, underJetBrainsMeta: Bool) throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        let dirty = session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "x"), replaying: false, promptActive: false)
-        #expect(dirty.isEmpty)
-        #expect(session.transcript.messages.isEmpty)
-    }
-
-    @Test func unreadableUpdateIsIgnored() {
-        let session = negotiatedSession()
-        let info = ACPSessionInfoUpdate(title: nil, metadata: AnyCodable(["sessionFailure": AnyCodable("boom")]))
+        session.sessionFailure = negotiated ? .init() : nil
+        var info = failureInfo(id: "f", revision: 1, title: "x")
+        if underJetBrainsMeta {
+            let record = try #require(info.metadata?.value as? [String: AnyCodable])
+            info = ACPSessionInfoUpdate(title: nil, metadata: AnyCodable(["jetbrains": AnyCodable(["air": AnyCodable(record)])]))
+        }
 
         #expect(session.applySessionFailureUpdate(info, replaying: false, promptActive: false).isEmpty)
         #expect(session.transcript.messages.isEmpty)
@@ -1402,15 +1385,6 @@ struct ACPSessionTests {
         #expect(session.transcript.streamingState == .streaming)
         #expect(session.turnFailure == "earlier failure")
         #expect(session.lastError == "earlier error")
-    }
-
-    @Test func jetbrainsMetaIsNotARecord() throws {
-        let session = negotiatedSession()
-        let record = try #require(failureInfo(id: "f", revision: 1, title: "x").metadata?.value as? [String: AnyCodable])
-        let info = ACPSessionInfoUpdate(title: nil, metadata: AnyCodable(["jetbrains": AnyCodable(["air": AnyCodable(record)])]))
-
-        #expect(session.applySessionFailureUpdate(info, replaying: false, promptActive: false).isEmpty)
-        #expect(session.transcript.messages.isEmpty)
     }
 
     @Test("a live incident closes held output ahead of itself and reports both rows")

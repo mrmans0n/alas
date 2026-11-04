@@ -15,6 +15,16 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
         self.endedTurn = endedTurn
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case record, endedTurn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        record = try c.decode(ACPSessionFailureRecord.self, forKey: .record)
+        endedTurn = try c.decodeIfPresent(Bool.self, forKey: .endedTurn) ?? false
+    }
+
     /// The title, then a blank line and the details when present.
     public var displayText: String {
         record.details.map { "\(record.title)\n\n\($0)" } ?? record.title

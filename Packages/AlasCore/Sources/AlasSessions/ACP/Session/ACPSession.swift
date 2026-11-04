@@ -2655,9 +2655,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     /// Upserts the incident row of `record.id` and returns the rows to persist.
-    /// A higher revision rewrites the row in place; a lower one changes
-    /// nothing, and an equal one can only set `endedTurn`. Titles are never
-    /// compared, and lifecycle, `turnFailure` and `lastError` are untouched.
+    /// A higher revision rewrites the row in place. An equal or lower one
+    /// keeps the record and can only set `endedTurn`, so a response carrying an
+    /// older revision still reports the failure after a reload. Titles are
+    /// never compared, and lifecycle, `turnFailure` and `lastError` are untouched.
     /// Like a notice, this keeps the completed-output boundary and the content
     /// touch: the incident is not output.
     @discardableResult
@@ -2670,7 +2671,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             let updated: ACPFailureIncident
             if record.revision > stored.record.revision {
                 updated = ACPFailureIncident(record: record, endedTurn: stored.endedTurn || endedTurn)
-            } else if record.revision == stored.record.revision, endedTurn, !stored.endedTurn {
+            } else if endedTurn, !stored.endedTurn {
                 updated = ACPFailureIncident(record: stored.record, endedTurn: true)
             } else {
                 return []
