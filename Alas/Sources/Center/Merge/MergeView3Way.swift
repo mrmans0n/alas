@@ -128,8 +128,8 @@ struct MergeView3Way: View {
                     codeFontSize: codeFontSize,
                     coordinator: coordinator,
                     endsWithNewline: lastRegionEndsWithNewline,
-                    onEditFullText: { newText in
-                        model.applyEditedFullText(newText, showBase: showBase)
+                    onEditFullText: { newText, selectionBefore in
+                        model.applyEditedFullText(newText, showBase: showBase, selectionBefore: selectionBefore)
                     },
                     editHistory: model,
                     focusToken: model.actionEditCount

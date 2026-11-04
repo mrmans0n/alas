@@ -330,6 +330,45 @@ struct MergeConflictTabModelTests {
         #expect(!model.canRedo)
     }
 
+    @Test func undoAndRedoPutTheSelectionBack() {
+        let clock = UndoClock()
+        let model = Self.undoModel(clock: clock)
+        model.acceptLocal()
+        model.acceptLocal()
+        let before = NSRange(location: 2, length: 0)
+
+        // Typing: back to where the group started, forward to where it ended.
+        model.applyEditedFullText("heXad\na-ours\nmiddle\nb-ours\ntail\n", selectionBefore: before)
+        model.noteResultSelection(NSRange(location: 3, length: 0))
+        clock.date += 0.5
+        model.applyEditedFullText(
+            "heXYad\na-ours\nmiddle\nb-ours\ntail\n", selectionBefore: NSRange(location: 3, length: 0)
+        )
+        let after = NSRange(location: 4, length: 0)
+        model.noteResultSelection(after)
+        let restores = model.selectionRestoreCount
+
+        model.undo()
+        #expect(model.restoredSelection == before)
+        #expect(model.selectionRestoreCount == restores + 1)
+
+        model.redo()
+        #expect(model.restoredSelection == after)
+        #expect(model.selectionRestoreCount == restores + 2)
+    }
+
+    @Test func undoingAnAcceptPutsTheSelectionFromBeforeIt() {
+        let model = Self.undoModel()
+        let selection = NSRange(location: 6, length: 3)
+        model.noteResultSelection(selection)
+
+        model.acceptLocal()
+        model.noteResultSelection(NSRange(location: 0, length: 0))
+        model.undo()
+
+        #expect(model.restoredSelection == selection)
+    }
+
     @Test func aPendingProposalHoldsUndoBack() {
         let model = Self.undoModel()
         model.acceptLocal()

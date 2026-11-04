@@ -21,8 +21,9 @@ struct MergeResultPane: NSViewRepresentable {
     /// no-EOF-newline files get a phantom `\n` added on writeback.
     let endsWithNewline: Bool
     /// Pushed by the view when the user types. Receives the full new
-    /// buffer text so the model can reconcile inserts AND deletes.
-    let onEditFullText: (String) -> Void
+    /// buffer text so the model can reconcile inserts AND deletes, and the
+    /// selection from before the edit, which undo puts back.
+    let onEditFullText: (String, NSRange?) -> Void
     let editHistory: MergeConflictTabModel
     /// A change gives this pane the keyboard: an accept came from a gutter button, and ⌘Z
     /// should undo it next.
@@ -43,6 +44,7 @@ struct MergeResultPane: NSViewRepresentable {
         context.coordinator.scrollBridge = MergePaneScrollBridge(scroll: scroll, source: .result, coordinator: coordinator)
         context.coordinator.onEditFullText = onEditFullText
         context.coordinator.lastFocusToken = focusToken
+        context.coordinator.lastSelectionRestoreCount = editHistory.selectionRestoreCount
         return scroll
     }
 
@@ -50,6 +52,7 @@ struct MergeResultPane: NSViewRepresentable {
         guard let textView = scroll.documentView as? MergeCodeTextView else { return }
         context.coordinator.onEditFullText = onEditFullText
         textView.editHistory = editHistory
+        context.coordinator.editHistory = editHistory
         if context.coordinator.lastFocusToken != focusToken {
             context.coordinator.lastFocusToken = focusToken
             textView.window?.makeFirstResponder(textView)
@@ -89,6 +92,17 @@ struct MergeResultPane: NSViewRepresentable {
             }
             context.coordinator.lastKey = key
         }
+        // After the text above: the selection is an offset into the restored text.
+        if context.coordinator.lastSelectionRestoreCount != editHistory.selectionRestoreCount {
+            context.coordinator.lastSelectionRestoreCount = editHistory.selectionRestoreCount
+            if let selection = editHistory.restoredSelection {
+                let length = (textView.string as NSString).length
+                let location = min(selection.location, length)
+                let restored = NSRange(location: location, length: min(selection.length, length - location))
+                textView.setSelectedRange(restored)
+                textView.scrollRangeToVisible(restored)
+            }
+        }
         let editorTheme = EditorTheme(theme: theme)
         textView.typingAttributes = metrics.baseAttributes(foreground: editorTheme.defaultFG)
         textView.insertionPointColor = editorTheme.defaultFG
@@ -115,7 +129,10 @@ struct MergeResultPane: NSViewRepresentable {
         }
 
         var lastFocusToken = 0
-        var onEditFullText: ((String) -> Void)?
+        var lastSelectionRestoreCount = 0
+        weak var editHistory: MergeConflictTabModel?
+        private var selectionBeforeEdit: NSRange?
+        var onEditFullText: ((String, NSRange?) -> Void)?
         var lastKey: CacheKey?
         fileprivate var scrollBridge: MergePaneScrollBridge?
 
@@ -124,7 +141,20 @@ struct MergeResultPane: NSViewRepresentable {
         /// `regions`, which handles both inserts and deletes.
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            onEditFullText?(tv.string)
+            onEditFullText?(tv.string, selectionBeforeEdit)
+            selectionBeforeEdit = nil
+        }
+
+        func textView(
+            _ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?
+        ) -> Bool {
+            selectionBeforeEdit = selectionBeforeEdit ?? textView.selectedRange()
+            return true
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            editHistory?.noteResultSelection(tv.selectedRange())
         }
     }
 }

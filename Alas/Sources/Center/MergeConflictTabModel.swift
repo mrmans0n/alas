@@ -68,6 +68,7 @@ final class MergeConflictTabModel {
         let resultText: String
         let regions: [ConflictRegion]
         let currentConflictIndex: Int?
+        var resultSelection: NSRange?
     }
 
     /// The one history for accepts, typing and agent proposals, in the order they happened.
@@ -85,6 +86,17 @@ final class MergeConflictTabModel {
     /// Counts edits made by an action rather than by typing, so the view can give the result
     /// pane the keyboard after one and ⌘Z reaches this history.
     private(set) var actionEditCount = 0
+
+    /// The result pane's selection as it last reported it.
+    @ObservationIgnored private var resultSelection: NSRange?
+    /// The selection an undo or redo put back, for the result pane to apply. Each one counts up
+    /// `selectionRestoreCount`, so the pane applies it once and leaves later selections alone.
+    private(set) var restoredSelection: NSRange?
+    private(set) var selectionRestoreCount = 0
+
+    func noteResultSelection(_ selection: NSRange) {
+        resultSelection = selection
+    }
 
     var canUndo: Bool { !undoStack.isEmpty && agentProposal == nil }
     var canRedo: Bool { !redoStack.isEmpty && agentProposal == nil }
@@ -222,13 +234,21 @@ final class MergeConflictTabModel {
     }
 
     private var currentSnapshot: EditSnapshot {
-        EditSnapshot(resultText: resultText, regions: regions, currentConflictIndex: currentConflictIndex)
+        EditSnapshot(
+            resultText: resultText,
+            regions: regions,
+            currentConflictIndex: currentConflictIndex,
+            resultSelection: resultSelection
+        )
     }
 
     private func restore(_ snapshot: EditSnapshot) {
         resultText = snapshot.resultText
         regions = snapshot.regions
         currentConflictIndex = snapshot.currentConflictIndex
+        resultSelection = snapshot.resultSelection
+        restoredSelection = snapshot.resultSelection
+        selectionRestoreCount += 1
         lastTypingAt = nil
         cancelExplanationIfItsConflictIsGone()
     }
@@ -237,12 +257,16 @@ final class MergeConflictTabModel {
         undoStack = []
         redoStack = []
         lastTypingAt = nil
+        resultSelection = nil
+        restoredSelection = nil
     }
 
     /// Runs `edit` and, when it changed the text, makes it an undo step. Typing soon after
     /// other typing joins that step.
-    private func recordingUndo(typing: Bool = false, _ edit: () -> Void) {
-        let before = currentSnapshot
+    private func recordingUndo(typing: Bool = false, selectionBefore: NSRange? = nil, _ edit: () -> Void) {
+        var before = currentSnapshot
+        // By the time an edit arrives the pane has already moved its selection past it.
+        if let selectionBefore { before.resultSelection = selectionBefore }
         edit()
         guard resultText != before.resultText else { return }
         redoStack = []
@@ -442,8 +466,8 @@ final class MergeConflictTabModel {
     /// After mutation, `resultText` is rebuilt in MARKER form via
     /// `serializeRegionsWithMarkers` and `reparse()` is called so each
     /// block's `lineRangeInMerged` reflects the new line counts.
-    func applyEditedFullText(_ newText: String, showBase: Bool = false) {
-        recordingUndo(typing: true) { reconcileEditedFullText(newText, showBase: showBase) }
+    func applyEditedFullText(_ newText: String, showBase: Bool = false, selectionBefore: NSRange? = nil) {
+        recordingUndo(typing: true, selectionBefore: selectionBefore) { reconcileEditedFullText(newText, showBase: showBase) }
     }
 
     private func reconcileEditedFullText(_ newText: String, showBase: Bool) {
