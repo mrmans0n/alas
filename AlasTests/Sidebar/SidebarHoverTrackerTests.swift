@@ -41,8 +41,13 @@ struct SidebarHoverTrackerTests {
         #expect(rows.take() == ["+a"])
         rows.tracker.pointerMoved(to: CGPoint(x: 20, y: 20))
         #expect(rows.take().isEmpty)
+        // Exit before entry in both directions, whatever order rows are stored in.
         rows.tracker.pointerMoved(to: CGPoint(x: 10, y: 50))
-        #expect(Set(rows.take()) == ["-a", "+b"])
+        #expect(rows.take() == ["-a", "+b"])
+        rows.tracker.pointerMoved(to: CGPoint(x: 10, y: 10))
+        #expect(rows.take() == ["-b", "+a"])
+        rows.tracker.pointerMoved(to: CGPoint(x: 10, y: 50))
+        #expect(rows.take() == ["-a", "+b"])
         rows.tracker.pointerExited()
         #expect(rows.take() == ["-b"])
 

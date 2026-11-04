@@ -241,6 +241,25 @@ struct AppStateRepoIconTests {
         #expect(state.sidebarIcon(for: local) != first)
     }
 
+    /// The only render after an edit comes before the re-check is due. Its stale
+    /// answer still gets corrected, with no further render to prompt it.
+    @Test func aStaleAnswerIsCorrectedWithoutAnotherRender() async throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let state = state(staging: fixture.staging)
+        let cache = state.repoIconRenderCache
+        cache.recheckInterval = 0.2
+        let local = project(path: fixture.checkout.path)
+        let first = state.sidebarIcon(for: local)
+
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes + Data([0x00]))
+        #expect(state.sidebarIcon(for: local) == first)
+        await cache.waitForRecheck()
+
+        #expect(cache.revision == 1)
+        #expect(state.sidebarIcon(for: local) != first)
+    }
+
     /// A config that starts naming an image adds that file to what is watched,
     /// so later edits to the image still reach the sidebar.
     @Test func sidebarWatchesAnImageAConfigStartsNaming() async throws {

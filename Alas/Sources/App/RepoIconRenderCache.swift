@@ -9,8 +9,10 @@ import Observation
 /// so on a busy disk those calls stall the main thread. This cache keeps the
 /// sidebar away from the disk: a project is resolved when first seen, and from
 /// then on its repo files are re-checked off the main actor, at most once per
-/// `recheckInterval`. A changed file re-resolves and re-renders whoever read
-/// the icon, so an edit to `.alas/icon.png` shows up within that interval.
+/// `recheckInterval`. Every read is followed by a check that starts after it, so
+/// an answer that turns out stale is corrected without needing another render:
+/// a changed file re-resolves and re-renders whoever read the icon. Checks stop
+/// when reads do, so an idle sidebar costs nothing.
 @MainActor
 @Observable
 final class RepoIconRenderCache {
@@ -40,6 +42,8 @@ final class RepoIconRenderCache {
         var watched: [String]
         var stamps: [FileStamp?]
         var checkedAt: Date
+        /// Read since the last check started, so another check is owed.
+        var readSinceCheck = false
     }
 
     /// Bumped when a re-check changes an icon, which is what re-renders readers.
@@ -58,9 +62,8 @@ final class RepoIconRenderCache {
     ) -> ProjectIcon {
         _ = revision
         if let entry = entries[project.id], entry.project.icon == project.icon, entry.project.path == project.path {
-            if Date().timeIntervalSince(entry.checkedAt) >= recheckInterval {
-                scheduleRecheck(watched: watched, resolve: resolve)
-            }
+            entries[project.id]?.readSinceCheck = true
+            scheduleRecheck(watched: watched, resolve: resolve)
             return entry.icon
         }
         let paths = watched(project)
@@ -80,17 +83,36 @@ final class RepoIconRenderCache {
         watched: @escaping (ProjectConfig) -> [String],
         resolve: @escaping (ProjectConfig) -> ProjectIcon
     ) {
-        guard recheck == nil else { return }
-        let now = Date()
-        let due = entries.filter { now.timeIntervalSince($0.value.checkedAt) >= recheckInterval }
-            .mapValues(\.watched)
+        guard recheck == nil, recheckInterval.isFinite else { return }
         recheck = Task { [weak self] in
-            let fresh = await Task.detached(priority: .utility) {
-                due.mapValues { $0.map(FileStamp.read) }
-            }.value
-            self?.apply(fresh, watched: watched, resolve: resolve)
+            while let wait = self?.delayUntilNextCheck() {
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                guard let due = self?.takeDueChecks() else { break }
+                let fresh = await Task.detached(priority: .utility) {
+                    due.mapValues { $0.map(FileStamp.read) }
+                }.value
+                self?.apply(fresh, watched: watched, resolve: resolve)
+            }
             self?.recheck = nil
         }
+    }
+
+    /// How long until the next owed check is due, or nil when none is owed.
+    private func delayUntilNextCheck() -> TimeInterval? {
+        entries.values.filter(\.readSinceCheck).map(\.checkedAt).min().map {
+            max(0, recheckInterval - Date().timeIntervalSince($0))
+        }
+    }
+
+    private func takeDueChecks() -> [String: [String]] {
+        let now = Date()
+        var due: [String: [String]] = [:]
+        for (id, entry) in entries
+        where entry.readSinceCheck && now.timeIntervalSince(entry.checkedAt) >= recheckInterval {
+            entries[id]?.readSinceCheck = false
+            due[id] = entry.watched
+        }
+        return due
     }
 
     private func apply(

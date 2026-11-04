@@ -170,7 +170,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
                 .buttonStyle(.plain)
-                .sidebarHover { plusHoveringWorkspaceID = $0 ? workspace.id : nil }
+                .sidebarHover { hovering in
+                    if hovering { plusHoveringWorkspaceID = workspace.id }
+                    else if plusHoveringWorkspaceID == workspace.id { plusHoveringWorkspaceID = nil }
+                }
                 .help("New checkout in \(workspace.name)")
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
@@ -198,7 +201,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
         .contentShape(Rectangle())
-        .sidebarHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
+        .sidebarHover { hovering in
+            if hovering { hoveringWorkspaceID = workspace.id }
+            else if hoveringWorkspaceID == workspace.id { hoveringWorkspaceID = nil }
+        }
         .contextMenu {
             Button("New checkout...", systemImage: "plus") { model.creatingCheckout = workspace }
             Button("Edit workspace...", systemImage: "pencil") { model.editingWorkspace = workspace }
@@ -274,7 +280,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                 }
             }
-            .sidebarHover { hoveringCheckoutID = $0 ? checkout.id : nil }
+            .sidebarHover { hovering in
+                if hovering { hoveringCheckoutID = checkout.id }
+                else if hoveringCheckoutID == checkout.id { hoveringCheckoutID = nil }
+            }
             .contextMenu {
                 Button("Checkout details...", systemImage: "info.circle") { model.inspectedCheckout = checkout }
                 Divider()

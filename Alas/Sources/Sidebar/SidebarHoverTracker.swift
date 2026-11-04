@@ -94,13 +94,23 @@ final class SidebarHoverTracker {
         reconcileAll()
     }
 
+    /// Exits first, so a row sharing one "hovered id" with its neighbours isn't
+    /// cleared by the exit of the row the pointer just left.
     private func reconcileAll() {
-        for id in targets.keys { reconcile(id) }
+        let (entering, others) = targets.keys.reduce(into: ([UUID](), [UUID]())) { result, id in
+            if shouldHover(targets[id]) { result.0.append(id) } else { result.1.append(id) }
+        }
+        for id in others + entering { reconcile(id) }
+    }
+
+    private func shouldHover(_ target: Target?) -> Bool {
+        guard let target else { return false }
+        return isEnabled && !isScrolling && pointer.map(target.frame.contains) == true
     }
 
     private func reconcile(_ id: UUID) {
         guard var target = targets[id] else { return }
-        let hovered = isEnabled && !isScrolling && pointer.map(target.frame.contains) == true
+        let hovered = shouldHover(target)
         guard hovered != target.isHovered else { return }
         target.isHovered = hovered
         targets[id] = target
