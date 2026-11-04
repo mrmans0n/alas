@@ -31,7 +31,8 @@ struct DataDirectoryLockTests {
         var first: DataDirectoryLock? = try DataDirectoryLock.acquire(in: directory)
         // The lock is exclusive, so the waiter cannot return before `first`
         // lets go; without waiting it would refuse at once.
-        let waiter = Task.detached { try DataDirectoryLock.acquire(in: directory, waiting: true) }
+        // The waiting acquire blocks, so it waits off the cooperative pool every other test shares.
+        let waiter = Task { try await BlockingWork.run { try DataDirectoryLock.acquire(in: directory, waiting: true) } }
         first = nil
         _ = first
         let second = try await waiter.value

@@ -519,12 +519,18 @@ struct ACPSessionTests {
         #expect(session.transcript.lastContentTouchIndex == 0)
     }
 
-    @Test("a plan update does not move lastContentTouchIndex off the in-progress row")
-    func planUpdateDoesNotMoveContentTouch() {
+    @Test("a plan update does not move lastContentTouchIndex off the in-progress row", arguments: [
+        ACPSessionUpdate.plan([.init(content: "Step 1", priority: nil, status: "pending")]),
+        .markdownPlan("m", "# Plan"),
+    ])
+    func planUpdateDoesNotMoveContentTouch(update: ACPSessionUpdate) {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.agentThoughtChunk(.text("thinking")))
+        session.apply(.toolCall(.init(toolCallId: "t1", title: "Read", kind: "read", status: "in_progress")))
         #expect(session.transcript.lastContentTouchIndex == 0)
-        session.apply(.plan([.init(content: "Step 1", priority: nil, status: "pending")]))
+        // Twice: the first appends the plan row, the second rewrites it.
+        session.apply(update)
+        session.apply(update)
+        #expect(session.transcript.messages.count == 2)
         #expect(session.transcript.lastContentTouchIndex == 0)
     }
 
@@ -1271,22 +1277,28 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("completed output boundary skips trailing plan rows")
-    func completedOutputBoundarySkipsTrailingPlan() async {
+    @Test("completed output boundary skips trailing plan rows", arguments: [
+        ACPSessionUpdate.plan([.init(content: "done", priority: nil, status: "completed")]),
+        .markdownPlan("m", "# Plan"),
+    ])
+    func completedOutputBoundarySkipsTrailingPlan(plan: ACPSessionUpdate) async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.apply(.agentMessageChunk(.text("first task")))
-        session.apply(.plan([.init(content: "done", priority: nil, status: "completed")]))
+        session.apply(plan)
         session.markCompletedOutputBoundary()
         session.apply(.agentMessageChunk(.text("second task")))
 
-        #expect(session.transcript.messages.count == 3)
+        try #require(session.transcript.messages.count == 3)
         if case .agent(_, _, let first) = session.transcript.messages[0],
-           case .plan = session.transcript.messages[1],
            case .agent(_, _, let second) = session.transcript.messages[2] {
             #expect(first.value == "first task")
             #expect(second.value == "second task")
         } else {
             Issue.record("expected agent, plan, agent")
+        }
+        switch session.transcript.messages[1] {
+        case .plan, .planDocument: break
+        default: Issue.record("expected a plan row between the answers")
         }
     }
 
@@ -1620,6 +1632,216 @@ struct ACPSessionTests {
         session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
         session.markCompletedOutputBoundary()
         #expect(session.retryStatus == nil)
+    }
+
+    @Test("a plan with content clears retryable status; a removal or an unknown plan does not", arguments: [
+        (ACPSessionUpdate.planUpdate(.init(planId: "p", content: .items([]))), true),
+        (.markdownPlan("p", "# Plan"), true),
+        (.planUpdate(.init(planId: "p", content: .file(uri: "file:///tmp/p.md"))), true),
+        (.planUpdate(.init(planId: "p", content: .unknown(type: "_future"))), false),
+        (.planRemoved(planId: "p"), false),
+    ])
+    func planUpdatesClearRetryStatus(update: ACPSessionUpdate, clears: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])]))))
+        session.apply(update)
+        #expect((session.retryStatus == nil) == clears)
+    }
+
+    // MARK: - Plan documents
+
+    @Test("a Markdown or file plan reuses the row for its id, except Claude's shared id in a later turn", arguments: [
+        ("repeatedSnapshots", ["item_1=v1", "item_1=v2"], "item_1", ACPPlanContent.markdown("v3"),
+         [ACPPlanDocument.markdown("item_1", "v3")]),
+        ("twoPlansSuccessiveTurns", ["item_1=first", "user"], "item_2", .markdown("second"),
+         [.markdown("item_1", "first"), .markdown("item_2", "second")]),
+        ("sameIdNextTurn", ["plan-mode:toolu_1=v1", "user"], "plan-mode:toolu_1", .markdown("v2"),
+         [.markdown("plan-mode:toolu_1", "v2")]),
+        ("sharedClaudeIdSameTurn", ["plan-mode=v1"], "plan-mode", .markdown("v2"), [.markdown("plan-mode", "v2")]),
+        ("sharedClaudeIdNextTurn", ["plan-mode=v1", "user"], "plan-mode", .markdown("v2"),
+         [.markdown("plan-mode", "v1"), .markdown("plan-mode", "v2")]),
+        ("fileUri", [], "p", .file(uri: "file:///tmp/p.md"),
+         [.init(planId: "p", kind: .file, markdown: nil, file: .init(path: "/tmp/p.md", sha256: nil))]),
+        ("nonFileUri", [], "p", .file(uri: "https://example.com/p.md"),
+         [.markdown("p", "Plan file: https://example.com/p.md")]),
+    ])
+    func planDocumentPlacement(name: String, prior: [String], planId: String, content: ACPPlanContent,
+                               expected: [ACPPlanDocument]) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.userMessageChunk(.text("Plan it")))
+        for step in prior {
+            if step == "user" {
+                session.apply(.userMessageChunk(.text("Next")))
+                continue
+            }
+            let parts = step.split(separator: "=", maxSplits: 1).map(String.init)
+            session.apply(.markdownPlan(parts[0], parts[1]))
+        }
+        session.apply(.planUpdate(.init(planId: planId, content: content)))
+
+        #expect(session.transcript.messages.planDocuments == expected, "\(name)")
+    }
+
+    nonisolated private static let planFileSha = String(repeating: "ab", count: 32)
+
+    nonisolated private static func planFileMeta(planId: String = "plan-mode:toolu_1", sha256: String = planFileSha,
+                                     path: String? = "/Users/u/.claude/plans/a.md") -> AnyCodable {
+        var payload: [String: AnyCodable] = [
+            "version": AnyCodable(1), "planId": AnyCodable(planId), "sha256": AnyCodable(sha256),
+        ]
+        if let path { payload["path"] = AnyCodable(path) }
+        return AnyCodable(["planFile": AnyCodable(payload)])
+    }
+
+    @Test("an approved plan carries the plan file its tool call or review named, only when planFile was negotiated",
+          arguments: [
+              (negotiated: true, fromReview: false, attached: true),
+              (negotiated: false, fromReview: false, attached: false),
+              (negotiated: true, fromReview: true, attached: true),
+          ])
+    func approvedPlanAttachesPlanFile(negotiated: Bool, fromReview: Bool, attached: Bool) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        if negotiated { session.planFile = .init() }
+        session.apply(.userMessageChunk(.text("Plan it")))
+        session.apply(.toolCall(.init(
+            toolCallId: "toolu_1", title: "Ready to code?", kind: "switch_mode", status: "pending",
+            metadata: fromReview ? nil : Self.planFileMeta())))
+        if fromReview {
+            session.noteReviewedPlanFile(ACPPermissionToolCall(
+                toolCallId: "toolu_1", title: "Ready to code?", kind: "switch_mode", metadata: Self.planFileMeta()))
+        }
+        session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
+
+        let document = session.transcript.messages.planDocuments.first
+        #expect(document?.kind == .markdown)
+        #expect(document?.markdown == "# Plan")
+        #expect(document?.file == (attached
+            ? ACPPlanFileReference(path: "/Users/u/.claude/plans/a.md", sha256: Self.planFileSha) : nil))
+    }
+
+    @Test("planFile payloads are well formed only with a plan-mode id, a full digest and an absolute path",
+          arguments: [
+              (Self.planFileMeta(), true as Bool?),
+              (Self.planFileMeta(path: nil), true),
+              (Self.planFileMeta(planId: "plan-mode"), false),
+              (Self.planFileMeta(sha256: "abcd"), false),
+              (Self.planFileMeta(sha256: String(repeating: "AB", count: 32)), false),
+              (Self.planFileMeta(path: "plans/a.md"), false),
+              (AnyCodable(["planFile": AnyCodable("x")]), nil),
+          ] as [(AnyCodable, Bool?)])
+    func planFilePayloadShapes(metadata: AnyCodable, wellFormed: Bool?) {
+        #expect(ACPPlanFilePayload.from(metadata: metadata)?.isWellFormed == wellFormed)
+    }
+
+    @Test("a permission is a plan review for ExitPlanMode or a well-formed planFile payload only",
+          arguments: [
+              ("switch_mode", nil, true as Bool),
+              ("read", Self.planFileMeta(), true),
+              ("read", AnyCodable(["planFile": AnyCodable([String: AnyCodable]())]), false),
+              ("read", nil, false),
+          ] as [(String, AnyCodable?, Bool)])
+    func planFilePermissionIsPlanReview(kind: String, metadata: AnyCodable?, expected: Bool) {
+        let toolCall = ACPPermissionToolCall(toolCallId: "toolu_1", title: "t", kind: kind, metadata: metadata)
+        #expect(toolCall.isPlanReview == expected)
+    }
+
+    @Test("plan_removed hides the plan's row, a later snapshot shows it again, and both bump its revision")
+    func planRemovedHides() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.userMessageChunk(.text("Plan it")))
+        session.apply(.markdownPlan("m", "v1"))
+        let rowId = session.transcript.messages[1].stableId
+
+        session.apply(.planRemoved(planId: "m"))
+        #expect(session.transcript.messages.count == 2)
+        #expect(session.transcript.messages.planDocuments == [.markdown("m", "v1", hidden: true)])
+
+        session.apply(.markdownPlan("m", "v2"))
+        #expect(session.transcript.messages.planDocuments == [.markdown("m", "v2")])
+        #expect(session.transcript.messages[1].stableId == rowId)
+        #expect(session.planRevisions["m"] == 3)
+        // Revisions count updates that leave no row as well.
+        session.apply(.planRemoved(planId: "gone"))
+        session.apply(.planUpdate(.init(planId: "future", content: .unknown(type: "_future"))))
+        #expect(session.planRevisions["gone"] == 1)
+        #expect(session.planRevisions["future"] == 1)
+        #expect(session.transcript.messages.count == 2)
+    }
+
+    @Test("a repeated identical plan snapshot is not a new revision", arguments: [
+        ACPPlanContent.markdown("# Plan"), .items([.init(content: "a", priority: "high", status: "pending")]),
+    ])
+    func identicalPlanSnapshotKeepsRevision(content: ACPPlanContent) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.planUpdate(.init(planId: "item_1", content: content)))
+        session.apply(.planUpdate(.init(planId: "item_1", content: content)))
+        #expect(session.planRevisions["item_1"] == 1)
+
+        session.apply(.planUpdate(.init(planId: "item_1", content: .markdown("# Changed"))))
+        #expect(session.planRevisions["item_1"] == 2)
+    }
+
+    @Test("a clear-context restart repeats the approved plan into its row and counts the reset")
+    func clearContextRestartUpdatesPlanOnce() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.userMessageChunk(.text("Plan it")))
+        session.apply(.usageUpdate(.init(used: 5_000, size: 200_000, cost: nil)))
+        session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
+        #expect(session.contextResetCount == 0)
+
+        session.apply(.currentModeUpdate(modeId: "default"))
+        session.apply(.sessionConfigOptionsUpdate([]))
+        session.apply(.usageUpdate(.init(used: 0, size: 200_000, cost: nil)))
+        session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
+
+        #expect(session.transcript.messages.planDocuments == [.markdown("plan-mode:toolu_1", "# Plan")])
+        #expect(session.contextResetCount == 1)
+    }
+
+    @Test("replay rewrites a Markdown plan's row by id anywhere and adds none", arguments: [
+        (ACPSessionUpdate.markdownPlan("m", "new"), ACPPlanDocument.markdown("m", "new"), Set([1])),
+        (.markdownPlan("other", "new"), .markdown("m", "old"), Set<Int>()),
+        (.planRemoved(planId: "m"), .markdown("m", "old", hidden: true), Set([1])),
+    ])
+    func replayReconcilesPlanById(update: ACPSessionUpdate, expected: ACPPlanDocument, dirty: Set<Int>) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "Plan it", attachments: []),
+            .planDocument(id: UUID(), .markdown("m", "old")),
+            .agent(id: UUID(), StreamingText("Done")),
+        ])
+        session.beginSuppressedReplaySideEffects()
+
+        #expect(session.applySuppressedReplaySideEffects(update) == dirty)
+        #expect(session.transcript.messages.count == 3)
+        #expect(session.transcript.messages.planDocuments == [expected])
+    }
+
+    @Test("replaying Claude's shared plan id in two turns gives each turn's own row its last snapshot",
+          arguments: [1, 2])
+    func replayedSharedPlanIdFollowsTheCursor(snapshotsPerTurn: Int) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "First", attachments: []),
+            .planDocument(id: UUID(), .markdown("plan-mode", "old 1")),
+            .user(id: UUID(), text: "Second", attachments: []),
+            .planDocument(id: UUID(), .markdown("plan-mode", "old 2")),
+        ])
+        session.beginSuppressedReplaySideEffects()
+
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("First"))).isEmpty)
+        for n in 1...snapshotsPerTurn {
+            #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "first \(n)")) == [1])
+        }
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("Second"))).isEmpty)
+        for n in 1...snapshotsPerTurn {
+            #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "second \(n)")) == [3])
+        }
+        #expect(session.transcript.messages.planDocuments == [
+            .markdown("plan-mode", "first \(snapshotsPerTurn)"), .markdown("plan-mode", "second \(snapshotsPerTurn)"),
+        ])
     }
 
     @Test("permanent Codex error clears retryable status")

@@ -115,7 +115,7 @@ struct HostSocketServerTests {
             // Left open, as a host keeps the connection after a bad message.
         }
 
-        let response = try await Task.detached { try HostSocketServer.request(.remotePairingCode, at: path) }.value
+        let response = try await BlockingWork.run { try HostSocketServer.request(.remotePairingCode, at: path) }
         #expect(response == .failure(error: .invalidRequest(reason: "unknown request")))
     }
 }

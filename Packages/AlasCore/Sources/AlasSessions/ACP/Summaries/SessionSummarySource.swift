@@ -38,6 +38,8 @@ public struct SessionSummarySource: Equatable, Sendable {
         for message in messages.reversed() {
             switch message {
             case .plan(let items): return items
+            // A Markdown or file plan is never the checklist.
+            case .planDocument: continue
             case .user: return []
             default: continue
             }

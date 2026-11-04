@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import os
 
 public struct ACPSessionUpdateParams: Codable, Equatable, Sendable {
     public let sessionId: String
@@ -49,6 +50,9 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
     case toolCall(ACPToolCallPayload)
     case toolCallUpdate(ACPToolCallUpdate)
     case plan([ACPPlanEntry])
+    /// Standard `plan_update`: replaces the content stored for one plan id.
+    case planUpdate(ACPPlanUpdate)
+    case planRemoved(planId: String)
     case availableModelsUpdate([ACPModelInfo])
     case currentModeUpdate(modeId: String)
     case currentModelUpdate(modelId: String)
@@ -78,8 +82,14 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
 
     private enum Keys: String, CodingKey {
         case sessionUpdate, content, availableModels, modeId, modelId,
-             entries, availableCommands, configOptions
+             entries, availableCommands, configOptions, plan, planId
     }
+
+    private enum PlanKeys: String, CodingKey {
+        case type, planId, entries, content, uri
+    }
+
+    private static let planLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-protocol")
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -97,6 +107,23 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
             self = .toolCallUpdate(try ACPToolCallUpdate(from: decoder))
         case "plan":
             self = .plan(try c.decode([ACPPlanEntry].self, forKey: .entries))
+        case "plan_update":
+            // One malformed plan must not break the stream, so a shape
+            // violation degrades to `.unknown` instead of throwing.
+            do {
+                let (planId, content) = try ACPPlanContent.parse(c.decode(LSPJSONValue.self, forKey: .plan))
+                self = .planUpdate(ACPPlanUpdate(planId: planId, content: content))
+            } catch {
+                Self.planLogger.info("ignoring malformed plan_update: \(String(describing: error), privacy: .public)")
+                self = .unknown(kind)
+            }
+        case "plan_removed":
+            if let planId = try? c.decode(String.self, forKey: .planId) {
+                self = .planRemoved(planId: planId)
+            } else {
+                Self.planLogger.info("ignoring plan_removed without a string planId")
+                self = .unknown(kind)
+            }
         case "available_models_update":
             self = .availableModelsUpdate(try c.decode([ACPModelInfo].self, forKey: .availableModels))
         case "current_mode_update":
@@ -160,7 +187,6 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        // Encoding not required for v1 (we only receive these). Implement when needed.
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
         case .userMessageChunk(let b):
@@ -175,6 +201,26 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
         case .plan(let e):
             try c.encode("plan", forKey: .sessionUpdate)
             try c.encode(e, forKey: .entries)
+        case .planUpdate(let update):
+            try c.encode("plan_update", forKey: .sessionUpdate)
+            var plan = c.nestedContainer(keyedBy: PlanKeys.self, forKey: .plan)
+            try plan.encode(update.planId, forKey: .planId)
+            switch update.content {
+            case .items(let entries):
+                try plan.encode("items", forKey: .type)
+                try plan.encode(entries, forKey: .entries)
+            case .markdown(let content):
+                try plan.encode("markdown", forKey: .type)
+                try plan.encode(content, forKey: .content)
+            case .file(let uri):
+                try plan.encode("file", forKey: .type)
+                try plan.encode(uri, forKey: .uri)
+            case .unknown(let type):
+                try plan.encode(type, forKey: .type)
+            }
+        case .planRemoved(let planId):
+            try c.encode("plan_removed", forKey: .sessionUpdate)
+            try c.encode(planId, forKey: .planId)
         case .availableModelsUpdate(let m):
             try c.encode("available_models_update", forKey: .sessionUpdate)
             try c.encode(m, forKey: .availableModels)

@@ -12,6 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Pause idle macOS worktree VMs, resume their saved state, create and restore clean points, run per-project guest setup scripts, and inspect or clean up VM disk use from Settings (#2333, #2337).
 - Show negotiated exact Git patches in agent tool rows and approval cards, including proposed and written states, change kinds, and line counts (#2338).
+- Render Markdown plans as first-class transcript rows and bind plan approvals to dedicated review cards, including file-backed Claude plans (#2344).
 
 ### 🐛 Fixes
 
@@ -24,6 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🏗️ Internal
 
 - Continue the disabled-by-default ACP 2 runtime foundation with fresh attachment bootstrap, durable session projection, and coordinated interactive request decisions (#2332, #2339, #2343).
+- Keep blocking core test calls off Swift's cooperative thread pool (#2345).
 
 ## [0.23.0] - 2026-11-03
 

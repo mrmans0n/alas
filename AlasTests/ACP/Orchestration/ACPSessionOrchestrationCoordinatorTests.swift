@@ -1565,6 +1565,28 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )])
     }
 
+    @Test("a child that answered with a plan reports it to session_wait and session_read")
+    func waitAndReadReportChildPlan() async throws {
+        let fixture = try makeOutcomeFixture()
+        let plan = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Plan\n- parse", file: nil)
+        _ = try await insertLiveChild(fixture, messages: [
+            .user(id: UUID(), text: "Plan the parser fix", attachments: []),
+            .agent(id: UUID(), StreamingText("Here is the plan.")),
+            .planDocument(id: UUID(), plan),
+        ])
+
+        let wait = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+        let read = try decoded(ACPOrchestrationReadResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .read(.init(targetSessionId: "child"))
+        ))
+
+        #expect(wait.sessions.map(\.settled) == [true])
+        #expect(wait.sessions.first?.lastAgentText == "# Plan\n- parse")
+        #expect(read.entries.map(\.text) == ["Plan the parser fix", "Here is the plan.", "# Plan\n- parse"])
+    }
+
     @Test("only a direct parent may wait on or interrupt a session")
     func childControlRequiresParent() async throws {
         let fixture = try makeOutcomeFixture()

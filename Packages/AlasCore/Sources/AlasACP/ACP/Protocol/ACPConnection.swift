@@ -77,6 +77,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let forkPoint: ACPForkPointCapability?
     /// Exact git patches on edits, when it advertised `_meta.diffPatch`.
     public let diffPatch: ACPDiffPatchCapability?
+    /// The approved plan's file and digest, when it advertised `_meta.planFile`.
+    public let planFile: ACPPlanFileCapability?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -99,7 +101,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         systemPromptAppendMaxBytes: Int? = nil,
         sessionIndex: ACPSessionIndexSupport? = nil,
         forkPoint: ACPForkPointCapability? = nil,
-        diffPatch: ACPDiffPatchCapability? = nil
+        diffPatch: ACPDiffPatchCapability? = nil,
+        planFile: ACPPlanFileCapability? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -120,6 +123,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.sessionIndex = sessionIndex
         self.forkPoint = forkPoint
         self.diffPatch = diffPatch
+        self.planFile = planFile
     }
 }
 
@@ -348,7 +352,8 @@ public final class ACPConnection: @unchecked Sendable {
             settleAtResult: true,
             codexHooks: codexHooksReviewEnabled ? .init() : nil,
             forkPoint: .init(),
-            diffPatch: .init()
+            diffPatch: .init(),
+            planFile: .init()
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
@@ -398,7 +403,8 @@ public final class ACPConnection: @unchecked Sendable {
             systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes,
             sessionIndex: result.meta?.sessionIndex?.support,
             forkPoint: result.meta?.forkPoint?.capability,
-            diffPatch: result.meta?.diffPatch?.capability
+            diffPatch: result.meta?.diffPatch?.capability,
+            planFile: result.meta?.planFile?.capability
         )
     }
 

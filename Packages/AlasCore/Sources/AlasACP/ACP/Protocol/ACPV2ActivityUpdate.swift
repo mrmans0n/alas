@@ -51,6 +51,7 @@ extension ACPV2SessionUpdateEnvelope {
         public let type: String
         /// Nil is opaque future content; an empty array is a known empty items plan.
         public let entries: [LSPJSONValue]?
+        public let content: ACPPlanContent
         public let rawValue: LSPJSONValue
     }
 
@@ -132,21 +133,12 @@ extension ACPV2SessionUpdateEnvelope {
     }
 
     private static func planValue(_ raw: LSPJSONValue) throws -> PlanUpdate {
+        let (id, content) = try ACPPlanContent.parse(raw)
+        // `parse` has already validated the shape, so these reads cannot fail.
         let fields = try object(raw)
         let type = try requiredString(fields, "type")
-        let id = try requiredString(fields, "planId")
-        _ = try metadata(fields["_meta"])
-        var entries: [LSPJSONValue]?
-        if type == "items" {
-            guard let value = fields["entries"] else { throw invalid("plan entries are required") }
-            entries = try array(value)
-            for entry in entries ?? [] {
-                let item = try object(entry)
-                for key in ["content", "priority", "status"] { _ = try requiredString(item, key) }
-                _ = try metadata(item["_meta"])
-            }
-        }
-        return PlanUpdate(planID: id, type: type, entries: entries, rawValue: raw)
+        let entries: [LSPJSONValue]? = if case .items = content { try array(fields["entries"] ?? .null) } else { nil }
+        return PlanUpdate(planID: id, type: type, entries: entries, content: content, rawValue: raw)
     }
 
     private static func outputSnapshot(_ raw: LSPJSONValue) throws -> OutputSnapshot {

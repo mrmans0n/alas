@@ -226,4 +226,15 @@ struct ACPMessageWireTests {
         }
         #expect(refreshed.first?.symbol?.lineRange == 10...12)
     }
+
+    @Test("plan document payloads decode to the same document as the codec",
+          arguments: [ACPPlanDocument.markdownFixture, .fileFixture, .hiddenFixture])
+    func planDocumentWireMatchesCodec(document: ACPPlanDocument) throws {
+        let payload = try ACPMessageCodec.encode(.planDocument(id: UUID(), document))
+        guard case .planDocument(_, let codecDocument) = try ACPMessageCodec.decode(kind: "plan", payload: payload) else {
+            Issue.record("expected a plan document from the codec")
+            return
+        }
+        #expect(try ACPMessageWire.decode(kind: "plan", payload: payload) == .planDocument(codecDocument))
+    }
 }
