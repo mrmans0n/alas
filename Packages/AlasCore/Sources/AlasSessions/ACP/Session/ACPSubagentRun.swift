@@ -412,7 +412,11 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         case .plan(let entries):
             return applyChecklist(entries, at: timestamp)
         case .planUpdate(let plan):
-            if case .items(let entries) = plan.content { return applyChecklist(entries, at: timestamp) }
+            // A checklist replaces the id's document, as in the parent transcript.
+            if case .items(let entries) = plan.content {
+                let touched = applyChecklist(entries, at: timestamp)
+                return touched.union(hidePlanDocuments(planId: plan.planId))
+            }
             // The same placement as the parent transcript's own plan documents.
             let placement = ACPPlanDocumentPlacement.decide(
                 planId: plan.planId, existing: planDocumentIndex(planId: plan.planId), latestUserIndex: lastUserIndex())
@@ -506,7 +510,11 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         case .plan(let entries):
             return applyReplayedPlan(entries, at: timestamp)
         case .planUpdate(let plan):
-            if case .items(let entries) = plan.content { return applyReplayedPlan(entries, at: timestamp) }
+            if case .items(let entries) = plan.content {
+                // Hidden after the plan lands: a recovered row shifts indices.
+                let touched = applyReplayedPlan(entries, at: timestamp)
+                return touched.union(hidePlanDocuments(planId: plan.planId))
+            }
             guard ACPSession.isPlanContentUpdate(update) else { return [] }
             // A plan row closes the prompt run before it, as in `applyReplayedPlan`.
             legacyOpenUserRun = nil

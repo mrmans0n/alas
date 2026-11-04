@@ -1323,9 +1323,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if planContents.updateValue(plan.content, forKey: plan.planId) != plan.content {
                 planRevisions[plan.planId, default: 0] += 1
             }
+            // An identified update replaces the plan's whole content, so a
+            // checklist hides the id's document and a document empties its checklist.
             if case .items(let entries) = plan.content {
                 clearRestoredContextRecoveryStatus()
-                return applyChecklist(entries, planId: plan.planId)
+                let hidden = hidePlanDocuments(planId: plan.planId)
+                return hidden.union(applyChecklist(entries, planId: plan.planId))
             }
             let existing = planDocumentIndex(planId: plan.planId)
             let placement = ACPPlanDocumentPlacement.decide(
@@ -1341,14 +1344,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
             attachPlanFile(to: &document)
             clearRestoredContextRecoveryStatus()
+            let cleared = dropChecklist(planId: plan.planId)
             switch placement {
             case .replace(let i):
-                return replacePlanDocument(at: i, with: document)
+                return cleared.union(replacePlanDocument(at: i, with: document))
             case .append:
                 transcript.appendMessage(.planDocument(id: UUID(), document))
                 didAppendTranscriptMessage()
                 transcript.completedOutputBoundaryMessageIds.removeAll()
-                return [transcript.messages.count - 1]
+                return cleared.union([transcript.messages.count - 1])
             }
         case .planRemoved(let planId):
             planContents[planId] = nil
@@ -1836,6 +1840,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // Read-only lookups, so a miss just leaves the cursor unmoved
         // rather than risking a wrong mutation.
         var matchedIndex: Int?
+        // Rows touched alongside the resolved one, left out of the cursor.
+        var sideDirty: Set<Int> = []
         switch update {
         case .toolCall(let payload):
             guard let touched = updateToolCall(id: payload.toolCallId, { tc in
@@ -1885,8 +1891,18 @@ public final class ACPSession: ChangeTracking, Identifiable {
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
         case .planUpdate(let plan):
+            // As live, the update replaces the id's other kind of content.
+            // Those rows can sit anywhere, so they do not move the cursor.
             if case .items = plan.content {
                 dirty = []
+                sideDirty = hidePlanDocuments(planId: plan.planId)
+                // A repeated snapshot keeps the row its id already holds in
+                // this turn instead of consuming the next persisted checklist.
+                if let mapped = checklistRowIndex(planId: plan.planId),
+                   replayedTurnRange(before: suppressedReplayInsertionCursor)?.contains(mapped) == true {
+                    matchedIndex = mapped
+                    break
+                }
                 matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
                 if let matchedIndex, case .plan(let rowId, _) = transcript.messages[matchedIndex] {
                     checklistRowIds[plan.planId] = rowId
@@ -1902,6 +1918,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             attachPlanFile(to: &document)
             matchedIndex = i
             dirty = replacePlanDocument(at: i, with: document)
+            sideDirty = dropChecklist(planId: plan.planId)
         case .planRemoved(let planId):
             // A cleared checklist row is persisted as it is, and replay never
             // rewrites checklists, so clearing one here could not be undone
@@ -1922,7 +1939,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         if let touchedIndex = dirty.min() ?? matchedIndex {
             suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedIndex + 1)
         }
-        return dirty
+        return dirty.union(sideDirty)
     }
 
     public func beginSuppressedReplaySideEffects() {
@@ -4531,14 +4548,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return false
         }
         if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId {
-            let start = min(max(cursor, 0), messages.count)
-            if let turnStart = messages[..<start].lastIndex(where: Self.isUserRow) {
-                let turnEnd = messages[(turnStart + 1)...].firstIndex(where: Self.isUserRow) ?? messages.count
-                if let index = messages[(turnStart + 1)..<turnEnd].firstIndex(where: isMatch) { return index }
-            }
-            if let index = messages[start...].firstIndex(where: isMatch) { return index }
+            if let turn = replayedTurnRange(before: cursor),
+               let index = messages[turn].firstIndex(where: isMatch) { return index }
+            if let index = messages[min(max(cursor, 0), messages.count)...].firstIndex(where: isMatch) { return index }
         }
         return messages.lastIndex(where: isMatch)
+    }
+
+    /// The rows of the turn being replayed: after the last user row before
+    /// `cursor`, up to the next user row. Nil before the first user row.
+    private func replayedTurnRange(before cursor: Int) -> Range<Int>? {
+        let messages = transcript.messages
+        let start = min(max(cursor, 0), messages.count)
+        guard let turnStart = messages[..<start].lastIndex(where: Self.isUserRow) else { return nil }
+        let turnEnd = messages[(turnStart + 1)...].firstIndex(where: Self.isUserRow) ?? messages.count
+        return (turnStart + 1)..<turnEnd
     }
 
     private static func isUserRow(_ message: ACPMessage) -> Bool {
@@ -4587,6 +4611,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
               case .plan(let id, let items) = transcript.messages[i], !items.isEmpty else { return [] }
         transcript.replaceMessage(at: i, with: .plan(id: id, []))
         return [i]
+    }
+
+    /// A Markdown or file snapshot replaces the id's checklist: it is emptied
+    /// and no longer belongs to the id, so a later checklist starts a new row.
+    private func dropChecklist(planId: String) -> Set<Int> {
+        let cleared = clearChecklist(planId: planId)
+        checklistRowIds[planId] = nil
+        return cleared
     }
 
     private func replacePlanDocument(at index: Int, with document: ACPPlanDocument) -> Set<Int> {
