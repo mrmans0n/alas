@@ -1803,7 +1803,7 @@ git commit -m "feat(devices): add an experimental Device tab to the right pane"
 
 - [ ] **Step 3: Look for tearing and the XPC cost.** Scroll quickly for ten seconds. Expected: no torn or half-updated frames. Activity Monitor shows `AlasSimService` and `Alas Dev` together below 30% CPU on Apple silicon while scrolling. If frames tear, the pool is reusing a buffer still on screen: in `DeviceScreenNSView.show`, call `IOSurfaceIncrementUseCount` on the surface being enqueued and `IOSurfaceDecrementUseCount` on the previous one, then check again.
 
-- [ ] **Step 4: Kill the service.** `pkill -f AlasSimService.xpc`. Expected: "The simulator stream stopped." with Retry; Retry brings the screen back.
+- [ ] **Step 4: Kill the service.** `pkill -9 -f AlasSimService` (a plain SIGTERM did not end it during implementation). Expected: "The simulator stream stopped." with Retry; Retry brings the screen back.
 
 - [ ] **Step 5: Break simctl.** `sudo xcode-select -s /Library/Developer/CommandLineTools`, wait 3 seconds. Expected: the Xcode hint and simctl's error. Restore with `sudo xcode-select -s <your Xcode>.app` and the list returns.
 
