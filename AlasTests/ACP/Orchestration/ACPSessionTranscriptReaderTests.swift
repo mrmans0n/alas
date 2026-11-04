@@ -8,7 +8,7 @@ struct ACPSessionTranscriptReaderTests {
         texts.enumerated().map { .init(index: $0.offset, role: "agent", text: $0.element) }
     }
 
-    @Test("messages become verbatim text entries; tool calls are summarized and thoughts left out")
+    @Test("messages become verbatim text entries; tool calls are summarized, plans read as agent text, and thoughts left out")
     func entriesSummarizeTranscript() {
         let messages: [ACPMessage] = [
             .user(id: UUID(), text: "Fix the parser", attachments: []),
@@ -21,16 +21,42 @@ struct ACPSessionTranscriptReaderTests {
                 id: UUID(), title: "Layouts", html: "<h2>secret markup</h2>", question: nil,
                 answer: .answered(selectedOptionIds: ["b"], note: nil, at: Date()), createdAt: Date()
             )),
+            .plan(id: UUID(), [.init(content: "checklist step", status: "pending")]),
+            .planDocument(id: UUID(), .markdownFixture),
+            .planDocument(id: UUID(), .fileFixture),
+            .planDocument(id: UUID(), .hiddenFixture),
         ]
 
         let result = ACPSessionTranscriptReader.entries(messages)
 
-        #expect(result.map(\.role) == ["user", "tool", "tool", "agent", "tool"])
+        #expect(result.map(\.role) == ["user", "tool", "tool", "agent", "tool", "agent", "agent", "system"])
         #expect(result.map(\.text) == [
             "Fix the parser", "Bash [completed]", "Edited Sources/Parser.swift (+3 -1)", "    let indented = true\n",
-            "visual aid: Layouts (answered: b)",
+            "visual aid: Layouts (answered: b)", "# Plan", "Plan file: /p.md", "Plan removed.",
         ])
-        #expect(result.map(\.index) == [0, 1, 2, 3, 4])
+        #expect(result.map(\.index) == [0, 1, 2, 3, 4, 5, 6, 7])
+    }
+
+    @Test("hiding a plan between paged reads keeps later entries at their offsets")
+    func hiddenPlanKeepsReadOffsets() {
+        let user = ACPMessage.user(id: UUID(), text: "Plan it", attachments: [])
+        let tool = ACPMessage.toolCall(.init(toolCallId: "t1", title: "Read", status: "completed", content: "", name: "Read"))
+        let answer = ACPMessage.agent(id: UUID(), StreamingText("Answer"))
+        let before = ACPSessionTranscriptReader.entries([user, .planDocument(id: UUID(), .markdownFixture), tool, answer])
+        let after = ACPSessionTranscriptReader.entries([user, .planDocument(id: UUID(), .hiddenFixture), tool, answer])
+
+        #expect(after.map(\.text)[2...] == before.map(\.text)[2...])
+    }
+
+    @Test("the last agent text is the latest agent message or shown plan")
+    func lastAgentTextIncludesPlans() {
+        func last(_ messages: ACPMessage...) -> String? { ACPSessionTranscriptReader.lastAgentText(messages) }
+        let planning = ACPMessage.agent(id: UUID(), StreamingText("Planning."))
+
+        #expect(last(planning, .planDocument(id: UUID(), .markdownFixture)) == "# Plan")
+        #expect(last(.planDocument(id: UUID(), .markdownFixture), .agent(id: UUID(), StreamingText("Done."))) == "Done.")
+        #expect(last(planning, .planDocument(id: UUID(), .hiddenFixture)) == "Planning.")
+        #expect(last(.planDocument(id: UUID(), .fileFixture)) == "Plan file: /p.md")
     }
 
     @Test("without an offset the latest entries are read, within both bounds")

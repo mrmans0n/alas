@@ -21,6 +21,19 @@ struct ACPV2SessionProjectionTests {
         #expect(fixture.session.v2Projection?.canonical.order.count == 3)
     }
 
+    @Test func markdownPlanProjectsAsDocument() throws {
+        let fixture = try ProjectionFixture()
+        try fixture.update(##"{"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"p","content":"# A"}}"##)
+        try fixture.update(#"{"sessionUpdate":"plan_update","plan":{"type":"_future","planId":"f"}}"#)
+        #expect(fixture.session.transcript.messages.count == 1)
+        guard case .planDocument(_, let document)? = fixture.session.transcript.messages.first else {
+            Issue.record("expected a plan document, got \(fixture.session.transcript.messages)")
+            return
+        }
+        #expect(document == ACPPlanDocument(planId: "p", kind: .markdown, markdown: "# A", file: nil))
+        #expect(fixture.session.transcript.currentPlan == nil)
+    }
+
     @Test(arguments: [false, true])
     func acceptedEchoReusesOnlyTheRegisteredLocalRow(echoFirst: Bool) throws {
         let rowID = UUID()

@@ -74,6 +74,14 @@ struct ACPV2ActivityStateTests {
         #expect(state.order == [.plan("a"), .plan("b")])
     }
 
+    @Test func markdownPlanKeepsContent() throws {
+        let context = ACPV2MessageTranscript.Context(sessionID: "s", connectionID: UUID())
+        var state = ACPV2ActivityState(context: context)
+        _ = state.apply(try event(##"{"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"m","content":"# A"}}"##), context: context)
+        #expect(state.plan(id: "m")?.content == .markdown("# A"))
+        #expect(state.plan(id: "m")?.entries == nil)
+    }
+
     @Test func activityTypesAndMessagesKeepIndependentIdentities() throws {
         let context = ACPV2MessageTranscript.Context(sessionID: "s", connectionID: UUID())
         var state = ACPV2ActivityState(context: context)

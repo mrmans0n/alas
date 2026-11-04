@@ -52,15 +52,19 @@ public final class ACPV2AttachmentRuntime {
     }
     public struct Attachment: Sendable {
         fileprivate enum Client: Sendable { case stdio(ACPStdioClient), broker(ACPBrokerClient) }
+        fileprivate let orderedIntake: ACPV2OrderedIntake?
         fileprivate let client: Client
         fileprivate let updates: ACPV2SessionUpdateOwner.Attachment
         fileprivate let inbound: ACPV2InboundReceiptOwner.Attachment
         fileprivate let response: ACPV2ResponseAttachment
         fileprivate let localSessionId: String?
         public var connectionID: UUID { inbound.connectionID }
+        var usesOrderedIntake: Bool { orderedIntake != nil }
 
         @MainActor
-        public init(stdioClient: ACPStdioClient) throws {
+        public init(stdioClient: ACPStdioClient, orderedIntake: ACPV2OrderedIntake? = nil) throws {
+            try stdioClient.validateV2Intake(orderedIntake)
+            self.orderedIntake = orderedIntake
             inbound = try .init(stdioClient: stdioClient)
             response = try .init(stdioClient: stdioClient)
             updates = .init(freshStdioConnectionID: stdioClient.updateConnectionID)
@@ -69,6 +73,7 @@ public final class ACPV2AttachmentRuntime {
         }
         @MainActor
         public init(brokerClient: ACPBrokerClient, opened: ACPBrokerOpenResult) throws {
+            orderedIntake = nil
             inbound = try .init(brokerClient: brokerClient, opened: opened)
             response = try .init(brokerClient: brokerClient, opened: opened)
             updates = try .init(brokerConnectionID: inbound.connectionID, opened: opened)
@@ -130,6 +135,7 @@ public final class ACPV2AttachmentRuntime {
         onLifecycleChange: (@MainActor (LifecycleEvent) -> Void)? = nil) throws {
         guard !sessionId.isEmpty, !upstreamSessionId.isEmpty, sessionId.utf8.elementsEqual(fence.sessionId.utf8),
               attachment.localSessionId.map({ $0.utf8.elementsEqual(sessionId.utf8) }) ?? true else { throw Failure.invalidAttachment }
+        try attachment.orderedIntake?.claimConsumer()
         self.sessionId = sessionId
         self.upstreamSessionId = upstreamSessionId
         self.attachment = attachment
@@ -158,7 +164,7 @@ public final class ACPV2AttachmentRuntime {
 
     @discardableResult
     public func start() -> Bool {
-        guard !started, current() else { return false }
+        guard attachment.orderedIntake == nil, !started, current() else { return false }
         started = true
         setStatus(.restoring)
         guard current() else { return false }
@@ -198,6 +204,12 @@ public final class ACPV2AttachmentRuntime {
             })
         }
         ownersStarted = true
+        monitorOwners()
+        synchronize()
+        return true
+    }
+
+    private func monitorOwners() {
         let updates = updateOwner.observations
         let inbound = inboundOwner.observations
         monitors.append(Task { [weak self] in
@@ -208,8 +220,47 @@ public final class ACPV2AttachmentRuntime {
             for await _ in inbound { self?.synchronize() }
             self?.synchronize()
         })
-        synchronize()
-        return true
+    }
+
+    public func startFreshOrdered() async throws {
+        guard let intake = attachment.orderedIntake, !started, current() else { throw Failure.invalidAttachment }
+        started = true
+        setStatus(.restoring)
+        do {
+            guard current() else { throw Failure.invalidated }
+            try await updateOwner.prepareFreshOrdered()
+            guard current() else { throw Failure.invalidated }
+            try await inboundOwner.prepareFreshOrdered()
+            guard current() else { throw Failure.invalidated }
+            try updateOwner.establishFreshSessionDefault()
+            ownersStarted = true
+            monitorOwners()
+            guard current() else { throw Failure.invalidated }
+            setStatus(.ready)
+            guard current() else { throw Failure.invalidated }
+            readers.append(Task { [weak self] in
+                guard let self else { return }
+                do {
+                    for await event in intake.events {
+                        guard self.current() else { throw Failure.invalidated }
+                        switch event {
+                        case .update(let delivery): try await self.updateOwner.processOrdered(delivery)
+                        case .inbound(let delivery): try await self.inboundOwner.processOrdered(delivery)
+                        case .diagnostic(let diagnostic):
+                            let delivery = try ACPV2InboundDelivery(stdioDiagnostic: diagnostic)
+                            self.diagnostics.insert(delivery.receiptID)
+                            try await self.inboundOwner.processOrdered(delivery)
+                        }
+                    }
+                    guard self.current() else { return }
+                    try self.updateOwner.finishOrderedInput()
+                    self.finish(.observationLost)
+                } catch { self.finish(self.terminalChildStatus() ?? .blocked(.invalidAttachment)) }
+            })
+        } catch {
+            finish(.blocked((error as? Failure) ?? .invalidAttachment))
+            throw error
+        }
     }
 
     public func stop() { finish(.stopped) }
@@ -306,6 +357,10 @@ public final class ACPV2AttachmentRuntime {
         if !diagnostic, header?.id != nil, offered.insert(receipt.record.ordinal).inserted {
             request = .init(record: receipt.record, epoch: epoch, delivery: delivery)
         } else { request = nil }
+        if attachment.orderedIntake != nil, !diagnostic {
+            let typed = try ACPV2InteractiveRequest.decode(frame: delivery.frame, upstreamSessionId: upstreamSessionId, support: .init())
+            try updateOwner.applyPermissionSubject(typed, origin: receipt.record)
+        }
         do {
             try onInbound?(.init(attachmentID: epoch, record: receipt.record, currentSource: delivery.source,
                 receiptID: delivery.receiptID, isDiagnostic: diagnostic, request: request))

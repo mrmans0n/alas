@@ -68,17 +68,7 @@ public struct ACPV2ActivityState: Sendable {
         let effects: [Effect]
         switch event.payload {
         case .toolCall(let patch):
-            var tool = tools[patch.toolCallID] ?? ToolCall(toolCallID: patch.toolCallID)
-            tool.name = patch.name.applying(to: tool.name)
-            tool.title = patch.title.applying(to: tool.title)
-            tool.kind = patch.kind.applying(to: tool.kind)
-            tool.status = patch.status.applying(to: tool.status)
-            tool.content = patch.content.applying(to: tool.content, cleared: [])
-            tool.locations = patch.locations.applying(to: tool.locations, cleared: [])
-            tool.rawInput = patch.rawInput.applying(to: tool.rawInput)
-            tool.rawOutput = patch.rawOutput.applying(to: tool.rawOutput)
-            tool.metadata = patch.metadata.applying(to: tool.metadata)
-            effects = save(tool)
+            effects = applyToolCall(patch, context: context)
         case .toolContentChunk(let chunk):
             var tool = tools[chunk.toolCallID] ?? ToolCall(toolCallID: chunk.toolCallID)
             tool.content.append(chunk.content)
@@ -119,6 +109,21 @@ public struct ACPV2ActivityState: Sendable {
             return Reduction(event: event, disposition: .unhandled, effects: [])
         }
         return Reduction(event: event, disposition: .applied, effects: effects)
+    }
+
+    public mutating func applyToolCall(_ patch: ACPV2SessionUpdateEnvelope.ToolCallUpdate, context: Context) -> [Effect] {
+        guard context == self.context else { return [] }
+        var tool = tools[patch.toolCallID] ?? ToolCall(toolCallID: patch.toolCallID)
+        tool.name = patch.name.applying(to: tool.name)
+        tool.title = patch.title.applying(to: tool.title)
+        tool.kind = patch.kind.applying(to: tool.kind)
+        tool.status = patch.status.applying(to: tool.status)
+        tool.content = patch.content.applying(to: tool.content, cleared: [])
+        tool.locations = patch.locations.applying(to: tool.locations, cleared: [])
+        tool.rawInput = patch.rawInput.applying(to: tool.rawInput)
+        tool.rawOutput = patch.rawOutput.applying(to: tool.rawOutput)
+        tool.metadata = patch.metadata.applying(to: tool.metadata)
+        return save(tool)
     }
 
     private mutating func save(_ tool: ToolCall) -> [Effect] {

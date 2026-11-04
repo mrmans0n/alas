@@ -412,6 +412,12 @@ extension SessionsAPI {
         guard let answer = ACPRequestAnswers.permission(pending, optionId: optionID, scope: scope) else {
             throw SessionRefusal.invalidAnswer
         }
+        // A peer never sees the plan text, so it approves without a digest;
+        // a review whose plan or context changed still refuses it.
+        if let option = pending.params.options.first(where: { $0.optionId == answer.optionId }),
+           policy.refusesApproval(optionKind: option.kind, planDigest: nil) {
+            throw SessionRefusal.invalidAnswer
+        }
         // The request was checked above with nothing awaited since, so a
         // refusal here is the lease, confirmed again right before the agent
         // resumes: recording the decision awaits.

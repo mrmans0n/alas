@@ -1,0 +1,16 @@
+{
+  "version": "0.23.1",
+  "headline": {
+    "title": "Markdown plan reviews",
+    "body": "Review agent plans in dedicated cards, with readable Markdown and support for Claude plan files.",
+    "media": "media/0.23.1-markdown-plans.png"
+  },
+  "also": [
+    {
+      "title": "Pause and restore worktree VMs"
+    },
+    {
+      "title": "Preview exact Git patches"
+    }
+  ]
+}

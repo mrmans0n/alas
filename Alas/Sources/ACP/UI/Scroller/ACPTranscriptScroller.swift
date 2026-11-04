@@ -53,6 +53,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
+    /// Opens a plan's file by its path on the session's host.
+    var onOpenPlanFile: (String) -> Void = { _ in }
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -522,6 +524,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let pending: ACPSession.PendingPermission
             let rowDiffs: [ACPToolCallDiff]?
             let worktreeRoot: String?
+            /// A plan review refreshes when its file is read, its plan is
+            /// revised, the context resets or its turn ends.
+            var planReviewFile: ACPPlanFileReadResult?
+            var planRevision: Int?
+            var contextResetCount = 0
+            var foregroundTurnActive = false
         }
 
         private struct ConnectionRecoveryTokenInputs: Equatable {
@@ -1018,8 +1026,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 forkTargets: host.forkTargets,
                 isLiveNarration: snapshot.liveNarrationIndex == row.index,
                 delegatedLabel: delegatedLabel(host: host, message: message),
-                delegationAction: delegationAction
+                delegationAction: delegationAction,
+                reviewedPlanId: reviewedPlanId(host: host, message: message)
             )
+        }
+
+        /// The plan id of the parked plan review, for a plan document row
+        /// only, so the row collapses while the review card shows the plan.
+        private static func reviewedPlanId(host: ACPTranscriptScroller, message: ACPMessage) -> String? {
+            guard case .planDocument = message, let pending = host.transcript.pendingPermission,
+                  pending.params.toolCall.isPlanReview
+            else { return nil }
+            return ACPPlanReviewPresentation.planId(pending.params, planFileNegotiated: host.session.planFile != nil)
         }
 
         /// The reveal button for a root tool call that sent a delegation
@@ -1192,9 +1210,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onRevealDelegation: onRevealDelegation,
                 delegatedLabel: delegatedLabel(host: host, message: message),
                 delegationAction: delegationAction,
+                reviewedPlanId: reviewedPlanId(host: host, message: message),
                 visualAidActions: host.visualAidActions,
                 isExpanded: isExpanded,
-                onExpandedChange: onExpandedChange
+                onExpandedChange: onExpandedChange,
+                onOpenPlanFile: host.onOpenPlanFile
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —
@@ -1316,7 +1336,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         PendingPermissionTokenInputs(
                             pending: pendingPermission,
                             rowDiffs: rowDiffs,
-                            worktreeRoot: host.trustedImageRoot?.path
+                            worktreeRoot: host.trustedImageRoot?.path,
+                            planReviewFile: session.planReviewFiles[pendingPermission.params.toolCall.toolCallId],
+                            planRevision: ACPPlanReviewPresentation.planId(
+                                pendingPermission.params, planFileNegotiated: session.planFile != nil
+                            ).map { session.planRevisions[$0] ?? 0 },
+                            contextResetCount: session.contextResetCount,
+                            foregroundTurnActive: session.foregroundTurnActive()
                         ),
                         host: host
                     ),
@@ -1324,7 +1350,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         wrapRow(host: host) {
                             ACPPermissionPrompt(
                                 session: session, policy: policy, scopeKey: host.scopeKey,
-                                worktreeRoot: host.trustedImageRoot?.path
+                                worktreeRoot: host.trustedImageRoot?.path,
+                                typography: host.typography,
+                                onOpenPlanFile: host.onOpenPlanFile
                             )
                         }
                     }

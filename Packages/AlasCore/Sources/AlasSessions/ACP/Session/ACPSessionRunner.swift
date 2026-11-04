@@ -184,6 +184,12 @@ public final class ACPSessionRunner {
     /// — so each consumer checks and drains this set before starting work
     /// on a freshly dequeued id, instead of the id being silently dropped.
     private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
+    /// Reads a parked plan review's plan file on this session's host.
+    var planFileReader = ACPPlanFileReader()
+    /// The latest plan file read, so tests can await it.
+    private(set) var planFileReadTask: Task<Void, Never>?
+    /// Bumped per plan file read; only the latest read may record its result.
+    private var planFileReadGeneration = 0
     private var authStatusTask: Task<Void, Never>?
     package var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
@@ -695,6 +701,31 @@ public final class ACPSessionRunner {
                     await self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
+                if params.toolCall.isPlanReview {
+                    // A plan review parks without suspending, binding the
+                    // plan revision it sees, and Codex sends its final
+                    // plan_update right before the request on the other
+                    // stream: apply what is already yielded first, as
+                    // persistPermissionDecision does.
+                    await self.drainYieldedUpdates()
+                    guard self.isConnectionCurrent(), !Task.isCancelled else { continue }
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        let response = ACPPermissionResponse(outcome: .cancelled)
+                        self.connection.client.respondToPermission(id: id, response: response)
+                        await self.persistPermissionDecision(params: params, response: response)
+                        continue
+                    }
+                }
+                if let path = self.planReviewFilePath(params) {
+                    // Runs once evaluate below has parked the review, which
+                    // it does before its first suspension.
+                    self.planFileReadGeneration += 1
+                    let generation = self.planFileReadGeneration
+                    self.planFileReadTask = Task {
+                        await self.refreshPlanReviewFile(
+                            id: id, toolCallId: params.toolCall.toolCallId, path: path, generation: generation)
+                    }
+                }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
@@ -1145,6 +1176,18 @@ public final class ACPSessionRunner {
         }
     }
 
+    /// Applies every update the client had yielded when this was called,
+    /// including ones `updatesTask` has not dequeued yet. Bounded by
+    /// cancellation (`stop()` cancels `updatesTask` too) and by the
+    /// connection being replaced: past either, nothing more would apply.
+    private func drainYieldedUpdates() async {
+        let updateWatermark = connection.client.yieldedUpdateCount
+        while appliedUpdateCount < updateWatermark, !Task.isCancelled, isConnectionCurrent() {
+            await Task.yield()
+            flushPendingIncomingUpdates()
+        }
+    }
+
     /// Folds the decoded `_meta.permission` presentation and the outcome
     /// (auto-run, remembered decision, or user click — `evaluate` already
     /// resolved all three the same way) into the matching persisted tool
@@ -1174,15 +1217,9 @@ public final class ACPSessionRunner {
         // deferCompletedOutputBoundaryUntilUpdatesDrain() uses) rather
         // than guessing an attempt count, so a materialized/merged tool
         // call row never jumps ahead of a preceding agent/thought message
-        // regardless of how many updates are queued. Bounded only by
-        // cancellation (stop() cancels updatesTask too, so nothing more
-        // would ever apply past that point).
-        let updateWatermark = connection.client.yieldedUpdateCount
-        while appliedUpdateCount < updateWatermark, !Task.isCancelled {
-            await Task.yield()
-            flushPendingIncomingUpdates()
-        }
-        guard !Task.isCancelled else { return }
+        // regardless of how many updates are queued.
+        await drainYieldedUpdates()
+        guard !Task.isCancelled, isConnectionCurrent() else { return }
         // Re-check: holdsLeaseForWrite() above can no longer speak for
         // "now" after the suspensions just above — a cross-window takeover
         // could have seized the lease in the interim. persistIndices below
@@ -1293,7 +1330,8 @@ public final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown,
+             .planUpdate, .planRemoved:
             return []
         }
     }
@@ -2353,14 +2391,14 @@ public final class ACPSessionRunner {
             sentBeforeResult: { [weak self] in logged(self) }))
     }
 
-    /// Tail of the last agent message this turn produced, or nil. Only rows at
-    /// or after `activePromptTranscriptFloor` belong to the turn.
+    /// Tail of the last agent message, or plan, this turn produced, or nil.
+    /// Only rows at or after `activePromptTranscriptFloor` belong to the turn.
     private func currentTurnLastAgentText() -> String? {
         let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
         return session.transcript.messages[floor...].reversed().lazy
             .compactMap { message -> String? in
-                guard case .agent(_, _, let text) = message else { return nil }
-                let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
+                guard let text = ACPSessionTranscriptReader.agentText(message) else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text, limit: ACPTurnCompletion.lastAgentTextLimit)
                 return tail.isEmpty ? nil : tail
             }
             .first
@@ -5528,7 +5566,8 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown,
+             .planUpdate, .planRemoved:
             return false
         }
     }
@@ -5887,6 +5926,30 @@ extension ACPSessionRunner {
         trimLastPersistedPayloads()
         onPersist?()
         onMessageActivity?()
+    }
+
+    /// The path to read for a plan review, nil unless the negotiated payload
+    /// is well formed and names this review's own inline plan text: the
+    /// agent chooses the path, and only a file the card would offer is read.
+    private func planReviewFilePath(_ params: ACPPermissionRequestParams) -> String? {
+        guard params.toolCall.isPlanReview, session.planFile != nil,
+              let payload = ACPPlanFilePayload.from(metadata: params.toolCall.metadata), payload.isWellFormed,
+              let path = payload.path,
+              let text = ACPPlanReviewPresentation.planText(params),
+              payload.sha256 == ACPPlanReviewPresentation.sha256Hex(text)
+        else { return nil }
+        return path
+    }
+
+    /// Reads the plan file a parked plan review names, at exactly its
+    /// payload path, and records the outcome only while that review is still
+    /// the one parked.
+    private func refreshPlanReviewFile(id: JSONRPCID, toolCallId: String, path: String, generation: Int) async {
+        let result = await planFileReader.read(path: path, host: effectiveRemoteHost())
+        guard generation == planFileReadGeneration, policy.pendingPermissionRequestID == id,
+              session.transcript.pendingPermission?.params.toolCall.toolCallId == toolCallId
+        else { return }
+        session.planReviewFiles[toolCallId] = result
     }
 
     private func effectiveRemoteHost() -> String? {

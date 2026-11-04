@@ -33,6 +33,9 @@ extension ACPSession {
                 total &+= UInt64(edit.path.utf8.count)
             case .plan(_, let items):
                 for item in items { total &+= UInt64(item.content.utf8.count) }
+            case .planDocument(_, let document):
+                total &+= UInt64(document.markdown?.utf8.count ?? 0)
+                total &+= UInt64(document.file?.path.utf8.count ?? 0)
             case .systemNotice(_, let text):
                 total &+= UInt64(text.utf8.count)
             case .visualAid(let visual):

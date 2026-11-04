@@ -31,6 +31,11 @@ final class ACPV2BootstrapClaims: Sendable {
     var claim: ACPV2BootstrapClaim?
     var phase = 0 }
     private let state = Mutex(State())
+    func validateUnclaimed() throws {
+        try state.withLock { value in
+            guard !value.used, value.claim == nil else { throw ACPV2BootstrapClaimError.used }
+        }
+    }
     func claim() throws -> ACPV2BootstrapClaim {
         try state.withLock { value in
             guard !value.used, value.claim == nil else { throw ACPV2BootstrapClaimError.used }

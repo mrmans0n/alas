@@ -104,6 +104,102 @@ struct ACPTranscriptCurrentPlanTests {
         #expect(session.transcript.currentPlan == [.init(content: "Review", status: "in_progress")])
     }
 
+    @Test("a Markdown plan and a checklist keep separate rows, and only the checklist is the current plan")
+    func markdownAndChecklistCoexist() {
+        let session = makeSession()
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.markdownPlan("m", "v1"))
+        session.apply(.plan([.init(content: "a", priority: nil, status: "pending")]))
+        session.apply(.markdownPlan("m", "v2"))
+        session.apply(.plan([.init(content: "a", priority: nil, status: "completed")]))
+
+        let messages = session.transcript.messages
+        #expect(messages.planDocuments == [.markdown("m", "v2")])
+        let checklists = messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [[.init(content: "a", status: "completed")]])
+        #expect(session.transcript.currentPlan == [.init(content: "a", status: "completed")])
+    }
+
+    @Test("a checklist plan_update replaces only the row of its own plan id")
+    func identifiedChecklistReplacesItsOwnRow() {
+        let session = makeSession(agentId: "codex")
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "pending")]))))
+        session.apply(.planUpdate(.init(planId: "b", content: .items([.init(content: "b", priority: nil, status: "pending")]))))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "completed")]))))
+
+        let checklists = session.transcript.messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [[.init(content: "a", status: "completed")], [.init(content: "b", status: "pending")]])
+    }
+
+    @Test("plan_removed clears its checklist from the current plan and the plan pill")
+    func removedChecklistLeavesNoCurrentPlan() {
+        let session = makeSession(agentId: "codex")
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "in_progress")]))))
+        #expect(ACPPlanPillState(items: session.transcript.currentPlan) != nil)
+
+        session.apply(.planRemoved(planId: "a"))
+        #expect(session.transcript.currentPlan?.isEmpty != false)
+        #expect(ACPPlanPillState(items: session.transcript.currentPlan) == nil)
+    }
+
+    @Test("after replaying A, A, B, a live update or removal of A touches only A's checklist")
+    func replayedRepeatedChecklistKeepsItsOwnRow() {
+        let session = makeSession(agentId: "codex")
+        let a = [ACPMessage.PlanItem(content: "a", status: "pending")]
+        let b = [ACPMessage.PlanItem(content: "b", status: "pending")]
+        session.transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "Go", attachments: []), .plan(id: UUID(), a), .plan(id: UUID(), b),
+        ])
+        session.beginSuppressedReplaySideEffects()
+        _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text("Go")))
+        for id in ["a", "a", "b"] {
+            _ = session.applySuppressedReplaySideEffects(.planUpdate(.init(
+                planId: id, content: .items([.init(content: id, priority: nil, status: "pending")]))))
+        }
+        session.endSuppressedReplaySideEffects()
+        func checklists() -> [[ACPMessage.PlanItem]] {
+            session.transcript.messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        }
+
+        session.apply(.planUpdate(.init(planId: "a", content: .items([.init(content: "a", priority: nil, status: "completed")]))))
+        #expect(checklists() == [[.init(content: "a", status: "completed")], b])
+        session.apply(.planRemoved(planId: "a"))
+        #expect(checklists() == [[], b])
+    }
+
+    @Test("a plan id switching between a checklist and a Markdown plan shows only its new content", arguments: [
+        (toMarkdown: true, child: false), (toMarkdown: false, child: false), (toMarkdown: false, child: true),
+    ])
+    func planIdSwitchingContentReplacesTheOldRow(toMarkdown: Bool, child: Bool) {
+        let checklist = ACPSessionUpdate.planUpdate(.init(
+            planId: "a", content: .items([.init(content: "a", priority: nil, status: "pending")])))
+        let updates = toMarkdown ? [checklist, .markdownPlan("a", "# Plan")] : [.markdownPlan("a", "# Plan"), checklist]
+        let session = makeSession(agentId: "codex")
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        for update in [.userMessageChunk(.text("Go"))] + updates {
+            if child { run.apply(update) } else { session.apply(update) }
+        }
+
+        let messages = child ? run.messages : session.transcript.messages
+        let checklists = messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [toMarkdown ? [] : [.init(content: "a", status: "pending")]])
+        #expect(messages.planDocuments == [.markdown("a", "# Plan", hidden: !toMarkdown)])
+        if !child { #expect((ACPPlanPillState(items: session.transcript.currentPlan) == nil) == toMarkdown) }
+    }
+
+    @Test("a turn with only Markdown plans has no current plan")
+    func markdownNeverFeedsCurrentPlan() {
+        let session = makeSession()
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.markdownPlan("m", "v1"))
+        session.apply(.markdownPlan("m", "v2"))
+
+        #expect(session.transcript.messages.planDocuments.count == 1)
+        #expect(session.transcript.currentPlan == nil)
+    }
+
     @Test("returns nil when no plan message has arrived")
     func nilWhenNoPlan() {
         let session = makeSession()

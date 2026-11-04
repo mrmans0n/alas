@@ -528,6 +528,12 @@ private struct NativePeerRowView: View {
             ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(let items):
             ACPPlanChecklist(items: items, isTurnActive: isPlanActive)
+        case .planDocument(let document):
+            // The plan file lives on the peer, so there is nothing to open.
+            if let display = document.display {
+                ACPPlanDocumentCard(
+                    display: display, cache: rowCache.markdownCache(for: stableId), typography: typography)
+            }
         case .systemNotice(let text):
             ACPSystemNoticeView(text: text)
         }

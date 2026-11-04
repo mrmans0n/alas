@@ -130,7 +130,7 @@ struct RightPaneView: View {
         if let panel {
             PluginPanelView(state: state, projectID: worktree.projectId, item: panel)
                 .id(panel.ref)
-        } else if rps.hasLoadedSnapshot || rps.activeTab == .agent {
+        } else if rps.hasLoadedSnapshot || rps.activeTab == .agent || rps.activeTab == .device {
             switch rps.activeTab {
             case .changes:
                 ChangesTabView(
@@ -218,6 +218,8 @@ struct RightPaneView: View {
                 RunTabView(state: state, worktree: worktree)
             case .schedules:
                 SchedulesTabView(state: state, worktree: worktree)
+            case .device:
+                DeviceTabView(model: state.devicePane, client: state.simulatorStreams)
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
@@ -256,7 +258,7 @@ struct RightPaneView: View {
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
                 activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
-                tabs: RightPaneTab.available(isFolder: rps.isFolder),
+                tabs: RightPaneTab.available(isFolder: rps.isFolder, devicePanel: state.config.devicePanelEnabled),
                 panels: panels,
                 activePanel: panel?.ref,
                 onPanel: { handlePanel($0, active: panel?.ref, rps: rps) },
@@ -308,7 +310,7 @@ struct RightPaneView: View {
         guard let raw = notification.object as? String,
               let tab = RightPaneTab(rawValue: raw),
               state.acceptsRightPaneTabShortcut(tab),
-              RightPaneTab.available(isFolder: rps.isFolder).contains(tab)
+              RightPaneTab.available(isFolder: rps.isFolder, devicePanel: state.config.devicePanelEnabled).contains(tab)
         else { return }
         let panelShown = PluginPanelItem.selected(rps.activePluginPanel, in: pluginPanels) != nil
         handle(

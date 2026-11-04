@@ -58,12 +58,16 @@ struct RightPaneRail: View {
                         )
                     }
                 }
+                // Badges extend 3pt above the first button.
+                .padding(.top, 3)
+                .padding(.horizontal, 5)
             }
+            // Use the full rail width so trailing badge outsets stay inside the scroll clip.
+            .frame(width: Self.width)
             .scrollBounceBehavior(.basedOnSize)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
-        .padding(.horizontal, 3)
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
         // Neither a fill nor a divider: the rail sits over the same
@@ -79,6 +83,7 @@ struct RightPaneRail: View {
         case .agent:   return "Agent"
         case .run:     return "Run"
         case .schedules: return "Schedules"
+        case .device:  return "Device"
         }
     }
 
@@ -89,6 +94,7 @@ struct RightPaneRail: View {
         case .agent:   return "cpu"
         case .run:     return "play"
         case .schedules: return "clock"
+        case .device:  return "iphone"
         }
     }
 }

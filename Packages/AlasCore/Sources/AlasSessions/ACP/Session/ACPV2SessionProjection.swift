@@ -111,6 +111,7 @@ public final class ACPV2SessionProjection {
                 effects = application.effects
                 let id = application.record.registration.sequence
                 submissions[id] = publication.state.lifecycle.submission(id)
+            case .permissionSubject(_, let changes): effects = changes
             case .setupDefault(let result): effects = result.effects
             case .observationLost(let loss): effects = loss
             observing = false
@@ -203,12 +204,28 @@ public final class ACPV2SessionProjection {
                 terminalIds: value.content.compactMap(\.terminalID), name: value.name))
         case .plan(let planID):
             guard let value = state.activity.plan(id: planID) else { throw Failure.conflictingIdentity }
-            let items = (value.entries ?? []).compactMap { entry -> ACPMessage.PlanItem? in
-                guard case .object(let fields) = entry, case .string(let content)? = fields["content"],
-                      case .string(let status)? = fields["status"] else { return nil }
-                return .init(content: content, status: status)
+            switch value.content {
+            case .items:
+                let items = (value.entries ?? []).compactMap { entry -> ACPMessage.PlanItem? in
+                    guard case .object(let fields) = entry, case .string(let content)? = fields["content"],
+                          case .string(let status)? = fields["status"] else { return nil }
+                    return .init(content: content, status: status)
+                }
+                row = .plan(id: id, items)
+            case .markdown, .file:
+                let current: ACPPlanDocument? = if let existingIndex,
+                                                   session.transcript.messages.indices.contains(existingIndex),
+                                                   case .planDocument(_, let document) = session.transcript.messages[existingIndex] {
+                    document
+                } else {
+                    nil
+                }
+                guard let document = ACPPlanDocument.updated(current, planId: planID, content: value.content)
+                else { return }
+                row = .planDocument(id: id, document)
+            // A plan type this build cannot show has no row.
+            case .unknown: return
             }
-            row = .plan(id: id, items)
         case .terminal: return
         }
         guard session.transcript.projectMessage(row, at: index, replacing: existingIndex != nil,

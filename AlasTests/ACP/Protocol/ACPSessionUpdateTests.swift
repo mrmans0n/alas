@@ -269,6 +269,26 @@ struct ACPSessionUpdateTests {
         } else { Issue.record("expected plan") }
     }
 
+    @Test("decodes standard plan_update and plan_removed shapes", arguments: [
+        (#"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p","entries":[{"content":"a","priority":"high","status":"pending"}]}}"#,
+         ACPSessionUpdate.planUpdate(.init(planId: "p", content: .items([.init(content: "a", priority: "high", status: "pending")])))),
+        (##"{"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"item_1","content":"# Plan\n- a"}}"##,
+         .planUpdate(.init(planId: "item_1", content: .markdown("# Plan\n- a")))),
+        (#"{"sessionUpdate":"plan_update","plan":{"type":"file","planId":"p","uri":"file:///tmp/p.md"}}"#,
+         .planUpdate(.init(planId: "p", content: .file(uri: "file:///tmp/p.md")))),
+        (#"{"sessionUpdate":"plan_update","plan":{"type":"_future","planId":"p","x":1}}"#,
+         .planUpdate(.init(planId: "p", content: .unknown(type: "_future")))),
+        (#"{"sessionUpdate":"plan_update","plan":{"type":"markdown","content":"x"}}"#, .unknown("plan_update")),
+        (#"{"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"p"}}"#, .unknown("plan_update")),
+        (#"{"sessionUpdate":"plan_removed","planId":"p"}"#, .planRemoved(planId: "p")),
+    ])
+    func planUpdateDecodes(json: String, expected: ACPSessionUpdate) throws {
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: Data(json.utf8))
+        #expect(update == expected)
+        if case .unknown = update { return }
+        #expect(try JSONDecoder().decode(ACPSessionUpdate.self, from: JSONEncoder().encode(update)) == update)
+    }
+
     @Test("decodes available_models_update")
     func availableModels() throws {
         let env = try decode("session-update-available-models")

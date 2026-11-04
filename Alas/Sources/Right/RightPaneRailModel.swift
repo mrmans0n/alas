@@ -66,6 +66,7 @@ enum RightPaneRailModel {
         case .agent:   return activeAgentCount > 0 ? .count(activeAgentCount) : .none
         case .run:     return activeRunCount > 0 ? .liveDot : .none
         case .schedules: return activeScheduleCount > 0 ? .liveDot : .none
+        case .device:  return .none
         }
     }
 

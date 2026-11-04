@@ -1719,6 +1719,18 @@ struct RemoteSessionGatewayTests {
         #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
     }
 
+    @Test(arguments: [ACPPlanDocument.markdownFixture, .fileFixture, .hiddenFixture])
+    func planDocumentWire(document: ACPPlanDocument) throws {
+        let wire = RemoteSessionGateway.toWire(.planDocument(id: UUID(), document), index: 4)
+        #expect(wire.kind == "planDocument")
+        #expect(wire.text == (document.kind == .file ? "Plan file: /p.md" : document.markdown))
+        #expect(wire.isHidden == (document.hidden ? true : nil))
+        let decoded = try JSONDecoder().decode(ACPPlanDocument.self, from: Data(try #require(wire.json).utf8))
+        var expected = document
+        expected.file = nil
+        #expect(decoded == expected)
+    }
+
     @Test func checkpointAttachmentDoesNotRenderAsRemotePlaceholder() {
         let msg = ACPMessage.user(id: UUID(), text: "hello", attachments: [.checkpointReference(id: UUID())])
         let wire = RemoteSessionGateway.toWire(msg, index: 0)

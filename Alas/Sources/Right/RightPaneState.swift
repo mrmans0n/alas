@@ -4,11 +4,13 @@ import Observation
 import os
 
 enum RightPaneTab: String {
-    case changes, files, agent, run, schedules
+    case changes, files, agent, run, schedules, device
 
-    /// Folder projects have no git, so no Changes tab.
-    static func available(isFolder: Bool = false) -> [Self] {
-        isFolder ? [.files, .agent, .run, .schedules] : [.changes, .files, .agent, .run, .schedules]
+    /// Folder projects have no git, so no Changes tab. Device is an
+    /// experiment, offered only while its setting is on.
+    static func available(isFolder: Bool = false, devicePanel: Bool = false) -> [Self] {
+        let tabs: [Self] = isFolder ? [.files, .agent, .run, .schedules] : [.changes, .files, .agent, .run, .schedules]
+        return devicePanel ? tabs + [.device] : tabs
     }
 
     /// A peer worktree exposes read-only changes and files, and its sessions;

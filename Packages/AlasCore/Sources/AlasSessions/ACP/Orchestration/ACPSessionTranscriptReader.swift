@@ -11,7 +11,9 @@ import AlasACP
 ///
 /// A transcript becomes a flat list of entries: user and agent messages
 /// verbatim, tool calls and file edits as one-line summaries, system notices
-/// as text. Thoughts and plans are internal state and are left out. Entry
+/// as text. A Markdown or file plan is agent output (Codex sends its plan
+/// only that way once plans are negotiated), so it reads as an agent entry;
+/// thoughts and checklists are internal state and are left out. Entry
 /// indices only grow as a session runs, so a caller can page with them.
 ///
 /// Reading an agent message's text touches `StreamingText.value`, which is
@@ -73,6 +75,10 @@ public enum ACPSessionTranscriptReader: Sendable {
                 append("system", text)
             case .visualAid(let visual):
                 append("tool", visual.transcriptSummary)
+            case .planDocument(_, let document):
+                // A removed plan keeps its slot, so paged reads that
+                // started before the removal don't skip the next entry.
+                append(document.hidden ? "system" : "agent", planText(document) ?? "Plan removed.")
             case .thought, .plan:
                 continue
             }
@@ -138,16 +144,38 @@ public enum ACPSessionTranscriptReader: Sendable {
         }
     }
 
-    /// Tail of the latest agent message, capped like a turn completion's.
+    /// Tail of the latest agent message, or of a plan with no agent text
+    /// after it, capped like a turn completion's.
     @MainActor
     public static func lastAgentText(_ messages: [ACPMessage]) -> String? {
         for message in messages.reversed() {
-            guard case .agent(_, _, let buffer) = message else { continue }
-            let text = buffer.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
+            guard let text = agentText(message)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty
+            else { continue }
             return String(text.suffix(ACPTurnCompletion.lastAgentTextLimit))
         }
         return nil
+    }
+
+    /// The text an agent message or a shown plan contributes as agent
+    /// output, untrimmed; nil for any other message.
+    @MainActor
+    public static func agentText(_ message: ACPMessage) -> String? {
+        switch message {
+        case .agent(_, _, let buffer): buffer.value
+        case .planDocument(_, let document): planText(document)
+        default: nil
+        }
+    }
+
+    /// A plan's Markdown, or "Plan file: <path>" for a file plan; nil once
+    /// `plan_removed` hid it, or with neither.
+    static func planText(_ document: ACPPlanDocument) -> String? {
+        guard !document.hidden else { return nil }
+        switch document.kind {
+        case .markdown: return document.markdown
+        case .file: return document.file.map { "Plan file: \($0.path)" }
+        }
     }
 
     private static func snippet(_ text: String, around range: Range<String.Index>) -> String {

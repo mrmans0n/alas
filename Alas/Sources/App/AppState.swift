@@ -715,6 +715,10 @@ final class AppState {
     @ObservationIgnored
     private let automaticCheckpointService = WorktreeCheckpointService()
     let rightPaneStore = RightPaneStore()
+    /// The Device tab's simulator list, shared by every worktree's pane.
+    let devicePane = DevicePaneModel()
+    @ObservationIgnored
+    let simulatorStreams = SimulatorStreamClient()
     var harness: HarnessService { core.harness }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.

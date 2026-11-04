@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -158,5 +159,16 @@ struct NativePeerTranscriptTests {
         transcript.apply(.questionResolved(sessionId: "B:s", requestId: 1))
         transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which one?")))
         #expect(transcript.requestGeneration(for: .question) != second)
+    }
+
+    @Test func planDocumentRows() {
+        let wire = RemoteSessionGateway.toWire(.planDocument(id: UUID(), .markdownFixture), index: 2)
+        #expect(NativePeerRow(message: wire) == .planDocument(.markdownFixture))
+
+        let unknown = RemoteWireMessage(stableId: wire.stableId, kind: "planDocumentV9", text: wire.text, json: wire.json, index: 2)
+        #expect(NativePeerRow(message: unknown) == .systemNotice("# Plan"))
+
+        let malformed = RemoteWireMessage(stableId: wire.stableId, kind: "planDocument", text: nil, json: "{", index: 2)
+        #expect(NativePeerRow(message: malformed) == .systemNotice("Plan details are unavailable."))
     }
 }
