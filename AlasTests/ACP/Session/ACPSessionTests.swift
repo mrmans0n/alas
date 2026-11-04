@@ -1773,6 +1773,62 @@ struct ACPSessionTests {
         #expect(session.retryStatus == nil)
     }
 
+    @Test("a warning record shows as a retry only while a prompt runs live", arguments: [
+        (true, false, true),
+        (false, false, false),
+        (true, true, false),
+    ])
+    func warningRecordSetsRetryStatus(promptActive: Bool, replaying: Bool, shows: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Reconnecting\n  to the service", severity: "warning"),
+            replaying: replaying, promptActive: promptActive)
+        #expect(session.transcript.failureIncidentIndex(id: "a") != nil)
+        #expect(session.retryStatus?.detail == (shows ? "Reconnecting to the service" : nil))
+        #expect(session.retryStatus?.incidentId == (shows ? "a" : nil))
+        session.apply(.agentMessageChunk(.text("resumed")))
+        #expect(session.retryStatus == nil)
+    }
+
+    @Test("an error clears the retry of its own incident only", arguments: [("a", true), ("b", false)])
+    func errorAtRetryIdClearsRetryStatus(errorId: String, clears: Bool) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Retrying", severity: "warning"), replaying: false, promptActive: true)
+        session.applySessionFailureUpdate(
+            failureInfo(id: errorId, revision: 2, title: "Gave up"), replaying: false, promptActive: true)
+        #expect((session.retryStatus == nil) == clears)
+        let index = try #require(session.transcript.failureIncidentIndex(id: errorId))
+        guard case .failureIncident(_, let incident) = session.transcript.messages[index] else {
+            Issue.record("expected an incident row")
+            return
+        }
+        #expect(incident.record.revision == 2)
+        #expect(session.transcript.messages.count == (clears ? 1 : 2))
+    }
+
+    @Test("a late warning cannot reopen a retry its incident's error ended")
+    func olderWarningAfterErrorSetsNoRetryStatus() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        session.applySessionFailureUpdate(failureInfo(id: "a", revision: 2, title: "Gave up"), replaying: false, promptActive: true)
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Retrying", severity: "warning"), replaying: false, promptActive: true)
+        #expect(session.retryStatus == nil)
+    }
+
+    @Test("legacy retry metadata counts only without negotiated failures", arguments: [(true, false), (false, true)])
+    func negotiatedSessionIgnoresLegacyRetryMeta(negotiated: Bool, sets: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        if negotiated { session.sessionFailure = .init() }
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying"),
+        ])])]))))
+        #expect((session.retryStatus != nil) == sets)
+    }
+
     @Test("a plan with content clears retryable status; a removal or an unknown plan does not", arguments: [
         (ACPSessionUpdate.planUpdate(.init(planId: "p", content: .items([]))), true),
         (.markdownPlan("p", "# Plan"), true),

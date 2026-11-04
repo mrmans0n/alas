@@ -228,19 +228,27 @@ struct ACPSessionForkRunnerTests {
         #expect(acknowledgement.persistedQueueCounts == [0])
     }
 
-    @Test("a first prompt stopped by a quota record keeps its context delivered and acknowledges once", arguments: [true, false])
-    func quotaRecordFirstPromptKeepsContextDelivered(queued: Bool) async throws {
+    @Test("a first prompt stopped by a failure record delivered its context only if model work shows, and acknowledges once", arguments: [
+        ("quota_exhausted", true, true), ("quota_exhausted", false, true),
+        ("quota_exhausted", true, false), ("quota_exhausted", false, false),
+        ("service", true, true), ("service", false, true),
+        ("service", true, false), ("service", false, false),
+    ] as [(String, Bool, Bool)])
+    func failureRecordKeepsContextPendingWithoutModelWork(kind: String, queued: Bool, modelWork: Bool) async throws {
         let (runner, mock, session, persistence) = try await makeRunner()
         mock.script(method: "initialize") { _ in
             Data(#"{"protocolVersion":1,"_meta":{"sessionFailure":{"version":1}}}"#.utf8)
         }
         try await runner.connection.initialize()
+        runner.start()
+        defer { runner.stop() }
         let acknowledgement = ForkPromptAcknowledgementRecorder()
         let path = persistence.path
         let sessionID = session.id
         mock.scriptResponse(method: "session/prompt") { _ in
-            ACPResponse(
-                body: Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:quota","revision":1,"severity":"error","kind":"quota_exhausted","title":"Usage limit exceeded"}}}"#.utf8),
+            if modelWork { mock.emit(.init(sessionId: sessionID, update: .agentMessageChunk(.text("partial")))) }
+            return ACPResponse(
+                body: Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:e","revision":1,"severity":"error","kind":"\#(kind)","title":"Usage limit exceeded"}}}"#.utf8),
                 durableConsumptionAcknowledgement: {
                     acknowledgement.recordPersistedForkState(path: path, targetSessionID: sessionID)
                 }
@@ -255,11 +263,14 @@ struct ACPSessionForkRunnerTests {
             runner.sendNow(blocks: [.text("Continue")], queuedItemId: nil)
         }
 
-        try await waitUntil { session.usageLimit != nil }
+        try await waitUntil { session.usageLimit != nil || session.turnFailure != nil }
+        await runner.flushPersistence()
+        try await waitUntil { acknowledgement.recordedCount > 0 }
         await runner.flushPersistence()
 
-        #expect(acknowledgement.persistedPendingStates == [false])
-        #expect(try await persistence.loadFork(targetSessionID: sessionID)?.contextDeliveryPending == false)
+        #expect(acknowledgement.persistedPendingStates == [!modelWork])
+        #expect(session.forkRecord?.contextDeliveryPending == !modelWork)
+        #expect(try await persistence.loadFork(targetSessionID: sessionID)?.contextDeliveryPending == !modelWork)
     }
 
     @Test("failed fork marker persistence leaves queued first prompt unacknowledged")

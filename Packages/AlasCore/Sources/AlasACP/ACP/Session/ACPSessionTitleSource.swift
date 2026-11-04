@@ -53,10 +53,13 @@ public struct ACPGoalState: Equatable, Hashable, Sendable {
 public struct ACPRetryStatus: Equatable, Sendable {
     public let turnId: String?
     public let detail: String?
+    /// The failure incident this retry belongs to; nil for legacy retry metadata.
+    public let incidentId: String?
 
-    public init(turnId: String?, detail: String?) {
+    public init(turnId: String?, detail: String?, incidentId: String? = nil) {
         self.turnId = turnId
         self.detail = detail
+        self.incidentId = incidentId
     }
 }
 

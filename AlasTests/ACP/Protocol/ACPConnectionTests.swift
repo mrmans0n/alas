@@ -325,6 +325,28 @@ struct ACPConnectionTests {
         #expect(unreadable.failure == (honored ? .unreadable : .absent))
     }
 
+    @Test("a prompt defers its acknowledgement only for a failure record", arguments: [
+        (#"{"stopReason":"end_turn"}"#, true, false),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:e","revision":1,"title":"boom"}}}"#, true, true),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":"boom"}}"#, true, true),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:e","revision":1,"title":"boom"}}}"#, false, false),
+    ] as [(String, Bool, Bool)])
+    func promptDefersAcknowledgementOnlyForARecord(body: String, negotiated: Bool, defers: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(negotiated ? #"{"sessionFailure":{"version":1}}"# : "{}")}".utf8)
+        }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data(body.utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        let connection = ACPConnection(client: mock)
+        try await connection.initialize()
+        let outcome = try await connection.prompt(sessionId: "s", blocks: [])
+        #expect(acknowledgement.count == (defers ? 0 : 1))
+        #expect((outcome.acknowledgement != nil) == defers)
+    }
+
     @Test("fork points need version 1 and a known boundary", arguments: [
         (#"{"forkPoint":{"version":1,"boundary":"message"}}"#, ACPForkPointBoundary.message),
         (#"{"forkPoint":{"version":1,"boundary":"turn"}}"#, .turn),

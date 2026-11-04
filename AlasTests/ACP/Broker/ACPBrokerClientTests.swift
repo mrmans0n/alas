@@ -1663,6 +1663,33 @@ struct ACPBrokerClientTests {
         #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
     }
 
+    @Test func reattachReplaysFailureMeta() async throws {
+        let service = MockBrokerService()
+        let key = "queued-failed-turn"
+        let outcome = ACPBrokerRPCOutcome(result: .object([
+            "stopReason": .string("end_turn"),
+            "_meta": .object(["sessionFailure": .object([
+                "version": .number(1), "id": .string("t:error"), "revision": .number(1), "title": .string("boom"),
+            ])]),
+        ]), error: nil)
+        await service.enqueueAttach(
+            events: [.init(cursor: .init(rawValue: 1), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: outcome))],
+            snapshotJournalTail: .init(rawValue: 1),
+            snapshotOperations: [.init(operationKey: .init(rawValue: key), adapterRequestId: .init(rawValue: 1), method: "session/prompt", terminalOutcome: outcome)])
+        let client = makeClient(service: service)
+        defer { Task { await client.detach() } }
+        client.preRegisterAwaitedOperationKeys([key])
+        try await client.start()
+
+        let replayed = try #require(client.replayedCompletion(forPreRegisteredOperationKey: key))
+        let result = try JSONDecoder().decode(ACPSessionPromptResult.self, from: #require(replayed.outcome.result).data)
+        guard case .record(let record) = result.failure else {
+            Issue.record("expected a record, got \(result.failure)")
+            return
+        }
+        #expect(record.title == "boom")
+    }
+
     @Test func rejectedReviewCompletionReleasesRegistrationWithoutSkippingEarlierUpdates() async throws {
         let service = MockBrokerService()
         let key = "queued-hook-review"

@@ -768,7 +768,8 @@ public final class ACPConnection: @unchecked Sendable {
             }
             let result = try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body)
             let failure = negotiatedSessionFailure ? result?.failure ?? .absent : .absent
-            if acknowledgeDurableConsumption {
+            // A failure record is acknowledged by the runner, once its row is saved.
+            if acknowledgeDurableConsumption, !failure.isPresent {
                 resp.acknowledgeDurableConsumption()
                 return ACPPromptOutcome(acknowledgement: nil, quota: result?.quota, stopReason: result?.stopReason ?? .init(), failure: failure)
             }

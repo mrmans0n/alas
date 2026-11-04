@@ -2650,7 +2650,23 @@ public final class ACPSession: ChangeTracking, Identifiable {
             sessionFailureLogger.error("session \(self.id, privacy: .public): unreadable sessionFailure on session_info_update")
             return []
         case .record(let record):
-            return applyFailureRecord(record, endedTurn: false, replaying: replaying)
+            let dirty = applyFailureRecord(record, endedTurn: false, replaying: replaying)
+            if promptActive, !replaying { applyFailureRetryStatus(of: record.id) }
+            return dirty
+        }
+    }
+
+    /// An incident that is still a warning shows as a retry, read from its row
+    /// so an older warning cannot reopen what a newer error ended.
+    private func applyFailureRetryStatus(of id: String) {
+        guard let index = transcript.failureIncidentIndex(id: id),
+              case .failureIncident(_, let incident) = transcript.messages[index]
+        else { return }
+        switch incident.record.severity {
+        case .warning:
+            retryStatus = ACPRetryStatus(turnId: nil, detail: Self.retryDetail(incident.record.title), incidentId: id)
+        case .error:
+            if retryStatus?.incidentId == id { clearRetryStatus() }
         }
     }
 
@@ -3520,6 +3536,23 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return item
     }
 
+    public static let heldAfterFailedTurnMessage = "Not sent because the previous turn failed."
+
+    /// A turn failed, so the prompt behind it waits for the user instead of
+    /// flushing into the same failure. Sets `lastError` in place on the first
+    /// item other than `consumedId`, which may still sit at the head while its
+    /// wake confirmation saves. Never reorders and never touches provenance or
+    /// uncertainty. An item being force-sent is the user's call, and goes out.
+    @discardableResult
+    public func holdNextQueuedPrompt(after consumedId: UUID?) -> Bool {
+        guard let index = queue.firstIndex(where: { $0.id != consumedId }),
+              queue[index].id != forceSendAfterSendingHeadId,
+              queue[index].isHoldableAfterFailedTurn
+        else { return false }
+        queue[index].lastError = Self.heldAfterFailedTurnMessage
+        return true
+    }
+
     /// Roll the `.sending` head back to `.pending` with an error message.
     /// Used by the flusher's failure path. Keeps the item at the head so
     /// the user sees "Retry" on the bubble.
@@ -4286,7 +4319,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
         }
         applyGoalMetadata(info.metadata)
-        if tracksRetryStatus { applyRetryMetadata(info.metadata) }
+        // A negotiated session reports retries through its failure records.
+        if tracksRetryStatus, sessionFailure == nil { applyRetryMetadata(info.metadata) }
     }
 
     public func clearRetryStatus() {
@@ -4361,12 +4395,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
         retryStatus = ACPRetryStatus(
             turnId: Self.metadataScalarString(error["turnId"]),
-            detail: Self.retryDetail(error["message"])
+            detail: Self.metadataScalarString(error["message"]).flatMap(Self.retryDetail)
         )
     }
 
-    private static func retryDetail(_ value: AnyCodable?) -> String? {
-        guard let message = metadataScalarString(value) else { return nil }
+    private static func retryDetail(_ message: String) -> String? {
         let compact = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !compact.isEmpty else { return nil }
         return String(compact.prefix(240))

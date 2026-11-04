@@ -269,6 +269,11 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         scheduledAt.map { $0 <= date } ?? true
     }
 
+    /// Would flush right now into the failure that just happened.
+    public var isHoldableAfterFailedTurn: Bool {
+        status == .pending && lastError == nil && !deliveryUncertain && usageLimit == nil && isReady()
+    }
+
     /// The draft to load back into the composer when this item is edited:
     /// the structured `draft` when captured, otherwise the heuristic inverse
     /// of `blocks`. See the `draft` field for why the fallback is lossy.
