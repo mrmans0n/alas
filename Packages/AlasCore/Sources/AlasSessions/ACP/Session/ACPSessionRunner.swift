@@ -2528,10 +2528,12 @@ public final class ACPSessionRunner {
 
     /// Whether this turn showed any model work, so what its prompt carried
     /// demonstrably reached the model. Only rows at or after
-    /// `activePromptTranscriptFloor` belong to the turn.
+    /// `activePromptTranscriptFloor` belong to the turn. Text a steering row
+    /// save still holds back counts too: the flush cannot land it yet.
     private func activeTurnShowedModelWork() -> Bool {
         guard let floor = activePromptTranscriptFloor else { return false }
-        return session.transcript.messages.dropFirst(floor).contains(where: \.isAgentSideProgress)
+        return bufferedAgentText() != nil
+            || session.transcript.messages.dropFirst(floor).contains(where: \.isAgentSideProgress)
     }
 
     /// The usage limit a `session/prompt` response's failure record reports,
@@ -4992,8 +4994,8 @@ extension ACPSessionRunner {
                     // A failed turn delivered its one-time context only if it shows
                     // model work; otherwise the next prompt carries it again.
                     // Read here: the floor goes when the turn ends.
-                    let retainsContext = reportsFailure && completionResult.isFailedOrLimited
-                        && !(isActivePrompt && self.activeTurnShowedModelWork())
+                    let modelWorkShown = isActivePrompt && self.activeTurnShowedModelWork()
+                    let retainsContext = reportsFailure && completionResult.isFailedOrLimited && !modelWorkShown
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -5056,17 +5058,25 @@ extension ACPSessionRunner {
                         } else {
                             nil
                         }
-                        // A failed resume keeps its place: consuming it would leave
-                        // the session Limited with nothing to resume. It blocks what
-                        // follows on its own, like any failed head.
-                        let keepsFailedResumeItem = failureMessage != nil && queuedItemId != nil
+                        // Some failed heads keep their place for a manual retry. Consuming
+                        // a resume would leave the session Limited with nothing to resume;
+                        // a wake that shows no model work is hidden, so the agent would
+                        // never learn its job finished. Either blocks what follows on its
+                        // own, like any failed head.
+                        let keepsFailedHead = failureMessage != nil && queuedItemId != nil
                             && self.session.queue.first?.id == queuedItemId
-                            && self.session.queue.first?.usageLimit != nil
+                            && (self.session.queue.first?.usageLimit != nil
+                                || (self.session.queue.first?.backgroundTaskWake != nil && !modelWorkShown))
                         // Ahead of the consumption below, whose write stores the hold.
-                        let heldNext = failureMessage != nil && !keepsFailedResumeItem
+                        let heldNext = failureMessage != nil && !keepsFailedHead
                             && self.session.holdNextQueuedPrompt(after: queuedItemId)
-                        if keepsFailedResumeItem, let failureMessage {
-                            self.session.setQueueHeadError(failureMessage)
+                        if keepsFailedHead, let failureMessage {
+                            // A retry under the same key would replay this failure
+                            // from the broker instead of reaching the agent.
+                            self.session.setQueueHeadError(
+                                failureMessage,
+                                advancesBrokerOperationAttempt: brokerOperationKey != nil
+                            )
                             if deliveredForkContext {
                                 self.persistForkContextDeliveredAndQueue(acknowledging: promptAcknowledgement)
                             } else {

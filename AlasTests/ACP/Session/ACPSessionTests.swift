@@ -1807,16 +1807,11 @@ struct ACPSessionTests {
         }
         #expect(incident.record.revision == 2)
         #expect(session.transcript.messages.count == (clears ? 1 : 2))
-    }
 
-    @Test("a late warning cannot reopen a retry its incident's error ended")
-    func olderWarningAfterErrorSetsNoRetryStatus() {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.sessionFailure = .init()
-        session.applySessionFailureUpdate(failureInfo(id: "a", revision: 2, title: "Gave up"), replaying: false, promptActive: true)
+        // A late warning cannot reopen a retry its incident's error ended.
         session.applySessionFailureUpdate(
             failureInfo(id: "a", revision: 1, title: "Retrying", severity: "warning"), replaying: false, promptActive: true)
-        #expect(session.retryStatus == nil)
+        #expect((session.retryStatus == nil) == clears)
     }
 
     @Test("legacy retry metadata counts only without negotiated failures", arguments: [(true, false), (false, true)])

@@ -3547,7 +3547,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func holdNextQueuedPrompt(after consumedId: UUID?) -> Bool {
         guard let index = queue.firstIndex(where: { $0.id != consumedId }),
               queue[index].id != forceSendAfterSendingHeadId,
-              queue[index].isHoldableAfterFailedTurn
+              queue[index].isHoldableAfterFailedTurn,
+              // Already waiting for the limit to clear, and drains by itself then.
+              !queue[index].isHeld(by: usageLimit)
         else { return false }
         queue[index].lastError = Self.heldAfterFailedTurnMessage
         return true

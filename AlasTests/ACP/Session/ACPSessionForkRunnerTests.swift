@@ -229,10 +229,11 @@ struct ACPSessionForkRunnerTests {
     }
 
     @Test("a first prompt stopped by a failure record delivered its context only if model work shows, and acknowledges once", arguments: [
-        ("quota_exhausted", true, true), ("quota_exhausted", false, true),
-        ("quota_exhausted", true, false), ("quota_exhausted", false, false),
-        ("service", true, true), ("service", false, true),
-        ("service", true, false), ("service", false, false),
+        // A queued prompt's marker goes with its queue write, through `applyUsageLimit`
+        // when limited. A direct one's lane is the same for either kind.
+        ("quota_exhausted", true, true), ("quota_exhausted", true, false),
+        ("service", true, true), ("service", true, false),
+        ("service", false, true), ("service", false, false),
     ] as [(String, Bool, Bool)])
     func failureRecordKeepsContextPendingWithoutModelWork(kind: String, queued: Bool, modelWork: Bool) async throws {
         let (runner, mock, session, persistence) = try await makeRunner()

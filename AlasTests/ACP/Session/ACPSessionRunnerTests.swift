@@ -2440,7 +2440,7 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadMessages(sessionId: "s").count == (writeRecovers ? 1 : 0))
     }
 
-    @Test("an update that writes nothing acknowledges behind the queued writes", arguments: [
+    @Test("an update that writes nothing acknowledges behind the queued writes", .timeLimit(.minutes(1)), arguments: [
         ACPSessionUpdate.sessionInfoUpdate(.init(title: "New title", metadata: nil)),
         .usageUpdate(.init(used: 1, size: 10, cost: nil)),
     ])
@@ -2649,7 +2649,8 @@ struct ACPSessionRunnerTests {
         #expect(acknowledgement.recordedCount == 1)
     }
 
-    @Test func cancelledKeepsRecordRowWithoutEffects() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func cancelledKeepsRecordRowWithoutEffects() async throws {
         var completions: [ACPTurnCompletion] = []
         let (runner, mock, session, _) = try await makeFailureRunner(onTurnCompleted: { completions.append($0) })
         let answered = AsyncGate()
@@ -2692,7 +2693,8 @@ struct ACPSessionRunnerTests {
         let (runner, mock, session, _) = try await makeFailureRunner()
         session.lastError = earlier
         mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse() }
-        try await sendAndSettle(runner)
+        let delivered = try await sendAndSettle(runner)
+        #expect(delivered == true, "the draft is not reinstated")
         #expect(session.lastError == earlier)
         #expect(session.turnFailure == "Model overloaded")
     }
@@ -2721,13 +2723,6 @@ struct ACPSessionRunnerTests {
         try await sendAndSettle(runner)
         #expect((session.pendingMCPPreamble == nil) == cleared)
         #expect(session.mcpPreambleSent == cleared)
-    }
-
-    @Test func failedTurnDoesNotRestoreDraft() async throws {
-        let (runner, mock, _, _) = try await makeFailureRunner()
-        mock.scriptResponse(method: "session/prompt") { _ in try Self.failedPromptResponse() }
-        let delivered = try await sendAndSettle(runner)
-        #expect(delivered == true)
     }
 
     @Test func accessRecordStaysOutOfAuthFlow() async throws {
@@ -2778,7 +2773,7 @@ struct ACPSessionRunnerTests {
         #expect(completions.isEmpty)
     }
 
-    @Test("a warning during suppressed replay leaves only its row; a live one during a prompt shows as a retry")
+    @Test("a warning during suppressed replay leaves only its row; a live one during a prompt shows as a retry", .timeLimit(.minutes(1)))
     func replayedWarningRecordSetsNoRetryStatus() async throws {
         let (runner, mock, session, _) = try await makeFailureRunner()
         runner.suppressLoadReplay(throughYieldedUpdateCount: 1)
