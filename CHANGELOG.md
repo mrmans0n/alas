@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Keep plugin right-rail badges fully visible without clipping their top or right edges.
+
 ## [0.23.1] - 2026-11-04
 
 ### ✨ Features
