@@ -2671,8 +2671,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// requested it, when negotiated. The report's `requestId` is the only
     /// correlation, so it lands the same before or after the prompt's response.
     /// The first report wins. Returns the rows to persist. Never touches
-    /// lifecycle, `turnFailure`, `lastError`, queue or usage, and, like a notice,
-    /// keeps the completed-output boundary and the content touch: it is not output.
+    /// lifecycle, `turnFailure`, `lastError`, queue or usage. The row publishes, but
+    /// a report is not output: it counts as no next-prompt activity, so one landing
+    /// after the turn leaves that turn's offer and recap in place.
     @discardableResult
     public func applyFileChangeReportUpdate(_ info: ACPSessionInfoUpdate) -> Set<Int> {
         guard agentFileChangeReport != nil else { return [] }
@@ -2681,7 +2682,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .absent:
             return []
         case .malformed:
-            fileChangeReportLogger.error("unreadable agentFileChangeReport on session_info_update")
+            fileChangeReportLogger.error("session \(self.id, privacy: .public): unreadable agentFileChangeReport on session_info_update")
             return []
         case .report(let value):
             report = value
@@ -2690,12 +2691,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
               case .user(let id, let messageId, let text, var attachments, let delegatedSource, let pastedSpans) = transcript.messages[index],
               let position = attachments.firstIndex(where: { $0.fileChangeReportRequestId == report.requestId })
         else {
-            fileChangeReportLogger.info("no row for file change report \(report.requestId, privacy: .public)")
+            fileChangeReportLogger.info("session \(self.id, privacy: .public): no row for file change report \(report.requestId, privacy: .public)")
             return []
         }
         guard attachments[position].fileChangeReport == nil else { return [] }
         attachments[position] = .fileChangeReportReference(requestId: report.requestId, report: report)
-        transcript.replaceMessage(at: index, with: .user(
+        transcript.replaceMessageMetadata(at: index, with: .user(
             id: id,
             messageId: messageId,
             text: text,

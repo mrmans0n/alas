@@ -27,7 +27,7 @@ struct NextPromptSettingsTests {
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
         let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
             promptID: session.allocatePromptID(), userMessageID: userID,
-            transcriptRevision: session.transcript.messagesGeneration)
+            transcriptRevision: session.transcript.conversationRevision)
         var environment = NextPromptEligibilitySnapshot.Environment()
         environment.isAppActive = true
         environment.isActiveVisibleWriter = true
@@ -103,7 +103,7 @@ struct NextPromptSettingsTests {
             incarnation: session.incarnation,
             promptID: session.allocatePromptID(),
             userMessageID: userID,
-            transcriptRevision: session.transcript.messagesGeneration
+            transcriptRevision: session.transcript.conversationRevision
         )
 
         state.nextPromptCompleted(turn, owner: owner)
@@ -186,7 +186,7 @@ struct NextPromptSettingsTests {
         app.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
         app.nextPromptCompleted(NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
-            promptID: promptID, userMessageID: userID, transcriptRevision: session.transcript.messagesGeneration),
+            promptID: promptID, userMessageID: userID, transcriptRevision: session.transcript.conversationRevision),
             owner: owner)
         await app.nextPromptCoordinator.generationTask?.value
 
@@ -237,7 +237,7 @@ struct NextPromptSettingsTests {
             parent.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
             let turn = NextPromptCompletedTurn(sessionID: parent.id, incarnation: parent.incarnation,
                 promptID: parent.allocatePromptID(), userMessageID: userID,
-                transcriptRevision: parent.transcript.messagesGeneration)
+                transcriptRevision: parent.transcript.conversationRevision)
             state.nextPromptCompleted(turn, owner: owner)
             return turn
         }
@@ -298,7 +298,7 @@ struct NextPromptSettingsTests {
             session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
             let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
                                                promptID: session.allocatePromptID(), userMessageID: userID,
-                                               transcriptRevision: session.transcript.messagesGeneration)
+                                               transcriptRevision: session.transcript.conversationRevision)
             state.nextPromptCompleted(turn, owner: owner)
             return turn
         }

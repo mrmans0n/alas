@@ -5190,7 +5190,7 @@ extension ACPSessionRunner {
                                     incarnation: self.session.incarnation,
                                     promptID: promptID,
                                     userMessageID: userMessageID,
-                                    transcriptRevision: self.session.transcript.messagesGeneration
+                                    transcriptRevision: self.session.transcript.conversationRevision
                                 )
                             }
                         )
@@ -5564,7 +5564,7 @@ extension ACPSessionRunner {
                 incarnation: turn.incarnation,
                 promptID: turn.promptID,
                 userMessageID: turn.userMessageID,
-                transcriptRevision: self.session.transcript.messagesGeneration
+                transcriptRevision: self.session.transcript.conversationRevision
             ))
         }
 #if DEBUG

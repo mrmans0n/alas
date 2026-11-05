@@ -335,7 +335,7 @@ struct NextPromptCoordinatorTests {
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Here is the answer.")))
         let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
                                           promptID: session.allocatePromptID(), userMessageID: userID,
-                                          transcriptRevision: session.transcript.messagesGeneration)
+                                          transcriptRevision: session.transcript.conversationRevision)
         var environment = NextPromptEligibilitySnapshot.Environment()
         environment.isEnabled = true
         environment.hasVerifiedModel = true
@@ -559,7 +559,7 @@ struct NextPromptCoordinatorTests {
         let userID = session.recordUserPrompt(text: "Follow up", attachments: [])
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Another answer")))
         turn = .init(sessionID: session.id, incarnation: session.incarnation, promptID: session.allocatePromptID(),
-                     userMessageID: userID, transcriptRevision: session.transcript.messagesGeneration)
+                     userMessageID: userID, transcriptRevision: session.transcript.conversationRevision)
         coordinator.completed(turn)
         await generator.waitForStart()
         let newTask = coordinator.generationTask

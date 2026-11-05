@@ -160,7 +160,7 @@ import Testing
         let revision = try #require(context.revision)
         #expect(revision.goal == context.goal)
         #expect(revision.plan == context.plan)
-        #expect(revision.transcriptGeneration == session.transcript.messagesGeneration)
+        #expect(revision.transcriptGeneration == session.transcript.conversationRevision)
     }
 
     @Test func boundsRenderedCandidateCountForLongSessions() throws {

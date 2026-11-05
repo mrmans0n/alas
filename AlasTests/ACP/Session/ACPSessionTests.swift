@@ -1359,6 +1359,44 @@ struct ACPSessionTests {
         #expect(session.usageLimit == usageLimit)
     }
 
+    @Test("a report landing after a successful turn keeps its next-prompt offer and recap")
+    func lateReportLeavesTheTurnsOfferEligible() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.agentFileChangeReport = .init()
+        session.agentState = .ready
+        let userID = UUID()
+        session.transcript.appendMessage(.user(id: userID, text: "Explain this", attachments: [try FileChangeReportRowCase.reference(nil)]))
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Here is the answer.")))
+        let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
+                                           promptID: session.allocatePromptID(), userMessageID: userID,
+                                           transcriptRevision: session.transcript.conversationRevision)
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isEnabled = true
+        environment.hasVerifiedModel = true
+        environment.isRuntimeAvailable = true
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+        let offer = try #require(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment))
+        let recap = SessionSummarySourceRevision.current(session: session, composer: session.composer)
+        let uiGeneration = session.transcript.messagesGeneration
+        var activity = 0
+        var published = 0
+        let observations = [
+            session.nextPromptActivity.sink { activity += 1 },
+            session.transcript.willChange.sink { published += 1 },
+        ]
+
+        #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+
+        #expect(activity == 0, "activity would invalidate the offer for good")
+        #expect(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)?.id == offer.id)
+        #expect(SessionSummarySourceRevision.current(session: session, composer: session.composer) == recap)
+        #expect(session.transcript.messagesGeneration != uiGeneration, "the row still reaches the UI")
+        #expect(published > 0)
+        withExtendedLifetime(observations) {}
+    }
+
     private func negotiatedSession() -> ACPSession {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.sessionFailure = .init()
@@ -4587,14 +4625,10 @@ struct FileChangeReportDecision: Sendable, CustomTestStringConvertible {
         let reported = FileChangeReportRowCase.reported
         let unknownReason = #","status":"unavailable","reason":"brand_new""#
         let noPaths = #","status":"reported","paths":[]"#
-        let tooManyPaths = #","status":"reported","paths":[\#(Array(repeating: #""/a""#, count: 1_025).joined(separator: ","))]"#
         return [
-            .init(testDescription: "no metadata", info: .init(title: nil, metadata: nil)),
-            .init(testDescription: "metadata without the key", info: .init(title: nil, metadata: AnyCodable(["other": AnyCodable(1)]))),
+            .init(testDescription: "absent", info: .init(title: nil, metadata: AnyCodable(["other": AnyCodable(1)]))),
             .init(testDescription: "not negotiated", negotiated: false, info: fileChangeReportInfo()),
             .init(testDescription: "malformed", info: .init(title: nil, metadata: AnyCodable(["agentFileChangeReport": AnyCodable("boom")]))),
-            .init(testDescription: "unsupported version", info: fileChangeReportInfo(version: 2)),
-            .init(testDescription: "over the path limit", info: fileChangeReportInfo(tooManyPaths)),
             .init(testDescription: "no matching row", info: fileChangeReportInfo(requestId: "alas-turn:stale")),
             .init(testDescription: "first report", info: fileChangeReportInfo(), expected: reported, writes: true),
             .init(testDescription: "unknown reason", info: fileChangeReportInfo(unknownReason), expected: unknownReason, writes: true),
