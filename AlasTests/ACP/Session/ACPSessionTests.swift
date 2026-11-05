@@ -1368,6 +1368,30 @@ struct ACPSessionTests {
         #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
     }
 
+    enum FileChangeReportTurnRow: String, CaseIterable, CustomTestStringConvertible {
+        case latestWhileStreaming, latestWhileIdle, olderWhileNewerStreams, latestWithLaterSteeredRow
+        var testDescription: String { rawValue }
+    }
+
+    @Test(arguments: FileChangeReportTurnRow.allCases)
+    func fileChangeReportTurnIsActive(row: FileChangeReportTurnRow) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        func user(_ requestId: String?) -> ACPMessage {
+            .user(id: UUID(), text: "go", attachments: requestId.map { [.fileChangeReportReference(requestId: $0)] } ?? [])
+        }
+        var messages = [user("alas-turn:a")]
+        switch row {
+        case .latestWhileStreaming, .latestWhileIdle: break
+        case .olderWhileNewerStreams: messages.append(user("alas-turn:b"))
+        case .latestWithLaterSteeredRow: messages.append(user(nil))
+        }
+        session.replaceTranscriptMessages(messages)
+        session.transcript.streamingState = row == .latestWhileIdle ? .idle : .streaming
+
+        let expected = row == .latestWhileStreaming || row == .latestWithLaterSteeredRow
+        #expect(session.isFileChangeReportTurnActive(requestId: "alas-turn:a") == expected)
+    }
+
     // MARK: - Failure incidents
 
     @Test(arguments: FileChangeReportDecision.all)

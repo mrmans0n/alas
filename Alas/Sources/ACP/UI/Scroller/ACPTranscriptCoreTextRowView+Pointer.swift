@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 
 extension ACPTranscriptCoreTextRowView {
     // MARK: - Clicks
@@ -12,6 +13,7 @@ extension ACPTranscriptCoreTextRowView {
         case link(URL)
         /// The "Copy" button of the code block at this index.
         case codeCopy(Int)
+        case reportedChanges
     }
 
     /// Farther than this from the press, a drag is not a click.
@@ -46,8 +48,14 @@ extension ACPTranscriptCoreTextRowView {
         return nil
     }
 
+    private func isOverReportedChanges(_ point: NSPoint) -> Bool {
+        guard bounds.width > 0, actions.reportedChanges != nil else { return false }
+        return layout(forWidth: bounds.width).reportedChangesRect?.contains(point) == true
+    }
+
     private func hitTarget(at point: NSPoint) -> HitTarget? {
         guard bounds.width > 0 else { return nil }
+        if isOverReportedChanges(point) { return .reportedChanges }
         if let index = codeCopyIndex(at: point) { return .codeCopy(index) }
         if let url = link(at: point) { return .link(url) }
         guard actions.toggleExpanded != nil,
@@ -96,7 +104,7 @@ extension ACPTranscriptCoreTextRowView {
     private func updateCursor(at point: NSPoint?) {
         var wanted = PointerCursor.arrow
         if let point {
-            if link(at: point) != nil || codeCopyIndex(at: point) != nil {
+            if link(at: point) != nil || codeCopyIndex(at: point) != nil || isOverReportedChanges(point) {
                 wanted = .pointingHand
             } else if textPosition(at: point, inside: true) != nil {
                 wanted = .iBeam
@@ -129,6 +137,8 @@ extension ACPTranscriptCoreTextRowView {
             actions.openURL(url)
         case .codeCopy(let index):
             copyCode(index, to: .general)
+        case .reportedChanges:
+            presentReportedChanges(self)
         case .expansionToggle:
             // A native tool call or thought is always collapsed; a group
             // header draws either state.
@@ -138,6 +148,32 @@ extension ACPTranscriptCoreTextRowView {
                 actions.toggleExpanded?(true)
             }
         }
+    }
+
+    // MARK: - Reported changes
+
+    /// The same popover body as the SwiftUI control. A hosted body inherits no
+    /// environment, so the theme is passed explicitly.
+    func showReportedChangesPopover() {
+        if reportedChangesPopover?.isShown == true {
+            closeReportedChangesPopover()
+            return
+        }
+        guard let control = actions.reportedChanges, let theme, bounds.width > 0,
+              let rect = layout(forWidth: bounds.width).reportedChangesRect
+        else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: ACPReportedChangesPopover(
+            presentation: control.presentation, actions: control.actions
+        ).environment(\.theme, theme))
+        popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
+        reportedChangesPopover = popover
+    }
+
+    func closeReportedChangesPopover() {
+        reportedChangesPopover?.close()
+        reportedChangesPopover = nil
     }
 
     // MARK: - Text selection (ported from `DiffSplitCoreTextRowView`)

@@ -1014,6 +1014,47 @@ private struct ACPSessionView: View {
                     worktreeId: worktree.id,
                     absoluteURL: URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktree.path.path)),
                     revealLine: nil, revealCharacter: nil, editable: false)
+            },
+            reportedChangesActions: reportedChangesActions
+        )
+    }
+
+    private var reportedChangesActions: ACPReportedChangesActions {
+        let state = state
+        let worktree = worktree
+        let checkout = state.workspaceCheckout(for: owner)
+        // A remote checkout's members are virtual, so its root must be too.
+        let root = checkout.map { $0.inAppWorktreePath($0.rootPath) } ?? worktree.path.path
+        /// A remote path is never probed here; the editor reads it on its host.
+        func reportsMissingFile(at path: String) -> Bool {
+            guard !RemotePath.isReserved(path), !FileManager.default.fileExists(atPath: path) else { return false }
+            state.showFileActionError(
+                title: "File Not Found",
+                message: "Nothing exists at \(path). It may have been moved or deleted since this turn."
+            )
+            return true
+        }
+        return ACPReportedChangesActions(
+            roots: {
+                ACPReportedPathRoots(
+                    root: root,
+                    physicalRoot: ACPReportedPathRoots.physicalRoot(of: root),
+                    memberRoots: checkout.map { checkout in checkout.members.map { checkout.inAppWorktreePath($0.worktreePath) } }
+                )
+            },
+            openFile: { relativePath in
+                let path = root + "/" + relativePath
+                guard !reportsMissingFile(at: path) else { return }
+                if checkout != nil {
+                    state.tabs.openExternalEditor(
+                        worktreeId: worktree.id, absoluteURL: URL(fileURLWithPath: path),
+                        revealLine: nil, revealCharacter: nil, editable: false)
+                } else {
+                    state.openFile(relativePath: relativePath, worktreeId: worktree.id)
+                }
+            },
+            openDiff: isMirror || checkout != nil ? nil : { relativePath in
+                state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             }
         )
     }

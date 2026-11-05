@@ -1116,6 +1116,29 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return index
     }
 
+    /// True while `requestId` belongs to the latest referencing user row and the
+    /// transcript is not idle. A steered row carries no reference, so it does not
+    /// end the turn that is owed the report.
+    public func isFileChangeReportTurnActive(requestId: String) -> Bool {
+        guard transcript.streamingState != .idle,
+              let index = transcript.fileChangeReportIndex(requestId: requestId)
+        else { return false }
+        return !transcript.messages[(index + 1)...].contains { message in
+            guard case .user(_, _, _, let attachments, _, _) = message else { return false }
+            return attachments.contains { $0.fileChangeReportRequestId != nil }
+        }
+    }
+
+    /// What this row shows for `attachments`. The turn's state is read only for
+    /// a reference still without a report.
+    public func reportedChangesPresentation(attachments: [ACPMessage.Attachment]) -> ACPReportedChangesPresentation? {
+        guard let reference = attachments.first(where: { $0.fileChangeReportRequestId != nil }),
+              let requestId = reference.fileChangeReportRequestId
+        else { return nil }
+        let isTurnActive = reference.fileChangeReport == nil && isFileChangeReportTurnActive(requestId: requestId)
+        return .make(attachments: attachments, isTurnActive: isTurnActive)
+    }
+
     /// Points a reused user row at `requestId`, clearing any earlier report: the
     /// row describes its latest attempt, so a late report from an older one finds
     /// no row. Returns the row to persist. Nil when the row is gone or already

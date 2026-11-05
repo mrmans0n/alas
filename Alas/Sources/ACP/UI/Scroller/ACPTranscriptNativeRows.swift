@@ -9,7 +9,8 @@ import Foundation
 /// hidden members, and plain user messages; their markdown may hold tables of
 /// up to `ACPTranscriptMarkdownLayout.maxNativeTableColumns` (5) columns.
 /// Everything else stays SwiftUI per row: live/streaming rows, expanded cards,
-/// user messages with chips or attachments, tables wider than 5 columns,
+/// user messages with chips or attachments the user can see (Alas's own
+/// checkpoint and report references stay native), tables wider than 5 columns,
 /// images, task lists, Mermaid, file edits, plans, notices, visual aids,
 /// subagents, and compaction/background tasks.
 @MainActor
@@ -61,18 +62,19 @@ enum ACPTranscriptNativeRows {
         isLive: Bool,
         isCommentary: Bool,
         isExpanded: Bool = false,
-        createdAt: Date? = nil
+        createdAt: Date? = nil,
+        reportedChangesTitle: String? = nil
     ) -> ACPTranscriptCoreTextRowView.Content? {
         guard !isLive else { return nil }
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
             // Chips are found in the rendered text (entities decoded, `&#35;12`
             // becomes `#12`), so the source and the rendering are both checked.
-            guard attachments.isEmpty, pastedSpans.isEmpty, delegatedSource == nil,
+            guard attachments.allSatisfy(\.isLocalReference), pastedSpans.isEmpty, delegatedSource == nil,
                   !mayHoldChips(text), !mayHoldChips(ACPMarkdownInlineRenderer.plainText(text)),
                   supportsMarkdown(text)
             else { return nil }
-            return .user(markdown: text)
+            return .user(markdown: text, reportedChanges: reportedChangesTitle)
         case .agent(_, _, let buffer):
             let markdown = buffer.value
             guard supportsMarkdown(markdown) else { return nil }
@@ -120,6 +122,13 @@ enum ACPTranscriptNativeRows {
         /// Quotes selected text into the composer; nil hides "Quote" from
         /// the selection menu.
         var quote: ((String) -> Void)?
+        /// What the "Reported changes" control opens; nil when the row shows none.
+        var reportedChanges: ReportedChanges?
+
+        struct ReportedChanges {
+            let presentation: ACPReportedChangesPresentation
+            let actions: ACPReportedChangesActions
+        }
 
         static var inert: Actions {
             Actions(menu: nil, toggleExpanded: nil, openURL: { _ in }, showsActionsPermanently: false)

@@ -84,6 +84,141 @@ struct UserMessageRow: View {
     }
 }
 
+// MARK: - Reported changes
+
+/// What the "Reported changes" control can do. Nil on a surface without it.
+struct ACPReportedChangesActions {
+    let roots: () -> ACPReportedPathRoots
+    let openFile: (String) -> Void
+    /// Nil where a Git diff tab cannot open: a mirror or a checkout.
+    let openDiff: ((String) -> Void)?
+}
+
+/// The control under a SwiftUI user row. A native row draws the same chip in
+/// `ACPTranscriptCoreTextRowView` and opens the same popover body.
+struct ACPReportedChangesButton: View {
+    let presentation: ACPReportedChangesPresentation
+    let actions: ACPReportedChangesActions
+    @Environment(\.theme) private var theme
+    @State private var isPresented = false
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Text(verbatim: presentation.title)
+                .font(.system(size: ACPTranscriptCoreTextRowView.reportedChangesFontSize))
+                .foregroundStyle(theme.color("fg-faint"))
+                .lineLimit(1)
+                .padding(.horizontal, ACPTranscriptCoreTextRowView.toolTargetHorizontalPadding)
+                .padding(.vertical, ACPTranscriptCoreTextRowView.toolTargetVerticalPadding)
+                .background(
+                    theme.color("bg-2"),
+                    in: RoundedRectangle(cornerRadius: ACPTranscriptCoreTextRowView.toolTargetCornerRadius)
+                )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            ACPReportedChangesPopover(presentation: presentation, actions: actions)
+        }
+    }
+}
+
+/// Every string and target comes from the presentation and the resolver.
+struct ACPReportedChangesPopover: View {
+    let presentation: ACPReportedChangesPresentation
+    let actions: ACPReportedChangesActions
+    @Environment(\.theme) private var theme
+    @State private var rows: [ACPReportedPathRow] = []
+
+    private var stateText: String? {
+        switch presentation.state {
+        case .reported: nil
+        case .reportedEmpty, .missing: presentation.title
+        case .unavailable(let reasonText): reasonText
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Reported changes")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.color("fg"))
+            ForEach([presentation.caveat, presentation.truncationNotice, stateText].compactMap { $0 }, id: \.self) { text in
+                Text(verbatim: text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !rows.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(rows) { row in
+                            pathRow(row)
+                        }
+                    }
+                }
+                .frame(maxHeight: 280)
+            }
+        }
+        .padding(12)
+        .frame(width: 420, alignment: .leading)
+        .onAppear {
+            rows = ACPReportedPathResolver.rows(for: presentation.paths, roots: actions.roots())
+        }
+    }
+
+    @ViewBuilder
+    private func pathRow(_ row: ACPReportedPathRow) -> some View {
+        switch row.target {
+        case .file(let relativePath):
+            HStack(spacing: 8) {
+                Button { actions.openFile(relativePath) } label: {
+                    pathText(row.display).foregroundStyle(theme.color("accent"))
+                }
+                .buttonStyle(.plain)
+                .help(row.display)
+                Spacer(minLength: 0)
+                if let openDiff = actions.openDiff {
+                    Button("Open Git diff") { openDiff(relativePath) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .fixedSize()
+                        .help("Opens the file's current Git state, not this turn's change.")
+                }
+            }
+        case .outside:
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    pathText(row.display)
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .textSelection(.enabled)
+                    Text("Outside this worktree")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                Spacer(minLength: 0)
+                // The sanitized form: a raw control character must not reach a shell by paste.
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(row.display, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc").foregroundStyle(theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .help("Copy path")
+                .accessibilityLabel("Copy path")
+            }
+        }
+    }
+
+    private func pathText(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(.system(size: 11.5, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+}
+
 private struct ACPUserReferenceSummary: View {
     let text: String
     @ObservedObject var store: ACPUpstreamReferenceStore

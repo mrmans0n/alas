@@ -21,8 +21,9 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         case toolCall(presentation: ACPToolCallPresentation, target: String?, duration: String?, timestamp: String? = nil, failed: Bool)
         /// A tool-call group header, without the "Show N earlier" button.
         case toolGroupHeader(label: String, iconSystemName: String, expanded: Bool)
-        /// The user's prompt in its right-aligned bubble.
-        case user(markdown: String)
+        /// The user's prompt in its right-aligned bubble, with the title of its
+        /// "Reported changes" control under it, when it shows one.
+        case user(markdown: String, reportedChanges: String? = nil)
     }
 
     // Copied from `wrapRow`, `ACPCommentaryRow`, `ACPThoughtView`,
@@ -59,6 +60,9 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     static let bubbleStrokeWidth: CGFloat = 0.5
     static let bubbleTopAlpha: CGFloat = 0.32
     static let bubbleBottomAlpha: CGFloat = 0.20
+    // `ACPReportedChangesButton`.
+    static let reportedChangesFontSize: CGFloat = 11
+    static let reportedChangesTopSpacing: CGFloat = 4
     static let bubbleStrokeAlpha: CGFloat = 0.5
     /// Symbols are rendered once at this scale; Retina is the common case.
     static let symbolScale: CGFloat = 2
@@ -106,6 +110,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     /// One accessible Copy button per code block, kept while the content is.
     var codeCopyElements: [ACPTranscriptCodeCopyAccessibilityElement] = []
     var codeLabelElements: [ACPTranscriptCodeLabelAccessibilityElement] = []
+    var reportedChangesElement: ACPTranscriptCodeCopyAccessibilityElement?
+    var reportedChangesPopover: NSPopover?
+    /// Opens the "Reported changes" popover; tests replace it.
+    var presentReportedChanges: @MainActor (ACPTranscriptCoreTextRowView) -> Void = { $0.showReportedChangesPopover() }
     /// One accessible link per drawn link, kept while the links are.
     var linkElements: [ACPTranscriptLinkAccessibilityElement] = []
     /// Where code-block Copy writes; tests swap in a private pasteboard.
@@ -172,6 +180,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         if window == nil {
             dropTiles()
             resetHover()
+            closeReportedChangesPopover()
             armedHitTarget = nil
             pressOrigin = nil
             isSelectingText = false
@@ -216,6 +225,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             codeCopyElements = []
             codeLabelElements = []
             linkElements = []
+            reportedChangesElement = nil
+            closeReportedChangesPopover()
         }
         self.content = content
         self.contentMaxWidth = contentMaxWidth

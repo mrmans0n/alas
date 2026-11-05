@@ -51,6 +51,14 @@ private func makeHost(
 }
 
 @MainActor
+private func withReportedChangesActions(_ host: ACPTranscriptScroller) -> ACPTranscriptScroller {
+    var host = host
+    host.reportedChangesActions = ACPReportedChangesActions(
+        roots: { ACPReportedPathRoots(root: "/wt", physicalRoot: nil) }, openFile: { _ in }, openDiff: nil)
+    return host
+}
+
+@MainActor
 @Suite("ACPTranscriptScroller rowSpecs id list")
 struct ACPTranscriptScrollerRowSpecsTests {
     private func message() -> ACPMessage {
@@ -398,6 +406,60 @@ struct ACPTranscriptScrollerRowSpecsTests {
         // toggle must yield a different token or the reconciler would keep
         // the stale row content on screen.
         #expect(!collapsed.isEqual(to: expanded))
+    }
+
+    @Test func reportedChangesFollowATurnOnANativeRow() throws {
+        let host = withReportedChangesActions(makeHost())
+        let checkpoint = UUID()
+        let id = UUID()
+        host.session.replaceTranscriptMessages([
+            .user(id: id, text: "please fix the tests", attachments: [
+                .checkpointReference(id: checkpoint), .fileChangeReportReference(requestId: "alas-turn:a"),
+            ]),
+            // Steered: the turn still owes the row above its report, and that row can already be native.
+            .user(id: UUID(), text: "and the docs", attachments: []),
+        ])
+        func nativeRow() throws -> (spec: ACPTranscriptRowSpec, view: ACPTranscriptCoreTextRowView) {
+            let spec = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true).first {
+                $0.id == host.transcript.stableId(for: host.transcript.messages[0])
+            })
+            let native = try #require(spec.native)
+            let view = try #require(native.make() as? ACPTranscriptCoreTextRowView)
+            native.configure(view)
+            return (spec, view)
+        }
+        func title(_ view: ACPTranscriptCoreTextRowView) -> String? {
+            if case .user(_, let title) = view.content { title } else { nil }
+        }
+
+        host.transcript.streamingState = .streaming
+        let active = try nativeRow()
+        #expect(title(active.view) == nil)
+        #expect(active.view.actions.reportedChanges == nil)
+        #expect(active.view.actions.menu?.checkpointID == checkpoint)
+
+        host.transcript.streamingState = .idle
+        let finished = try nativeRow()
+        #expect(title(finished.view) == "No report received")
+        #expect(finished.view.actions.reportedChanges != nil)
+        #expect(!active.spec.equalityToken.isEqual(to: finished.spec.equalityToken))
+
+        let report = try JSONDecoder().decode(ACPAgentFileChangeReport.self, from: Data(
+            #"{"version":1,"requestId":"alas-turn:a","status":"reported","paths":["/wt/a"]}"#.utf8))
+        host.transcript.replaceMessageMetadata(at: 0, with: .user(id: id, text: "please fix the tests", attachments: [
+            .checkpointReference(id: checkpoint), .fileChangeReportReference(requestId: "alas-turn:a", report: report),
+        ]))
+        let reported = try nativeRow()
+        #expect(title(reported.view) == "Reported changes · 1")
+        #expect(reported.view.actions.reportedChanges?.presentation.paths == ["/wt/a"])
+        #expect(!finished.spec.equalityToken.isEqual(to: reported.spec.equalityToken))
+
+        // A surface without the actions, as subagent rows are, shows no control.
+        let bare = makeHost(session: host.session)
+        let native = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: bare, nativeRowsEnabled: true).first?.native)
+        let view = try #require(native.make() as? ACPTranscriptCoreTextRowView)
+        native.configure(view)
+        #expect(title(view) == nil)
     }
 
     @Test("expanding a native tool row swaps it for the expanded SwiftUI card")

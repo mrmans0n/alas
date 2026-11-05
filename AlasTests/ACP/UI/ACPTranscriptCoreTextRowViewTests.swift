@@ -240,6 +240,50 @@ import Testing
         #expect(frame.maxX <= view.columnRect.maxX)
     }
 
+    @Test func aReportedChangesControlIsPressedNotSelected() throws {
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.reportedChanges = .init(
+            presentation: try #require(.make(attachments: [.fileChangeReportReference(requestId: "alas-turn:a")], isTurnActive: false)),
+            actions: .init(roots: { .init(root: "/wt", physicalRoot: nil) }, openFile: { _ in }, openDiff: nil)
+        )
+        let view = row(.user(markdown: "Can you fix the bug?", reportedChanges: "No report received"), actions: actions)
+        let plain = row(.user(markdown: "Can you fix the bug?"))
+        let height = view.measuredHeight(forWidth: 1_000)
+        #expect(height > plain.measuredHeight(forWidth: 1_000))
+        var presented = 0
+        view.presentReportedChanges = { _ in presented += 1 }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: height), styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView?.addSubview(view)
+        view.frame = NSRect(x: 0, y: 0, width: 1_000, height: height)
+        func click(_ point: NSPoint) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(
+                    with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                )!
+                type == .leftMouseDown ? view.mouseDown(with: event) : view.mouseUp(with: event)
+            }
+        }
+        let rect = try #require(view.layout(forWidth: 1_000).reportedChangesRect)
+        click(NSPoint(x: rect.midX, y: rect.midY))
+        #expect(presented == 1)
+        #expect(view.textSelection == nil)
+
+        let (_, origin) = try #require(view.markdown)
+        click(NSPoint(x: origin.x + 2, y: origin.y + 2))
+        #expect(presented == 1)
+
+        let elements = view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptCodeCopyAccessibilityElement } ?? []
+        let element = try #require(elements.first { $0.accessibilityLabel() == "No report received" })
+        #expect(element.accessibilityPerformPress())
+        #expect(presented == 2)
+    }
+
     @Test func aTableInAUserBubbleFillsTheBubble() throws {
         typealias V = ACPTranscriptCoreTextRowView
         let view = row(.user(markdown: "| a | b |\n|---|---|\n| 1 | 2 |"))
