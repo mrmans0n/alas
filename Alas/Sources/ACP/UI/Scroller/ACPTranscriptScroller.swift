@@ -53,6 +53,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
+    var failureIncidentActions: ACPFailureIncidentActions = .readOnly
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
 
@@ -671,6 +672,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                    case .visualAid = messages[row.index] {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
+                // The card's context is not in the row's token: a card back from the
+                // park with an equal token would keep what it read before it left.
+                if case .message(let row) = renderRow,
+                   messages.indices.contains(row.index),
+                   case .failureIncident = messages[row.index] {
+                    specs[specs.count - 1].parksWhenReleased = false
+                }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
                 // a bundle can end exactly there but never straddle it.
@@ -1212,6 +1220,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 delegationAction: delegationAction,
                 reviewedPlanId: reviewedPlanId(host: host, message: message),
                 visualAidActions: host.visualAidActions,
+                failureIncidentActions: host.failureIncidentActions,
                 isExpanded: isExpanded,
                 onExpandedChange: onExpandedChange,
                 onOpenPlanFile: host.onOpenPlanFile

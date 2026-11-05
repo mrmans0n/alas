@@ -17,6 +17,8 @@ public enum ACPMessage: Equatable, Sendable {
     /// checklist: the plan pill, `currentPlan` and summaries ignore it.
     case planDocument(id: UUID, ACPPlanDocument)
     case systemNotice(id: UUID, text: String)
+    /// Persisted under the `"system"` kind, with the title as its text.
+    case failureIncident(id: UUID, ACPFailureIncident)
     case visualAid(ACPVisualAid)
 
     public static func user(id: UUID, text: String, attachments: [Attachment]) -> ACPMessage {
@@ -41,6 +43,7 @@ public enum ACPMessage: Equatable, Sendable {
         case fileEdit(UUID)
         case plan(UUID)
         case systemNotice(UUID)
+        case failureIncident(UUID)
         case visualAid(UUID)
         case toolCall(String)
     }
@@ -59,6 +62,8 @@ public enum ACPMessage: Equatable, Sendable {
             .plan(id)
         case .systemNotice(let id, _):
             .systemNotice(id)
+        case .failureIncident(let id, _):
+            .failureIncident(id)
         case .visualAid(let visual):
             .visualAid(visual.id)
         case .toolCall(let tc):
@@ -80,7 +85,7 @@ public enum ACPMessage: Equatable, Sendable {
         switch self {
         case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             true
-        case .user, .systemNotice:
+        case .user, .systemNotice, .failureIncident:
             false
         }
     }
@@ -94,7 +99,7 @@ public enum ACPMessage: Equatable, Sendable {
         case .thoughtMessageId(let messageId):
             "acp-thought:\(messageId)"
         case .userUUID(let id), .agentUUID(let id), .thoughtUUID(let id),
-             .fileEdit(let id), .plan(let id), .systemNotice(let id), .visualAid(let id):
+             .fileEdit(let id), .plan(let id), .systemNotice(let id), .failureIncident(let id), .visualAid(let id):
             id.uuidString
         case .toolCall(let toolCallId):
             "tc-\(toolCallId)"
@@ -110,6 +115,8 @@ public enum ACPMessage: Equatable, Sendable {
             text.utf8Length
         case .systemNotice(_, let text):
             text.utf8.count
+        case .failureIncident(_, let incident):
+            incident.displayText.utf8.count
         case .toolCall(let tc):
             tc.content.utf8.count
         case .visualAid(let visual):
@@ -127,7 +134,7 @@ public enum ACPMessage: Equatable, Sendable {
         case .toolCall: "tool_call"
         case .fileEdit: "file_edit"
         case .plan, .planDocument: "plan"
-        case .systemNotice: "system"
+        case .systemNotice, .failureIncident: "system"
         case .visualAid: "visual_aid"
         }
     }
@@ -700,7 +707,8 @@ public enum ACPMessageCodec: Sendable {
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(ACPPlanRowPayload(items: items))
         case .planDocument(_, let document): return try encoder.encode(ACPPlanRowPayload(document: document))
-        case .systemNotice(_, let text):    return try encoder.encode(TextPayload(text: text))
+        case .systemNotice(_, let text):    return try encoder.encode(ACPSystemRowPayload(text: text))
+        case .failureIncident(_, let incident): return try encoder.encode(ACPSystemRowPayload(failureIncident: incident))
         case .visualAid(let visual):        return try encoder.encode(visual)
         }
     }
@@ -727,7 +735,8 @@ public enum ACPMessageCodec: Sendable {
         case "visual_aid":
             return .visualAid(try JSONDecoder().decode(ACPVisualAid.self, from: payload))
         case "system":
-            return .systemNotice(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            let p = try JSONDecoder().decode(ACPSystemRowPayload.self, from: payload)
+            return p.failureIncident.map { .failureIncident(id: UUID(), $0) } ?? .systemNotice(id: UUID(), text: p.text)
         default:
             return .systemNotice(id: UUID(), text: "(unknown message kind: \(kind))")
         }

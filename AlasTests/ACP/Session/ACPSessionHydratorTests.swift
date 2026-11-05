@@ -9,6 +9,39 @@ struct ACPSessionHydratorTests {
             .appendingPathComponent("hydrator-\(UUID()).sqlite").path
     }
 
+    // Main actor: ACPSession and toMessage() are main-actor-isolated.
+    @Test @MainActor func hydratedIncidentIsIndexedAndNotProgress() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "demo", currentModel: nil,
+            currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1,
+            lastOpenedAt: 1, archived: false))
+        let incident = try ACPFailureIncident.fixture(id: "stored")
+        let rows: [ACPMessage] = [
+            .user(id: UUID(), text: "prompt", attachments: []),
+            .failureIncident(id: UUID(), incident),
+        ]
+        for (seq, row) in rows.enumerated() {
+            try store.appendMessage(sessionId: "s", id: "m\(seq)", kind: row.kind, seq: Int64(seq),
+                                    payload: ACPMessageCodec.encode(row), createdAt: 1)
+        }
+        try store.upsertQueue(sessionId: "s", items: [QueuedPrompt(
+            blocks: [.text("prompt")], status: .sending, transcriptRecorded: true, dispatchCount: 1)])
+
+        let result = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.messages = result.wireMessages.map { $0.toMessage() }
+        #expect(session.transcript.failureIncidentIndex(id: "stored") == 1)
+        guard case .failureIncident(_, incident) = session.transcript.messages[1] else {
+            Issue.record("expected the stored incident")
+            return
+        }
+        #expect(QueuedPrompt.deliveredRecordedPromptIDs(in: result.queue, transcript: result.wireMessages).isEmpty)
+        #expect(result.deliveredQueuedPromptIDs.isEmpty)
+    }
+
     @Test("recovery reads transcript and queue from one snapshot", arguments: [false, true])
     func recoverySnapshotExcludesConcurrentQueueWrite(mirror: Bool) async throws {
         let path = tmpStorePath()

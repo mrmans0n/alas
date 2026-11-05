@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Muted single-line aside (e.g. "Agent disconnected.", "Blocked write
@@ -86,6 +87,128 @@ private struct ACPGoalEventCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.75))
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// What a failure incident card can ask its host to do. Every decision about
+/// what to offer stays in `ACPFailureIncidentPresentation`.
+struct ACPFailureIncidentActions {
+    /// Read live, never captured as a value: the rows that show a card are not
+    /// re-created when runner state or writer ownership changes.
+    var context: (String) -> ACPFailureActionContext
+    var isActiveRetry: (String) -> Bool
+    var retry: (String) -> Void
+    var signIn: (String) -> Void
+    var newSession: () -> Void
+    /// Fires when the host's state may have changed; the card re-reads `context`.
+    var changes: AnyPublisher<Void, Never>
+
+    /// For hosts that only display transcripts.
+    static var readOnly: Self {
+        .init(
+            context: { _ in .readOnly }, isActiveRetry: { _ in false }, retry: { _ in }, signIn: { _ in }, newSession: {},
+            changes: Empty(completeImmediately: false).eraseToAnyPublisher())
+    }
+
+    @MainActor
+    static func driven(
+        by manager: ACPSessionManager, session: ACPSession, newSession: @escaping () -> Void
+    ) -> Self {
+        let sessionId = session.id
+        return .init(
+            context: { [manager] incidentId in
+                manager.failureActionContext(sessionId: sessionId, incidentId: incidentId) ?? .readOnly
+            },
+            isActiveRetry: { [session] incidentId in session.retryStatus?.incidentId == incidentId },
+            retry: { [manager] incidentId in manager.retryFailedPrompt(sessionId: sessionId, incidentId: incidentId) },
+            signIn: { [manager] reason in manager.requestSignIn(sessionId: sessionId, reason: reason) },
+            newSession: newSession,
+            // `ACPSession` does not forward its transcript, which owns `streamingState`.
+            // `objectWillChange` fires before the change lands, so hop to the next main-queue turn to re-read.
+            changes: Publishers.Merge3(
+                manager.objectWillChange, session.objectWillChange, session.transcript.objectWillChange
+            )
+            .map { _ in () }
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher())
+    }
+}
+
+/// A failure the agent reported, in the notice style, with the recovery actions
+/// the adapter listed and this surface can run.
+struct ACPFailureIncidentCard: View {
+    let incident: ACPFailureIncident
+    let actions: ACPFailureIncidentActions
+    @State private var context: ACPFailureActionContext
+    @State private var isActiveRetry: Bool
+    @Environment(\.theme) private var theme
+
+    init(incident: ACPFailureIncident, actions: ACPFailureIncidentActions) {
+        self.incident = incident
+        self.actions = actions
+        _context = State(initialValue: actions.context(incident.record.id))
+        _isActiveRetry = State(initialValue: actions.isActiveRetry(incident.record.id))
+    }
+
+    var body: some View {
+        let presentation = ACPFailureIncidentPresentation.make(incident, context: context, isActiveRetry: isActiveRetry)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: incident.record.severity == .error ? "exclamationmark.octagon" : "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(tint(presentation.tone))
+                Text(presentation.title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(theme.color(presentation.tone == .muted ? "fg-faint" : "fg"))
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+            Text("\(presentation.categoryLabel) · \(presentation.severityLabel)")
+                .font(.system(size: 10))
+                .foregroundStyle(theme.color("fg-faint"))
+            if let details = presentation.details {
+                Text(details)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color(presentation.tone == .muted ? "fg-faint" : "fg-muted"))
+                    .textSelection(.enabled)
+            }
+            if !presentation.actions.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(presentation.actions, id: \.self) { action in
+                        Button(action.title) { run(action) }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11.5))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(theme.color("bg-1").opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+        )
+        .onReceive(actions.changes) {
+            context = actions.context(incident.record.id)
+            isActiveRetry = actions.isActiveRetry(incident.record.id)
+        }
+    }
+
+    private func tint(_ tone: ACPFailureIncidentPresentation.Tone) -> Color {
+        switch tone {
+        case .error: theme.color("del")
+        case .warningActive: theme.color("warn")
+        case .muted: theme.color("fg-faint")
+        }
+    }
+
+    private func run(_ action: ACPFailureAction) {
+        switch action {
+        case .retry: actions.retry(incident.record.id)
+        case .login: actions.signIn(incident.record.title)
+        case .newSession: actions.newSession()
+        }
     }
 }
 

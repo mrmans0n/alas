@@ -1144,11 +1144,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
         escalationSeconds: Int = 30,
         scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
         pause: @escaping (Duration) async -> Void = { _ in },
-        releaseReferencedSession: (() -> Void)? = nil
+        releaseReferencedSession: (() -> Void)? = nil,
+        sessionPath: String? = nil
     ) throws -> OutcomeFixture {
         let orchestrationPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
-        let sessionPath = FileManager.default.temporaryDirectory
+        let reopensStore = sessionPath != nil
+        let sessionPath = sessionPath ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-session-\(UUID().uuidString).sqlite").path
         let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
         let manager = ACPSessionManager(
@@ -1157,7 +1159,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             store: try ACPSessionStore(path: sessionPath),
             setupEvaluator: { _ in .missing(reason: "Install Codex") }
         )
-        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        if !reopensStore {
+            _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        }
         let worktree = Worktree(
             id: "worktree", projectId: "project", name: "feature-x", branch: "feature-x",
             path: URL(fileURLWithPath: "/tmp/worktree"), status: .clean,
@@ -1635,6 +1639,141 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(response.sessions.map(\.settled) == [true])
         #expect(response.sessions.first?.lastAgentText == "Parser fixed.")
+    }
+
+    /// A JSON-RPC failure ends here too, so it needs no incident row to be reported.
+    @Test func waitReportsLiveTurnFailure() async throws {
+        let fixture = try makeOutcomeFixture()
+        let child = try await insertLiveChild(fixture, messages: [.agent(id: UUID(), StreamingText("Partial."))])
+        child.turnFailure = "prompt failed: boom"
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == true)
+        #expect(response.sessions.first?.failure == "prompt failed: boom")
+    }
+
+    /// A failure is rewritten only when a turn ends. While the child runs it
+    /// describes the last turn, and a parent reading it would give up on this one.
+    @Test(arguments: [false, true])
+    func waitReportsNoFailureWhileTheChildRuns(fromRow: Bool) async throws {
+        let fixture = try makeOutcomeFixture()
+        let row = ACPMessage.failureIncident(id: UUID(), try .fixture(title: "Model overloaded", endedTurn: true))
+        let child = try await insertLiveChild(fixture, messages: fromRow ? [row] : [])
+        if !fromRow { child.turnFailure = "prompt failed: boom" }
+        child.transcript.streamingState = .streaming
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == false)
+        #expect(response.sessions.first?.failure == nil)
+    }
+
+    @Test func waitReportsStoredTurnFailure() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        let store = try ACPSessionStore(path: fixture.sessionPath)
+        try store.upsertSession(.init(id: "child", agentId: "codex", title: "Child",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "Fix it", attachments: []),
+            .failureIncident(id: UUID(), try .fixture(title: "Model overloaded", endedTurn: true)),
+        ]
+        for (seq, message) in messages.enumerated() {
+            try store.appendMessage(sessionId: "child", id: "m\(seq)", kind: message.kind,
+                                    seq: Int64(seq), payload: try ACPMessageCodec.encode(message), createdAt: 1)
+        }
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == true)
+        #expect(response.sessions.first?.failure == "Model overloaded")
+    }
+
+    enum RetriedHead: Sendable {
+        case resume, wake
+    }
+
+    private func waitFailure(_ fixture: OutcomeFixture) async throws -> String? {
+        try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        )).sessions.first?.failure
+    }
+
+    /// A retried item or a wake records no user row, so only the retry's own
+    /// result can close the failure. A cancelled retry says nothing about it.
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (RetriedHead.resume, #"{"stopReason":"end_turn"}"#, String?.none),
+        (.wake, #"{"stopReason":"end_turn"}"#, nil),
+        (.wake, #"{"stopReason":"max_tokens"}"#, nil),
+        (.wake, #"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:limit","revision":1,"severity":"error","title":"Limit","kind":"quota_exhausted"}}}"#, nil),
+        (.wake, #"{"stopReason":"cancelled"}"#, "Model overloaded"),
+        (.wake, #"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:again","revision":1,"severity":"error","title":"Still overloaded"}}}"#, "Still overloaded"),
+    ])
+    func waitFollowsARetriedTurn(head: RetriedHead, retriedResponse: String, expected: String?) async throws {
+        let fixture = try makeOutcomeFixture()
+        let session = try await insertLiveChild(fixture, messages: [])
+        let store = try ACPSessionStore(path: fixture.sessionPath)
+        try store.upsertSession(.init(id: "child", agentId: "codex", title: "Child",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"sessionFailure":{"version":1}}}"#.utf8)
+        }
+        let failed = try JSONSerialization.data(withJSONObject: ["stopReason": "end_turn", "_meta": ["sessionFailure": [
+            "version": 1, "id": "t:error", "revision": 1, "severity": "error", "title": "Model overloaded",
+        ] as [String: Any]]] as [String: Any])
+        mock.script(method: "session/prompt") { _ in failed }
+        let connection = ACPConnection(client: mock)
+        try await connection.initialize()
+        session.sessionFailure = .init()
+        session.agentState = .ready
+        var completions: [ACPTurnCompletion] = []
+        let runner = ACPSessionRunner(
+            session: session, connection: connection, store: store, sessionId: "child",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onTurnCompleted: { completions.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+        switch head {
+        case .resume:
+            let limit = ACPUsageLimit(detectedAt: Date(), resetSource: .unknown, probeAttempt: 0, resettable: true)
+            session.usageLimit = limit
+            session.upsertUsageLimitResume(limit: limit, scheduledAt: Date().addingTimeInterval(-1))
+        case .wake:
+            session.transcript.streamingState = .awaitingPermission
+            session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+                state: "completed"), ownerSessionId: "child")
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            session.transcript.streamingState = .idle
+        }
+        let item = try #require(session.queue.first)
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        #expect(try await waitFailure(fixture) == "Model overloaded")
+
+        let retried = Data(retriedResponse.utf8)
+        mock.script(method: "session/prompt") { _ in retried }
+        runner.forceSendQueuedItem(id: item.id)
+        try await waitUntil { completions.count == 2 }
+        await runner.flushPersistence()
+
+        #expect(try await waitFailure(fixture) == expected)
+        let reloaded = try makeOutcomeFixture(sessionPath: fixture.sessionPath)
+        try await insertReadyChild(reloaded.persistence)
+        #expect(try await waitFailure(reloaded) == expected)
+        #expect(reloaded.manager.liveSession(for: "child")?.transcript.messages.contains { $0.kind == "system" } == true)
     }
 
     @Test("interrupting a running child this instance does not drive reports no cancellation")

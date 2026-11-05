@@ -51,6 +51,7 @@ struct ACPMessageList: View {
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
+    var failureIncidentActions: ACPFailureIncidentActions = .readOnly
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
@@ -108,6 +109,7 @@ struct ACPMessageList: View {
                 upstreamReferences: upstreamReferences,
                 promptCardContext: promptCardContext,
                 visualAidActions: visualAidActions,
+                failureIncidentActions: failureIncidentActions,
                 onOpenPlanFile: onOpenPlanFile
             )
             if Self.shouldShowGoToNewestAffordance(

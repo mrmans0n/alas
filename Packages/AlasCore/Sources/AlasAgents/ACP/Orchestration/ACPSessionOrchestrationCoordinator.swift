@@ -868,7 +868,10 @@ public final class ACPSessionOrchestrationCoordinator {
             state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived).rawValue,
             settled: settled,
             lastAgentText: transcriptSession.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
-            failure: record?.failureMessage
+            // A turn's failure is rewritten only when a turn ends, so until the
+            // child settles it describes an earlier turn, not the running one.
+            failure: record?.failureMessage ?? (settled ? session?.turnFailure
+                ?? transcriptSession.flatMap { ACPSessionTranscriptReader.trailingTurnFailure($0.transcript.messages) } : nil)
         )
     }
 

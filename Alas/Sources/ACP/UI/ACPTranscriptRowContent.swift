@@ -90,6 +90,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// card re-reads (and re-reads when `changes` fires), so a mounted row
     /// follows writer ownership without a new value reaching this struct.
     var visualAidActions: ACPVisualAidActions = .readOnly
+    /// Not compared, for the same reason: the card re-reads its context live.
+    var failureIncidentActions: ACPFailureIncidentActions = .readOnly
     /// Seeds a tool card's or thought's disclosure, which then keeps its own
     /// state; `onExpandedChange` reports toggles back to the scroller's
     /// `ACPTranscriptRowExpansionStore`. Compared: a subagent row reads the
@@ -384,6 +386,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             }
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
+        case .failureIncident(_, let incident):
+            ACPFailureIncidentCard(incident: incident, actions: failureIncidentActions)
         case .visualAid(let visual):
             ACPVisualAidCard(
                 visual: visual, form: session.visualAidForm(for: visual),

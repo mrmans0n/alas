@@ -43,6 +43,15 @@ struct ACPPromptQuotaTests {
         #expect(quota.modelUsage[0].tokenCount.totalTokens == 120)
     }
 
+    @Test("an unreadable session failure leaves quota intact")
+    func quotaSurvivesAnUnreadableSessionFailure() throws {
+        let json = Data(#"{"stopReason":"end_turn","_meta":{"quota":{"token_count":{"totalTokens":7}},"sessionFailure":"boom"}}"#.utf8)
+        let result = try JSONDecoder().decode(ACPSessionPromptResult.self, from: json)
+        #expect(result.quota?.tokenCount?.totalTokens == 7)
+        #expect(result.stopReason.rawValue == .string("end_turn"))
+        #expect(result.failure == .unreadable)
+    }
+
     @Test("absent _meta decodes quota to nil")
     func absentMetaDecodesNil() throws {
         let json = #"{"stopReason":"end_turn"}"#.data(using: .utf8)!

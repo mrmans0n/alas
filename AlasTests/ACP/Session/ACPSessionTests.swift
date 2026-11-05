@@ -1277,6 +1277,145 @@ struct ACPSessionTests {
         }
     }
 
+    // MARK: - Failure incidents
+
+    private func negotiatedSession() -> ACPSession {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        return session
+    }
+
+    private func incidents(_ session: ACPSession) -> [ACPFailureIncident] {
+        session.transcript.messages.compactMap {
+            if case .failureIncident(_, let incident) = $0 { incident } else { nil }
+        }
+    }
+
+    @Test("endedTurn is sticky, and only it changes on an equal or lower revision", arguments: [
+        // stored revision and flag, incoming revision and flag; expected title, flag, dirty
+        (1, false, 2, true, "incoming", true, Set([0])),
+        (1, true, 2, false, "incoming", true, Set([0])),
+        (1, false, 1, true, "stored", true, Set([0])),
+        (1, true, 1, true, "stored", true, Set<Int>()),
+        (2, false, 1, true, "stored", true, Set([0])),
+        (2, true, 1, true, "stored", true, Set<Int>()),
+        (2, false, 1, false, "stored", false, Set<Int>()),
+    ] as [(Int, Bool, Int, Bool, String, Bool, Set<Int>)])
+    func incidentEndedTurnFlag(storedRevision: Int, storedFlag: Bool, revision: Int, flag: Bool,
+                               title: String, expectedFlag: Bool, expectedDirty: Set<Int>) throws {
+        let session = negotiatedSession()
+        try session.applyFailureRecord(.fixture(id: "f", revision: storedRevision, title: "stored"),
+                                       endedTurn: storedFlag, replaying: false)
+        let dirty = try session.applyFailureRecord(.fixture(id: "f", revision: revision, title: "incoming"),
+                                                   endedTurn: flag, replaying: false)
+        #expect(dirty == expectedDirty)
+        #expect(incidents(session).map(\.record.title) == [title])
+        #expect(incidents(session).map(\.endedTurn) == [expectedFlag])
+    }
+
+    @Test func upsertStaysInPlaceAfterLaterRows() throws {
+        let session = negotiatedSession()
+        session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "first"), replaying: false, promptActive: false)
+        let stableId = try #require(session.transcript.messages.first).stableId
+        let createdAt = session.transcript.createdAt(forMessageAt: 0)
+        session.apply(.agentMessageChunk(.text("later")))
+
+        let dirty = session.applySessionFailureUpdate(
+            failureInfo(id: "f", revision: 2, title: "second"), replaying: false, promptActive: false)
+
+        #expect(dirty == [0])
+        #expect(session.transcript.failureIncidentIndex(id: "f") == 0)
+        #expect(incidents(session).map(\.record.title) == ["second"])
+        #expect(session.transcript.messages[0].stableId == stableId)
+        #expect(session.transcript.createdAt(forMessageAt: 0) == createdAt)
+        guard case .agent = session.transcript.messages[1] else {
+            Issue.record("expected the agent row to stay after the incident")
+            return
+        }
+    }
+
+    @Test func equalTitlesWithDifferentIdsStaySeparate() {
+        let session = negotiatedSession()
+        session.applySessionFailureUpdate(failureInfo(id: "a", revision: 1, title: "same"), replaying: false, promptActive: false)
+        session.applySessionFailureUpdate(failureInfo(id: "b", revision: 1, title: "same"), replaying: false, promptActive: false)
+        #expect(incidents(session).map(\.record.id) == ["a", "b"])
+    }
+
+    @Test func incidentIndexFollowsInsertions() {
+        let session = negotiatedSession()
+        session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "first"), replaying: false, promptActive: false)
+        session.transcript.insertMessage(.systemNotice(id: UUID(), text: "earlier"), at: 0)
+        #expect(session.transcript.failureIncidentIndex(id: "f") == 1)
+
+        let dirty = session.applySessionFailureUpdate(
+            failureInfo(id: "f", revision: 2, title: "second"), replaying: false, promptActive: false)
+
+        #expect(dirty == [1])
+        #expect(session.transcript.messages.count == 2)
+        #expect(incidents(session).map(\.record.title) == ["second"])
+    }
+
+    @Test("no row without negotiation, or from the JetBrains form of the field", arguments: [
+        (false, false),
+        (true, true),
+    ])
+    func updateAddsNoRow(negotiated: Bool, underJetBrainsMeta: Bool) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = negotiated ? .init() : nil
+        var info = failureInfo(id: "f", revision: 1, title: "x")
+        if underJetBrainsMeta {
+            let record = try #require(info.metadata?.value as? [String: AnyCodable])
+            info = ACPSessionInfoUpdate(title: nil, metadata: AnyCodable(["jetbrains": AnyCodable(["air": AnyCodable(record)])]))
+        }
+
+        #expect(session.applySessionFailureUpdate(info, replaying: false, promptActive: false).isEmpty)
+        #expect(session.transcript.messages.isEmpty)
+    }
+
+    @Test func sessionUpdateNeverTouchesLifecycle() {
+        let session = negotiatedSession()
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        session.turnFailure = "earlier failure"
+        session.lastError = "earlier error"
+
+        session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "x", severity: "error"), replaying: false, promptActive: false)
+
+        #expect(session.agentState == .ready)
+        #expect(session.transcript.streamingState == .streaming)
+        #expect(session.turnFailure == "earlier failure")
+        #expect(session.lastError == "earlier error")
+    }
+
+    @Test("a live incident closes held output ahead of itself and reports both rows")
+    func liveIncidentFlushesHeldOutput() {
+        let session = negotiatedSession()
+        session.transcript.messages = Self.seedMessages([.agent("OK done.")])
+        session.allowsStreamingBoundaryCrossing = false
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+
+        let dirty = session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "x"), replaying: false, promptActive: false)
+
+        #expect(dirty == [1, 2])
+        #expect(Self.orderedRows(session) == ["agent:OK done.", "agent:OK"])
+        #expect(session.transcript.failureIncidentIndex(id: "f") == 2)
+    }
+
+    @Test("an incident is not output: the boundary scan passes it and it keeps the content touch")
+    func completedOutputBoundarySkipsTrailingIncident() {
+        let session = negotiatedSession()
+        session.apply(.agentMessageChunk(.text("first task")))
+        let touch = session.transcript.lastContentTouchIndex
+        session.applySessionFailureUpdate(failureInfo(id: "f", revision: 1, title: "x"), replaying: false, promptActive: false)
+        #expect(session.transcript.lastContentTouchIndex == touch)
+
+        session.markCompletedOutputBoundary()
+        session.apply(.agentMessageChunk(.text("second task")))
+
+        #expect(Self.orderedRows(session) == ["agent:first task", "agent:second task"])
+        #expect(session.transcript.failureIncidentIndex(id: "f") == 1)
+    }
+
     @Test("completed output boundary skips trailing plan rows", arguments: [
         ACPSessionUpdate.plan([.init(content: "done", priority: nil, status: "completed")]),
         .markdownPlan("m", "# Plan"),
@@ -1632,6 +1771,57 @@ struct ACPSessionTests {
         session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
         session.markCompletedOutputBoundary()
         #expect(session.retryStatus == nil)
+    }
+
+    @Test("a warning record shows as a retry only while a prompt runs live", arguments: [
+        (true, false, true),
+        (false, false, false),
+        (true, true, false),
+    ])
+    func warningRecordSetsRetryStatus(promptActive: Bool, replaying: Bool, shows: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Reconnecting\n  to the service", severity: "warning"),
+            replaying: replaying, promptActive: promptActive)
+        #expect(session.transcript.failureIncidentIndex(id: "a") != nil)
+        #expect(session.retryStatus?.detail == (shows ? "Reconnecting to the service" : nil))
+        #expect(session.retryStatus?.incidentId == (shows ? "a" : nil))
+        session.apply(.agentMessageChunk(.text("resumed")))
+        #expect(session.retryStatus == nil)
+    }
+
+    @Test("an error clears the retry of its own incident only", arguments: [("a", true), ("b", false)])
+    func errorAtRetryIdClearsRetryStatus(errorId: String, clears: Bool) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.sessionFailure = .init()
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Retrying", severity: "warning"), replaying: false, promptActive: true)
+        session.applySessionFailureUpdate(
+            failureInfo(id: errorId, revision: 2, title: "Gave up"), replaying: false, promptActive: true)
+        #expect((session.retryStatus == nil) == clears)
+        let index = try #require(session.transcript.failureIncidentIndex(id: errorId))
+        guard case .failureIncident(_, let incident) = session.transcript.messages[index] else {
+            Issue.record("expected an incident row")
+            return
+        }
+        #expect(incident.record.revision == 2)
+        #expect(session.transcript.messages.count == (clears ? 1 : 2))
+
+        // A late warning cannot reopen a retry its incident's error ended.
+        session.applySessionFailureUpdate(
+            failureInfo(id: "a", revision: 1, title: "Retrying", severity: "warning"), replaying: false, promptActive: true)
+        #expect((session.retryStatus == nil) == clears)
+    }
+
+    @Test("legacy retry metadata counts only without negotiated failures", arguments: [(true, false), (false, true)])
+    func negotiatedSessionIgnoresLegacyRetryMeta(negotiated: Bool, sets: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        if negotiated { session.sessionFailure = .init() }
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying"),
+        ])])]))))
+        #expect((session.retryStatus != nil) == sets)
     }
 
     @Test("a plan with content clears retryable status; a removal or an unknown plan does not", arguments: [
@@ -4300,4 +4490,15 @@ extension ACPSessionTests {
                   expectedPreview: "`cmd` ran successfully"),
         ]
     }
+}
+
+/// A `session_info_update` carrying one failure record.
+func failureInfo(id: String, revision: Int, title: String, severity: String = "error") -> ACPSessionInfoUpdate {
+    ACPSessionInfoUpdate(title: nil, metadata: AnyCodable(["sessionFailure": AnyCodable([
+        "version": AnyCodable(1),
+        "id": AnyCodable(id),
+        "revision": AnyCodable(revision),
+        "severity": AnyCodable(severity),
+        "title": AnyCodable(title),
+    ])]))
 }

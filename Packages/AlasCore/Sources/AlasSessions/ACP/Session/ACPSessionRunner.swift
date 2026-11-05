@@ -252,10 +252,11 @@ public final class ACPSessionRunner {
     private var failedFirstWriteVisualAidIDs: Set<UUID> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
-    /// Outcome of the most recently COMPLETED write queued via
-    /// `persistIndices` or `persistSubagentIndices` that has not yet
-    /// reached an acknowledgement boundary, regardless of whether that
-    /// write itself carried a durable acknowledgement.
+    /// Outcome of the most recently COMPLETED lifecycle-batch write queued
+    /// via `persistIndices(participatesInLifecycleBatch: true)` or
+    /// `persistSubagentIndices` that has not yet reached an acknowledgement
+    /// boundary, regardless of whether that write itself carried a durable
+    /// acknowledgement. Ordinary row and queue writes never touch it.
     ///
     /// Consulted (and reset) by `acknowledgeAfterQueuedPersistence`'s
     /// barrier and by the two `persistIndices`/`persistSubagentIndices`
@@ -267,10 +268,10 @@ public final class ACPSessionRunner {
     /// say) would otherwise slip past the fence check alone, and the
     /// barrier would acknowledge a row that was never stored.
     ///
-    /// Set unconditionally inside each write's own completion — not the
-    /// caller-supplied one, which is nil whenever that particular update
-    /// carries no ack of its own (the spawn half of an OpenCode-normalized
-    /// batch, always) — so it reflects every real write, acked or not.
+    /// Set inside each such write's own completion — not the caller-supplied
+    /// one, which is nil whenever that particular update carries no ack of its
+    /// own (the spawn half of an OpenCode-normalized batch, always) — so it
+    /// reflects every batch write, acked or not.
     ///
     /// Reset to `true` the moment a write DOES carry the caller's own
     /// completion — i.e. the moment a batch reaches its acknowledgement
@@ -367,6 +368,9 @@ public final class ACPSessionRunner {
     /// `session/fork` is in flight. New prompts remain queued until the
     /// target adapter has created the branch.
     private var nativeForkBarrierActive = false
+    /// What an explicit Retry sends, in memory only: the latest finished prompt
+    /// when it failed, as the user wrote it. A new runner starts with none.
+    private var retryablePrompt: (failure: ACPRetryableFailure, blocks: [ACPContentBlock], draft: ACPComposerDraft?)?
     public var onUnexpectedDisconnect: (() -> Void)?
 
     /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
@@ -1448,17 +1452,18 @@ public final class ACPSessionRunner {
                 params.update,
                 tracksRetryStatus: !suppressingLoadReplay,
                 worktreeRoot: worktreePath
-            )
+            ).union(session.applySessionFailureUpdate(
+                info,
+                replaying: suppressingLoadReplay,
+                promptActive: activePromptID != nil
+            ))
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
         }
         if suppressingLoadReplay {
             if let dirty = preAppliedSessionInfoDirty {
-                persistIndices(
-                    dirty,
-                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
-                )
+                persistSessionInfoRows(dirty, of: params.update, acknowledging: durableConsumptionAcknowledgement)
             } else {
                 // `.toolCall`/`.toolCallUpdate` reconciliation (pre-existing)
                 // and root-level subagent lifecycle reconciliation both
@@ -1505,10 +1510,7 @@ public final class ACPSessionRunner {
             return
         }
         if let dirty = preAppliedSessionInfoDirty {
-            persistIndices(
-                dirty,
-                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
-            )
+            persistSessionInfoRows(dirty, of: params.update, acknowledging: durableConsumptionAcknowledgement)
         } else {
             let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundary
                 .map { appliedUpdateCount <= $0.updateCount } ?? false
@@ -1593,6 +1595,9 @@ public final class ACPSessionRunner {
                     // synchronously without waiting for that write or
                     // re-checking the fence; this barrier does both.
                     acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+                } else if dirty.isEmpty {
+                    // Nothing of its own to write, and no batch to end.
+                    acknowledgeBehindQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
                     // This IS genuinely part of the OpenCode dual-write
                     // lifecycle batch when the update is spawn/state — every
@@ -1763,8 +1768,10 @@ public final class ACPSessionRunner {
     /// transient failure unrelated to the lease (a SQLite `step` error,
     /// say) would pass this barrier's own fence check while the earlier
     /// write stored nothing. So the completion also folds in
-    /// `lastQueuedPersistenceSucceeded`, which every real write updates
-    /// unconditionally regardless of whether IT carried a durable ack.
+    /// `lastQueuedPersistenceSucceeded`. Only lifecycle-batch writes update
+    /// that flag (`participatesInLifecycleBatch`, and every subagent write
+    /// by default), so this answers for a failed batch write, not for an
+    /// ordinary row or queue write queued ahead of it.
     private func acknowledgeAfterQueuedPersistence(
         _ acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
@@ -1790,6 +1797,25 @@ public final class ACPSessionRunner {
             if succeeded {
                 acknowledgement()
             }
+        })
+    }
+
+    /// For a durable update that wrote nothing and ends no lifecycle batch:
+    /// orders its acknowledgement behind everything already queued. It answers
+    /// for a batch failure still waiting on its boundary, but leaves that
+    /// failure for the boundary to consume, which
+    /// `acknowledgeAfterQueuedPersistence` would not.
+    private func acknowledgeBehindQueuedPersistence(
+        _ acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else { return }
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        enqueuePersistence({ persistence in
+            try await persistence.persistSubagentMessages([], fence: fence)
+        }, completion: { [weak self] persisted in
+            guard let self, persisted == true, self.lastQueuedPersistenceSucceeded else { return }
+            acknowledgement()
         })
     }
 
@@ -1885,6 +1911,40 @@ public final class ACPSessionRunner {
             completion?(succeeded)
         })
         return true
+    }
+
+    /// An update that writes nothing still acknowledges behind the queue: an
+    /// earlier update's row can be unwritten, and this ack would pass it.
+    private func persistSessionInfoRows(
+        _ dirty: Set<Int>,
+        of update: ACPSessionUpdate,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        var rows = dirty
+        if dirty.isEmpty, acknowledgement != nil, session.sessionFailure != nil,
+           case .sessionInfoUpdate(let info) = update,
+           case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
+            rows = unconfirmedIncidentRow(id: record.id)
+        }
+        if rows.isEmpty {
+            acknowledgeBehindQueuedPersistence(acknowledgement)
+        } else {
+            persistIndices(rows, completion: persistenceCompletion(acknowledging: acknowledgement))
+        }
+    }
+
+    /// A record that changes nothing can still be the redelivery of one whose
+    /// row never reached the store, because the in-memory row makes it a no-op.
+    /// Acknowledging it would move the cursor past that row, so unless this
+    /// runner's own write confirmed the row, it is written again. A row
+    /// hydrated from the store, or trimmed from `lastPersistedPayloads`, is
+    /// rewritten with the same bytes.
+    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
+        guard let index = session.transcript.failureIncidentIndex(id: id),
+              let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index])),
+              lastPersistedPayloads[index] != payload
+        else { return [] }
+        return [index]
     }
 
     private func persistenceCompletion(
@@ -2431,10 +2491,88 @@ public final class ACPSessionRunner {
         }
     }
 
+    /// Flushes buffered updates when `promptID` is still active (so the row
+    /// lands after the turn's last text), upserts a readable record, persists
+    /// it, and returns `acknowledgement` gated on that row write. The
+    /// persistence pipeline is serial, so the returned ack can be handed to a
+    /// later queue write. Passes `acknowledgement` through when no row is at stake.
+    private func applyResponseFailure(
+        _ failure: ACPSessionFailureSignal,
+        promptID: Int,
+        endedTurn: Bool,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) -> ACPDurableConsumptionAcknowledgement? {
+        if activePromptID == promptID {
+            flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        }
+        guard case .record(let record) = failure else { return acknowledgement }
+        flushStreamingPersist()
+        let dirty = session.applyFailureRecord(record, endedTurn: endedTurn, replaying: false)
+        return persistIncidentRows(
+            dirty.isEmpty && acknowledgement != nil ? unconfirmedIncidentRow(id: record.id) : dirty,
+            acknowledging: acknowledgement)
+    }
+
+    /// Persists incident rows and returns `acknowledgement` gated on that
+    /// write. The persistence pipeline is serial, so the result can be handed
+    /// to a later queue write.
+    private func persistIncidentRows(
+        _ rows: Set<Int>,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) -> ACPDurableConsumptionAcknowledgement? {
+        guard !rows.isEmpty else { return acknowledgement }
+        guard let acknowledgement else {
+            persistIndices(rows)
+            return nil
+        }
+        let rowWritten = OSAllocatedUnfairLock(initialState: false)
+        persistIndices(rows, completion: { persisted in
+            rowWritten.withLock { $0 = persisted }
+        })
+        return {
+            if rowWritten.withLock({ $0 }) { acknowledgement() }
+        }
+    }
+
+    /// An error record on `end_turn` ended the turn; any other record happened during it.
+    private static func recordEndedTurn(_ outcome: ACPPromptOutcome, wasCancelled: Bool) -> Bool {
+        guard !wasCancelled, case .record(let record) = outcome.failure else { return false }
+        return record.severity == .error && outcome.stopReason.rawValue == .string("end_turn")
+    }
+
+    /// Whether this turn showed any model work, so what its prompt carried
+    /// demonstrably reached the model. Only rows at or after
+    /// `activePromptTranscriptFloor` belong to the turn. Text a steering row
+    /// save still holds back counts too: the flush cannot land it yet.
+    private func activeTurnShowedModelWork() -> Bool {
+        guard let floor = activePromptTranscriptFloor else { return false }
+        return bufferedAgentText() != nil
+            || session.transcript.messages.dropFirst(floor).contains(where: \.isAgentSideProgress)
+    }
+
+    /// The usage limit a `session/prompt` response's failure record reports,
+    /// read before the turn's bookkeeping ends so this turn's text is in reach.
+    private func typedUsageLimit(_ failure: ACPSessionFailureSignal) -> ACPUsageLimit? {
+        guard case .record(let record) = failure else { return nil }
+        return ACPUsageLimitDetector.detect(
+            failure: record,
+            turnAgentText: [currentTurnLastAgentText(), bufferedAgentText()].compactMap { $0 }.joined(),
+            claudeRateLimit: session.latestClaudeRateLimit,
+            now: Date(),
+            resettableUnlessClaude: session.agentId != ACPManagedAdapterDescriptor.claude.agentID
+        )
+    }
+
     /// A usage limit stopped the active prompt. The prompt itself reached the
     /// agent (it is in the agent's history), so a queued one is consumed like
     /// a success; resuming sends a short continue prompt instead.
-    private func applyUsageLimit(_ detected: ACPUsageLimit, failedQueuedItemId: UUID?) {
+    /// `acknowledging` waits for this consumption's own durable write.
+    private func applyUsageLimit(
+        _ detected: ACPUsageLimit,
+        failedQueuedItemId: UUID?,
+        deliveredForkContext: Bool = false,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
         var previous = session.usageLimit
         var consumedWake: QueuedPrompt?
         if let failedQueuedItemId, session.queue.first?.id == failedQueuedItemId {
@@ -2460,9 +2598,13 @@ public final class ACPSessionRunner {
         if let consumedWake {
             persistBackgroundWakeAndQueue(
                 rows: markBackgroundWakesDelivered(for: consumedWake),
-                consuming: consumedWake)
+                consuming: consumedWake,
+                deliveredForkContext: deliveredForkContext,
+                acknowledging: acknowledgement)
+        } else if deliveredForkContext {
+            persistForkContextDeliveredAndQueue(acknowledging: acknowledgement)
         } else {
-            persistQueue()
+            persistQueue(acknowledging: acknowledgement)
         }
     }
 
@@ -3992,6 +4134,7 @@ extension ACPSessionRunner {
         onPromptFinished: (@MainActor (Bool) -> Void)?,
         recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
+        clearRetryablePrompt()
         let dispatchHandoff = onDispatchRegistered.map(ACPRequestHandoff.init)
         // A force-steered item may keep provenance from an earlier failed
         // send; that dispatch does not describe this steered delivery.
@@ -4509,6 +4652,7 @@ extension ACPSessionRunner {
         discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
         session.clearRetryStatus()
+        clearRetryablePrompt()
         let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
@@ -4842,7 +4986,11 @@ extension ACPSessionRunner {
                     beforeRequestHandoff: beforeRequestHandoff,
                     onRequestHandoffDidOccur: onRequestHandoffDidOccur
                 )
-                let promptAcknowledgement = promptOutcome.acknowledgement
+                let reportsFailure = promptOutcome.failure.isPresent
+                if reportsFailure {
+                    // A failure's row belongs after the updates sent before it.
+                    await self.waitForPromptUpdateDelivery(promptID: promptID)
+                }
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
                     let isActivePrompt = self.activePromptID == promptID
@@ -4853,7 +5001,24 @@ extension ACPSessionRunner {
                     // after the `isActivePrompt` block, mirroring the pre-existing cleanup point.
                     let wasCancelled = self.cancelledPromptIDs.contains(promptID)
                     let completionResult: ACPTurnCompletion.Result = wasCancelled
-                        ? .cancelled : promptOutcome.stopReason.v1Result
+                        ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure)
+                    var promptAcknowledgement = !reportsFailure ? promptOutcome.acknowledgement : self.applyResponseFailure(
+                        promptOutcome.failure,
+                        promptID: promptID,
+                        endedTurn: isActivePrompt && Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
+                        acknowledging: promptOutcome.acknowledgement)
+                    // A retried item or a wake records no user row, so its result
+                    // has to close the failure it follows. A superseded prompt's
+                    // result says nothing about the last turn.
+                    if isActivePrompt, completionResult.closesEarlierTurnFailure {
+                        promptAcknowledgement = self.persistIncidentRows(
+                            self.session.clearTrailingTurnFailures(), acknowledging: promptAcknowledgement)
+                    }
+                    // A failed turn delivered its one-time context only if it shows
+                    // model work; otherwise the next prompt carries it again.
+                    // Read here: the floor goes when the turn ends.
+                    let modelWorkShown = isActivePrompt && self.activeTurnShowedModelWork()
+                    let retainsContext = reportsFailure && completionResult.isFailedOrLimited && !modelWorkShown
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -4865,18 +5030,18 @@ extension ACPSessionRunner {
                     if !isActivePrompt {
                         self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota, result: completionResult)
                     }
-                    let deliveredForkContext = pendingForkContext != nil
+                    let deliveredForkContext = pendingForkContext != nil && !retainsContext
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
                     // "active" by the time we get back on the main actor —
                     // guard against a racing change (e.g. a new preamble
                     // queued mid-flight) before clearing.
-                    if let pendingPreamble, self.session.pendingMCPPreamble == pendingPreamble {
+                    if !retainsContext, let pendingPreamble, self.session.pendingMCPPreamble == pendingPreamble {
                         self.session.pendingMCPPreamble = nil
                         self.session.mcpPreambleSent = true
                         self.persistMCPPreambleSent()
                     }
-                    if pendingForkContext != nil,
+                    if deliveredForkContext,
                        var fork = self.session.forkRecord,
                        fork.contextDeliveryPending {
                         fork.contextDeliveryPending = false
@@ -4889,12 +5054,68 @@ extension ACPSessionRunner {
                             self.persistForkContextDelivered(acknowledging: promptAcknowledgement)
                         }
                     }
-                    if isActivePrompt {
+                    let typedUsageLimit = isActivePrompt && completionResult == .limited
+                        ? self.typedUsageLimit(promptOutcome.failure) : nil
+                    if let typedUsageLimit {
+                        self.session.clearRetryStatus()
+                        // A direct prompt's fork context and acknowledgement were
+                        // handled above; a queued one's wait for this queue write.
+                        self.applyUsageLimit(
+                            typedUsageLimit,
+                            failedQueuedItemId: queuedItemId,
+                            deliveredForkContext: queuedItemId != nil && deliveredForkContext,
+                            acknowledging: queuedItemId != nil ? promptAcknowledgement : nil
+                        )
+                        self.activePromptID = nil
+                        self.emitTurnCompleted(.limited, promptID: promptID, quota: promptOutcome.quota)
+                        self.deferCompletedOutputBoundaryUntilUpdatesDrain()
+                        self.onPromptWorkChanged?()
+                    } else if isActivePrompt {
                         self.session.clearRetryStatus()
                         let completionUserMessageID = promptRecording.messageID
                             ?? recordedUserMessageID
                             ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
-                        if let queuedItemId {
+                        // Only a turn that reported its failure; `.failed` means nothing else here.
+                        let failureMessage: String? = if reportsFailure, case .failed(let message) = completionResult {
+                            message
+                        } else {
+                            nil
+                        }
+                        // Some failed heads keep their place for a manual retry. Consuming
+                        // a resume would leave the session Limited with nothing to resume;
+                        // a wake that shows no model work is hidden, so the agent would
+                        // never learn its job finished. Either blocks what follows on its
+                        // own, like any failed head.
+                        let keepsFailedHead = failureMessage != nil && queuedItemId != nil
+                            && self.session.queue.first?.id == queuedItemId
+                            && (self.session.queue.first?.usageLimit != nil
+                                || (self.session.queue.first?.backgroundTaskWake != nil && !modelWorkShown))
+                        // Ahead of the consumption below, whose write stores the hold.
+                        let heldNext = failureMessage != nil && !keepsFailedHead
+                            && self.session.holdNextQueuedPrompt(after: queuedItemId)
+                        // Read before the consumption below. A kept head has its own
+                        // Retry, and a wake or a resume is not the user's prompt.
+                        let failedItem = queuedItemId.flatMap { id in self.session.queue.first { $0.id == id } }
+                        let isUserPrompt = normalUserTurn && delegatedSource == nil && !keepsFailedHead
+                            && failedItem?.backgroundTaskWake == nil && failedItem?.usageLimit == nil
+                        if failureMessage != nil, isUserPrompt, case .record(let record) = promptOutcome.failure {
+                            let failure = ACPRetryableFailure(incidentId: record.id, promptID: promptID)
+                            self.retryablePrompt = (failure, blocks, draft)
+                            self.session.setRetryableFailure(failure)
+                        }
+                        if keepsFailedHead, let failureMessage {
+                            // A retry under the same key would replay this failure
+                            // from the broker instead of reaching the agent.
+                            self.session.setQueueHeadError(
+                                failureMessage,
+                                advancesBrokerOperationAttempt: brokerOperationKey != nil
+                            )
+                            if deliveredForkContext {
+                                self.persistForkContextDeliveredAndQueue(acknowledging: promptAcknowledgement)
+                            } else {
+                                self.persistQueue(acknowledging: promptAcknowledgement)
+                            }
+                        } else if let queuedItemId {
                             let completedItem = self.session.queue.first
                             let wakeRows = completedItem.map { self.markBackgroundWakesDelivered(for: $0) } ?? []
                             self.session.normalQueuedTurnIDs.remove(queuedItemId)
@@ -4910,8 +5131,10 @@ extension ACPSessionRunner {
                                     self.persistQueue(acknowledging: promptAcknowledgement)
                                 }
                             }
+                        } else if heldNext {
+                            self.persistQueue()
                         }
-                        if !wasCancelled, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
+                        if !wasCancelled, failureMessage == nil, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
                             self.session.usageLimit = nil
                             self.persistUsageLimit()
                             if self.session.removeUsageLimitResume() {
@@ -4919,7 +5142,11 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
+                        if !wasCancelled, failureMessage == nil, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
+                        // An unreadable record has no row to show it.
+                        if let failureMessage, case .unreadable = promptOutcome.failure {
+                            self.session.lastError = "prompt failed: \(failureMessage)"
+                        }
                         self.emitTurnCompleted(
                             completionResult, promptID: promptID, quota: promptOutcome.quota, reportsAtBoundary: true)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
@@ -4948,6 +5175,13 @@ extension ACPSessionRunner {
                         self.onPromptWorkChanged?()
                     } else {
                         nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: no longer the active prompt (newerActive=\(hasNewerActivePrompt), cancelled=\(wasCancelled))")
+                    }
+                    // `ACPConnection.prompt` left this ack to us. A queued active
+                    // prompt and a delivered fork marker handed it to their writes.
+                    if reportsFailure,
+                       !(isActivePrompt && queuedItemId != nil),
+                       !(deliveredForkContext && (queuedItemId == nil || !isActivePrompt)) {
+                        self.acknowledgeBehindQueuedPersistence(promptAcknowledgement)
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     self.promptLifecycle.forget(promptID)
@@ -5030,14 +5264,7 @@ extension ACPSessionRunner {
                                 self.session.lastError = "prompt failed: \(errorMessage)"
                             }
                             if let authReason {
-                                self.session.setupState = .needsAuth(
-                                    methods: self.session.authMethods,
-                                    reason: authReason
-                                )
-                                self.session.agentState = .failed(authReason)
-                                Task { @MainActor in
-                                    await self.onAuthRequired?(self, authReason)
-                                }
+                                self.enterAuthRequired(reason: authReason)
                             }
                             self.activePromptID = nil
                             self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage), promptID: promptID)
@@ -5067,6 +5294,7 @@ extension ACPSessionRunner {
         turnPublicationGeneration += 1
         discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()
+        clearRetryablePrompt()
         let promptID = session.allocatePromptID()
         if let previous = activePromptID { promptLifecycle.forget(previous) }
         activePromptID = promptID
@@ -5114,10 +5342,20 @@ extension ACPSessionRunner {
                 let promptOutcome = try await self.connection.prompt(
                     sessionId: remoteId, blocks: [.text(prompt)],
                     onTransportHandoff: { [promptHandoffs] in promptHandoffs.mark(promptID) })
+                if promptOutcome.failure.isPresent {
+                    await self.waitForPromptUpdateDelivery(promptID: promptID)
+                }
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
+                    if promptOutcome.failure.isPresent {
+                        self.acknowledgeBehindQueuedPersistence(self.applyResponseFailure(
+                            promptOutcome.failure,
+                            promptID: promptID,
+                            endedTurn: isActivePrompt && Self.recordEndedTurn(promptOutcome, wasCancelled: wasCancelled),
+                            acknowledging: promptOutcome.acknowledgement))
+                    }
                     // See the matching comment in sendNow: always accumulate
                     // into the session total, only overwrite "last turn"
                     // when this response still belongs to the active prompt.
@@ -5135,10 +5373,10 @@ extension ACPSessionRunner {
                     // hands UI state to its successor turn, this callback is the
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
-                    self.reportSupersededTurnUsage(
-                        promptID, quota: promptOutcome.quota,
-                        result: wasCancelled ? .cancelled : promptOutcome.stopReason.v1Result)
-                    onCompleted?(isActivePrompt && !wasCancelled)
+                    let result: ACPTurnCompletion.Result = wasCancelled
+                        ? .cancelled : promptOutcome.stopReason.v1Result(failure: promptOutcome.failure)
+                    self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota, result: result)
+                    onCompleted?(isActivePrompt && !wasCancelled && !result.isFailedOrLimited)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
 #endif
@@ -5506,6 +5744,79 @@ extension ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// The runner's half of the policy's input. It cannot see `isMirror`, which
+    /// the manager fills in, and a runner is never a peer's.
+    public func failureActionContext(incidentId: String) -> ACPFailureActionContext {
+        let needsAuth = if case .needsAuth = session.setupState { true } else { false }
+        return ACPFailureActionContext(
+            // Keyed on the prompt this runner holds: the session outlives its runner.
+            isRetryTarget: session.retryableFailure?.incidentId == incidentId
+                && session.retryableFailure == retryablePrompt?.failure,
+            agentReady: session.agentState == .ready && !needsAuth && !stopped && isConnectionCurrent()
+                && !backgroundCancellationInProgress && !nativeForkBarrierActive
+                && !session.holdsPromptsForDelegatedSelection,
+            promptActive: hasRunningPromptWork,
+            holdsWriteLease: holdsLeaseForWrite(),
+            isMirror: false,
+            hasUncertainDelivery: session.queue.contains(where: \.deliveryUncertain) || session.directTurnInFlight,
+            isPeer: false,
+            hasBackgroundWork: session.activity.backgroundWorking
+        )
+    }
+
+    /// An explicit click only. Sends the failed prompt again as a new turn under a
+    /// new operation key, so a broker cannot replay the failure. It records a new
+    /// user row and leaves the queue alone: a held successor stays held.
+    @discardableResult
+    public func retryFailedPrompt(incidentId: String) -> Bool {
+        guard let index = session.transcript.failureIncidentIndex(id: incidentId),
+              case .failureIncident(_, let incident) = session.transcript.messages[index],
+              ACPFailureActionPolicy.visibleActions(
+                rawActions: incident.record.actions, context: failureActionContext(incidentId: incidentId)
+              ).contains(.retry),
+              let prompt = retryablePrompt
+        else { return false }
+        clearRetryablePrompt()
+        sendNow(
+            blocks: prompt.blocks,
+            queuedItemId: nil,
+            brokerOperationKey: "failure-retry-\(UUID().uuidString)",
+            recordUserPrompt: true,
+            normalUserTurn: true,
+            draft: prompt.draft
+        )
+        return true
+    }
+
+    /// Enters the auth flow the way a JSON-RPC auth error does. Ignored while work
+    /// runs, for a click that lands as it starts: the flow stands the runner down,
+    /// which kills running children and restores a `.sending` head as plain
+    /// pending, so the delivered prompt would go out again on reconnect.
+    public func requestSignIn(reason: String) {
+        guard !hasRunningPromptWork, !session.activity.backgroundWorking else { return }
+        enterAuthRequired(reason: reason)
+    }
+
+    /// A `.sending` head counts before `activePromptID` does: its `sendNow` runs
+    /// only once its queue write lands.
+    private var hasRunningPromptWork: Bool {
+        activePromptID != nil || session.transcript.streamingState != .idle || steerInProgress || detachedSteeringTurn
+            || session.transcript.hasBlockingUserInput || session.queue.first?.status == .sending
+    }
+
+    private func enterAuthRequired(reason: String) {
+        session.setupState = .needsAuth(methods: session.authMethods, reason: reason)
+        session.agentState = .failed(reason)
+        Task { @MainActor in
+            await self.onAuthRequired?(self, reason)
+        }
+    }
+
+    private func clearRetryablePrompt() {
+        retryablePrompt = nil
+        session.clearRetryableFailure()
+    }
+
     /// True when this runner may write — it still holds the session lease.
     /// When `ownerInstanceId` is nil (tests that construct a runner directly
     /// without a lease), gating is disabled and writes always proceed.

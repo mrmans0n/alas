@@ -156,9 +156,12 @@ extension ACPTokenCount: Decodable {
 public struct ACPSessionPromptResult: Decodable, Sendable {
     public let quota: ACPPromptQuota?
     public let stopReason: ACPStopReason
+    /// `_meta.sessionFailure`, as sent. Honoring it needs the negotiation only
+    /// `ACPConnection` knows about.
+    public let failure: ACPSessionFailureSignal
 
     private enum CodingKeys: String, CodingKey { case stopReason, meta = "_meta" }
-    private enum MetaKeys: String, CodingKey { case quota }
+    private enum MetaKeys: String, CodingKey { case quota, sessionFailure }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -166,8 +169,10 @@ public struct ACPSessionPromptResult: Decodable, Sendable {
             ? try c.decode(LSPJSONValue.self, forKey: .stopReason) : nil)
         guard let metaContainer = try? c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta) else {
             quota = nil
+            failure = .absent
             return
         }
         quota = (try? metaContainer.decodeIfPresent(ACPPromptQuota.self, forKey: .quota)) ?? nil
+        failure = (try? metaContainer.decodeIfPresent(ACPSessionFailureSignal.self, forKey: .sessionFailure)) ?? .absent
     }
 }
