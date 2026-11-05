@@ -37,3 +37,54 @@ public struct ACPPeerOutboxEntry: Codable, Equatable, Sendable {
         self.createdAt = createdAt
     }
 }
+
+/// Where a child a paired Mac asked for runs on this one.
+public enum ACPPeerChildTarget: Equatable, Sendable {
+    case worktree(path: String)
+    /// `expectedBaseSHA`, when set, is what `base` must be at on the remote.
+    case newWorktree(branch: String, base: String, expectedBaseSHA: String?)
+}
+
+/// A paired Mac's request to start a delegated child here. `autoRun` is
+/// already what this Mac allows for that peer. `childID` is the requester's,
+/// which makes a repeated request find the same child.
+public struct ACPPeerChildStart: Sendable {
+    public let childID: String
+    public let peerServerId: String
+    public let projectID: String
+    public let target: ACPPeerChildTarget
+    public let agentID: String
+    public let modelSelection: ACPDelegatedModelSelection?
+    public let role: String?
+    public let autoRun: Bool
+    public let prompt: String
+
+    public init(
+        childID: String,
+        peerServerId: String,
+        projectID: String,
+        target: ACPPeerChildTarget,
+        agentID: String,
+        modelSelection: ACPDelegatedModelSelection?,
+        role: String?,
+        autoRun: Bool,
+        prompt: String
+    ) {
+        self.childID = childID
+        self.peerServerId = peerServerId
+        self.projectID = projectID
+        self.target = target
+        self.agentID = agentID
+        self.modelSelection = modelSelection
+        self.role = role
+        self.autoRun = autoRun
+        self.prompt = prompt
+    }
+}
+
+public enum ACPPeerStartResult: Equatable, Sendable {
+    /// `state` is an `ACPOrchestrationPublicState` raw value. A child that
+    /// fails from here on reports that through the outbox.
+    case started(sessionId: String, state: String)
+    case refused(String)
+}

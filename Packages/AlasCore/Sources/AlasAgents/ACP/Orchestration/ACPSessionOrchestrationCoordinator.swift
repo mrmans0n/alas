@@ -17,6 +17,18 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
+    /// A worktree made for a paired Mac's child, and whether its repository's
+    /// unapproved create hook was skipped.
+    public struct PeerWorktree: Sendable {
+        public let worktree: Worktree
+        public let skippedRepoHook: Bool
+
+        public init(worktree: Worktree, skippedRepoHook: Bool) {
+            self.worktree = worktree
+            self.skippedRepoHook = skippedRepoHook
+        }
+    }
+
     public struct SessionLocation {
         public let origin: ACPOrchestrationSessionOrigin
         public let manager: ACPSessionManager
@@ -102,6 +114,14 @@ public final class ACPSessionOrchestrationCoordinator {
         /// Suspends `session_wait` between polls. Tests replace it to change
         /// state between polls instead of sleeping.
         public let pause: (Duration) async -> Void
+        /// The project a paired Mac asked to run a child in.
+        public let project: (String) -> ProjectConfig?
+        /// Creates the worktree for `(projectId, branch, base)` as `createWorktree`
+        /// does, for a child nobody here is waiting on: unapproved hooks are
+        /// skipped without asking.
+        public let createPeerWorktree: (String, String, String, @escaping @MainActor (URL) async throws -> Void) async -> Result<PeerWorktree, WorktreeCreationError>
+        /// What a paired Mac's user knows this Mac as.
+        public let machineName: () -> String
 
         public init(
             persistence: ACPOrchestrationPersistence,
@@ -130,9 +150,17 @@ public final class ACPSessionOrchestrationCoordinator {
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void,
             pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-            admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil }
+            admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil },
+            project: @escaping (String) -> ProjectConfig? = { _ in nil },
+            createPeerWorktree: @escaping (String, String, String, @escaping @MainActor (URL) async throws -> Void) async -> Result<PeerWorktree, WorktreeCreationError> = { _, _, _, _ in
+                .failure(.init(message: "This host cannot create worktrees for a paired Mac."))
+            },
+            machineName: @escaping () -> String = { "this Mac" }
         ) {
             self.admitChild = admitChild
+            self.project = project
+            self.createPeerWorktree = createPeerWorktree
+            self.machineName = machineName
             self.persistence = persistence
             self.instanceId = instanceId
             self.now = now
@@ -284,7 +312,7 @@ public final class ACPSessionOrchestrationCoordinator {
         if let role, role.isEmpty { return .error("role must not be blank") }
         do {
             let task = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
-            prompt = role.map { "[alas system] Your role in this delegated task is \($0).\n\n\(task)" } ?? task
+            prompt = Self.framedPrompt(task, role: role)
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")
         } catch {
@@ -312,9 +340,9 @@ public final class ACPSessionOrchestrationCoordinator {
                 return .error("Could not validate delegated session request.")
             }
             if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
-                return rejection
+                return .error(rejection)
             }
-            return await createChild(
+            return response(await createChild(
                 childID: childID,
                 origin: origin,
                 prompt: prompt,
@@ -325,7 +353,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 request: .current(worktreeId: worktree.id),
                 phase: .starting,
                 now: now
-            )
+            ))
         case .existing(let id):
             guard let worktree = environment.existingWorktree(origin.projectId, id) else {
                 return .error("The requested worktree is not available in this project.")
@@ -344,9 +372,9 @@ public final class ACPSessionOrchestrationCoordinator {
                 return .error("Could not validate delegated session request.")
             }
             if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
-                return rejection
+                return .error(rejection)
             }
-            return await createChild(
+            return response(await createChild(
                 childID: childID,
                 origin: origin,
                 prompt: prompt,
@@ -357,7 +385,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 request: .existing(worktreeId: worktree.id),
                 phase: .starting,
                 now: now
-            )
+            ))
         case .new(let branch, let base):
             switch GitNameValidator.validateBranchName(branch) {
             case .valid:
@@ -385,71 +413,266 @@ public final class ACPSessionOrchestrationCoordinator {
             if let rejection = modelSelectionRejection(
                 request.modelSelection, agentID: agentID, worktree: environment.worktree(origin.worktreeId)
             ) {
-                return rejection
+                return .error(rejection)
             }
-            let optimisticID = "pending-\(childID)"
-            let record = ACPDelegationRecord(
-                childSessionId: childID,
-                parentSessionId: origin.sessionId,
-                projectId: origin.projectId,
-                parentWorktreeId: origin.worktreeId,
-                childWorktreeId: nil,
-                agentId: agentID,
-                worktreeRequest: .new(
-                    branch: branch,
-                    base: base,
-                    destinationPath: destination.path,
-                    optimisticId: optimisticID
-                ),
-                pendingInitialPrompt: prompt,
-                phase: .creatingWorktree,
-                failureMessage: nil,
-                createdAt: now,
-                updatedAt: now,
+            return response(await createChildInNewWorktree(
+                childID: childID,
+                origin: origin,
+                prompt: prompt,
+                agentID: agentID,
                 modelSelection: request.modelSelection,
-                role: role
-            )
-            do {
-                try await environment.persistence.insert(record)
-            } catch {
-                return .error("Could not persist delegated session.")
-            }
-            parentSession.nextPromptWorkCount += 1
-            environment.notifyChanged()
-            Task { @MainActor in
-                defer { parentSession.nextPromptWorkCount -= 1 }
-                let result = await self.environment.createWorktree(origin.projectId, branch, base) { prepared in
-                    // Recovery matches an interrupted create by this path, so it
-                    // must be the prepared one (remote home, virtual path).
-                    try await self.environment.persistence.updateWorktreeRequest(
-                        childSessionId: childID,
-                        request: .new(branch: branch, base: base, destinationPath: prepared.path, optimisticId: optimisticID),
-                        updatedAt: self.environment.now()
-                    )
-                }
-                switch result {
-                case .success(let worktree):
-                    await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
-                case .failure(let error):
-                    await self.markChildFailed(childSessionId: childID, message: error.message)
-                }
-            }
-            return json(ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil))
+                role: role,
+                branch: branch,
+                base: base,
+                destination: destination,
+                now: now
+            ) { recordDestination in
+                await self.environment.createWorktree(origin.projectId, branch, base, recordDestination)
+            })
         }
+    }
+
+    /// Starts a child a paired Mac asked for, as an ordinary delegation whose
+    /// parent is the peer's sentinel, so its outcomes wait in that peer's
+    /// outbox. Refuses what can be known now; what goes wrong later fails the
+    /// child, which the peer hears through the outbox. A repeated request gets
+    /// the child the first one started.
+    public func startForPeer(_ start: ACPPeerChildStart) async -> ACPPeerStartResult {
+        let sentinel = ACPPeerParent.sentinel(serverId: start.peerServerId)
+        guard ACPPeerParent.serverId(from: sentinel) != nil, !start.childID.isEmpty else {
+            return .refused("The delegation request names no peer or child.")
+        }
+        let existing: ACPDelegationRecord?
+        do {
+            existing = try await environment.persistence.delegation(childSessionId: start.childID)
+        } catch {
+            return .refused("Could not verify session delegation.")
+        }
+        if let existing { return await repeatedPeerStart(start, existing: existing) }
+
+        guard let project = environment.project(start.projectID) else {
+            return .refused("The project is no longer available.")
+        }
+        guard project.host == nil else { return .refused("Delegated sessions cannot start in an SSH project.") }
+        guard !project.isFolder else { return .refused("Delegated sessions cannot start in a folder project.") }
+        // The id comes from the peer: it must not reach a session that is not
+        // its child.
+        guard environment.sessionLocation(start.childID) == nil else { return .refused(Self.sessionIdTakenReason) }
+        let role = start.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let role, role.isEmpty { return .refused("role must not be blank") }
+        guard let task = try? ACPSessionOrchestrationPolicy.validatedPrompt(start.prompt) else {
+            return .refused("prompt must not be blank")
+        }
+        let prompt = Self.framedPrompt(task, role: role)
+        let now = environment.now()
+
+        let created: ACPOrchestrationNewResponse?
+        switch start.target {
+        case .worktree(let path):
+            guard let worktree = environment.existingWorktree(start.projectID, path) else {
+                return .refused("The worktree is not listed, or is archived.")
+            }
+            if await environment.manager(worktree)?.persistedSessionRow(id: start.childID) != nil {
+                return .refused(Self.sessionIdTakenReason)
+            }
+            let origin = ACPOrchestrationSessionOrigin(sessionId: sentinel, projectId: start.projectID, worktreeId: worktree.id)
+            guard let agentID = try? ACPSessionOrchestrationPolicy.resolveAgent(
+                requestedId: start.agentID,
+                parentAgentId: start.agentID,
+                available: await environment.availableAgents(origin, worktree)
+            ) else {
+                return .refused("Agent is not enabled or ACP-capable: \(start.agentID)")
+            }
+            if let rejection = modelSelectionRejection(start.modelSelection, agentID: agentID, worktree: worktree) {
+                return .refused(rejection)
+            }
+            // Checked again when the child starts, where a refusal fails it.
+            if let refusal = await environment.admitChild(worktree, agentID) { return .refused(refusal) }
+            created = await createChild(
+                childID: start.childID,
+                origin: origin,
+                prompt: prompt,
+                agentID: agentID,
+                modelSelection: start.modelSelection,
+                role: role,
+                worktree: worktree,
+                request: .existing(worktreeId: worktree.id),
+                phase: .starting,
+                autoRun: start.autoRun,
+                now: now
+            )
+        case .newWorktree(let branch, let base, let expectedBaseSHA):
+            for name in [branch, base] {
+                if case .invalid(let message) = GitNameValidator.validateBranchName(name) {
+                    return .refused("invalid branch name: \(message)")
+                }
+            }
+            guard let destination = environment.newWorktreeDestination(start.projectID, branch) else {
+                return .refused("The project is no longer available.")
+            }
+            guard let agentID = try? ACPSessionOrchestrationPolicy.resolveAgent(
+                requestedId: start.agentID,
+                parentAgentId: start.agentID,
+                available: environment.configuredAgents()
+            ) else {
+                return .refused("Agent is not enabled or ACP-capable: \(start.agentID)")
+            }
+            // Peer children only run in local projects, so the worktree it
+            // will be has the same host as this stand-in.
+            let upcoming = Worktree(
+                id: Worktree.makeId(path: destination), projectId: start.projectID, name: branch, branch: branch,
+                path: destination, status: .clean, lastActivity: Date(timeIntervalSince1970: TimeInterval(now))
+            )
+            if let rejection = modelSelectionRejection(start.modelSelection, agentID: agentID, worktree: upcoming) {
+                return .refused(rejection)
+            }
+            let repo = URL(fileURLWithPath: project.path)
+            created = await createChildInNewWorktree(
+                childID: start.childID,
+                origin: .init(sessionId: sentinel, projectId: start.projectID, worktreeId: upcoming.id),
+                prompt: prompt,
+                agentID: agentID,
+                modelSelection: start.modelSelection,
+                role: role,
+                branch: branch,
+                base: base,
+                destination: destination,
+                autoRun: start.autoRun,
+                now: now
+            ) { recordDestination in
+                await self.createWorktreeForPeerChild(
+                    start, branch: branch, base: base, expectedBaseSHA: expectedBaseSHA, repo: repo,
+                    recordDestination: recordDestination
+                )
+            }
+        }
+        if let created { return .started(sessionId: created.sessionId, state: created.state) }
+        // Another copy of this request can win the insert.
+        if let winner = try? await environment.persistence.delegation(childSessionId: start.childID) {
+            return await repeatedPeerStart(start, existing: winner)
+        }
+        return .refused("Could not persist delegated session.")
+    }
+
+    private static let sessionIdTakenReason = "A session with this id already exists."
+
+    private func repeatedPeerStart(_ start: ACPPeerChildStart, existing: ACPDelegationRecord) async -> ACPPeerStartResult {
+        guard ACPPeerParent.serverId(from: existing.parentSessionId) == start.peerServerId else {
+            return .refused(Self.sessionIdTakenReason)
+        }
+        return .started(sessionId: existing.childSessionId, state: await waitSnapshot(sessionId: existing.childSessionId).state)
+    }
+
+    private func createWorktreeForPeerChild(
+        _ start: ACPPeerChildStart,
+        branch: String,
+        base: String,
+        expectedBaseSHA: String?,
+        repo: URL,
+        recordDestination: @escaping @MainActor (URL) async throws -> Void
+    ) async -> Result<Worktree, WorktreeCreationError> {
+        let resolvedBase: String
+        switch await peerWorktreeBase(branch: branch, base: base, expectedSHA: expectedBaseSHA, repo: repo) {
+        case .success(let base): resolvedBase = base
+        case .failure(let error): return .failure(error)
+        }
+        switch await environment.createPeerWorktree(start.projectID, branch, resolvedBase, recordDestination) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let created):
+            if created.skippedRepoHook,
+               let record = try? await environment.persistence.delegation(childSessionId: start.childID) {
+                let context = ACPDelegatedOutcomeText.Context(
+                    childSessionId: record.childSessionId, agentId: record.agentId,
+                    worktreeName: created.worktree.name, role: record.role
+                )
+                await enqueueOutcome(.init(
+                    id: "notice-\(record.childSessionId)-repo-hook-skipped",
+                    sourceSessionId: record.childSessionId,
+                    targetSessionId: record.parentSessionId,
+                    prompt: ACPDelegatedOutcomeText.peerRepoHookSkipped(context, machine: environment.machineName()),
+                    createdAt: environment.now(),
+                    kind: .notice
+                ), child: record)
+            }
+            return .success(created.worktree)
+        }
+    }
+
+    /// What a peer child's new worktree branches from. `base` is fetched
+    /// explicitly, since a bare branch name is otherwise never refreshed, and
+    /// its remote-tracking ref is used when there is one. With `expectedSHA`
+    /// the peer is relying on this exact code, so anything but finding it is a
+    /// failure. Without, the fetch is best effort and a `base` the remote does
+    /// not have (a tag, a local branch) is used as given.
+    private func peerWorktreeBase(
+        branch: String,
+        base: String,
+        expectedSHA: String?,
+        repo: URL
+    ) async -> Result<String, WorktreeCreationError> {
+        let git = GitService()
+        // A base with a remote prefix names it. Otherwise `origin`, the remote
+        // a peer's project is matched by.
+        var source = try? await git.remoteForFetch(worktreePath: repo, ref: base)
+        if source == nil, (try? await git.remotes(worktreePath: repo))?.contains(where: { $0.name == "origin" }) == true {
+            source = ("origin", base)
+        }
+        var fetched = false
+        var tracked: String?
+        if let source {
+            fetched = (try? await git.fetchRef(worktreePath: repo, remote: source.remote, branch: source.branch)) != nil
+            tracked = await Self.commit(of: "refs/remotes/\(source.remote)/\(source.branch)", in: repo)
+        }
+        let remoteBase = source.map { "\($0.remote)/\($0.branch)" }
+        guard let expectedSHA else { return .success(tracked != nil ? remoteBase ?? base : base) }
+
+        let machine = environment.machineName()
+        let name = source?.branch ?? base
+        guard fetched, let tracked, let remoteBase else {
+            return .failure(.init(
+                message: "\(name) on \(machine) could not be fetched from \(source?.remote ?? "origin"), expected \(expectedSHA). Push and try again."
+            ))
+        }
+        guard tracked == expectedSHA else {
+            return .failure(.init(message: "\(name) on \(machine) is at \(tracked), expected \(expectedSHA). Push and try again."))
+        }
+        // A worktree checks out a branch that already exists, whatever the base.
+        if let existing = await Self.commit(of: "refs/heads/\(branch)", in: repo), existing != expectedSHA {
+            return .failure(.init(
+                message: "\(branch) already exists on \(machine) at \(existing), expected \(expectedSHA). Delete it or pick another name."
+            ))
+        }
+        return .success(remoteBase)
+    }
+
+    private static func commit(of ref: String, in repo: URL) async -> String? {
+        guard let result = try? await Process.git(["rev-parse", "--verify", "--quiet", "\(ref)^{commit}"], cwd: repo),
+              result.exitCode == 0
+        else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func framedPrompt(_ task: String, role: String?) -> String {
+        role.map { "[alas system] Your role in this delegated task is \($0).\n\n\(task)" } ?? task
+    }
+
+    private func response(_ created: ACPOrchestrationNewResponse?) -> AlasCLIResponse {
+        created.map { json($0) } ?? .error("Could not persist delegated session.")
     }
 
     private func modelSelectionRejection(
         _ selection: ACPDelegatedModelSelection?,
         agentID: String,
         worktree: Worktree?
-    ) -> AlasCLIResponse? {
+    ) -> String? {
         guard let selection else { return nil }
         guard let error = ACPSessionOrchestrationPolicy.preflightModelSelection(
             selection,
             agentId: agentID,
             launchModels: worktree.flatMap { environment.launchModels(agentID, $0) }
         ) else { return nil }
-        return .error(error.localizedDescription)
+        return error.localizedDescription
     }
 
     private func resolveAgent(
@@ -1178,6 +1401,8 @@ public final class ACPSessionOrchestrationCoordinator {
         )
     }
 
+    /// Nil when the child could not be recorded. `autoRun`, when given,
+    /// replaces this Mac's default for a new session.
     private func createChild(
         childID: String,
         origin: ACPOrchestrationSessionOrigin,
@@ -1188,8 +1413,9 @@ public final class ACPSessionOrchestrationCoordinator {
         worktree: Worktree,
         request: ACPDelegatedWorktreeRequest,
         phase: ACPDelegationPhase,
+        autoRun: Bool? = nil,
         now: Int64
-    ) async -> AlasCLIResponse {
+    ) async -> ACPOrchestrationNewResponse? {
         environment.rememberParent(childID, origin.sessionId)
         let record = ACPDelegationRecord(
             childSessionId: childID,
@@ -1207,23 +1433,89 @@ public final class ACPSessionOrchestrationCoordinator {
             modelSelection: modelSelection,
             role: role
         )
-            do {
-                self.environment.rememberParent(childID, origin.sessionId)
-                try await environment.persistence.insert(record)
+        do {
+            try await environment.persistence.insert(record)
         } catch {
-            return .error("Could not persist delegated session.")
+            return nil
         }
         let parentSession = environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)
         parentSession?.nextPromptWorkCount += 1
         environment.notifyChanged()
         Task { @MainActor in
             defer { parentSession?.nextPromptWorkCount -= 1 }
-            await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
+            await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree, autoRun: autoRun)
         }
-        return json(ACPOrchestrationNewResponse(sessionId: childID, state: "starting", worktreeId: worktree.id))
+        return ACPOrchestrationNewResponse(sessionId: childID, state: "starting", worktreeId: worktree.id)
     }
 
-    private func startPersistedChild(childID: String, prompt: String, worktree: Worktree) async {
+    /// Records the child, then creates its worktree through `create` and
+    /// starts it. Nil when the child could not be recorded.
+    private func createChildInNewWorktree(
+        childID: String,
+        origin: ACPOrchestrationSessionOrigin,
+        prompt: String,
+        agentID: String,
+        modelSelection: ACPDelegatedModelSelection?,
+        role: String?,
+        branch: String,
+        base: String?,
+        destination: URL,
+        autoRun: Bool? = nil,
+        now: Int64,
+        create: @escaping (_ recordDestination: @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>
+    ) async -> ACPOrchestrationNewResponse? {
+        let optimisticID = "pending-\(childID)"
+        let record = ACPDelegationRecord(
+            childSessionId: childID,
+            parentSessionId: origin.sessionId,
+            projectId: origin.projectId,
+            parentWorktreeId: origin.worktreeId,
+            childWorktreeId: nil,
+            agentId: agentID,
+            worktreeRequest: .new(
+                branch: branch,
+                base: base,
+                destinationPath: destination.path,
+                optimisticId: optimisticID
+            ),
+            pendingInitialPrompt: prompt,
+            phase: .creatingWorktree,
+            failureMessage: nil,
+            createdAt: now,
+            updatedAt: now,
+            modelSelection: modelSelection,
+            role: role
+        )
+        do {
+            try await environment.persistence.insert(record)
+        } catch {
+            return nil
+        }
+        let parentSession = environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)
+        parentSession?.nextPromptWorkCount += 1
+        environment.notifyChanged()
+        Task { @MainActor in
+            defer { parentSession?.nextPromptWorkCount -= 1 }
+            let result = await create { prepared in
+                // Recovery matches an interrupted create by this path, so it
+                // must be the prepared one (remote home, virtual path).
+                try await self.environment.persistence.updateWorktreeRequest(
+                    childSessionId: childID,
+                    request: .new(branch: branch, base: base, destinationPath: prepared.path, optimisticId: optimisticID),
+                    updatedAt: self.environment.now()
+                )
+            }
+            switch result {
+            case .success(let worktree):
+                await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree, autoRun: autoRun)
+            case .failure(let error):
+                await self.markChildFailed(childSessionId: childID, message: error.message)
+            }
+        }
+        return ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil)
+    }
+
+    private func startPersistedChild(childID: String, prompt: String, worktree: Worktree, autoRun: Bool? = nil) async {
         let record: ACPDelegationRecord?
         do {
             record = try await environment.persistence.delegation(childSessionId: childID)
@@ -1275,7 +1567,7 @@ public final class ACPSessionOrchestrationCoordinator {
             _ = manager.createSession(
                 id: childID,
                 agentId: record.agentId,
-                autoRunDefault: environment.autoRunDefault()
+                autoRunDefault: autoRun ?? environment.autoRunDefault()
             )
         }
         // Without a model selection the prompt is queued before attach, as it
@@ -1391,6 +1683,8 @@ public final class ACPSessionOrchestrationCoordinator {
         targetParent: ACPDelegationRecord? = nil,
         manager suppliedManager: ACPSessionManager? = nil
     ) async {
+        // A paired Mac's sentinel, not a session: it collects from the outbox.
+        guard ACPPeerParent.serverId(from: sessionID) == nil else { return }
         guard deliveringSessions.insert(sessionID).inserted else {
             deliveryRequested.insert(sessionID)
             return

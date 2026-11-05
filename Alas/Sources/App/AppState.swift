@@ -13973,7 +13973,8 @@ final class AppState {
                 role: record.role
             ))
         }
-        if let parent {
+        // A paired Mac's sentinel is not a session anyone could open here.
+        if let parent, ACPPeerParent.serverId(from: parent.parentSessionId) == nil {
             summaries.append(.init(
                 sessionId: parent.parentSessionId,
                 relationship: "parent",

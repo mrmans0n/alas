@@ -113,12 +113,58 @@ extension AlasCoreContext {
                 admitChild: { [weak self] worktree, agentID in
                     guard let self else { return "Alas is not available." }
                     return await SessionsAPI(core: self).refusal(toStart: agentID, in: worktree).map(Self.childRefusalMessage)
+                },
+                project: { [weak self] id in self?.projects.projects.first { $0.id == id } },
+                createPeerWorktree: { [weak self] projectID, branch, base, recordDestination in
+                    guard let self else { return .failure(.init(message: "Alas is not available.")) }
+                    return await createPeerChildWorktree(
+                        projectID: projectID, branch: branch, base: base, recordDestination: recordDestination
+                    )
+                },
+                machineName: { [weak self] in
+                    self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
                 }
             )
         )
     }
 
+    /// Creates a worktree for a child a paired Mac started, the way work a
+    /// peer starts is created: nobody here is waiting to approve a hook, so an
+    /// unapproved one is skipped, and said to be.
+    private func createPeerChildWorktree(
+        projectID: String, branch: String, base: String,
+        recordDestination: @MainActor (URL) async throws -> Void
+    ) async -> Result<ACPSessionOrchestrationCoordinator.PeerWorktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
+        let worktrees = WorktreesAPI(core: self)
+        do {
+            let prepared = try await worktrees.prepareCreate(projectID: projectID, branch: branch, base: base, caller: .cli)
+            guard let project = projects.projects.first(where: { $0.id == projectID }) else {
+                return .failure(.init(message: "The project is no longer available."))
+            }
+            try await recordDestination(prepared.request.destination)
+            let repoPath = URL(fileURLWithPath: project.path)
+            // The worktree checks out the local branch when it exists, and is
+            // otherwise created from base.
+            let ref = try await Self.firstExistingRef(
+                ["refs/heads/\(branch)", "refs/heads/\(base)", "refs/remotes/\(base)"], repoPath: repoPath
+            ) ?? base
+            let gate = try await gateRepoHook(event: .worktreeCreate, project: project, consent: nil) {
+                await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: ref, repoPath: repoPath, host: project.host)
+            }
+            var request = prepared.request
+            request.launchSurface = .delegated
+            request.asksAboutRepoHooks = false
+            let worktree = try await worktrees.create(request, caller: .cli)
+            return .success(.init(worktree: worktree, skippedRepoHook: gate == .skippedUnapproved))
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
+    }
+
+    /// A paired Mac's sentinel is not a session, so it is no one's parent
+    /// here; `delegatedParentSessionID` still reads it from the record.
     @_spi(AppHost) public func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        guard ACPPeerParent.serverId(from: parentID) == nil else { return }
         delegatedSessionParents[childID] = parentID
     }
 
@@ -135,7 +181,9 @@ extension AlasCoreContext {
     @_spi(AppHost) public func loadDelegatedSessionParents() async {
         guard let links = try? await orchestrationPersistence.delegationParents() else { return }
         // Live entries win: they may describe a delegation still being written.
-        delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
+        delegatedSessionParents = links
+            .filter { ACPPeerParent.serverId(from: $0.value) == nil }
+            .merging(delegatedSessionParents) { _, live in live }
     }
 
     /// What a parent hears when its child is refused as a new session.

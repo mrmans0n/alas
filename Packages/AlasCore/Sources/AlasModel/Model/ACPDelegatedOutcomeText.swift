@@ -99,6 +99,12 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "Delegated session \(label(context)) had its turn cancelled."
     }
 
+    /// A worktree missing its setup can otherwise look like a code problem.
+    public static func peerRepoHookSkipped(_ context: Context, machine: String) -> String {
+        "Delegated session \(label(context)) started without its repository's worktree-create hook, "
+            + "which needs approval on \(machine). Whatever that hook sets up is missing from the worktree."
+    }
+
     public static func limited(_ context: Context) -> String {
         "Delegated session \(label(context)) stopped at a provider usage limit."
     }

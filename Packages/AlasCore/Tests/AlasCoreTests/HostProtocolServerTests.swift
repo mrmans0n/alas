@@ -2242,6 +2242,40 @@ struct HostProtocolServerTests {
     /// app's approval sheet, even when the host has one. A peer that can't
     /// ask its own user hears the hook was skipped, unless the project
     /// doesn't use the repository's hook at all.
+    /// A delegated child on a real repository: the unapproved hook does not
+    /// run, nobody here is asked, the parent hears why, and the child is no
+    /// one's session here.
+    @Test(.timeLimit(.minutes(1))) func aPeerChildSkipsTheUnapprovedHookAndSaysSo() async throws {
+        let environment = AskingEnvironment()
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        _ = try await fixture.commitHook(.worktreeCreate, "touch hook-ran\n")
+        fixture.core.worktreeDestinationPreparer = { [root = fixture.root] _, destination in
+            root.appendingPathComponent(destination.lastPathComponent)
+        }
+        let persistence = fixture.core.orchestrationPersistence
+
+        let result = await fixture.core.orchestration.startForPeer(ACPPeerChildStart(
+            childID: "child", peerServerId: "s1", projectID: fixture.projectID,
+            target: .newWorktree(branch: "feature", base: "main", expectedBaseSHA: nil),
+            agentID: "gemini", modelSelection: nil, role: nil, autoRun: false, prompt: "Go"
+        ))
+
+        #expect(result == .started(sessionId: "child", state: "creating_worktree"))
+        try await eventually {
+            (try? await persistence.delegation(childSessionId: "child"))??.phase == .ready
+        }
+        let record = try await persistence.delegation(childSessionId: "child")
+        let entries = try await persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries
+        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature" })
+        #expect(record?.childWorktreeId == created.id)
+        #expect(environment.asks == 0)
+        #expect(!FileManager.default.fileExists(atPath: created.path.appendingPathComponent("hook-ran").path))
+        #expect(entries.first?.kind == .notice)
+        #expect(entries.first?.prompt.contains("hook") == true)
+        #expect(fixture.core.delegatedSessionParents["child"] == nil)
+    }
+
     @Test(arguments: [(nil, .useGlobal, true), (.skip, .useGlobal, false), (nil, .disabled, false)]
         as [(RepoHookConsent?, ProjectStartupScriptMode, Bool)])
     func aPeerThatCantAskSkipsTheHookWithoutAskingTheHost(

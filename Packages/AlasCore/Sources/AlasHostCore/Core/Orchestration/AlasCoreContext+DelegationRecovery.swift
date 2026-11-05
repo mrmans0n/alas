@@ -72,10 +72,13 @@ extension AlasCoreContext {
                 _ = manager.placeholderSession(id: record.childSessionId)
                 await manager.hydrateIfNeeded(id: record.childSessionId)
             } else {
+                // What a paired Mac's child was allowed is not stored, and
+                // this Mac's default could exceed it.
+                let isPeerChild = ACPPeerParent.serverId(from: record.parentSessionId) != nil
                 _ = manager.createSession(
                     id: record.childSessionId,
                     agentId: record.agentId,
-                    autoRunDefault: environment.configuration().harness.acpAutoRunByDefault
+                    autoRunDefault: !isPeerChild && environment.configuration().harness.acpAutoRunByDefault
                 )
             }
             let restoredPendingPrompt = record.pendingInitialPrompt != nil

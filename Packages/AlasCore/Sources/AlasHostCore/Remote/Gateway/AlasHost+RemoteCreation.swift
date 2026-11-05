@@ -198,7 +198,7 @@ extension AlasHost {
 extension AlasCoreContext {
     /// The first of `refs` that exists, as full refs so a same-named tag
     /// can't stand in for a branch.
-    fileprivate static func firstExistingRef(_ refs: [String], repoPath: URL) async throws -> String? {
+    static func firstExistingRef(_ refs: [String], repoPath: URL) async throws -> String? {
         for ref in refs {
             if try await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: repoPath).exitCode == 0 { return ref }
         }
