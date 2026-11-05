@@ -13,7 +13,7 @@ final class NativePeerSessions {
     private struct VisualSubmission {
         let sessionId: String
         let visualId: UUID
-        let completion: CheckedContinuation<Bool, Never>
+        var completion: CheckedContinuation<Bool, Never>?
     }
 
     var canAnswerVisuals: Bool {
@@ -70,19 +70,40 @@ final class NativePeerSessions {
     }
 
     private func finishVisual(_ requestId: String, accepted: Bool) {
-        visualSubmissions.removeValue(forKey: requestId)?.completion.resume(returning: accepted)
+        guard var submission = visualSubmissions[requestId] else { return }
+        let completion = submission.completion
+        if accepted {
+            // The host can still roll this answer back if its generated prompt fails to send.
+            submission.completion = nil
+            visualSubmissions[requestId] = submission
+        } else {
+            visualSubmissions[requestId] = nil
+            if completion == nil {
+                visualStatus(for: submission.visualId, sessionId: submission.sessionId).error = ACPVisualAidSendStatus.failureMessage
+            }
+        }
+        completion?.resume(returning: accepted)
     }
 
     private func reconcileVisualSubmissions() {
         for (requestId, submission) in visualSubmissions {
-            guard selectedSessionId == submission.sessionId, canAnswerVisuals else {
+            guard selectedSessionId == submission.sessionId else {
+                if submission.completion != nil { finishVisual(requestId, accepted: false) }
+                continue
+            }
+            if submission.completion != nil && !canAnswerVisuals {
                 finishVisual(requestId, accepted: false)
                 continue
             }
-            if transcript?.messages.contains(where: {
-                guard $0.kind == "visualAid", case .visualAid(let visual) = NativePeerRow(message: $0) else { return false }
-                return visual.id == submission.visualId && visual.answer != nil
-            }) == true { finishVisual(requestId, accepted: true) }
+            for row in transcript?.messages ?? [] where row.kind == "visualAid" {
+                guard case .visualAid(let visual) = NativePeerRow(message: row), visual.id == submission.visualId else { continue }
+                if visual.answer != nil {
+                    if submission.completion != nil { finishVisual(requestId, accepted: true) }
+                } else if submission.completion == nil {
+                    finishVisual(requestId, accepted: false)
+                }
+                break
+            }
         }
         visualChanges.send()
     }
@@ -688,6 +709,9 @@ final class NativePeerSessions {
 
     func stop() {
         defer { reconcileVisualSubmissions() }
+        let submissions = visualSubmissions.values
+        visualSubmissions = [:]
+        for submission in submissions { submission.completion?.resume(returning: false) }
         visualForms = [:]
         visualStatuses = [:]
         if let downstream {

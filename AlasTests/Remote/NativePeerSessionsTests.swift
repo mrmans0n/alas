@@ -2114,7 +2114,7 @@ struct NativePeerSessionsTests {
         ))
     }
 
-    @Test(arguments: ["confirmed", "dismissed", "rejected", "offline", "selection", "ownership", "readonly", "wrongSession"])
+    @Test(arguments: ["confirmed", "dismissed", "rejected", "offline", "selection", "ownership", "readonly", "wrongSession", "rollback", "lateRejection"])
     func visualAnswersWaitForHostOutcome(outcome: String) async throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -2155,7 +2155,7 @@ struct NativePeerSessionsTests {
         #expect(ids == (outcome == "dismissed" ? [] : ["b"]))
         #expect(note == (outcome == "dismissed" ? nil : "Looks good"))
         switch outcome {
-        case "confirmed", "dismissed":
+        case "confirmed", "dismissed", "rollback", "lateRejection":
             visual.answer = answer
             links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
                                            upserts: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
@@ -2170,7 +2170,20 @@ struct NativePeerSessionsTests {
                                            upserts: [], epoch: 1, revision: 1), from: "B")
         default: client.clearSelection()
         }
-        #expect(await submission.value == (["confirmed", "dismissed"].contains(outcome)))
+        #expect(await submission.value == (["confirmed", "dismissed", "rollback", "lateRejection"].contains(outcome)))
+        if outcome == "rollback" || outcome == "lateRejection" {
+            let status = client.visualStatus(for: visual.id, sessionId: "B:s")
+            #expect(status.error == nil)
+            if outcome == "lateRejection" {
+                links.receive(.visualAidRejected(sessionId: "s", visualId: id, reason: "invalid", requestId: requestId), from: "B")
+            } else {
+                visual.answer = nil
+                links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
+                                               upserts: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
+                                               epoch: 1, revision: 2), from: "B")
+            }
+            #expect(status.error == ACPVisualAidSendStatus.failureMessage)
+        }
     }
 
     @Test func urlElicitationCannotBeAcceptedBeforeOpeningBrowser() {
