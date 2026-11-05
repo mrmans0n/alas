@@ -52,6 +52,9 @@ final class DeviceAgentControl {
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var screenshotSizes: [String: (width: Double, height: Double)] = [:]
     @ObservationIgnored private var leases: [String: (token: UUID, release: Task<Void, Never>)] = [:]
+    /// Devices with an input call running, and the calls waiting their turn, in order.
+    @ObservationIgnored private var inputBusy: Set<String> = []
+    @ObservationIgnored private var inputWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored private let imageContext = CIContext()
 
     init(
@@ -132,6 +135,21 @@ final class DeviceAgentControl {
         renewLease(udid)
         leased = true
 
+        // Touches and keys from two calls must not interleave on one simulator,
+        // so input calls to a device run one at a time, in order.
+        let isInput = switch command {
+        case .tap, .swipe, .type, .button: true
+        case .list, .open, .snapshot, .screenshot: false
+        }
+        if isInput {
+            await acquireInput(udid)
+            if userDriving(udid) {
+                releaseInput(udid)
+                return .error(Self.userDriving)
+            }
+        }
+        defer { if isInput { releaseInput(udid) } }
+
         switch command {
         case .list:
             return await list()
@@ -205,6 +223,22 @@ final class DeviceAgentControl {
         case .button(_, let name, let includeScreenshot):
             input.button(udid: udid, name: name.rawValue)
             return await finish(udid, includeScreenshot: includeScreenshot)
+        }
+    }
+
+    private func acquireInput(_ udid: String) async {
+        if inputBusy.insert(udid).inserted { return }
+        await withCheckedContinuation { inputWaiters[udid, default: []].append($0) }
+    }
+
+    /// Hands the device to the next waiting call, which keeps it marked busy.
+    private func releaseInput(_ udid: String) {
+        if var waiting = inputWaiters[udid], !waiting.isEmpty {
+            let next = waiting.removeFirst()
+            inputWaiters[udid] = waiting.isEmpty ? nil : waiting
+            next.resume()
+        } else {
+            inputBusy.remove(udid)
         }
     }
 

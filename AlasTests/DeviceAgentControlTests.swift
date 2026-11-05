@@ -200,3 +200,16 @@ extension DeviceAgentControlTests {
         #expect(input.subscribeCount == 2)
     }
 }
+
+extension DeviceAgentControlTests {
+    /// Two agent calls to one simulator run one after the other, never interleaved.
+    @Test func overlappingInputCallsDoNotInterleave() async {
+        let input = FakeInput()
+        let control = control(input) { _ in await Task.yield() }
+        async let first = control.perform(.type(udid: "on", text: "ab", includeScreenshot: false), sessionID: "s")
+        async let second = control.perform(.type(udid: "on", text: "cd", includeScreenshot: false), sessionID: "t")
+        #expect(await (first, second) == (.ok, .ok))
+        let downs = input.keys.filter(\.down).map(\.usage)
+        #expect(downs == [0x04, 0x05, 0x06, 0x07] || downs == [0x06, 0x07, 0x04, 0x05])
+    }
+}
