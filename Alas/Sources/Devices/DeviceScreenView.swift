@@ -11,16 +11,23 @@ struct DeviceScreenView: NSViewRepresentable {
     let udid: String
     let client: SimulatorStreamClient
     var onStopped: (String) -> Void
+    /// False while an agent drives: clicks and keys stay off the simulator.
+    var allowsInput = true
+    var onBlockedClick: () -> Void = {}
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
         view.onStopped = onStopped
+        view.onBlockedClick = onBlockedClick
+        view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
     }
 
     func updateNSView(_ view: DeviceScreenNSView, context: Context) {
         view.onStopped = onStopped
+        view.onBlockedClick = onBlockedClick
+        view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
 
@@ -38,6 +45,11 @@ final class DeviceScreenNSView: NSView {
     private var lastTouch: DeviceScreenPoint?
     private var heldKeys = HeldSimulatorKeys()
     var onStopped: (String) -> Void = { _ in }
+    var onBlockedClick: () -> Void = {}
+    /// Turning input off lifts anything still held, so the agent starts from a clean state.
+    var allowsInput = true {
+        didSet { if oldValue, !allowsInput { releaseHeldInput() } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -130,6 +142,10 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard allowsInput else {
+            onBlockedClick()
+            return
+        }
         window?.makeFirstResponder(self)
         let point = location(event)
         guard let touch = geometry.normalized(x: point.x, y: point.y) else { return }
@@ -158,7 +174,7 @@ final class DeviceScreenNSView: NSView {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        guard !event.modifierFlags.contains(.command),
+        guard allowsInput, !event.modifierFlags.contains(.command),
               HIDKeyboardUsage.usage(forKeyCode: event.keyCode) != nil else {
             super.keyDown(with: event)
             return
@@ -176,7 +192,7 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        guard HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode) != nil else {
+        guard allowsInput, HIDKeyboardUsage.usage(forModifierKeyCode: event.keyCode) != nil else {
             super.flagsChanged(with: event)
             return
         }

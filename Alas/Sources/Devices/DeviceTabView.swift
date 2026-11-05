@@ -5,9 +5,13 @@ import SwiftUI
 struct DeviceTabView: View {
     @Bindable var model: DevicePaneModel
     let client: SimulatorStreamClient
+    let control: DeviceAgentControl
+    /// Names the agent session driving a device.
+    let agentName: (String) -> String
     @Environment(\.theme) private var theme
     @State private var streamError: String?
     @State private var streamGeneration = 0
+    @State private var blockedHint = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -64,27 +68,63 @@ struct DeviceTabView: View {
     }
 
     private func screen(_ device: SimulatorDevice) -> some View {
-        VStack(spacing: 8) {
-            ZStack {
-                DeviceScreenView(udid: device.udid, client: client, onStopped: { streamError = $0 })
+        // Each second, for "n s ago" and the end of the agent's driving window.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let driver = control.driver(udid: device.udid, at: context.date)
+            let allowsInput = VMDriver.allowsViewInput(driver)
+            VStack(spacing: 8) {
+                driverBar(device, driver: driver, now: context.date)
+                ZStack {
+                    DeviceScreenView(
+                        udid: device.udid, client: client, onStopped: { streamError = $0 },
+                        allowsInput: allowsInput, onBlockedClick: showBlockedHint
+                    )
                     // A new identity unsubscribes and subscribes again, which restarts the stream.
                     .id("\(device.udid):\(streamGeneration)")
-                if let streamError {
-                    VStack(spacing: 8) {
-                        message(streamError)
-                        AlasButton(title: "Retry", style: .normal) {
-                            self.streamError = nil
-                            streamGeneration += 1
+                    if let streamError {
+                        VStack(spacing: 8) {
+                            message(streamError)
+                            AlasButton(title: "Retry", style: .normal) {
+                                self.streamError = nil
+                                streamGeneration += 1
+                            }
                         }
+                        .padding(12)
+                        .background(theme.color("field-bg"), in: RoundedRectangle(cornerRadius: 8))
+                    } else if blockedHint {
+                        message("Take over to use the device")
+                            .padding(10)
+                            .background(theme.color("field-bg"), in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .padding(12)
-                    .background(theme.color("field-bg"), in: RoundedRectangle(cornerRadius: 8))
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                AlasButton(title: "Home", icon: "house", style: .normal, compact: true) {
+                    client.button(udid: device.udid, name: "home")
+                }
+                .disabled(!allowsInput)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            AlasButton(title: "Home", icon: "house", style: .normal, compact: true) {
-                client.button(udid: device.udid, name: "home")
+        }
+    }
+
+    /// Who drives the device, with Take over or Hand back.
+    private func driverBar(_ device: SimulatorDevice, driver: VMDriver, now: Date) -> some View {
+        let name: String = if case .agent(let sessionID, _, _) = driver { agentName(sessionID) } else { "" }
+        let status = VMDriverStatus.make(driver: driver, agentName: name, now: now)
+        return VMStatusBar(tone: status.tone, title: status.title, details: status.details) {
+            switch status.action {
+            case .takeOver:
+                AlasButton(title: "Take over", compact: true) { control.takeOver(udid: device.udid) }
+            case .handBack:
+                AlasButton(title: "Hand back", style: .primary, compact: true) { control.handBack(udid: device.udid) }
             }
+        }
+    }
+
+    private func showBlockedHint() {
+        blockedHint = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            blockedHint = false
         }
     }
 
