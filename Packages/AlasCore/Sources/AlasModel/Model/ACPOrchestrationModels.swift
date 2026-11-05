@@ -161,8 +161,10 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// the same selection before the pending initial prompt.
     public var modelSelection: ACPDelegatedModelSelection? = nil
     public var role: String? = nil
+    /// Set on the delegating machine for a child that runs on a paired peer.
+    public var peerServerId: String? = nil
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil) {
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -178,6 +180,7 @@ public struct ACPDelegationRecord: Equatable, Sendable {
         self.lastParentReportAt = lastParentReportAt
         self.modelSelection = modelSelection
         self.role = role
+        self.peerServerId = peerServerId
     }
 }
 

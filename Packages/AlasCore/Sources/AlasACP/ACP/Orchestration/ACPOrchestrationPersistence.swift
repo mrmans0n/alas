@@ -130,6 +130,38 @@ public actor ACPOrchestrationPersistence {
         try openedStore().pendingMessageTargetSessionIds()
     }
 
+    public func outbox(
+        peerServerId: String,
+        after: Int64,
+        maxBytes: Int
+    ) throws -> (entries: [ACPPeerOutboxEntry], hasMore: Bool) {
+        try openedStore().outbox(peerServerId: peerServerId, after: after, maxBytes: maxBytes)
+    }
+
+    public func acknowledgeOutbox(peerServerId: String, through: Int64) throws {
+        try openedStore().acknowledgeOutbox(peerServerId: peerServerId, through: through)
+    }
+
+    public func deleteOutbox(peerServerId: String) throws {
+        try openedStore().deleteOutbox(peerServerId: peerServerId)
+    }
+
+    public func collectPeerEntry(
+        _ entry: ACPPeerOutboxEntry,
+        peerServerId: String,
+        parentSessionId: String
+    ) throws -> Bool {
+        try openedStore().collectPeerEntry(entry, peerServerId: peerServerId, parentSessionId: parentSessionId)
+    }
+
+    public func peerCursor(peerServerId: String) throws -> Int64 {
+        try openedStore().peerCursor(peerServerId: peerServerId)
+    }
+
+    public func peerChildren(peerServerId: String) throws -> [ACPDelegationRecord] {
+        try openedStore().peerChildren(peerServerId: peerServerId)
+    }
+
     public func incompleteDelegations() throws -> [ACPDelegationRecord] {
         try openedStore().incompleteDelegations()
     }
