@@ -49,8 +49,14 @@ final class NativePeerSessions {
         let ids: [String]
         let note: String?
         switch answer {
-        case .answered(let selected, let text, _): action = "answer"; ids = selected; note = text
-        case .dismissed: action = "dismiss"; ids = []; note = nil
+        case .answered(let selected, let text, _):
+            action = "answer"
+            ids = selected
+            note = text
+        case .dismissed:
+            action = "dismiss"
+            ids = []
+            note = nil
         }
         guard RemoteSessionGateway.visualAidAnswer(to: question, action: action, selectedOptionIds: ids, note: note) != nil else {
             return false
