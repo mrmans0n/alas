@@ -7,7 +7,7 @@ import Testing
 struct HeadlessCLIRouterTests {
     nonisolated static let screenBound: [AlasCLIRequest.Command] = [
         .open(paths: ["/srv/a"]), .openAt(path: "/srv/a", line: 1, endLine: nil),
-        .preview(.init(action: .list)), .computer(.init(action: .apps)), .worktree(.switch(target: "main")),
+        .preview(.init(action: .list)), .computer(.init(action: .apps)), .device(.list), .worktree(.switch(target: "main")),
         .workspace(.list), .workspace(.show(checkoutID: UUID())),
     ]
 

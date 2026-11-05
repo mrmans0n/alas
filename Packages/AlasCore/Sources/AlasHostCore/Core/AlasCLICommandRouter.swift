@@ -44,6 +44,10 @@ public struct AlasCLICommandRouter {
     var vmStatus: (VMGuestOS?, String) async -> AlasCLIResponse = { _, _ in
         .error("Worktree VMs are not available.")
     }
+    /// A `device_*` command and the calling session.
+    var deviceCommand: (DeviceCommand, String) async -> AlasCLIResponse = { _, _ in
+        .error("device_unavailable: Device control is not available.")
+    }
     var activateApp: () -> Void
     /// On a headless host, screen-bound commands are refused.
     var isHeadless = false
@@ -80,6 +84,9 @@ public struct AlasCLICommandRouter {
         vmStatus: @escaping (VMGuestOS?, String) async -> AlasCLIResponse = { _, _ in
             .error("Worktree VMs are not available.")
         },
+        deviceCommand: @escaping (DeviceCommand, String) async -> AlasCLIResponse = { _, _ in
+            .error("device_unavailable: Device control is not available.")
+        },
         activateApp: @escaping () -> Void,
         isHeadless: Bool = false
     ) {
@@ -98,6 +105,7 @@ public struct AlasCLICommandRouter {
         self.computerCommand = computerCommand
         self.vmRun = vmRun
         self.vmStatus = vmStatus
+        self.deviceCommand = deviceCommand
         self.activateApp = activateApp
         self.isHeadless = isHeadless
     }
@@ -153,6 +161,11 @@ public struct AlasCLICommandRouter {
         case .vmStatus(let vm):
             guard let sessionID = computerUseCaller(request.sessionId) else { return Self.vmUnsupportedCaller }
             return await vmStatus(vm, sessionID)
+        case .device(let command):
+            guard let sessionID = computerUseCaller(request.sessionId) else {
+                return .error("device_unsupported_caller: Device tools are only available to ACP agent sessions.")
+            }
+            return await deviceCommand(command, sessionID)
         case .workspace(let command):
             return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
@@ -287,7 +300,7 @@ public struct AlasCLICommandRouter {
             case .ambiguous(let labels):
                 return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
             }
-        case .workspace, .preview, .computer, .vmRun, .vmStatus:
+        case .workspace, .preview, .computer, .vmRun, .vmStatus, .device:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
@@ -353,9 +366,9 @@ public struct AlasCLICommandRouter {
         "computer_unsupported_caller: VM tools are only available to ACP agent sessions."
     )
 
-    /// The session that may use computer and VM tools: a worktree's ACP agent session. Side
-    /// sessions never show the approval card, and checkout owners have no computer or VM tools
-    /// in their MCP scope.
+    /// The session that may use computer, VM and device tools: a worktree's ACP agent session.
+    /// Side sessions never show the approval card, and checkout owners have no such tools in
+    /// their MCP scope.
     private func computerUseCaller(_ sessionID: String?) -> String? {
         let callers = host.callers
         guard let sessionID, callers.acpOrigin(ofSession: sessionID) != nil,
