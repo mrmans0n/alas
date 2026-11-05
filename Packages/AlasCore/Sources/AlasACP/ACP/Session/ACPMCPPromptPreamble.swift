@@ -161,6 +161,17 @@ public enum ACPMCPPromptPreamble: Sendable {
             + "agent session in Alas that reports back to you here."
     }
 
+    /// Worktree VMs need Apple silicon, so elsewhere there is none to prefer.
+    private static var worktreeVMPreference: String {
+        #if arch(arm64)
+        "To test an app you built, prefer a VM: it leaves the user's desktop, focus and files alone. "
+            + "If vm_status says this worktree has none, ask for one to be created from its VM tab before driving "
+            + "the user's Mac, unless they asked you to use their Mac or the task needs something only it has. "
+        #else
+        ""
+        #endif
+    }
+
     private static func mcpText(
         builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
@@ -251,6 +262,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "computer_user_active means the user is working there: wait and retry later instead of switching apps. "
                     + "Secure fields can't be typed into; ask the user instead.")
                 lines.append("In a worktree with a VM, computer tools drive the VM instead of the user's Mac. "
+                    + worktreeVMPreference
                     + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
                     + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
                     + "for example to open a built app. "
