@@ -3106,6 +3106,52 @@ struct HostProtocolServerTests {
 
     /// Forgetting a Mac revokes the token it uses here, so only the local user
     /// may: never a paired device, which a stolen one could use to keep a peer.
+    /// Access is the target's consent, so only the local user sets it, and it
+    /// acts on the inbound device the peer record names.
+    @Test(arguments: [true, false])
+    func settingPeerAgentAccessActsOnItsDeviceOnlyForTheLocalUser(isLocalUser: Bool) async throws {
+        let fixture = try Fixture()
+        let peer = RemotePeer(
+            id: "peer-1", serverId: "mac-1", name: "Laptop", origins: [], token: "t", localDeviceId: "device-1", addedAt: .distantPast
+        )
+        let unpaired = RemotePeer(
+            id: "peer-2", serverId: "mac-2", name: "Desk", origins: [], token: "t", addedAt: .distantPast
+        )
+        let device = RemoteDevice(
+            id: "device-1", name: "Laptop", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+            kind: .alasInstance, peerServerId: "mac-1"
+        )
+        let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [device]))
+        fixture.server.remotePeers = RemotePeerManager(
+            store: MemoryPeerStore(peers: [peer, unpaired]), pairing: pairing, localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
+        let client = Client()
+        let caller: HostCaller = isLocalUser ? .localUser(uid: 501) : .remotePeer(deviceID: "device-1")
+        let connection = fixture.server.connect(caller: caller, send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .setPeerAgentAccess(peerID: "peer-1", access: .ask)))
+        await connection.receive(HostClientMessage(id: 2, request: .setPeerAgentAccess(peerID: "peer-2", access: .ask)))
+        await connection.receive(HostClientMessage(id: 3, request: .listPeers))
+
+        if isLocalUser {
+            #expect(pairing.device(id: "device-1")?.agentAccess == .ask)
+            guard case .response(_, .failure(let refusal))? = client.messages.dropFirst().first else {
+                Issue.record("expected a refusal for a peer with no device, got \(client.messages)")
+                return
+            }
+            #expect("\(refusal)".contains("Pair"))
+            guard case .response(_, .peers(let listed))? = client.messages.last else {
+                Issue.record("expected peers, got \(client.messages)")
+                return
+            }
+            #expect(listed.map(\.agentAccess) == [.ask, nil])
+        } else {
+            #expect(pairing.device(id: "device-1")?.agentAccess == .off)
+            #expect(client.messages.count == 3)
+            #expect(client.messages.allSatisfy { if case .response(_, .failure) = $0 { true } else { false } })
+        }
+    }
+
     @Test(arguments: [true, false])
     func forgettingAPeerRevokesItsDeviceOnlyForTheLocalUser(isLocalUser: Bool) async throws {
         let fixture = try Fixture()

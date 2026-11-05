@@ -75,8 +75,15 @@ enum HostCommands {
             try await removeProject(arguments[1])
         case ("peers", "list", 1):
             for peer in try await listPeers() {
-                print("\(peer.id)  \(peer.name)  \(peer.serverId)")
+                print("\(peer.id)  \(peer.name)  \(peer.serverId)  agents: \(peer.agentAccess.map(Self.accessLabel) ?? "unavailable")")
             }
+        case ("peers", "agents", 3):
+            let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
+            guard let access = ["off": RemoteDeviceAgentAccess.off, "ask": .ask, "auto": .autoRun][arguments[2]] else {
+                throw HostError.failed(message: "Access must be off, ask or auto.")
+            }
+            try await setPeerAgentAccess(peer.id, access)
+            print("\(peer.id)  \(peer.name)  agents: \(Self.accessLabel(access))")
         case ("peers", "remove", 2):
             let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
             try await forgetPeer(peer.id)
@@ -236,7 +243,7 @@ enum HostCommands {
         try await perform(.listPeers) {
             if case .peers(let peers) = $0 { peers } else { nil }
         } inProcess: { _ in
-            localPeerManager().peers.map { HostPeerSummary(id: $0.id, serverId: $0.serverId, name: $0.name, origins: $0.origins) }
+            localPeerManager().summaries
         }
     }
 
@@ -244,6 +251,22 @@ enum HostCommands {
         try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { _ in
             // The pairing service's revoke persists the device revocation.
             localPeerManager().forget(peerId: id)
+        }
+    }
+
+    static func setPeerAgentAccess(_ id: String, _ access: RemoteDeviceAgentAccess) async throws {
+        try await perform(.setPeerAgentAccess(peerID: id, access: access)) { $0 == .done ? () : nil } inProcess: { _ in
+            guard localPeerManager().setAgentAccess(access, peerId: id) else {
+                throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
+            }
+        }
+    }
+
+    private static func accessLabel(_ access: RemoteDeviceAgentAccess) -> String {
+        switch access {
+        case .off: "off"
+        case .ask: "ask"
+        case .autoRun: "auto"
         }
     }
 

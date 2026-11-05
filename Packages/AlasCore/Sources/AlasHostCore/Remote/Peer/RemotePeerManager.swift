@@ -904,6 +904,23 @@ public final class RemotePeerManager {
         savePeers()
     }
 
+    /// The peers as `alas-host peers list` shows them.
+    public var summaries: [HostPeerSummary] {
+        peers.map { peer in
+            HostPeerSummary(
+                id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins,
+                agentAccess: peer.localDeviceId.flatMap { pairing.device(id: $0)?.agentAccess }
+            )
+        }
+    }
+
+    /// Sets the access of the inbound device `peerId` reaches this Mac with.
+    /// False when the peer has no such device (reciprocal pairing never completed).
+    public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
+        guard let deviceId = peers.first(where: { $0.id == peerId })?.localDeviceId else { return false }
+        return pairing.setAgentAccess(access, deviceId: deviceId)
+    }
+
     public func forget(peerId: String) {
         guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
         let peer = peers.remove(at: index)

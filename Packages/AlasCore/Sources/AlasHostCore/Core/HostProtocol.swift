@@ -121,6 +121,8 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case listPeers
     /// Forgets a paired Mac and revokes its token; local client only.
     case forgetPeer(peerID: String)
+    /// Sets what agents on a paired Mac may do on this one; local client only.
+    case setPeerAgentAccess(peerID: String, access: RemoteDeviceAgentAccess)
     /// Reads a listed worktree's code as a session in it would
     /// (`host.worktrees.read.v1`).
     case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
@@ -531,12 +533,15 @@ public struct HostPeerSummary: Codable, Equatable, Sendable {
     public var serverId: String
     public var name: String
     public var origins: [String]
+    /// Nil for a peer that never completed reciprocal pairing, or from an older host.
+    public var agentAccess: RemoteDeviceAgentAccess?
 
-    public init(id: String, serverId: String, name: String, origins: [String]) {
+    public init(id: String, serverId: String, name: String, origins: [String], agentAccess: RemoteDeviceAgentAccess? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
         self.origins = origins
+        self.agentAccess = agentAccess
     }
 
     /// The peer `query` names: its id or server id, else a name only one peer has.

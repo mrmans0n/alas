@@ -343,11 +343,18 @@ public final class HostProtocolConnection {
                 code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL), link: remotePairingLink()?(code)
             )
         case .listPeers:
-            return .peers(peers: try localPeers().peers.map(Self.summary))
+            return .peers(peers: try localPeers().summaries)
         case .forgetPeer(let peerID):
             let peers = try localPeers()
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             peers.forget(peerId: peerID)
+            return .done
+        case .setPeerAgentAccess(let peerID, let access):
+            let peers = try localPeers()
+            guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
+            guard peers.setAgentAccess(access, peerId: peerID) else {
+                throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
+            }
             return .done
         case .readWorktree(let ref, let read):
             // Needs no lease, as for a session: seeing a worktree is enough
@@ -445,10 +452,6 @@ public final class HostProtocolConnection {
             throw HostError.failed(message: "This host does not serve Mac peers.")
         }
         return peers
-    }
-
-    private static func summary(_ peer: RemotePeer) -> HostPeerSummary {
-        HostPeerSummary(id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins)
     }
 
     /// Following acts on the connection's subscription, so it needs one.
