@@ -4305,7 +4305,203 @@ struct ACPSessionRunnerQueueTests {
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
     }
+
+    // MARK: - File change report requests
+
+    struct FileChangeReportIssuanceRow: Sendable, CustomTestStringConvertible {
+        enum Expected: Sendable { case keeps, none, mints }
+        var stored: String?
+        var wake = false
+        var continuation = false
+        var negotiated = true
+        var dispatchCount = 0
+        var generation = false
+        var fresh = false
+        var recorded = false
+        var locatable = false
+        let expected: Expected
+
+        var testDescription: String {
+            "stored=\(stored ?? "nil") wake=\(wake) continuation=\(continuation) negotiated=\(negotiated) "
+                + "dispatchCount=\(dispatchCount) generation=\(generation) fresh=\(fresh) "
+                + "recorded=\(recorded) locatable=\(locatable) -> \(expected)"
+        }
+    }
+
+    @Test(arguments: [
+        FileChangeReportIssuanceRow(stored: "x", negotiated: false, dispatchCount: 3, generation: true, recorded: true, expected: .keeps),
+        FileChangeReportIssuanceRow(wake: true, recorded: true, expected: .none),
+        FileChangeReportIssuanceRow(continuation: true, expected: .none),
+        FileChangeReportIssuanceRow(negotiated: false, expected: .none),
+        FileChangeReportIssuanceRow(dispatchCount: 1, recorded: true, locatable: true, expected: .none),
+        FileChangeReportIssuanceRow(generation: true, expected: .none),
+        FileChangeReportIssuanceRow(expected: .mints),
+        FileChangeReportIssuanceRow(dispatchCount: 2, fresh: true, recorded: true, locatable: true, expected: .mints),
+        FileChangeReportIssuanceRow(dispatchCount: 2, fresh: true, recorded: true, expected: .none),
+        // A native steer's `.promptRequired` continuation: its row exists, but no prompt went out yet.
+        FileChangeReportIssuanceRow(recorded: true, locatable: true, expected: .mints),
+    ])
+    func fileChangeReportIssuance(row: FileChangeReportIssuanceRow) throws {
+        var item = QueuedPrompt(
+            blocks: [.text("prompt")],
+            backgroundTaskWake: row.wake ? "job" : nil,
+            transcriptRecorded: row.recorded,
+            dispatchCount: row.dispatchCount,
+            dispatchedBrokerGeneration: row.generation ? ACPBrokerGeneration(rawValue: 7) : nil,
+            interruptedTurnContinuation: row.continuation)
+        if row.fresh { item.advanceBrokerOperationAttempt() }
+        item.fileChangeReportRequestId = row.stored
+
+        item.prepareFileChangeReportRequest(negotiated: row.negotiated, rowLocatable: row.locatable)
+
+        switch row.expected {
+        case .keeps:
+            #expect(item.fileChangeReportRequestId == row.stored)
+        case .none:
+            #expect(item.fileChangeReportRequestId == nil)
+        case .mints:
+            let id = try #require(item.fileChangeReportRequestId)
+            #expect(id.hasPrefix("alas-turn:"))
+            #expect(ACPAgentFileChangeReport.isValidRequestId(id))
+        }
+        #expect(!item.brokerOperationAttemptIsFresh)
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        #expect(json["brokerOperationAttemptIsFresh"] == nil)
+    }
+
+    /// Unrecorded is an exit between marking and recording: no row rule can hold this back.
+    @Test(arguments: [true, false])
+    func alreadyDispatchedItemWithoutAnIdSendsNone(transcriptRecorded: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let stored = try JSONDecoder().decode(QueuedPrompt.self, from: Data("""
+        {"id":"\(UUID().uuidString)","blocks":[{"type":"text","text":"older"}],"enqueuedAt":0,
+         "status":"sending","transcriptRecorded":\(transcriptRecorded),"dispatchCount":1}
+        """.utf8))
+        session.restoreQueue([stored])
+        mock.script(method: "session/prompt") { _ in throw FileChangeReportTransportFailure() }
+
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+
+        let sent = Self.sentPrompts(mock)
+        #expect(sent.map(\.brokerOperationKey) == [stored.brokerOperationKey])
+        #expect((sent.first?.params as? ACPSessionPromptParams)?.meta == nil)
+        #expect(session.queue.first?.fileChangeReportRequestId == nil)
+    }
+
+    @Test func sameKeyResendKeepsTheRequestId() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let id = UUID()
+        session.enqueue(id: id, blocks: [.text("prompt")])
+        session.normalQueuedTurnIDs.insert(id)
+        mock.script(method: "session/prompt") { _ in throw FileChangeReportTransportFailure() }
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        #expect(session.retryQueueItem(id: id))
+        runner.flushQueueIfIdle()
+        try await waitUntil { Self.sentPrompts(mock).count == 2 }
+
+        let sent = Self.sentPrompts(mock)
+        #expect(sent[0].brokerOperationKey == sent[1].brokerOperationKey)
+        #expect(Self.reportRequestIds(mock)[0] != nil)
+        // The broker fingerprints the method and every param, `_meta` included.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let params = try sent.map { try encoder.encode(#require($0.params as? ACPSessionPromptParams)) }
+        #expect(params[0] == params[1])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func queuedRequestIdIsDurableBeforeDispatch() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        // A broker dispatch saves its provenance first, behind the row's write.
+        mock.brokerGenerationForTesting = ACPBrokerGeneration(rawValue: 7)
+        let requested = QueueTestGate()
+        let respond = QueueTestGate()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await requested.open()
+            await respond.wait()
+            return ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8))
+        }
+        session.enqueue(blocks: [.text("prompt")])
+        runner.flushQueueIfIdle()
+        await requested.wait()
+
+        let requestId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        #expect(try store.loadQueue(sessionId: "s").first?.fileChangeReportRequestId == requestId)
+        let row = try #require(store.loadMessages(sessionId: "s").first { $0.kind == "user" })
+        guard case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) else {
+            Issue.record("expected a user row")
+            await respond.open()
+            return
+        }
+        #expect(attachments.compactMap(\.fileChangeReportRequestId) == [requestId])
+
+        await respond.open()
+        try await waitUntil { session.queue.isEmpty }
+    }
+
+    enum FileChangeReportAttemptAdvance: CaseIterable, Sendable {
+        case edit, uncertainRetry, brokerMismatch
+    }
+
+    @Test(arguments: FileChangeReportAttemptAdvance.allCases)
+    func advancedAttemptGetsANewIdAndKey(advance: FileChangeReportAttemptAdvance) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let id = UUID()
+        session.enqueue(id: id, blocks: [.text("prompt")])
+        session.normalQueuedTurnIDs.insert(id)
+        mock.script(method: "session/prompt") { _ in
+            guard advance == .brokerMismatch else { throw FileChangeReportTransportFailure() }
+            throw ACPClientError.jsonrpc(.init(
+                code: -32076, message: "broker state error: OperationKeyPayloadMismatch", data: nil))
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+
+        switch advance {
+        case .edit:
+            session.editQueueItem(id: id, blocks: [.text("edited")])
+        case .uncertainRetry:
+            session.queue[0].markDeliveryUncertain()
+            #expect(session.retryQueueItem(id: id))
+        case .brokerMismatch:
+            #expect(session.retryQueueItem(id: id))
+        }
+        runner.persistQueue()
+        await runner.flushPersistence()
+        // A relaunch before the next dispatch must still see the attempt as new.
+        let persisted = try #require(store.loadQueue(sessionId: "s").first)
+        #expect(persisted.brokerOperationAttemptIsFresh)
+        #expect(persisted.fileChangeReportRequestId == nil)
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        runner.flushQueueIfIdle()
+        try await waitUntil { Self.sentPrompts(mock).count == 2 }
+
+        let keys = Self.sentPrompts(mock).map(\.brokerOperationKey)
+        #expect(keys[0] != keys[1])
+        let ids = Self.reportRequestIds(mock)
+        #expect(ids[0] != nil && ids[1] != nil)
+        #expect(ids[0] != ids[1])
+    }
+
+    private static func sentPrompts(_ mock: ACPMockClient) -> [ACPRequest] {
+        mock.sent.filter { $0.method == "session/prompt" }
+    }
+
+    private static func reportRequestIds(_ mock: ACPMockClient) -> [String?] {
+        sentPrompts(mock).map { ($0.params as? ACPSessionPromptParams)?.meta?.agentFileChangeReportRequest?.requestId }
+    }
 }
+
+private struct FileChangeReportTransportFailure: Error {}
 
 private actor QueueTestGate {
     private var isOpen = false

@@ -3532,6 +3532,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @discardableResult
     public func markQueueHeadSending() -> String? {
         guard !queue.isEmpty, queue[0].status == .pending else { return nil }
+        queue[0].prepareFileChangeReportRequest(
+            negotiated: agentFileChangeReport != nil,
+            rowLocatable: normalQueuedTurnUserMessageIDs[queue[0].id] != nil)
         queue[0].status = .sending
         queue[0].lastError = nil
         queue[0].dispatchedBrokerGeneration = nil

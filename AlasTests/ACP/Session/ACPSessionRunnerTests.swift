@@ -2620,6 +2620,82 @@ struct ACPSessionRunnerTests {
         #expect(session.queue.first?.lastError != nil)
     }
 
+    enum ReportRequestTurn: CaseIterable, Sendable {
+        case direct, delegatedDirect, failureRetry, steerRedirect
+        case wake, restartContinuation, recoveryContext, notNegotiated
+
+        var requestsAReport: Bool {
+            switch self {
+            case .direct, .delegatedDirect, .failureRetry, .steerRedirect: true
+            case .wake, .restartContinuation, .recoveryContext, .notNegotiated: false
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: ReportRequestTurn.allCases)
+    func turnsRequestAReportOnlyWhenTheyShould(turn: ReportRequestTurn) async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        session.agentFileChangeReport = turn == .notNegotiated ? nil : .init()
+        let succeed: (ACPRequest) async throws -> ACPResponse = { _ in ACPResponse(body: Self.succeededPrompt) }
+        mock.scriptResponse(method: "session/prompt", succeed)
+        var sends = 1
+        switch turn {
+        case .direct, .notNegotiated:
+            try await sendAndSettle(runner)
+        case .delegatedDirect:
+            runner.sendNow(blocks: [.text("hello")], queuedItemId: nil,
+                           delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "m"))
+        case .failureRetry:
+            scriptRetryableFailure(mock)
+            try await sendAndSettle(runner)
+            mock.scriptResponse(method: "session/prompt", succeed)
+            #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+            sends = 2
+        case .steerRedirect:
+            let release = AsyncGate()
+            let entered = AsyncGate()
+            mock.scriptResponse(method: "session/prompt") { _ in
+                await entered.open()
+                await release.wait()
+                return ACPResponse(body: Self.succeededPrompt)
+            }
+            runner.send(text: "first", attachments: []) { _ in }
+            await entered.wait()
+            runner.steer(blocks: [.text("instead")])
+            await release.open()
+            sends = 2
+        case .wake:
+            session.queue = [QueuedPrompt(blocks: [.text("task finished")], backgroundTaskWake: "job", transcriptRecorded: true)]
+            runner.flushQueueIfIdle()
+        case .restartContinuation:
+            session.queue = [QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true)]
+            runner.flushQueueIfIdle()
+        case .recoveryContext:
+            #expect(runner.sendRecoveryContext("restore"))
+        }
+        try await waitUntil { self.sentPrompts(mock).count == sends }
+        try await settleToIdle(runner, session)
+
+        let params = sentPrompts(mock).compactMap { $0.params as? ACPSessionPromptParams }
+        #expect(params.count == sends)
+        let references = session.transcript.messages.flatMap { message -> [String] in
+            guard case .user(_, _, _, let attachments, _, _) = message else { return [] }
+            return attachments.compactMap(\.fileChangeReportRequestId)
+        }
+        guard turn.requestsAReport else {
+            #expect(params.allSatisfy { $0.meta == nil })
+            #expect(references.isEmpty)
+            return
+        }
+        let ids = params.compactMap { $0.meta?.agentFileChangeReportRequest?.requestId }
+        #expect(ids == references)
+        #expect(ids.count == sends)
+        #expect(Set(ids).count == sends)
+        #expect(ids.allSatisfy { $0.hasPrefix("alas-turn:") && ACPAgentFileChangeReport.isValidRequestId($0) })
+    }
+
     @Test func retryResendsAnAttachmentAndItsPlacement() async throws {
         let (runner, mock, session, _) = try await makeFailureRunner()
         runner.start()
