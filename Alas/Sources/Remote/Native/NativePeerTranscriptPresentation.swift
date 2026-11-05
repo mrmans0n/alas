@@ -99,6 +99,18 @@ final class NativePeerRowCache {
         let proxy: ACPMessage
     }
 
+    private let decodeRow: (RemoteWireMessage) -> NativePeerRow
+
+    init(decodeRow: @escaping (RemoteWireMessage) -> NativePeerRow = NativePeerRow.init(message:)) {
+        self.decodeRow = decodeRow
+    }
+
+    func removeAll() {
+        decoded.removeAll()
+        markdownCaches.removeAll()
+        thoughtBuffers.removeAll()
+    }
+
     private var decoded: [String: Decoded] = [:]
     private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
     private var thoughtBuffers: [String: StreamingText] = [:]
@@ -149,7 +161,7 @@ final class NativePeerRowCache {
 
     private func entry(for message: RemoteWireMessage) -> Decoded {
         if let cached = decoded[message.stableId], cached.source == message { return cached }
-        let row = NativePeerRow(message: message)
+        let row = decodeRow(message)
         let entry = Decoded(source: message, row: row, proxy: proxy(for: row, stableId: message.stableId))
         decoded[message.stableId] = entry
         return entry

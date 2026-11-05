@@ -2114,13 +2114,17 @@ struct NativePeerSessionsTests {
         ))
     }
 
-    @Test(arguments: ["confirmed", "dismissed", "rejected", "offline", "selection", "ownership", "readonly", "wrongSession", "rollback", "lateRejection"])
+    @Test(arguments: ["confirmed", "dismissed", "rejected", "offline", "selection", "ownership", "readonly", "wrongSession", "rollback", "lateRejection", "streaming"])
     func visualAnswersWaitForHostOutcome(outcome: String) async throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
         let federation = FederatedSessionsProvider(links: links)
+        var decodes = 0
         let client = NativePeerSessions(federation: federation, peers: {
             [.init(serverId: "B", name: "Mac B", state: "online")]
+        }, decodeVisualRow: {
+            decodes += 1
+            return NativePeerRow(message: $0)
         })
         client.start()
         defer { client.stop() }
@@ -2155,7 +2159,7 @@ struct NativePeerSessionsTests {
         #expect(ids == (outcome == "dismissed" ? [] : ["b"]))
         #expect(note == (outcome == "dismissed" ? nil : "Looks good"))
         switch outcome {
-        case "confirmed", "dismissed", "rollback", "lateRejection":
+        case "confirmed", "dismissed", "rollback", "lateRejection", "streaming":
             visual.answer = answer
             links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
                                            upserts: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
@@ -2170,7 +2174,17 @@ struct NativePeerSessionsTests {
                                            upserts: [], epoch: 1, revision: 1), from: "B")
         default: client.clearSelection()
         }
-        #expect(await submission.value == (["confirmed", "dismissed", "rollback", "lateRejection"].contains(outcome)))
+        #expect(await submission.value == (["confirmed", "dismissed", "rollback", "lateRejection", "streaming"].contains(outcome)))
+        if outcome == "streaming" {
+            let confirmedDecodes = decodes
+            #expect(confirmedDecodes > 0)
+            for revision in 2...5 {
+                links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true,
+                                               upserts: [.init(stableId: "text", kind: "agent", text: "Chunk \(revision)", json: nil, index: 1)],
+                                               epoch: 1, revision: revision), from: "B")
+            }
+            #expect(decodes == confirmedDecodes)
+        }
         if outcome == "rollback" || outcome == "lateRejection" {
             let status = client.visualStatus(for: visual.id, sessionId: "B:s")
             #expect(status.error == nil)

@@ -10,6 +10,8 @@ final class NativePeerSessions {
     @ObservationIgnored private var visualStatuses: [String: [UUID: ACPVisualAidSendStatus]] = [:]
     @ObservationIgnored private var visualSubmissions: [String: VisualSubmission] = [:]
 
+    @ObservationIgnored private let visualRows: NativePeerRowCache
+
     private struct VisualSubmission {
         let sessionId: String
         let visualId: UUID
@@ -39,9 +41,9 @@ final class NativePeerSessions {
         guard selectedSessionId == sessionId, canAnswerVisuals,
               !visualSubmissions.values.contains(where: { $0.sessionId == sessionId && $0.visualId == id }),
               let row = transcript?.messages.first(where: {
-                  guard $0.kind == "visualAid", case .visualAid(let visual) = NativePeerRow(message: $0) else { return false }
+                  guard $0.kind == "visualAid", case .visualAid(let visual) = visualRows.row(for: $0) else { return false }
                   return visual.id == id && visual.answer == nil
-              }), case .visualAid(let visual) = NativePeerRow(message: row), let question = visual.question
+              }), case .visualAid(let visual) = visualRows.row(for: row), let question = visual.question
         else { return false }
         let action: String
         let ids: [String]
@@ -96,7 +98,7 @@ final class NativePeerSessions {
                 continue
             }
             for row in transcript?.messages ?? [] where row.kind == "visualAid" {
-                guard case .visualAid(let visual) = NativePeerRow(message: row), visual.id == submission.visualId else { continue }
+                guard case .visualAid(let visual) = visualRows.row(for: row), visual.id == submission.visualId else { continue }
                 if visual.answer != nil {
                     if submission.completion != nil { finishVisual(requestId, accepted: true) }
                 } else if submission.completion == nil {
@@ -335,6 +337,7 @@ final class NativePeerSessions {
     init(
         federation: FederatedSessionsProvider,
         peers: @escaping @MainActor () -> [RemoteHelloPeer],
+        decodeVisualRow: @escaping (RemoteWireMessage) -> NativePeerRow = NativePeerRow.init(message:),
         comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil },
         consoles: NativePeerConsoles? = nil,
         hosts: NativePeerHosts? = nil,
@@ -344,6 +347,7 @@ final class NativePeerSessions {
     ) {
         self.federation = federation
         self.peers = peers
+        self.visualRows = NativePeerRowCache(decodeRow: decodeVisualRow)
         self.comparisonMode = comparisonMode
         self.supportsRepoHookApproval = supportsRepoHookApproval
         self.decideRepoHook = decideRepoHook
@@ -714,6 +718,7 @@ final class NativePeerSessions {
         for submission in submissions { submission.completion?.resume(returning: false) }
         visualForms = [:]
         visualStatuses = [:]
+        visualRows.removeAll()
         if let downstream {
             if let selectedSessionId {
                 _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
