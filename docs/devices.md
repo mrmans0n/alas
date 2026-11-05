@@ -20,6 +20,30 @@ If the helper stops, the screen says so and Retry starts it again. If
 `xcode-select` points at the Command Line Tools instead of Xcode, the tab
 shows simctl's error.
 
-Not yet: agent control, Android, physical devices, rotation, and device
-settings. The follow-up list is in
-`docs/plans/2026-11-04-device-panel-design.md`.
+## Agents
+
+Agents can drive the same simulators. Turn on **Settings › Advanced ›
+Experiments › Let agents use the device** (it needs Device panel on). Agent
+sessions in a worktree then get these tools from the built-in `alas` MCP
+server:
+
+| Tool | What it does |
+|---|---|
+| `device_list` | Lists the iOS simulators and whether each is booted. |
+| `device_open` | Boots a simulator if needed and shows it in the agent's worktree's Device tab. |
+| `device_snapshot` | Reads the screen's accessibility elements, with refs such as `s2e3` and frames in points. |
+| `device_screenshot` | Returns a PNG of the screen, at most 1280 px on the long edge. |
+| `device_tap` | Taps a ref from the latest snapshot, or x/y pixels in the latest screenshot. |
+| `device_swipe` | Swipes in a direction, or between two screenshot points. |
+| `device_type` | Types ASCII text as key presses; `\n` presses Return. |
+| `device_button` | Presses Home, Lock, Siri, the side button, or opens the app switcher. |
+
+While an agent works on a simulator, the Device tab says who is driving and
+ignores your clicks and keys. Take over to use it yourself: the agent's
+calls then fail with `device_user_active` until you hand it back. With the
+setting off, every call fails with `device_disabled`. An agent's calls keep
+the simulator's stream running for a minute after its last call, so
+screenshots work with the Device tab closed.
+
+Not yet: Android, physical devices, rotation, and device settings. The
+follow-up list is in `docs/plans/2026-11-04-device-panel-design.md`.

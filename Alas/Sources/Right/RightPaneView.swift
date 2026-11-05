@@ -219,7 +219,10 @@ struct RightPaneView: View {
             case .schedules:
                 SchedulesTabView(state: state, worktree: worktree)
             case .device:
-                DeviceTabView(model: state.devicePane, client: state.simulatorStreams)
+                DeviceTabView(
+                    model: state.devicePane, client: state.simulatorStreams, control: state.deviceControl,
+                    agentName: { state.computerUseAgentName($0) }
+                )
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)

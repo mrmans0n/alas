@@ -15,6 +15,8 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case workspace(WorkspaceCommand)
         case preview(WebPreviewCommand)
         case computer(ComputerUseCommand)
+        /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+        case device(DeviceCommand)
         case review(ReviewCommand)
         case agentList(worktree: String?)
         case sessionList
@@ -771,6 +773,8 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 throw AlasCLIRequestError.unsupportedCommand
             }
             command = .computer(try ComputerUseCommand.decode(action: action, data: data))
+        case let name? where name.hasPrefix("device_"):
+            command = .device(try DeviceCommand.decode(toolName: name, data: data))
         case "vm_run":
             let params = try Self.decodeParams(VMRunParams.self, from: data)
             // Sent to the shell as given; only a blank or oversized command is refused.

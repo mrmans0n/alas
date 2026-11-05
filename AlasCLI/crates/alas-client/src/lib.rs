@@ -291,6 +291,8 @@ pub enum Command {
     VmStatus {
         vm: Option<VmGuest>,
     },
+    /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+    Device(DeviceCommand),
     Resolve,
 }
 
@@ -436,6 +438,90 @@ pub enum ComputerCommand {
 pub enum ComputerTarget {
     Ref(String),
     Point { x: f64, y: f64 },
+}
+
+/// The `device_*` tools. `udid` names the simulator; `include_screenshot`
+/// makes an action reply with a screenshot taken after it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceCommand {
+    List,
+    Open {
+        udid: String,
+    },
+    Snapshot {
+        udid: String,
+        query: Option<String>,
+        limit: u64,
+    },
+    Screenshot {
+        udid: String,
+    },
+    Tap {
+        udid: String,
+        target: DeviceTarget,
+        include_screenshot: bool,
+    },
+    Swipe {
+        udid: String,
+        gesture: DeviceSwipe,
+        duration_ms: u64,
+        include_screenshot: bool,
+    },
+    Type {
+        udid: String,
+        text: String,
+        include_screenshot: bool,
+    },
+    Button {
+        udid: String,
+        name: String,
+        include_screenshot: bool,
+    },
+}
+
+/// A ref from the device's latest `device_snapshot`, or pixels in its latest
+/// `device_screenshot`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceTarget {
+    Ref(String),
+    Point { x: f64, y: f64 },
+}
+
+/// A swipe across the middle of the screen, or between two points in pixels
+/// of the device's latest `device_screenshot`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceSwipe {
+    Direction(String),
+    Points {
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
+    },
+}
+
+impl DeviceCommand {
+    /// Whether the app's reply carries a screenshot for the MCP bridge to lift out.
+    pub fn includes_screenshot(&self) -> bool {
+        match self {
+            DeviceCommand::Screenshot { .. } => true,
+            DeviceCommand::Tap {
+                include_screenshot, ..
+            }
+            | DeviceCommand::Swipe {
+                include_screenshot, ..
+            }
+            | DeviceCommand::Type {
+                include_screenshot, ..
+            }
+            | DeviceCommand::Button {
+                include_screenshot, ..
+            } => *include_screenshot,
+            DeviceCommand::List | DeviceCommand::Open { .. } | DeviceCommand::Snapshot { .. } => {
+                false
+            }
+        }
+    }
 }
 
 /// What an input action returns afterwards: a fresh read of the window.
@@ -1010,11 +1096,91 @@ pub fn build_request(
             insert_vm(&mut r, *vm);
             r
         }
+        Command::Device(device) => device_request(device),
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
     req.cwd = cwd;
     req
+}
+
+fn device_request(command: &DeviceCommand) -> Request {
+    use serde_json::{json, Value};
+    let (name, params) = match command {
+        DeviceCommand::List => ("device_list", json!({})),
+        DeviceCommand::Open { udid } => ("device_open", json!({ "udid": udid })),
+        DeviceCommand::Snapshot { udid, query, limit } => {
+            let mut params = json!({ "udid": udid, "limit": limit });
+            if let Some(query) = query {
+                params["query"] = Value::String(query.clone());
+            }
+            ("device_snapshot", params)
+        }
+        DeviceCommand::Screenshot { udid } => ("device_screenshot", json!({ "udid": udid })),
+        DeviceCommand::Tap {
+            udid,
+            target,
+            include_screenshot,
+        } => {
+            let mut params = json!({ "udid": udid, "include_screenshot": include_screenshot });
+            match target {
+                DeviceTarget::Ref(reference) => params["ref"] = Value::String(reference.clone()),
+                DeviceTarget::Point { x, y } => {
+                    params["x"] = json!(x);
+                    params["y"] = json!(y);
+                }
+            }
+            ("device_tap", params)
+        }
+        DeviceCommand::Swipe {
+            udid,
+            gesture,
+            duration_ms,
+            include_screenshot,
+        } => {
+            let mut params = json!({
+                "udid": udid,
+                "duration_ms": duration_ms,
+                "include_screenshot": include_screenshot,
+            });
+            match gesture {
+                DeviceSwipe::Direction(direction) => {
+                    params["direction"] = Value::String(direction.clone())
+                }
+                DeviceSwipe::Points {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                } => {
+                    params["from_x"] = json!(from_x);
+                    params["from_y"] = json!(from_y);
+                    params["to_x"] = json!(to_x);
+                    params["to_y"] = json!(to_y);
+                }
+            }
+            ("device_swipe", params)
+        }
+        DeviceCommand::Type {
+            udid,
+            text,
+            include_screenshot,
+        } => (
+            "device_type",
+            json!({ "udid": udid, "text": text, "include_screenshot": include_screenshot }),
+        ),
+        DeviceCommand::Button {
+            udid,
+            name,
+            include_screenshot,
+        } => (
+            "device_button",
+            json!({ "udid": udid, "name": name, "include_screenshot": include_screenshot }),
+        ),
+    };
+    let mut request = Request::new(name);
+    request.params = Some(params);
+    request
 }
 
 fn computer_request(command: &ComputerCommand) -> Request {
@@ -1492,6 +1658,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// closes the connection, so giving up sooner would cancel an approved call.
 pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// `device_open` may boot the simulator and wait for it (the app allows 300 s).
+pub const DEVICE_OPEN_READ_TIMEOUT: Duration = Duration::from_secs(330);
+
 /// The guest's own bound on a `vm_run` command when the call gives none.
 pub const VM_RUN_DEFAULT_TIMEOUT_SECONDS: u32 = 120;
 
@@ -1503,6 +1672,8 @@ const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
         Command::Computer(..) => COMPUTER_READ_TIMEOUT,
+        Command::Device(DeviceCommand::Open { .. }) => DEVICE_OPEN_READ_TIMEOUT,
+        Command::Device(..) => COMPUTER_READ_TIMEOUT,
         Command::VmRun {
             timeout_seconds, ..
         } => {
@@ -2430,6 +2601,76 @@ mod tests {
         assert_eq!(read_timeout(&run(None)), Duration::from_secs(150));
         assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(630));
         assert_eq!(read_timeout(&Command::VmStatus { vm: None }), READ_TIMEOUT);
+    }
+
+    #[test]
+    fn device_commands_serialize_as_params_only_requests() {
+        let build = |device: DeviceCommand| {
+            let request = build_request(&Command::Device(device), Some("acp-1".into()), None);
+            (request.command, request.params.unwrap())
+        };
+        let udid = || "U-1".to_string();
+        assert_eq!(build(DeviceCommand::List), ("device_list".into(), serde_json::json!({})));
+        assert_eq!(
+            build(DeviceCommand::Snapshot {
+                udid: udid(),
+                query: None,
+                limit: 200
+            }),
+            (
+                "device_snapshot".into(),
+                serde_json::json!({ "udid": "U-1", "limit": 200 })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::Tap {
+                udid: udid(),
+                target: DeviceTarget::Ref("s2e3".into()),
+                include_screenshot: true
+            }),
+            (
+                "device_tap".into(),
+                serde_json::json!({ "udid": "U-1", "ref": "s2e3", "include_screenshot": true })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::Tap {
+                udid: udid(),
+                target: DeviceTarget::Point { x: 120.5, y: 300.0 },
+                include_screenshot: false
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1", "x": 120.5, "y": 300.0, "include_screenshot": false })
+        );
+        assert_eq!(
+            build(DeviceCommand::Swipe {
+                udid: udid(),
+                gesture: DeviceSwipe::Direction("up".into()),
+                duration_ms: 300,
+                include_screenshot: false
+            }),
+            (
+                "device_swipe".into(),
+                serde_json::json!({ "udid": "U-1", "direction": "up", "duration_ms": 300, "include_screenshot": false })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::Type {
+                udid: udid(),
+                text: "Hi\n".into(),
+                include_screenshot: false
+            })
+            .0,
+            "device_type"
+        );
+        assert_eq!(
+            read_timeout(&Command::Device(DeviceCommand::Open { udid: udid() })),
+            DEVICE_OPEN_READ_TIMEOUT
+        );
+        assert_eq!(
+            read_timeout(&Command::Device(DeviceCommand::List)),
+            COMPUTER_READ_TIMEOUT
+        );
     }
 
     #[test]

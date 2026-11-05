@@ -68,6 +68,17 @@ final class SimServiceHandler: NSObject, SimServiceProtocol, @unchecked Sendable
         session(udid)?.button(name)
     }
 
+    func describe(udid: String, reply: @escaping @Sendable (Data?, String?) -> Void) {
+        // The bridge blocks while the simulator answers; keep it off the XPC queue.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                reply(try AlasSimulatorSession.describeUI(udid: udid), nil)
+            } catch {
+                reply(nil, error.localizedDescription)
+            }
+        }
+    }
+
     func stopAll() {
         let all = lock.withLock { () -> [AlasSimulatorSession] in
             defer { sessions.removeAll() }

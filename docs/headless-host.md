@@ -227,7 +227,7 @@ archive after merge follow the project's shepherd rules. This needs `gh` (or
 setup` reports when it isn't.
 
 Tools that need a screen are hidden: `open`, `preview_*`, `computer_*`,
-`worktree_switch` and `workspace_*`. Calling one anyway, or its CLI command,
+`vm_*`, `device_*`, `worktree_switch` and `workspace_*`. Calling one anyway, or its CLI command,
 fails with "Not available on a headless host."
 
 When an agent opens a review or replies to a review comment, each paired Mac

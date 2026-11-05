@@ -19,6 +19,8 @@ enum SimServiceName {
     func key(udid: String, usage: UInt32, down: Bool)
     /// A serve-sim button name, such as `home`.
     func button(udid: String, name: String)
+    /// The accessibility tree of `udid` as serve-sim's JSON, or an error message.
+    func describe(udid: String, reply: @escaping @Sendable (Data?, String?) -> Void)
 }
 
 /// Calls from AlasSimService back into Alas.

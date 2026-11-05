@@ -53,10 +53,16 @@ struct WebPreviewAutomationRoutingTests {
             computerCommand: { _, _ in
                 Issue.record("Only full ACP sessions in a worktree may reach computer use")
                 return .ok
+            },
+            deviceCommand: { _, _ in
+                Issue.record("Only full ACP sessions in a worktree may reach device control")
+                return .ok
             }, activateApp: {}
         )
         let response = await router.handle(.init(version: 1, sessionId: sessionID, cwd: "/b", command: .computer(.init(action: .apps))))
         #expect(response == .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions."))
+        let device = await router.handle(.init(version: 1, sessionId: sessionID, cwd: "/b", command: .device(.list)))
+        #expect(device == .error("device_unsupported_caller: Device tools are only available to ACP agent sessions."))
     }
 
     @Test func listIsOwnerScopedAndDoesNotLoadPageOrFocus() async throws {

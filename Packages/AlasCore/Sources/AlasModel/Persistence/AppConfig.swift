@@ -95,6 +95,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var experimentalACP2Enabled: Bool = false
     /// Shows the experimental Device tab in the right pane.
     public var devicePanelEnabled: Bool = false
+    /// Lets agents use the Device tab's simulator through the `device_*` tools.
+    public var deviceAgentsEnabled: Bool = false
     public var recentProjectIds: [String] = []
     public var recentWorktreeIdsByProject: [String: [String]] = [:]
     public var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -803,7 +805,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, devicePanelEnabled: Bool = false) {
+    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, devicePanelEnabled: Bool = false, deviceAgentsEnabled: Bool = false) {
         self.themeId = themeId
         self.accent = accent
         self.matchSystemTheme = matchSystemTheme
@@ -832,6 +834,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.pluginsEnabled = pluginsEnabled
         self.experimentalACP2Enabled = experimentalACP2Enabled
         self.devicePanelEnabled = devicePanelEnabled
+        self.deviceAgentsEnabled = deviceAgentsEnabled
         self.recentProjectIds = recentProjectIds
         self.recentWorktreeIdsByProject = recentWorktreeIdsByProject
         self.recentWorktreeRefs = recentWorktreeRefs
@@ -937,6 +940,7 @@ extension AppConfig {
              pluginsEnabled,
              experimentalACP2Enabled,
              devicePanelEnabled,
+             deviceAgentsEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -1213,6 +1217,7 @@ extension AppConfig {
         pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? true
         experimentalACP2Enabled = (try? c.decode(Bool.self, forKey: .experimentalACP2Enabled)) ?? false
         devicePanelEnabled = (try? c.decode(Bool.self, forKey: .devicePanelEnabled)) ?? false
+        deviceAgentsEnabled = (try? c.decode(Bool.self, forKey: .deviceAgentsEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
