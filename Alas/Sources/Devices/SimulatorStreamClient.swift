@@ -14,6 +14,7 @@ final class SimulatorStreamClient {
     private var connection: NSXPCConnection?
     private var subscriptions = StreamSubscriptions()
     private var screens: [String: [UUID: Screen]] = [:]
+    private var lastFrames: [String: IOSurface] = [:]
 
     func subscribe(
         udid: String,
@@ -29,7 +30,10 @@ final class SimulatorStreamClient {
     func unsubscribe(udid: String, token: UUID) {
         screens[udid]?[token] = nil
         if screens[udid]?.isEmpty == true { screens[udid] = nil }
-        if subscriptions.remove(udid) == .stop { service()?.stopStream(udid: udid) }
+        if subscriptions.remove(udid) == .stop {
+            lastFrames[udid] = nil
+            service()?.stopStream(udid: udid)
+        }
     }
 
     func touch(udid: String, phase: String, point: DeviceScreenPoint) {
@@ -44,7 +48,31 @@ final class SimulatorStreamClient {
         service()?.button(udid: udid, name: name)
     }
 
+    /// The newest frame of a device someone is watching.
+    func lastFrame(udid: String) -> IOSurface? {
+        lastFrames[udid]
+    }
+
+    /// serve-sim's accessibility JSON for `udid`.
+    func describe(udid: String) async throws -> Data {
+        guard let service = service() else {
+            throw SimulatorStreamError(message: "device_unavailable: The simulator service is not available.")
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            service.describe(udid: udid) { data, error in
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: SimulatorStreamError(
+                        message: "device_unavailable: \(error ?? "The simulator did not describe its screen.")"
+                    ))
+                }
+            }
+        }
+    }
+
     fileprivate func deliver(udid: String, surface: IOSurface) {
+        lastFrames[udid] = surface
         screens[udid]?.values.forEach { $0.onFrame(surface) }
     }
 
@@ -96,6 +124,11 @@ final class SimulatorStreamClient {
         self.connection = connection
         return connection
     }
+}
+
+struct SimulatorStreamError: Error, LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 /// Receives frames on the XPC queue and hands them to the main actor.

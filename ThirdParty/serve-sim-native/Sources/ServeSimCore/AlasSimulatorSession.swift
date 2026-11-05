@@ -86,4 +86,12 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     public func button(_ name: String) {
         input.yield(.button(name))
     }
+
+    /// The booted simulator's accessibility tree as serve-sim's JSON (an array
+    /// whose first node is the application, frames in points). Blocks for up
+    /// to a few seconds; works without a running capture.
+    public static func describeUI(udid: String) throws -> Data {
+        SimFrameworks.load()
+        return try AccessibilityBridge.shared.describeUI(udid: udid)
+    }
 }
