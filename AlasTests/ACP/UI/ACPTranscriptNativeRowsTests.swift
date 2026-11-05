@@ -22,6 +22,19 @@ import Testing
         #expect((ACPTranscriptNativeRows.content(for: message, isLive: isLive, isCommentary: false) != nil) == expected)
     }
 
+    /// A report reference draws natively. A checkpoint's restore button and anything
+    /// the user attached are SwiftUI only.
+    @Test(arguments: [
+        ([ACPMessage.Attachment.fileChangeReportReference(requestId: "alas-turn:a")], true),
+        ([.checkpointReference(id: UUID())], false),
+        ([.checkpointReference(id: UUID()), .fileChangeReportReference(requestId: "alas-turn:a")], false),
+        ([.fileChangeReportReference(requestId: "alas-turn:a"), .init(uri: "file:///tmp/a.png", name: "a.png", mimeType: "image/png")], false),
+    ])
+    func onlyReportReferencesStayNative(attachments: [ACPMessage.Attachment], expected: Bool) {
+        let message = ACPMessage.user(id: UUID(), messageId: nil, text: "please fix the tests", attachments: attachments)
+        #expect((ACPTranscriptNativeRows.content(for: message, isLive: false, isCommentary: false) != nil) == expected)
+    }
+
     @Test(arguments: [
         ("Build: ![badge](https://example.com/badge.png)", false, false),
         ("## ![badge](b.png) title", false, false),

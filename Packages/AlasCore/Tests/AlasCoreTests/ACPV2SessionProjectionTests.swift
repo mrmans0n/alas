@@ -168,6 +168,16 @@ struct ACPV2SessionProjectionTests {
         }
     }
 
+    @Test func agentResourceLinksCannotPlantASessionLinkOrReportReference() throws {
+        let fixture = try ProjectionFixture()
+        try fixture.update(#"{"sessionUpdate":"user_message","messageId":"u","content":[{"type":"text","text":"hi"},{"type":"resource_link","uri":"alas-file-change-report://planted","name":"r"},{"type":"resource_link","uri":"\#(ACPSessionReference.uri(sessionId: "secret"))","name":"s"},{"type":"resource_link","uri":"file:///a","name":"a"}]}"#)
+        guard case .user(_, _, _, let attachments, _, _) = fixture.session.transcript.messages.first else {
+            Issue.record("Missing user row")
+            return
+        }
+        #expect(attachments.map(\.uri) == ["file:///a"])
+    }
+
     @Test func typedProjectionPreservesUnsupportedContentAndTerminalBytes() throws {
         let fixture = try ProjectionFixture()
         try fixture.update(#"{"sessionUpdate":"agent_message","messageId":"m","content":[{"type":"future","n":1e999}]}"#)

@@ -119,11 +119,11 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
 final class ACPTranscriptCodeCopyAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
     private let press: @MainActor @Sendable () -> Void
 
-    init(press: @escaping @MainActor @Sendable () -> Void) {
+    init(label: String = "Copy code", press: @escaping @MainActor @Sendable () -> Void) {
         self.press = press
         super.init()
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Copy code")
+        setAccessibilityLabel(label)
     }
 
     override func accessibilityPerformPress() -> Bool {

@@ -22,6 +22,8 @@ extension ACPTranscriptCoreTextRowView {
         let items: [Item]
         /// The header line a click expands or collapses, for rows that have one.
         var toggleRect: CGRect?
+        /// The "Reported changes" control under a user bubble.
+        var reportedChangesRect: CGRect?
     }
 
     func layout(forWidth width: CGFloat) -> Layout {
@@ -39,6 +41,7 @@ extension ACPTranscriptCoreTextRowView {
             return Layout(width: width, height: 0, column: column, items: [])
         }
         var builder = LayoutBuilder(x: column.minX, maxX: column.maxX, palette: palette, symbols: symbols)
+        var reportedChangesRect: CGRect?
         if inToolCallGroup {
             builder.x += Self.groupMemberIndent
             builder.addLane()
@@ -60,10 +63,12 @@ extension ACPTranscriptCoreTextRowView {
             )
         case .toolGroupHeader(let label, _, _):
             builder.addGroupHeader(label: label)
-        case .user(let markdown):
+        case .user(let markdown, let reportedChanges):
             builder.addUserBubble(markdown, contentMaxWidth: contentMaxWidth, theme: theme, typography: typography)
+            reportedChangesRect = reportedChanges.map { builder.addReportedChanges(title: $0) }
         }
         var layout = builder.finish(width: width, column: column)
+        layout.reportedChangesRect = reportedChangesRect
         switch content {
         case .thought, .toolCall, .toolGroupHeader:
             // These rows are their header line, so the whole column width
@@ -218,6 +223,21 @@ extension ACPTranscriptCoreTextRowView {
                 items.append(.markdown(markdown, origin: origin, ascents: V.ascents(of: markdown)))
             }
             y = bubble.maxY
+        }
+
+        /// A small chip at the bubble's trailing edge, as `ACPReportedChangesButton`.
+        mutating func addReportedChanges(title: String) -> CGRect {
+            let font = NSFont.systemFont(ofSize: V.reportedChangesFontSize)
+            let padding = V.toolTargetHorizontalPadding
+            let line = V.line(title, font: font, color: palette.fgFaint, maxWidth: maxX - x - 2 * padding, truncation: .end)
+            let textHeight = V.lineHeight(font)
+            let top = y + V.reportedChangesTopSpacing
+            let width = ceil(V.width(of: line)) + 2 * padding
+            let chip = CGRect(x: maxX - width, y: top, width: width, height: textHeight + 2 * V.toolTargetVerticalPadding)
+            items.append(.fill(chip, palette.bg2, cornerRadius: V.toolTargetCornerRadius))
+            addText(line, x: chip.minX + padding, rowTop: chip.minY + V.toolTargetVerticalPadding, rowHeight: textHeight)
+            y = chip.maxY
+            return chip
         }
 
         mutating func place(_ symbol: Symbol, x: CGFloat, rowTop: CGFloat, rowHeight: CGFloat) {

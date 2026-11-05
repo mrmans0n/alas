@@ -62,6 +62,19 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// boundary. A later generation cannot tell whether that request
     /// completed, so replay is held for an explicit user decision.
     public var dispatchedBrokerGeneration: ACPBrokerGeneration?
+    /// The id this item's `session/prompt` asks its file change report under.
+    /// The broker fingerprints `_meta`, so it is sent verbatim while
+    /// `brokerOperationKey` stays the same.
+    public var fileChangeReportRequestId: String?
+    /// Stored only while true, so the key stays out of ordinary queue JSON.
+    private var brokerOperationAttemptFreshMarker: Bool?
+    /// The current attempt's key has never been dispatched, by any build. A
+    /// `dispatchCount` above zero cannot show this: the count survives an
+    /// advance. Set by `advanceBrokerOperationAttempt`, cleared by the next dispatch.
+    public internal(set) var brokerOperationAttemptIsFresh: Bool {
+        get { brokerOperationAttemptFreshMarker == true }
+        set { brokerOperationAttemptFreshMarker = newValue ? true : nil }
+    }
     /// True when this prompt may have reached a broker but completion could
     /// not be confirmed. The queue flusher must not resend it automatically.
     public var deliveryUncertain: Bool
@@ -206,6 +219,8 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
         case backgroundTaskWakeBatch
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
+        case fileChangeReportRequestId
+        case brokerOperationAttemptFreshMarker = "brokerOperationAttemptIsFresh"
         case awaitingInterruptionResume, interruptedTurnContinuation
         case usageLimit
     }
@@ -227,6 +242,8 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
         dispatchCount = (try? c.decode(Int.self, forKey: .dispatchCount)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
+        fileChangeReportRequestId = try? c.decode(String.self, forKey: .fileChangeReportRequestId)
+        brokerOperationAttemptFreshMarker = (try? c.decode(Bool.self, forKey: .brokerOperationAttemptFreshMarker)) == true ? true : nil
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
         awaitingInterruptionResume = (try? c.decode(Bool.self, forKey: .awaitingInterruptionResume)) ?? false
         interruptedTurnContinuation = (try? c.decode(Bool.self, forKey: .interruptedTurnContinuation)) ?? false
@@ -362,5 +379,23 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     public mutating func advanceBrokerOperationAttempt() {
         brokerOperationAttempt += 1
+        fileChangeReportRequestId = nil
+        brokerOperationAttemptIsFresh = true
+    }
+
+    /// Decides this dispatch's report request id. Call before the dispatch
+    /// changes `dispatchCount` or the broker generation, which it reads.
+    public mutating func prepareFileChangeReportRequest(negotiated: Bool, rowLocatable: Bool) {
+        defer { brokerOperationAttemptIsFresh = false }
+        // A stored id already went out, or may have, under this key.
+        if fileChangeReportRequestId != nil { return }
+        guard backgroundTaskWake == nil, !interruptedTurnContinuation, negotiated else { return }
+        // The key may already be on the broker without a `_meta`, as an older
+        // build sent it, and a resend must match that fingerprint.
+        if dispatchCount > 0 || dispatchedBrokerGeneration != nil, !brokerOperationAttemptIsFresh { return }
+        // A report needs a row to land on. After a relaunch the row can't be
+        // found again, and matching it by text could pick the wrong turn.
+        if transcriptRecorded, !rowLocatable { return }
+        fileChangeReportRequestId = ACPAgentFileChangeReportRequest.newRequestId()
     }
 }

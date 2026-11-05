@@ -378,7 +378,7 @@ private struct ACPSubagentPromptRow: View {
     @Environment(\.theme) private var theme
 
     private var visibleAttachments: [ACPMessage.Attachment] {
-        attachments.filter { !$0.isCheckpointReference }
+        attachments.filter { !$0.isLocalReference }
     }
 
     var body: some View {

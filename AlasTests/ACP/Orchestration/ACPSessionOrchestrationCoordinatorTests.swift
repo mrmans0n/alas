@@ -31,7 +31,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         parent.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
         let turn = NextPromptCompletedTurn(sessionID: parent.id, incarnation: parent.incarnation,
             promptID: parent.allocatePromptID(), userMessageID: userID,
-            transcriptRevision: parent.transcript.messagesGeneration)
+            transcriptRevision: parent.transcript.conversationRevision)
         var facts = NextPromptEligibilitySnapshot.Environment()
         facts.isEnabled = true
         facts.hasVerifiedModel = true

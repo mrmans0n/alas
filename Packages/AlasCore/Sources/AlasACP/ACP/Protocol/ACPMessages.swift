@@ -290,6 +290,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let planFile: ACPPlanFileDeclaration
     /// Asks our Claude and Codex adapter forks for structured failure incidents.
     public let sessionFailure: ACPSessionFailureDeclaration
+    /// Asks our Claude and Codex adapter forks to report the files each turn changed.
+    public let agentFileChangeReport: ACPAgentFileChangeReportDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -304,7 +306,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         forkPoint: ACPForkPointDeclaration = .init(),
         diffPatch: ACPDiffPatchDeclaration = .init(),
         planFile: ACPPlanFileDeclaration = .init(),
-        sessionFailure: ACPSessionFailureDeclaration = .init()
+        sessionFailure: ACPSessionFailureDeclaration = .init(),
+        agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -319,10 +322,12 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.diffPatch = diffPatch
         self.planFile = planFile
         self.sessionFailure = sessionFailure
+        self.agentFileChangeReport = agentFileChangeReport
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
+        case agentFileChangeReport
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -346,6 +351,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         diffPatch = (try? c.decodeIfPresent(ACPDiffPatchDeclaration.self, forKey: .diffPatch)) ?? .init()
         planFile = (try? c.decodeIfPresent(ACPPlanFileDeclaration.self, forKey: .planFile)) ?? .init()
         sessionFailure = (try? c.decodeIfPresent(ACPSessionFailureDeclaration.self, forKey: .sessionFailure)) ?? .init()
+        agentFileChangeReport = (try? c.decodeIfPresent(ACPAgentFileChangeReportDeclaration.self, forKey: .agentFileChangeReport)) ?? .init()
     }
 }
 
@@ -441,9 +447,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let planFile: ACPPlanFileAdvertisement?
         /// Structured failure incidents (our Claude and Codex adapter forks).
         public let sessionFailure: ACPSessionFailureAdvertisement?
+        /// Per-turn changed-file reports (our Claude and Codex adapter forks).
+        public let agentFileChangeReport: ACPAgentFileChangeReportAdvertisement?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport
             case asyncTasks = "async-tasks"
         }
 
@@ -461,6 +469,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             diffPatch = try? c.decodeIfPresent(ACPDiffPatchAdvertisement.self, forKey: .diffPatch)
             planFile = try? c.decodeIfPresent(ACPPlanFileAdvertisement.self, forKey: .planFile)
             sessionFailure = try? c.decodeIfPresent(ACPSessionFailureAdvertisement.self, forKey: .sessionFailure)
+            agentFileChangeReport = try? c.decodeIfPresent(ACPAgentFileChangeReportAdvertisement.self, forKey: .agentFileChangeReport)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -839,6 +848,8 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     public var codexHooks: ACPCodexHookReviewMetadata? = nil
     /// Read by our adapter forks on `session/fork`; see `ACPForkPointTarget`.
     public var forkPoint: ACPForkPointTarget? = nil
+    /// Read by our adapter forks on `session/prompt`; correlates the turn's file change report.
+    public var agentFileChangeReportRequest: ACPAgentFileChangeReportRequest? = nil
 
     public init(
         claudeCode: ClaudeCode? = nil,

@@ -16,7 +16,7 @@ public final class ACPTranscript: ChangeTracking {
     nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public var onNextPromptActivity: (() -> Void)?
     @Tracked public var messages: [ACPMessage] = [] {
-        willSet { onNextPromptActivity?() }
+        willSet { if !isReplacingMessageMetadata { onNextPromptActivity?() } }
         didSet {
             let mutation = pendingMessagesMutation
             // Incremental mutation helpers maintain timestamps directly. Only
@@ -25,6 +25,7 @@ public final class ACPTranscript: ChangeTracking {
                 synchronizeMessageCreatedAts()
             }
             messagesGeneration &+= 1
+            if !isReplacingMessageMetadata { conversationRevision &+= 1 }
             updatePlanCaches(for: mutation)
             updateMessageIndexCaches(for: mutation)
             pendingMessagesMutation = nil
@@ -42,6 +43,7 @@ public final class ACPTranscript: ChangeTracking {
         case planNeutral
     }
     private var pendingMessagesMutation: MessagesMutation?
+    private var isReplacingMessageMetadata = false
     private var latestPlanMessageIndex: Int?
     public private(set) var latestUserMessageIndex: Int?
     public enum TextMessageKind: Hashable, Sendable {
@@ -61,6 +63,7 @@ public final class ACPTranscript: ChangeTracking {
     private var textMessageIndices: [TextMessageKey: Int] = [:]
     private var toolCallIndices: [String: Int] = [:]
     private var failureIncidentIndices: [String: Int] = [:]
+    private var fileChangeReportIndices: [String: Int] = [:]
     #if DEBUG
     public private(set) var planCacheRebuildCountForTests = 0
     public private(set) var messageIndexCacheRebuildCountForTests = 0
@@ -69,6 +72,10 @@ public final class ACPTranscript: ChangeTracking {
     /// value caches (visible-rows lookup) that must invalidate when the array
     /// changes, without adding another objectWillChange source.
     public private(set) var messagesGeneration: UInt64 = 0
+    /// Moves with `messagesGeneration`, except for `replaceMessageMetadata`: what
+    /// a next-prompt offer or a recap compares to tell whether the conversation
+    /// it describes has changed.
+    public private(set) var conversationRevision: UInt64 = 0
     /// Mutation log consumed by remote-web gateways for incremental deltas.
     /// Recording is enabled only while at least one gateway is subscribed.
     public let changeLog = ACPTranscriptChangeLog()
@@ -255,6 +262,7 @@ public final class ACPTranscript: ChangeTracking {
         else { mutation = nil }
         synchronizeMessageCreatedAts()
         messagesGeneration &+= 1
+        conversationRevision &+= 1
         guard updatePlanCaches(for: mutation, authorize: authorize) else { return false }
         updateMessageIndexCaches(for: mutation)
         recordMessagesDiff(old: old)
@@ -297,6 +305,16 @@ public final class ACPTranscript: ChangeTracking {
         }
         pendingMessagesMutation = .replace(index: index, old: old, new: message)
         messages[index] = message
+    }
+
+    /// Replaces a row with one that says the same to the conversation, for facts
+    /// that can land after the turn they describe finished. The row still publishes,
+    /// but this is no next-prompt activity and leaves `conversationRevision` alone,
+    /// so it cannot take that turn's offer or recap.
+    public func replaceMessageMetadata(at index: Int, with message: ACPMessage) {
+        isReplacingMessageMetadata = true
+        defer { isReplacingMessageMetadata = false }
+        replaceMessage(at: index, with: message)
     }
 
     /// The visual aid with `id`, searching from the newest row.
@@ -377,6 +395,11 @@ public final class ACPTranscript: ChangeTracking {
         failureIncidentIndices[id]
     }
 
+    /// The user row that holds the report reference with this request id.
+    public func fileChangeReportIndex(requestId: String) -> Int? {
+        fileChangeReportIndices[requestId]
+    }
+
     // MARK: - Incremental message index caches
 
     private func updateMessageIndexCaches(for mutation: MessagesMutation?) {
@@ -422,6 +445,19 @@ public final class ACPTranscript: ChangeTracking {
                     failureIncidentIndices[newIncidentId] = index
                 }
             }
+
+            let oldRequestId = fileChangeReportRequestId(for: old)
+            let newRequestId = fileChangeReportRequestId(for: new)
+            if oldRequestId != newRequestId {
+                if let oldRequestId, fileChangeReportIndices[oldRequestId] == index {
+                    fileChangeReportIndices.removeValue(forKey: oldRequestId)
+                    restoreFileChangeReportIndex(for: oldRequestId)
+                }
+                if let newRequestId,
+                   fileChangeReportIndices[newRequestId].map({ index < $0 }) ?? true {
+                    fileChangeReportIndices[newRequestId] = index
+                }
+            }
         case .planNeutral:
             break
         case .prepend, .insert, nil:
@@ -436,6 +472,7 @@ public final class ACPTranscript: ChangeTracking {
         textMessageIndices.removeAll(keepingCapacity: true)
         toolCallIndices.removeAll(keepingCapacity: true)
         failureIncidentIndices.removeAll(keepingCapacity: true)
+        fileChangeReportIndices.removeAll(keepingCapacity: true)
         for index in messages.indices {
             cacheMessageIndex(index, for: messages[index])
         }
@@ -450,6 +487,9 @@ public final class ACPTranscript: ChangeTracking {
         }
         if let incidentId = failureIncidentId(for: message), failureIncidentIndices[incidentId] == nil {
             failureIncidentIndices[incidentId] = index
+        }
+        if let requestId = fileChangeReportRequestId(for: message), fileChangeReportIndices[requestId] == nil {
+            fileChangeReportIndices[requestId] = index
         }
     }
 
@@ -472,6 +512,17 @@ public final class ACPTranscript: ChangeTracking {
         if let index = messages.firstIndex(where: { failureIncidentId(for: $0) == incidentId }) {
             failureIncidentIndices[incidentId] = index
         }
+    }
+
+    private func restoreFileChangeReportIndex(for requestId: String) {
+        if let index = messages.firstIndex(where: { fileChangeReportRequestId(for: $0) == requestId }) {
+            fileChangeReportIndices[requestId] = index
+        }
+    }
+
+    private func fileChangeReportRequestId(for message: ACPMessage) -> String? {
+        guard case .user(_, _, _, let attachments, _, _) = message else { return nil }
+        return attachments.lazy.compactMap(\.fileChangeReportRequestId).first
     }
 
     private func failureIncidentId(for message: ACPMessage) -> String? {

@@ -1456,7 +1456,7 @@ public final class ACPSessionRunner {
                 info,
                 replaying: suppressingLoadReplay,
                 promptActive: activePromptID != nil
-            ))
+            )).union(session.applyFileChangeReportUpdate(info))
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
@@ -1914,17 +1914,25 @@ public final class ACPSessionRunner {
     }
 
     /// An update that writes nothing still acknowledges behind the queue: an
-    /// earlier update's row can be unwritten, and this ack would pass it.
+    /// earlier update's row can be unwritten, and this ack would pass it. One
+    /// update can carry a failure record and a report, and writing the row of
+    /// one says nothing about the row of the other, so each is checked even
+    /// when the other wrote.
     private func persistSessionInfoRows(
         _ dirty: Set<Int>,
         of update: ACPSessionUpdate,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         var rows = dirty
-        if dirty.isEmpty, acknowledgement != nil, session.sessionFailure != nil,
-           case .sessionInfoUpdate(let info) = update,
-           case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
-            rows = unconfirmedIncidentRow(id: record.id)
+        if acknowledgement != nil, case .sessionInfoUpdate(let info) = update {
+            if session.sessionFailure != nil,
+               case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedIncidentRow(id: record.id))
+            }
+            if session.agentFileChangeReport != nil,
+               case .report(let report) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedRow(at: session.transcript.fileChangeReportIndex(requestId: report.requestId)))
+            }
         }
         if rows.isEmpty {
             acknowledgeBehindQueuedPersistence(acknowledgement)
@@ -1933,14 +1941,18 @@ public final class ACPSessionRunner {
         }
     }
 
-    /// A record that changes nothing can still be the redelivery of one whose
-    /// row never reached the store, because the in-memory row makes it a no-op.
-    /// Acknowledging it would move the cursor past that row, so unless this
-    /// runner's own write confirmed the row, it is written again. A row
+    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
+        unconfirmedRow(at: session.transcript.failureIncidentIndex(id: id))
+    }
+
+    /// A record or report that changes nothing can still be the redelivery of
+    /// one whose row never reached the store, because the in-memory row makes it
+    /// a no-op. Acknowledging it would move the cursor past that row, so unless
+    /// this runner's own write confirmed the row, it is written again. A row
     /// hydrated from the store, or trimmed from `lastPersistedPayloads`, is
     /// rewritten with the same bytes.
-    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
-        guard let index = session.transcript.failureIncidentIndex(id: id),
+    private func unconfirmedRow(at index: Int?) -> Set<Int> {
+        guard let index,
               let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index])),
               lastPersistedPayloads[index] != payload
         else { return [] }
@@ -4728,12 +4740,12 @@ extension ACPSessionRunner {
             }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
-            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?) in
+            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?) in
                 // Stopped, or its connection replaced, while symbol mentions
                 // resolved: this prompt is over and must not be recorded.
                 if self.activePromptID == promptID, self.stopped || !self.isConnectionCurrent() {
                     abandonUnrecordedPrompt()
-                    return (false, nil)
+                    return (false, nil, nil)
                 }
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -4748,7 +4760,7 @@ extension ACPSessionRunner {
                        !self.steerInProgress, self.activePromptID == nil {
                         onPromptFinished?(false)
                     }
-                    return (false, nil)
+                    return (false, nil, nil)
                 }
                 // A queued prompt whose turn already started (its user prompt
                 // is recorded) keeps that start: this is a resend of the same
@@ -4769,6 +4781,15 @@ extension ACPSessionRunner {
                 // RPC is sent below, so any agent chunk that follows is genuine
                 // new output — N+1 bubble creation is correct from here on.
                 self.session.allowsStreamingBoundaryCrossing = true
+                // A queued id was decided and saved when the head was marked.
+                // A direct send has no reused key, so a fresh id is always safe.
+                let fileChangeReportRequestId: String? = if let queuedItemId {
+                    self.session.queue.first { $0.id == queuedItemId }?.fileChangeReportRequestId
+                } else if self.session.agentFileChangeReport != nil, recordUserPrompt || recordedUserMessageID != nil {
+                    ACPAgentFileChangeReportRequest.newRequestId()
+                } else {
+                    nil
+                }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -4805,7 +4826,7 @@ extension ACPSessionRunner {
                     self.persistQueue()
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, nil)
+                    return (true, nil, fileChangeReportRequestId)
                 }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
@@ -4815,10 +4836,13 @@ extension ACPSessionRunner {
                         self.onResumeTranscriptTail?()
                     }
                     let promptText = Self.textPreview(of: blocks)
+                    // On the row from its first write: a checkpoint attaches in a
+                    // later one, too late for a report that overtakes it.
+                    let reportReference = fileChangeReportRequestId.map { [ACPMessage.Attachment.fileChangeReportReference(requestId: $0)] } ?? []
                     let messageID = self.session.recordUserPrompt(text: promptText,
                                                                   attachments: ACPSymbolReference.attachingSnapshots(
                                                                       to: Self.attachments(of: blocks, draft: draft),
-                                                                      from: symbolExpansion),
+                                                                      from: symbolExpansion) + reportReference,
                                                                   pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
@@ -4849,17 +4873,26 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, messageID)
+                    return (true, messageID, fileChangeReportRequestId)
                 }
                 let recordedID = recordedUserMessageID
                     ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
-                if let recordedID,
-                   let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
-                    self.persistIndices([index])
+                if let recordedID {
+                    var changed = Set<Int>()
+                    if let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
+                        changed.insert(index)
+                    }
+                    if let fileChangeReportRequestId,
+                       let index = self.session.bindFileChangeReportRequest(fileChangeReportRequestId, toUserMessage: recordedID) {
+                        changed.insert(index)
+                    }
+                    if !changed.isEmpty {
+                        self.persistIndices(changed)
+                    }
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                return (true, nil)
+                return (true, nil, fileChangeReportRequestId)
             }
             guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
@@ -4972,6 +5005,7 @@ extension ACPSessionRunner {
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
+                    fileChangeReportRequestId: promptRecording.fileChangeReportRequestId,
                     onRequestHandoff: onDispatchRegistered,
                     onTransportHandoff: { [weak self, promptHandoffs] in
                         promptHandoffs.mark(promptID)
@@ -5165,7 +5199,7 @@ extension ACPSessionRunner {
                                     incarnation: self.session.incarnation,
                                     promptID: promptID,
                                     userMessageID: userMessageID,
-                                    transcriptRevision: self.session.transcript.messagesGeneration
+                                    transcriptRevision: self.session.transcript.conversationRevision
                                 )
                             }
                         )
@@ -5539,7 +5573,7 @@ extension ACPSessionRunner {
                 incarnation: turn.incarnation,
                 promptID: turn.promptID,
                 userMessageID: turn.userMessageID,
-                transcriptRevision: self.session.transcript.messagesGeneration
+                transcriptRevision: self.session.transcript.conversationRevision
             ))
         }
 #if DEBUG
