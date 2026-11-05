@@ -2114,6 +2114,92 @@ struct NativePeerSessionsTests {
         ))
     }
 
+    @Test(arguments: ["confirmed", "dismissed", "rejected", "offline", "selection", "ownership", "readonly", "wrongSession", "rollback", "lateRejection", "streaming"])
+    func visualAnswersWaitForHostOutcome(outcome: String) async throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var decodes = 0
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        }, decodeVisualRow: {
+            decodes += 1
+            return NativePeerRow(message: $0)
+        })
+        client.start()
+        defer { client.stop() }
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        var visual = ACPVisualAid(
+            id: UUID(), title: "Pick", html: "<p>Pick</p>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "A"), .init(id: "b", label: "B")],
+                            allowMultiple: false), createdAt: .distantPast)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: outcome != "readonly",
+                                          messages: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
+                                          firstIndex: 0, totalCount: 1, epoch: 1, revision: 0), from: "B")
+        let answer: ACPVisualAid.Answer = outcome == "dismissed" ? .dismissed(at: .distantPast)
+            : .answered(selectedOptionIds: ["b"], note: "Looks good", at: .distantPast)
+        if outcome == "readonly" || outcome == "wrongSession" {
+            #expect(await client.answerVisualAid(visual.id, answer: answer,
+                                                sessionId: outcome == "wrongSession" ? "B:other" : "B:s") == false)
+            #expect(!links.sent(to: "B").contains { if case .visualAidResponse = $0 { true } else { false } })
+            return
+        }
+        let submission = Task { await client.answerVisualAid(visual.id, answer: answer, sessionId: "B:s") }
+        try await eventually("visual response") {
+            links.sent(to: "B").contains { if case .visualAidResponse = $0 { true } else { false } }
+        }
+        let request = try #require(links.sent(to: "B").first {
+            if case .visualAidResponse = $0 { true } else { false }
+        })
+        guard case .visualAidResponse(let sessionId, let id, let action, let ids, let note, let requestId) = request else { return }
+        #expect(sessionId == "s")
+        #expect(id == visual.id.uuidString)
+        #expect(action == (outcome == "dismissed" ? "dismiss" : "answer"))
+        #expect(ids == (outcome == "dismissed" ? [] : ["b"]))
+        #expect(note == (outcome == "dismissed" ? nil : "Looks good"))
+        switch outcome {
+        case "confirmed", "dismissed", "rollback", "lateRejection", "streaming":
+            visual.answer = answer
+            links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
+                                           upserts: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
+                                           epoch: 1, revision: 1), from: "B")
+        case "rejected":
+            links.receive(.visualAidRejected(sessionId: "s", visualId: id, reason: "notWriter", requestId: requestId), from: "B")
+        case "offline":
+            links.offline("B")
+            client.refresh()
+        case "ownership":
+            links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: false,
+                                           upserts: [], epoch: 1, revision: 1), from: "B")
+        default: client.clearSelection()
+        }
+        #expect(await submission.value == (["confirmed", "dismissed", "rollback", "lateRejection", "streaming"].contains(outcome)))
+        if outcome == "streaming" {
+            let confirmedDecodes = decodes
+            #expect(confirmedDecodes > 0)
+            for revision in 2...5 {
+                links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true,
+                                               upserts: [.init(stableId: "text", kind: "agent", text: "Chunk \(revision)", json: nil, index: 1)],
+                                               epoch: 1, revision: revision), from: "B")
+            }
+            #expect(decodes == confirmedDecodes)
+        }
+        if outcome == "rollback" || outcome == "lateRejection" {
+            let status = client.visualStatus(for: visual.id, sessionId: "B:s")
+            #expect(status.error == nil)
+            if outcome == "lateRejection" {
+                links.receive(.visualAidRejected(sessionId: "s", visualId: id, reason: "invalid", requestId: requestId), from: "B")
+            } else {
+                visual.answer = nil
+                links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
+                                               upserts: [RemoteSessionGateway.toWire(.visualAid(visual), index: 0)],
+                                               epoch: 1, revision: 2), from: "B")
+            }
+            #expect(status.error == ACPVisualAidSendStatus.failureMessage)
+        }
+    }
+
     @Test func urlElicitationCannotBeAcceptedBeforeOpeningBrowser() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
