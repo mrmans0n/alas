@@ -6,6 +6,46 @@ import AlasCore
 @testable import AlasSessions
 
 struct ACPBrokerRawClientTests {
+    @Test func growingBrokerTailDoesNotMoveTheCapturedReplayBarrier() async throws {
+        let service = RawBrokerFixture()
+        let initial = await service.snapshot()
+        var pages: [ACPBrokerAttachResult] = []
+        for cursor in 1...3 {
+            let snapshot = ACPBrokerSnapshot(metadata: initial.metadata, initializeResult: nil, remoteSessionResult: nil,
+                turnState: initial.turnState, acknowledgedCursor: initial.acknowledgedCursor,
+                journalTail: .init(rawValue: UInt64(cursor + 1)), pendingRequests: [], operations: [])
+            pages.append(.init(snapshot: snapshot, events: [.init(cursor: .init(rawValue: UInt64(cursor)), kind: .rawFrame(.init(bytes: RawBrokerFixture.first)))], hasMoreEvents: cursor < 3))
+        }
+        await service.setReplayPages(pages)
+        let client = makeClient(service)
+        _ = try await client.claimV2OrderedIntake()
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        #expect(await service.scriptedPageCount == 2)
+    }
+
+    @Test(arguments: ["bytes", "key", "journal"])
+    func orderedBrokerRejectsConflictingSnapshotAfterOriginDelivery(conflict: String) async throws {
+        let service = RawBrokerFixture(pending: true)
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        let original = await service.pendingRequest()
+        var changed = ACPBrokerPendingRequest(requestId: conflict == "key" ? "other" : "p", adapterRequestId: .string("p"), kind: .question, payload: .null)
+        changed.originCursor = original.originCursor
+        changed.rawFrame = conflict == "bytes" ? .init(bytes: Data(#"{"jsonrpc":"2.0","id":"p","method":"different"}"#.utf8)) : original.rawFrame
+        if conflict == "journal" {
+            let snapshot = await service.snapshot()
+            await service.setReplayPages([.init(snapshot: snapshot, events: [
+                .init(cursor: .init(rawValue: 1), kind: .rawFrame(.init(bytes: RawBrokerFixture.first)))
+            ])])
+        } else { await service.setPendingOverride([changed]) }
+        await #expect(throws: (any Error).self) { try await client.replayRawBrokerEvents() }
+        #expect(!intake.isValid)
+        #expect(await service.acks.isEmpty)
+    }
+
     @Test func orderedBrokerCaptureWaitsForThePendingJournalOrigin() async throws {
         let service = RawBrokerFixture()
         var pending = await service.pendingRequest()
@@ -1207,6 +1247,9 @@ struct ACPBrokerRawClientTests {
 }
 
 private actor RawBrokerFixture: ACPBrokerServicing {
+    private var scriptedPages: [ACPBrokerAttachResult] = []
+    var scriptedPageCount = 0
+    func setReplayPages(_ pages: [ACPBrokerAttachResult]) { scriptedPages = pages }
     private var noReplayProgress = false
     func holdReplayProgress() { noReplayProgress = true }
     func publishTerminal(_ method: String) {
@@ -1340,6 +1383,10 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return .init(snapshot: snapshot(), adopted: !freshBootstrap)
     }
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        if !scriptedPages.isEmpty {
+            scriptedPageCount += 1
+            return scriptedPages.removeFirst()
+        }
         if noReplayProgress {
             return .init(snapshot: snapshot(), events: [], hasMoreEvents: true)
         }
