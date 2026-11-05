@@ -43,7 +43,7 @@ enum RightPaneToolbarModel {
             default: return "\(runningScriptNames.count) running"
             }
         case .device:
-            return "iOS Simulator"
+            return "Devices"
         }
     }
 

@@ -1,5 +1,4 @@
 import AlasCore
-import CoreImage
 import Foundation
 import IOSurface
 import Observation
@@ -24,12 +23,12 @@ protocol DeviceInput: AnyObject {
 extension SimulatorStreamClient: DeviceInput {}
 
 /// Runs the `device_*` tools for agents, and tracks who drives each
-/// simulator so the Device tab can show it and the user can take over.
+/// simulator so the Devices tab can show it and the user can take over.
 @MainActor
 @Observable
 final class DeviceAgentControl {
     static let disabled =
-        "device_disabled: Device control is off. Ask the user to turn on Settings › Advanced › Experiments › Let agents use the device."
+        "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators."
     static let userDriving = "device_user_active: The user is driving this device. Try again after they hand it back."
 
     private struct AgentCall {
@@ -55,7 +54,6 @@ final class DeviceAgentControl {
     /// Devices with an input call running, and the calls waiting their turn, in order.
     @ObservationIgnored private var inputBusy: Set<String> = []
     @ObservationIgnored private var inputWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
-    @ObservationIgnored private let imageContext = CIContext()
 
     init(
         input: DeviceInput,
@@ -326,23 +324,19 @@ final class DeviceAgentControl {
         guard let frame else {
             return .error("device_unavailable: The simulator sent no frame. Try again in a moment.")
         }
-        let image = CIImage(ioSurface: frame)
-        let scale = min(1, 1280 / max(image.extent.width, image.extent.height))
-        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let bounds = scaled.extent.integral
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let png = imageContext.pngRepresentation(of: scaled.cropped(to: bounds), format: .RGBA8, colorSpace: colorSpace)
-        else { return .error("device_unavailable: The screenshot could not be encoded.") }
-        screenshotSizes[udid] = (Double(bounds.width), Double(bounds.height))
+        guard let png = DeviceScreenshot.png(frame, maxLongEdge: 1280) else {
+            return .error("device_unavailable: The screenshot could not be encoded.")
+        }
+        screenshotSizes[udid] = (Double(png.width), Double(png.height))
         return .text([Self.json([
-            "width": Int(bounds.width),
-            "height": Int(bounds.height),
-            "image": ["mime_type": "image/png", "data": png.base64EncodedString()],
+            "width": png.width,
+            "height": png.height,
+            "image": ["mime_type": "image/png", "data": png.data.base64EncodedString()],
         ])])
     }
 
     /// Keeps the device's stream running for the agent until `leaseWindow`
-    /// after its last call ends, so screenshots work with the Device tab
+    /// after its last call ends, so screenshots work with the Devices tab
     /// closed. A call still running keeps it, however long it takes.
     private func renewLease(_ udid: String) {
         let token = leases[udid]?.token

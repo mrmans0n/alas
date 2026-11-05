@@ -8,10 +8,10 @@ struct RightPaneTabTests {
         (false, true, [RightPaneTab.changes, .files, .agent, .run, .schedules, .device]),
         (true, true, [RightPaneTab.files, .agent, .run, .schedules, .device]),
     ])
-    func availableTabsDropChangesForFoldersAndAddDeviceWhenEnabled(
-        isFolder: Bool, devicePanel: Bool, expected: [RightPaneTab]
+    func availableTabsFollowFolderAndDevices(
+        isFolder: Bool, devices: Bool, expected: [RightPaneTab]
     ) {
-        #expect(RightPaneTab.available(isFolder: isFolder, devicePanel: devicePanel) == expected)
+        #expect(RightPaneTab.available(isFolder: isFolder, devices: devices) == expected)
     }
 
     @Test(arguments: [

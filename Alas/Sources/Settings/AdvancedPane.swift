@@ -22,26 +22,6 @@ struct AdvancedPane: View {
                     ) {
                         AlasToggle(on: state.bind(\.experimentalACP2Enabled))
                     }
-                    SettingsRow(
-                        name: "Device panel",
-                        desc: "Adds a Device tab to the right pane that shows a live iOS Simulator. Needs Xcode."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.devicePanelEnabled },
-                            set: { enabled in
-                                state.config.devicePanelEnabled = enabled
-                                state.saveConfig()
-                                if !enabled { state.rightPaneStore.retreatFromTab(.device) }
-                            }
-                        ))
-                    }
-                    SettingsRow(
-                        name: "Let agents use the device",
-                        desc: "Agents in a worktree can list, open, read and drive iOS simulators with the device_* tools. You can take over from the Device tab."
-                    ) {
-                        AlasToggle(on: state.bind(\.deviceAgentsEnabled))
-                            .disabled(!state.config.devicePanelEnabled)
-                    }
                 }
 
                 if let recovery = state.workspaceRecoveryError {
