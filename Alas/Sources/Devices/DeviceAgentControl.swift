@@ -110,9 +110,12 @@ final class DeviceAgentControl {
 
         lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
         inFlight[udid, default: 0] += 1
+        var leased = false
         defer {
             inFlight[udid, default: 1] -= 1
             lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
+            // The idle window starts when the call ends, not when it began.
+            if leased { renewLease(udid) }
         }
 
         if case .open = command, device.state != .booted {
@@ -127,6 +130,7 @@ final class DeviceAgentControl {
             return .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")
         }
         renewLease(udid)
+        leased = true
 
         switch command {
         case .list:
@@ -135,10 +139,12 @@ final class DeviceAgentControl {
             return .text([Self.json(Self.describe(device))])
         case .snapshot(_, let query, let limit):
             do {
+                // Reserved before the await, so overlapping snapshots never share refs.
                 let generation = (generations[udid] ?? 0) + 1
-                let snapshot = try DeviceSnapshot.parse(try await input.describe(udid: udid), generation: generation)
                 generations[udid] = generation
-                snapshots[udid] = snapshot
+                let snapshot = try DeviceSnapshot.parse(try await input.describe(udid: udid), generation: generation)
+                // One that finishes after a newer snapshot doesn't replace it.
+                if (snapshots[udid]?.generation ?? 0) < generation { snapshots[udid] = snapshot }
                 return .text([snapshot.json(query: query, limit: limit)])
             } catch {
                 return .error(error.localizedDescription.hasPrefix("device_")
@@ -302,7 +308,8 @@ final class DeviceAgentControl {
     }
 
     /// Keeps the device's stream running for the agent until `leaseWindow`
-    /// after its last call, so screenshots work with the Device tab closed.
+    /// after its last call ends, so screenshots work with the Device tab
+    /// closed. A call still running keeps it, however long it takes.
     private func renewLease(_ udid: String) {
         let token = leases[udid]?.token
             ?? input.subscribe(udid: udid, onFrame: { _ in }, onStop: { _ in })
@@ -310,7 +317,8 @@ final class DeviceAgentControl {
         let window = leaseWindow
         let release = Task { [weak self] in
             await self?.sleep(window)
-            guard !Task.isCancelled, let self, self.leases[udid]?.token == token else { return }
+            guard !Task.isCancelled, let self, self.leases[udid]?.token == token,
+                  (self.inFlight[udid] ?? 0) == 0 else { return }
             self.leases[udid] = nil
             self.input.unsubscribe(udid: udid, token: token)
         }

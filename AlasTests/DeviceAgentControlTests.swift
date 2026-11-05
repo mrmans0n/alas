@@ -10,7 +10,11 @@ struct DeviceAgentControlTests {
     final class FakeInput: DeviceInput {
         var touches: [(phase: String, point: DeviceScreenPoint)] = []
         var keys: [(usage: UInt32, down: Bool)] = []
+        /// Whether the stream was still held when each key was sent.
+        var keysWhileStreaming: [Bool] = []
         var subscribed: Set<String> = []
+        /// Yields before each `describe` answers, in call order, to finish calls out of order.
+        var describeYields: [Int] = []
         let frame = IOSurface(properties: [
             .width: 120, .height: 240, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
         ])
@@ -22,9 +26,16 @@ struct DeviceAgentControlTests {
         }
         func unsubscribe(udid: String, token: UUID) { subscribed.remove(udid) }
         func touch(udid: String, phase: String, point: DeviceScreenPoint) { touches.append((phase, point)) }
-        func key(udid: String, usage: UInt32, down: Bool) { keys.append((usage, down)) }
+        func key(udid: String, usage: UInt32, down: Bool) {
+            keys.append((usage, down))
+            keysWhileStreaming.append(subscribed.contains(udid))
+        }
         func button(udid: String, name: String) {}
-        func describe(udid: String) async throws -> Data { DeviceAgentControlTests.snapshot }
+        func describe(udid: String) async throws -> Data {
+            let yields = describeYields.isEmpty ? 0 : describeYields.removeFirst()
+            for _ in 0..<yields { await Task.yield() }
+            return DeviceAgentControlTests.snapshot
+        }
         func lastFrame(udid: String) -> IOSurface? { frame }
     }
 
@@ -126,5 +137,47 @@ struct DeviceAgentControlTests {
         #expect(await control(input).perform(.type(udid: "on", text: "aB", includeScreenshot: false), sessionID: "s") == .ok)
         #expect(input.keys.map(\.usage) == [0x04, 0x04, 0xE1, 0x05, 0x05, 0xE1])
         #expect(input.keys.map(\.down) == [true, false, true, true, false, false])
+    }
+}
+
+extension DeviceAgentControlTests {
+    /// A command that outlasts the lease window must keep its stream, or the
+    /// service drops the session that delivers its input.
+    @Test func theLeaseOutlastsACommandThatRunsPastItsWindow() async {
+        let input = FakeInput()
+        let window = Duration.seconds(60)
+        let control = DeviceAgentControl(
+            input: input, devices: { [Self.booted] }, boot: { _ in },
+            // The lease window passes at once; each typing pause lets it fire.
+            sleep: { duration in
+                guard duration != window else { return }
+                for _ in 0..<5 { await Task.yield() }
+            },
+            leaseWindow: window
+        )
+        #expect(await control.perform(.type(udid: "on", text: "abcdef", includeScreenshot: false), sessionID: "s") == .ok)
+        #expect(input.keysWhileStreaming.count == 12)
+        #expect(input.keysWhileStreaming.allSatisfy { $0 })
+    }
+
+    /// Two snapshots in flight get different refs, and the older one never
+    /// replaces the newer when it finishes last.
+    @Test func overlappingSnapshotsKeepTheirRefsApart() async {
+        let input = FakeInput()
+        input.describeYields = [20, 0]
+        let control = control(input)
+        async let first = control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "s")
+        async let second = control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "s")
+        let (older, newer) = await (first, second)
+        guard case .text(let olderLines) = older, case .text(let newerLines) = newer else {
+            Issue.record("Both snapshots should succeed")
+            return
+        }
+        let olderRefs = olderLines.joined().contains("\"s1e") ? "s1" : "s2"
+        let newerRefs = newerLines.joined().contains("\"s1e") ? "s1" : "s2"
+        #expect(olderRefs != newerRefs)
+        let stale = await control.perform(.tap(udid: "on", target: .ref("s1e2"), includeScreenshot: false), sessionID: "s")
+        #expect(error(stale)?.hasPrefix("device_stale_ref:") == true)
+        #expect(await control.perform(.tap(udid: "on", target: .ref("s2e2"), includeScreenshot: false), sessionID: "s") == .ok)
     }
 }
