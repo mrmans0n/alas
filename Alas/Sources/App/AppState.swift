@@ -717,6 +717,12 @@ final class AppState {
     let devicePane = DevicePaneModel()
     @ObservationIgnored
     let simulatorStreams = SimulatorStreamClient()
+    /// Runs agents' `device_*` calls and tracks who drives each simulator.
+    @ObservationIgnored lazy var deviceControl = DeviceAgentControl(
+        input: simulatorStreams,
+        devices: { try await SimulatorControl.devices() },
+        boot: { try await SimulatorControl.boot(udid: $0) }
+    )
     var harness: HarnessService { core.harness }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
@@ -7443,6 +7449,11 @@ final class AppState {
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
                 return await self.vmStatus(worktreeID: worktreeID, vm: vm)
+            },
+            deviceCommand: { [weak self] command, sessionID in
+                guard let self else { return .error("Alas is not available.") }
+                let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
+                return await self.performDeviceCommand(command, sessionID: sessionID, worktreeID: worktreeID)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
