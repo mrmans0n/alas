@@ -1143,6 +1143,10 @@ final class TabsManager {
         browser.onNavigate = { [weak self] url in
             self?.updateWebPreviewURL(worktreeId: ownerKey, url: url)
         }
+        browser.viewport = webPreviewState(ownerKey: ownerKey)?.viewport
+        browser.onViewportChange = { [weak self] viewport in
+            self?.updateWebPreviewViewport(ownerKey: ownerKey, viewport: viewport)
+        }
         webPreviewBrowsers[ownerKey] = browser
         return browser
     }
@@ -1241,6 +1245,24 @@ final class TabsManager {
         byWorktree[ownerKey] = file
         persist(ownerKey)
         return tab
+    }
+
+    private func webPreviewState(ownerKey: String) -> WebPreviewTabState? {
+        for case .webPreview(let state) in tabs(forWorktree: ownerKey) where state.ownerKey == ownerKey {
+            return state
+        }
+        return nil
+    }
+
+    private func updateWebPreviewViewport(ownerKey: String, viewport: WebPreviewViewport?) {
+        guard var file = byWorktree[ownerKey],
+              let idx = file.tabs.firstIndex(where: { $0.id == WebPreviewTabState(ownerKey: ownerKey).id }),
+              case .webPreview(var state) = file.tabs[idx]
+        else { return }
+        state.viewport = viewport
+        file.tabs[idx] = .webPreview(state)
+        byWorktree[ownerKey] = file
+        persist(ownerKey)
     }
 
     @discardableResult

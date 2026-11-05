@@ -86,6 +86,7 @@ struct WebPreviewTabView: View {
                 }
                 Spacer(minLength: 0)
                 if browser.capturing { ProgressView().controlSize(.small) }
+                WebPreviewViewportControls(browser: browser)
                 tool("Console errors (\(browser.consoleErrors.count))", icon: "exclamationmark.bubble") { showsConsole.toggle() }
                     .popover(isPresented: $showsConsole) {
                         VStack(alignment: .leading, spacing: 8) {
@@ -126,38 +127,46 @@ struct WebPreviewTabView: View {
                 .background(Color.yellow.opacity(0.12))
             }
             Divider()
-            ZStack(alignment: .topLeading) {
-                WebPreviewSurface(browser: browser)
-                if browser.webView.url == nil && !browser.loading {
-                    ContentUnavailableView("Web Preview", systemImage: "globe", description: Text("Enter a page URL."))
-                        .allowsHitTesting(false)
-                }
-                if selectionMode != .browse {
-                    Color.clear.contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                dragStart = value.startLocation
-                                dragEnd = value.location
-                            }
-                            .onEnded { value in
-                                if selectionMode == .element {
-                                    browser.captureRegion(elementAt: value.location)
-                                } else {
-                                    browser.captureRegion(rect(from: value.startLocation, to: value.location))
-                                }
-                                dragStart = nil
-                                dragEnd = nil
-                                selectionMode = .browse
-                            })
-                    if let dragStart, let dragEnd, selectionMode == .region {
-                        let selection = rect(from: dragStart, to: dragEnd)
-                        Rectangle().fill(Color.accentColor.opacity(0.15))
-                            .border(Color.accentColor, width: 1)
-                            .frame(width: selection.width, height: selection.height)
-                            .offset(x: selection.minX, y: selection.minY)
+            GeometryReader { pane in
+                ZStack(alignment: .topLeading) {
+                    WebPreviewSurface(browser: browser)
+                    if browser.webView.url == nil && !browser.loading {
+                        ContentUnavailableView("Web Preview", systemImage: "globe", description: Text("Enter a page URL."))
                             .allowsHitTesting(false)
                     }
+                    if selectionMode != .browse {
+                        Color.clear.contentShape(Rectangle())
+                            .gesture(DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    dragStart = value.startLocation
+                                    dragEnd = value.location
+                                }
+                                .onEnded { value in
+                                    if selectionMode == .element {
+                                        browser.captureRegion(elementAt: value.location)
+                                    } else {
+                                        browser.captureRegion(rect(from: value.startLocation, to: value.location))
+                                    }
+                                    dragStart = nil
+                                    dragEnd = nil
+                                    selectionMode = .browse
+                                })
+                        if let dragStart, let dragEnd, selectionMode == .region {
+                            let selection = rect(from: dragStart, to: dragEnd)
+                            Rectangle().fill(Color.accentColor.opacity(0.15))
+                                .border(Color.accentColor, width: 1)
+                                .frame(width: selection.width, height: selection.height)
+                                .offset(x: selection.minX, y: selection.minY)
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
+                .frame(width: browser.surfaceLayout?.size.width ?? pane.size.width,
+                       height: browser.surfaceLayout?.size.height ?? pane.size.height)
+                .frame(width: pane.size.width, height: pane.size.height)
+                .onAppear { browser.paneSize = pane.size }
+                .onChange(of: pane.size) { browser.paneSize = pane.size }
+                .onDisappear { browser.paneSize = nil }
             }
             .clipped()
         }
@@ -190,6 +199,69 @@ struct WebPreviewTabView: View {
     private func tool(_ title: String, icon: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: icon).frame(width: 20, height: 20) }
             .buttonStyle(.borderless).disabled(disabled).help(title).accessibilityLabel(title)
+    }
+}
+
+/// Picks the page size: fill the pane, a preset, or a custom size.
+private struct WebPreviewViewportControls: View {
+    let browser: WebPreviewBrowser
+    @State private var showsCustom = false
+    @State private var customWidth = ""
+    @State private var customHeight = ""
+
+    var body: some View {
+        if let layout = browser.surfaceLayout, layout.zoom < 1 {
+            Text("\(Int((layout.zoom * 100).rounded()))%")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .help("Scaled to fit. The page still lays out at its full size.")
+        }
+        Menu {
+            Button("Fill Pane") { browser.viewport = nil }
+            Divider()
+            ForEach(WebPreviewViewport.presets) { preset in
+                Button(preset.viewport.label) { browser.viewport = preset.viewport }
+            }
+            Divider()
+            Button("Custom…") {
+                customWidth = (browser.viewport?.width).map(String.init) ?? ""
+                customHeight = (browser.viewport?.height).map(String.init) ?? ""
+                showsCustom = true
+            }
+        } label: {
+            Text(browser.viewport?.label ?? "Fill Pane").font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Viewport size")
+        .accessibilityLabel("Viewport size")
+        .popover(isPresented: $showsCustom) {
+            HStack(spacing: 6) {
+                TextField("Width", text: $customWidth).frame(width: 64).accessibilityLabel("Viewport width")
+                Text("×")
+                TextField("Height", text: $customHeight).frame(width: 64).accessibilityLabel("Viewport height")
+                Button("Apply", action: applyCustom).disabled(custom == nil).keyboardShortcut(.defaultAction)
+            }
+            .textFieldStyle(.roundedBorder)
+            .padding(10)
+            .onSubmit(applyCustom)
+        }
+        if let viewport = browser.viewport {
+            Button { browser.viewport = viewport.rotated } label: {
+                Image(systemName: "rectangle.portrait.rotate").frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewport.width == viewport.height)
+            .help("Swap width and height")
+            .accessibilityLabel("Swap width and height")
+        }
+    }
+
+    private var custom: WebPreviewViewport? { WebPreviewViewport(width: customWidth, height: customHeight) }
+
+    private func applyCustom() {
+        guard let custom else { return }
+        browser.viewport = custom
+        showsCustom = false
     }
 }
 
