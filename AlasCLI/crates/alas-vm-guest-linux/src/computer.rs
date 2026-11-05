@@ -104,6 +104,9 @@ mod message {
     /// Linux only: appended to a foreground failure while the screen locker shows.
     pub const SCREEN_LOCKED: &str = "The Linux VM's screen is locked.";
     pub const REF_TYPING_CUT_SHORT: &str = "In this Linux VM, text beyond ASCII typed into a ref can be cut short: fix the field, then click it and type the rest without a ref.";
+    /// A ref click runs the app's handler inside the AT-SPI call, so a modal dialog it opens keeps
+    /// the app from answering any read until the dialog closes. Real input still reaches it.
+    pub const APP_UNRESPONSIVE: &str = "This app isn't answering accessibility reads, so its elements are missing. A dialog opened by a ref click does this until it closes: call computer_screenshot and use x/y.";
     pub const FOREGROUND_UNAVAILABLE: &str =
         "The window couldn't be brought to the front, so no input was sent.";
 
@@ -451,6 +454,8 @@ struct Read {
     elements: Vec<Value>,
     refs: HashMap<String, ElementRef>,
     truncated: bool,
+    /// Cua couldn't read the app through accessibility, so `elements` may be only the window.
+    degraded: bool,
 }
 
 /// A point in a window's screenshot pixels, and the capture it belongs to.
@@ -608,11 +613,17 @@ impl<D: Driver> Computer<D> {
             "inspect" => {
                 let read = self.read(call, &window, params, action, true)?;
                 payload["truncated"] = json!(read.truncated);
+                if read.degraded {
+                    payload["warning"] = json!(message::APP_UNRESPONSIVE);
+                }
                 payload["elements"] = Value::Array(read.elements);
             }
             "wait" => {
                 let read = self.wait(call, &window, params)?;
                 payload["truncated"] = json!(read.truncated);
+                if read.degraded {
+                    payload["warning"] = json!(message::APP_UNRESPONSIVE);
+                }
                 payload["elements"] = Value::Array(read.elements);
             }
             _ => {
@@ -632,6 +643,9 @@ impl<D: Driver> Computer<D> {
                 match self.read(call, &window, params, action, true) {
                     Ok(read) => {
                         payload["truncated"] = json!(read.truncated);
+                        if read.degraded {
+                            payload["warning"] = json!(message::APP_UNRESPONSIVE);
+                        }
                         payload["elements"] = Value::Array(read.elements);
                     }
                     Err(error) if error == message::CANCELLED => return Err(error),
@@ -1407,6 +1421,7 @@ fn map_elements(structured: &Value) -> Read {
         elements,
         refs,
         truncated: structured.get("truncated").and_then(Value::as_bool) == Some(true),
+        degraded: structured.get("degraded").and_then(Value::as_bool) == Some(true),
     }
 }
 
@@ -2236,6 +2251,40 @@ pub(crate) mod tests {
             json!({"pid": PID, "window_id": WINDOW, "element_token": "s00000002:17", "text": "hi"});
         assert_eq!(fake.calls("type_text"), vec![at.clone(), foreground(at)]);
         assert_eq!(result["delivery"], "activation");
+    }
+
+    /// A ref click that opens a modal dialog stops the app answering reads. Cua says so in
+    /// `degraded`, not always in `truncated`: the agent needs to know why, and that x/y still work.
+    #[test]
+    fn a_read_of_an_unresponsive_app_says_what_to_do() {
+        let unresponsive = || {
+            fixture_with("gws_elements", |result| {
+                let structured = &mut result["structuredContent"];
+                structured["degraded"] = json!(true);
+            })
+        };
+        let fake = Fake::mousepad();
+        fake.script(
+            "get_window_state",
+            vec![fixture("gws_elements"), unresponsive()],
+        );
+        fake.script("click", vec![fixture("click_element")]);
+        let mut computer = new_computer(&fake);
+
+        // A complete read carries no warning.
+        let read =
+            payload(&computer.perform(SESSION, &request("inspect", json!({"window_id": WINDOW}))));
+        assert!(read.get("warning").is_none());
+
+        // After the click that wedged it, and on any read after that.
+        let clicked = payload(&computer.perform(
+            SESSION,
+            &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+        ));
+        assert_eq!(clicked["warning"], message::APP_UNRESPONSIVE);
+        let inspected =
+            payload(&computer.perform(SESSION, &request("inspect", json!({"window_id": WINDOW}))));
+        assert_eq!(inspected["warning"], message::APP_UNRESPONSIVE);
     }
 
     #[test]
