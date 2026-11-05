@@ -1,9 +1,92 @@
+import Combine
 import Foundation
 import Observation
 
 /// Native, app-scoped consumer of the existing federated session feed.
 @MainActor @Observable
 final class NativePeerSessions {
+    @ObservationIgnored let visualChanges = PassthroughSubject<Void, Never>()
+    @ObservationIgnored private var visualForms: [String: [UUID: ACPUserInputFormState]] = [:]
+    @ObservationIgnored private var visualStatuses: [String: [UUID: ACPVisualAidSendStatus]] = [:]
+    @ObservationIgnored private var visualSubmissions: [String: VisualSubmission] = [:]
+
+    private struct VisualSubmission {
+        let sessionId: String
+        let visualId: UUID
+        let completion: CheckedContinuation<Bool, Never>
+    }
+
+    var canAnswerVisuals: Bool {
+        selectedPeer?.state.carriesSessions == true && transcript?.canDrive == true && transcript?.isClosed == false
+    }
+
+    func visualForm(for visual: ACPVisualAid, sessionId: String) -> ACPUserInputFormState? {
+        if let form = visualForms[sessionId]?[visual.id] { return form }
+        guard let request = ACPVisualAidQuestionForm.request(for: visual) else { return nil }
+        let form = ACPUserInputFormState(request: request)
+        visualForms[sessionId, default: [:]][visual.id] = form
+        return form
+    }
+
+    func visualStatus(for id: UUID, sessionId: String) -> ACPVisualAidSendStatus {
+        if let status = visualStatuses[sessionId]?[id] { return status }
+        let status = ACPVisualAidSendStatus()
+        visualStatuses[sessionId, default: [:]][id] = status
+        return status
+    }
+
+    func answerVisualAid(_ id: UUID, answer: ACPVisualAid.Answer, sessionId: String) async -> Bool {
+        guard selectedSessionId == sessionId, canAnswerVisuals,
+              !visualSubmissions.values.contains(where: { $0.sessionId == sessionId && $0.visualId == id }),
+              let row = transcript?.messages.first(where: {
+                  guard $0.kind == "visualAid", case .visualAid(let visual) = NativePeerRow(message: $0) else { return false }
+                  return visual.id == id && visual.answer == nil
+              }), case .visualAid(let visual) = NativePeerRow(message: row), let question = visual.question
+        else { return false }
+        let action: String
+        let ids: [String]
+        let note: String?
+        switch answer {
+        case .answered(let selected, let text, _): action = "answer"; ids = selected; note = text
+        case .dismissed: action = "dismiss"; ids = []; note = nil
+        }
+        guard RemoteSessionGateway.visualAidAnswer(to: question, action: action, selectedOptionIds: ids, note: note) != nil else {
+            return false
+        }
+        let requestId = UUID().uuidString
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.finishVisual(requestId, accepted: false)
+        }
+        defer { timeout.cancel() }
+        return await withCheckedContinuation { continuation in
+            visualSubmissions[requestId] = VisualSubmission(sessionId: sessionId, visualId: id, completion: continuation)
+            if !routeWhileOnline({ .visualAidResponse(sessionId: $0, visualId: id.uuidString, action: action,
+                                                     selectedOptionIds: ids, note: note, requestId: requestId) }) {
+                finishVisual(requestId, accepted: false)
+            }
+        }
+    }
+
+    private func finishVisual(_ requestId: String, accepted: Bool) {
+        visualSubmissions.removeValue(forKey: requestId)?.completion.resume(returning: accepted)
+    }
+
+    private func reconcileVisualSubmissions() {
+        for (requestId, submission) in visualSubmissions {
+            guard selectedSessionId == submission.sessionId, canAnswerVisuals else {
+                finishVisual(requestId, accepted: false)
+                continue
+            }
+            if transcript?.messages.contains(where: {
+                guard $0.kind == "visualAid", case .visualAid(let visual) = NativePeerRow(message: $0) else { return false }
+                return visual.id == submission.visualId && visual.answer != nil
+            }) == true { finishVisual(requestId, accepted: true) }
+        }
+        visualChanges.send()
+    }
+
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
     private let comparisonMode: @MainActor () -> AppConfig.Changes.ChangesComparisonMode?
@@ -604,6 +687,9 @@ final class NativePeerSessions {
     }
 
     func stop() {
+        defer { reconcileVisualSubmissions() }
+        visualForms = [:]
+        visualStatuses = [:]
         if let downstream {
             if let selectedSessionId {
                 _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
@@ -670,6 +756,7 @@ final class NativePeerSessions {
     }
 
     func refresh() {
+        defer { reconcileVisualSubmissions() }
         guard downstream != nil else { return }
         rebuildSnapshot()
         resubscribeSuspendedPrompts()
@@ -769,6 +856,7 @@ final class NativePeerSessions {
     }
 
     func clearSelection() {
+        defer { reconcileVisualSubmissions() }
         selectedWorktree = nil
         openedReview = nil
         openedCommitEditor = nil
@@ -1798,6 +1886,13 @@ final class NativePeerSessions {
     }
 
     private func receive(_ message: RemoteServerMessage) {
+        defer { reconcileVisualSubmissions() }
+        if case .visualAidRejected(let sessionId, let visualId, _, let requestId) = message,
+           let requestId, let submission = visualSubmissions[requestId],
+           submission.sessionId == sessionId, submission.visualId.uuidString == visualId {
+            finishVisual(requestId, accepted: false)
+            return
+        }
         // Tab actions answer for any session, not just the selected one. A
         // reply to a request the user has since moved on from, or retried,
         // is dropped.

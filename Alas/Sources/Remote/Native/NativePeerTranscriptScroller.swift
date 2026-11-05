@@ -32,6 +32,10 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     /// Opens the restore preview for a user row's checkpoint; nil hides the action.
     var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
 
+    var visualActions: ACPVisualAidActions = .readOnly
+    var visualForm: (ACPVisualAid) -> ACPUserInputFormState? = { _ in nil }
+    var visualStatus: (UUID) -> ACPVisualAidSendStatus = { _ in ACPVisualAidSendStatus() }
+
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
 
@@ -279,7 +283,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                             row: row, stableId: stableId, rowCache: rowCache,
                             contentMaxWidth: host.contentMaxWidth, typography: host.typography,
                             isPlanActive: isPlanActive, onQuote: host.onQuote,
-                            onRestoreCheckpoint: host.onRestoreCheckpoint
+                            onRestoreCheckpoint: host.onRestoreCheckpoint,
+                            visualActions: host.visualActions, visualForm: host.visualForm, visualStatus: host.visualStatus
                         )
                         if inGroup {
                             ACPToolCallGroupMemberRow { content }
@@ -499,6 +504,11 @@ private struct NativePeerRowView: View {
     var onQuote: (String) -> Void = { _ in }
     var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
 
+    var visualActions: ACPVisualAidActions = .readOnly
+    var visualForm: (ACPVisualAid) -> ACPUserInputFormState? = { _ in nil }
+    var visualStatus: (UUID) -> ACPVisualAidSendStatus = { _ in ACPVisualAidSendStatus() }
+    @State private var showsVisualPreview = false
+
     var body: some View {
         switch row {
         case .user(let text, let checkpointID):
@@ -534,10 +544,30 @@ private struct NativePeerRowView: View {
                 ACPPlanDocumentCard(
                     display: display, cache: rowCache.markdownCache(for: stableId), typography: typography)
             }
+        case .visualAid(let visual):
+            ACPVisualAidCard(
+                visual: visual, form: visualForm(visual), sendStatus: visualStatus(visual.id),
+                actions: actionsForVisual, typography: typography
+            )
+            .sheet(isPresented: $showsVisualPreview) {
+                ACPVisualAidCard(
+                    visual: visual, form: visualForm(visual), sendStatus: visualStatus(visual.id),
+                    actions: actionsForVisual, fillsHeight: true, typography: typography
+                )
+                .frame(minWidth: 640, minHeight: 480)
+                .toolbar { Button("Done") { showsVisualPreview = false } }
+            }
         case .systemNotice(let text):
             ACPSystemNoticeView(text: text)
         }
     }
+    private var actionsForVisual: ACPVisualAidActions {
+        var actions = visualActions
+        actions.popOut = { _ in showsVisualPreview = true }
+        actions.popOutLabel = "Expand visual"
+        return actions
+    }
+
     @ViewBuilder
     private func messageMenu(_ text: String, checkpointID: CheckpointID?) -> some View {
         // Ordered as ACPMessageActionsMenu.make orders the local row's menu.

@@ -11,6 +11,7 @@ enum NativePeerRow: Equatable {
     case fileEdit(ACPMessage.FileEdit)
     case plan([ACPMessage.PlanItem])
     case planDocument(ACPPlanDocument)
+    case visualAid(ACPVisualAid)
     case systemNotice(String)
 
     init(message: RemoteWireMessage) {
@@ -42,6 +43,12 @@ enum NativePeerRow: Equatable {
             } else {
                 self = .systemNotice("Plan details are unavailable.")
             }
+        case "visualAid":
+            if let visual = Self.visual(message.json) {
+                self = .visualAid(visual)
+            } else {
+                self = .systemNotice("Visual details are unavailable.")
+            }
         case "planDocument":
             if let document: ACPPlanDocument = Self.decode(message.json) {
                 self = .planDocument(document)
@@ -51,6 +58,26 @@ enum NativePeerRow: Equatable {
         default:
             self = .systemNotice(text)
         }
+    }
+
+    private static func visual(_ json: String?) -> ACPVisualAid? {
+        guard let dto: RemoteVisualAid = decode(json), let id = UUID(uuidString: dto.id) else { return nil }
+        let question = dto.question.map {
+            ACPVisualAid.Question(prompt: $0.prompt, options: $0.options.map { .init(id: $0.id, label: $0.label) },
+                                  allowMultiple: $0.allowMultiple)
+        }
+        guard ACPVisualAid.validationFailure(title: dto.title, html: dto.html, question: question) == nil else { return nil }
+        let answer: ACPVisualAid.Answer?
+        switch dto.answer?.kind {
+        case "answered":
+            answer = .answered(selectedOptionIds: dto.answer?.selectedOptionIds ?? [], note: dto.answer?.note, at: .distantPast)
+        case "dismissed": answer = .dismissed(at: .distantPast)
+        case nil: answer = nil
+        default: return nil
+        }
+        return ACPVisualAid(id: id, title: dto.title, html: dto.html, question: question,
+                            presentation: question == nil ? (ACPVisualAid.Presentation(rawValue: dto.presentation) ?? .card) : .card,
+                            answer: answer, createdAt: .distantPast)
     }
 
     private static func decode<T: Decodable>(_ json: String?) -> T? {
@@ -144,6 +171,8 @@ final class NativePeerRowCache {
             .plan(id: UUID(), items)
         case .planDocument(let document):
             .planDocument(id: UUID(), document)
+        case .visualAid(let visual):
+            .visualAid(visual)
         case .systemNotice(let text):
             .systemNotice(id: UUID(), text: text)
         }
