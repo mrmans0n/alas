@@ -79,7 +79,7 @@ struct ACPSessionTests {
         #expect(session.transcript.streamingState == expected)
     }
 
-    @Test("a session link in a user chunk from the agent is not recorded, so it grants nothing")
+    @Test("a session link or report reference in a user chunk from the agent is not recorded")
     func agentSentSessionLinkIsDropped() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
 
@@ -87,6 +87,9 @@ struct ACPSessionTests {
         session.apply(.userMessageChunk(.init(
             messageId: "u-1",
             content: .resourceLink(uri: ACPSessionReference.uri(sessionId: "secret"), name: "Secret")
+        )))
+        session.apply(.userMessageChunk(.init(
+            messageId: "u-1", content: .resourceLink(uri: "alas-file-change-report://planted", name: nil)
         )))
         session.apply(.userMessageChunk(.init(
             messageId: "u-1", content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift")
@@ -98,6 +101,7 @@ struct ACPSessionTests {
         }
         #expect(attachments.map(\.uri) == ["file:///tmp/a.swift"])
         #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
+        #expect(session.transcript.fileChangeReportIndex(requestId: "planted") == nil)
     }
 
     @Test("an app action's card lands under its loading row's id, and only its own prompt replaces it", arguments: [true, false])
@@ -1279,7 +1283,7 @@ struct ACPSessionTests {
 
     // MARK: - File change report references
 
-    @Test func fileChangeReportIndexFollowsMutations() {
+    @Test func fileChangeReportIndexFollowsMutations() throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         let transcript = session.transcript
         func user(_ requestId: String?) -> ACPMessage {
@@ -1301,24 +1305,18 @@ struct ACPSessionTests {
 
         transcript.messages = [.systemNotice(id: UUID(), text: "a"), .systemNotice(id: UUID(), text: "b"), user("rebuilt")]
         #expect(transcript.fileChangeReportIndex(requestId: "rebuilt") == 2)
-    }
 
-    @Test("attaching a checkpoint keeps the turn's report reference")
-    func attachCheckpointKeepsFileChangeReport() throws {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        let id = UUID()
-        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reports[1])
-        session.transcript.appendMessage(.user(id: id, text: "hi", attachments: [reference]))
-        let checkpoint = UUID()
-
-        #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
-
-        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages[0] else {
+        // A checkpoint's writer leaves the report alone.
+        let turn = UUID(), checkpoint = UUID()
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        transcript.appendMessage(.user(id: turn, text: "hi", attachments: [reference]))
+        #expect(session.attachCheckpoint(checkpoint, toUserMessage: turn))
+        #expect(transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 3)
+        guard case .user(_, _, _, let attachments, _, _) = transcript.messages[3] else {
             Issue.record("expected user message")
             return
         }
         #expect(Set(attachments) == [reference, .checkpointReference(id: checkpoint)])
-        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
     }
 
     // MARK: - Failure incidents

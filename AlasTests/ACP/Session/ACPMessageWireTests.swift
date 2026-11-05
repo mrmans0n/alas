@@ -231,7 +231,7 @@ struct ACPMessageWireTests {
     func landedReportRebuildsRowKeepingIdentity() throws {
         let id = UUID()
         let requested: ACPMessage.Attachment = .fileChangeReportReference(requestId: "alas-turn:a")
-        let landed = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reports[1])
+        let landed = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
         let existing: ACPMessage = .user(id: id, messageId: "m", text: "hi", attachments: [requested])
         func wire(_ attachment: ACPMessage.Attachment) -> ACPMessageWire {
             .user(messageId: "m", text: "hi", attachments: [attachment], delegatedSource: nil)

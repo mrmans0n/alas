@@ -48,7 +48,7 @@ public enum ACPMessageWire: Sendable, Equatable {
         switch kind {
         case "user":
             let p = try decoder.decode(UserPayload.self, from: payload)
-            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments + (p.fileChangeReport?.attachment.map { [$0] } ?? []), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
+            return .user(messageId: p.messageId, text: p.text, attachments: ACPStoredFileChangeReport.attachments(p.attachments, restoring: p.fileChangeReport), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try decoder.decode(TextPayload.self, from: payload)
             return .agent(messageId: p.messageId, text: p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata)

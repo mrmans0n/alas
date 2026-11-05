@@ -217,7 +217,9 @@ public enum ACPMessage: Equatable, Sendable {
 
         /// `uri` is "alas-file-change-report://<requestId>".
         public static func fileChangeReportReference(requestId: String, report: ACPAgentFileChangeReport? = nil) -> Self {
-            .init(uri: fileChangeReportReferencePrefix + requestId, name: nil, fileChangeReport: report)
+            assert(ACPAgentFileChangeReport.isValidRequestId(requestId), "Invalid request id")
+            assert(report.map { $0.requestId == requestId } ?? true, "Report answers another request")
+            return .init(uri: fileChangeReportReferencePrefix + requestId, name: nil, fileChangeReport: report)
         }
 
         public var fileChangeReportRequestId: String? {
@@ -757,7 +759,7 @@ public enum ACPMessageCodec: Sendable {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments + (p.fileChangeReport?.attachment.map { [$0] } ?? []), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: ACPStoredFileChangeReport.attachments(p.attachments, restoring: p.fileChangeReport), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
             return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata))
@@ -829,6 +831,15 @@ struct ACPStoredFileChangeReport: Codable {
     /// The row's report reference as an attachment, when the stored value was readable.
     var attachment: ACPMessage.Attachment? {
         reference.map { .fileChangeReportReference(requestId: $0.requestId, report: $0.report) }
+    }
+
+    /// A stored row's attachments. Only the sibling key can hold a reference:
+    /// a report uri in `attachments` was planted, through a build without the
+    /// agent filter, and must not win over it.
+    static func attachments(
+        _ stored: [ACPMessage.Attachment], restoring report: ACPStoredFileChangeReport?
+    ) -> [ACPMessage.Attachment] {
+        stored.filter { $0.fileChangeReportRequestId == nil } + (report?.attachment.map { [$0] } ?? [])
     }
 
     /// Nil when `attachments` holds no report reference.
