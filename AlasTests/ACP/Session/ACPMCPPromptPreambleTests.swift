@@ -148,9 +148,19 @@ struct ACPMCPPromptPreambleTests {
         "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.",
         "A stopped VM starts by itself on the first computer_* or vm_run call",
         "computer_vm_starting and computer_vm_slot_pending mean try again shortly",
-        "To test an app you built, prefer a VM",
-        "ask for one to be created from its VM tab before driving the user's Mac",
-    ]
+    ] + vmPreferenceGuidance
+
+    /// Worktree VMs need Apple silicon, so other builds have no VM to prefer.
+    private static let vmPreferenceGuidance: [String] = {
+        #if arch(arm64)
+        [
+            "To test an app you built, prefer a VM",
+            "ask for one to be created from its VM tab before driving the user's Mac",
+        ]
+        #else
+        []
+        #endif
+    }()
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {
