@@ -302,7 +302,9 @@ extension WebPreviewBrowser {
             let measured = try await settleViewport(operation: operation, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
             var result = automationSnapshot()
-            result["viewport"] = viewportReport(measured)
+            var report = viewportReport(measured.size)
+            report["layout_width"] = measured.layoutWidth
+            result["viewport"] = report
             return result
         case .console:
             let lines = consoleErrors
@@ -579,22 +581,29 @@ extension WebPreviewBrowser {
     }
 
     /// Waits for the page to lay out at the new size and returns what it sees.
+    /// `layoutWidth` is the width media queries use: a Mac showing classic
+    /// scrollbars takes theirs out of it on a page that scrolls, unlike `size`.
     /// A visible tab applies the size on its next layout pass, so the page
     /// lags this call. Gives up on a page that never matches and reports its
     /// real size: the caller must see that rather than an error, since the
     /// viewport did change.
     private func settleViewport(operation: AutomationOperation, deadline: Date,
-                                isAuthorized: @escaping @MainActor () -> Bool) async throws -> CGSize {
-        guard webView.url != nil, !loading else { return viewport?.size ?? pageViewportSize }
+                                isAuthorized: @escaping @MainActor () -> Bool) async throws -> (size: CGSize, layoutWidth: Double) {
+        guard webView.url != nil, !loading else {
+            let size = viewport?.size ?? pageViewportSize
+            return (size, size.width)
+        }
         let settleDeadline = min(deadline, Date().addingTimeInterval(2))
         var measured = pageViewportSize
+        var layoutWidth = measured.width
         while true {
             let result = try await callAutomationScript(Self.viewportScript, operation: operation, deadline: deadline, arguments: [:],
                                                         isAuthorized: isAuthorized) as? [String: Double]
             if let width = result?["width"], let height = result?["height"] {
                 measured = CGSize(width: width, height: height)
+                layoutWidth = result?["layoutWidth"] ?? width
             }
-            if measured == viewport?.size ?? pageViewportSize || Date() >= settleDeadline { return measured }
+            if measured == viewport?.size ?? pageViewportSize || Date() >= settleDeadline { return (measured, layoutWidth) }
             try await Task.sleep(for: .milliseconds(50))
         }
     }
@@ -956,13 +965,16 @@ extension WebPreviewBrowser {
     static let maximumCapturePixels = 8_000_000.0
 
     /// Resolves after two frames, so resize observers have run. Hidden pages
-    /// get no frames, hence the timer.
+    /// get no frames, hence the timer. Asks media queries for their width:
+    /// `clientWidth` rounds, so at a zoom it can read a pixel over.
     private static let viewportScript = #"""
     await new Promise(resolve => {
       const timer = setTimeout(resolve, 150);
       requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
     });
-    return { width: innerWidth, height: innerHeight };
+    let layoutWidth = innerWidth;
+    while (layoutWidth > 0 && !matchMedia(`(min-width: ${layoutWidth}px)`).matches) layoutWidth--;
+    return { width: innerWidth, height: innerHeight, layoutWidth };
     """#
 
     private static let metricsScript = #"""

@@ -34,9 +34,11 @@ The size is saved with the tab.
 A page smaller than the pane shows at real size, centered. A larger one uses
 WebKit page zoom to fit, with the percentage shown, so `innerWidth` and media
 queries still see the full size. While zoomed, the page's `devicePixelRatio`
-drops to match, so `srcset` may pick smaller images. Only the size changes:
-WebKit cannot emulate touch input or a device's pixel density, and the user
-agent stays the same.
+drops to match, so `srcset` may pick smaller images. On a Mac set to show
+classic scrollbars, a page that scrolls loses the scrollbar's width from media
+queries, as in Safari, so `min-width: 390px` is false at 390. Only the size
+changes: WebKit cannot emulate touch input or a device's pixel density, and the
+user agent stays the same.
 
 ## Feedback
 
@@ -164,6 +166,7 @@ the user sees, so their tab changes too. It accepts `width` and `height` or
 `fill`, works while the tab is hidden, and returns once the page has laid out
 at the new size. The `viewport` field there and in `preview_list` gives the size
 the page sees, whether it is fixed or fills the pane, and its on-screen scale.
+`preview_resize` adds `layout_width`, the width media queries use.
 
 Captures return PNG image data plus URL, capture time, CSS viewport dimensions,
 device pixel ratio, scroll position, region, and available element metadata.

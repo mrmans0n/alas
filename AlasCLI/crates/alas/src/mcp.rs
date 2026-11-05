@@ -1055,7 +1055,7 @@ fn preview_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "preview_resize",
-            "description": "Set the size an Alas web preview's page lays out at, in CSS pixels, to test responsive layouts: for example 390x844 (phone), 820x1180 (tablet), 1280x800 (laptop), 1920x1080 (desktop). Or pass fill to follow the pane again. The user's tab shows the same page and changes too. A size larger than the pane is scaled to fit on screen; the page still lays out at full size. Sizes only: this does not emulate touch input, pixel density, or a device's user agent. Returns once the page has re-laid out, with the size it sees in `viewport`; capture and other tools then use it.",
+            "description": "Set the size an Alas web preview's page lays out at, in CSS pixels, to test responsive layouts: for example 390x844 (phone), 820x1180 (tablet), 1280x800 (laptop), 1920x1080 (desktop). Or pass fill to follow the pane again. The user's tab shows the same page and changes too. A size larger than the pane is scaled to fit on screen; the page still lays out at full size. Sizes only: this does not emulate touch input, pixel density, or a device's user agent. Returns once the page has re-laid out, with the size it sees in `viewport`; capture and other tools then use it. `viewport.layout_width` is the width media queries use, which is narrower on a scrolling page if the Mac shows classic scrollbars.",
             "annotations": { "destructiveHint": false },
             "inputSchema": {
                 "type": "object",

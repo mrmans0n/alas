@@ -483,8 +483,20 @@ struct WebPreviewAutomationBrowserTests {
         #expect(viewport["mode"] as? String == "fixed")
         #expect(viewport["width"] as? CGFloat == CGFloat(width))
         #expect(viewport["height"] as? CGFloat == CGFloat(height))
+        // Classic scrollbars, as on CI, narrow what media queries see on this
+        // scrolling page, and `layout_width` has to report that.
+        let layoutWidth = try #require(viewport["layout_width"] as? Double)
+        let layoutMatches = try await browser.webView.callAsyncJavaScript(
+            "return matchMedia(`(min-width: ${w}px)`).matches && !matchMedia(`(min-width: ${w + 1}px)`).matches;",
+            arguments: ["w": layoutWidth], in: nil, contentWorld: .page) as? Bool
+        #expect(layoutMatches == true, "layout_width \(layoutWidth)")
+        #expect(layoutWidth <= Double(width))
         let matched = try await browser.webView.callAsyncJavaScript(
-            "return matchMedia(`(width: ${w}px)`).matches;",
+            """
+            document.documentElement.style.overflow = 'hidden';
+            void document.documentElement.offsetWidth;
+            return matchMedia(`(width: ${w}px)`).matches;
+            """,
             arguments: ["w": width], in: nil, contentWorld: .page) as? Bool
         #expect(matched == true)
     }
