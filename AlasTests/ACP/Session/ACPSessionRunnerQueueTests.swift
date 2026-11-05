@@ -4406,12 +4406,7 @@ struct ACPSessionRunnerQueueTests {
 
         let requestId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
         #expect(try store.loadQueue(sessionId: "s").first?.fileChangeReportRequestId == requestId)
-        let row = try #require(store.loadMessages(sessionId: "s").first { $0.kind == "user" })
-        let attachments: [ACPMessage.Attachment]? = switch try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) {
-        case .user(_, _, _, let attachments, _, _): attachments
-        default: nil
-        }
-        #expect(try #require(attachments).compactMap(\.fileChangeReportRequestId) == [requestId])
+        #expect(try Self.storedUserAttachments(store).map { $0.compactMap(\.fileChangeReportRequestId) } == [[requestId]])
     }
 
     enum FileChangeReportAttemptAdvance: CaseIterable, Sendable {
@@ -4421,7 +4416,7 @@ struct ACPSessionRunnerQueueTests {
     }
 
     @Test(arguments: FileChangeReportAttemptAdvance.allCases)
-    func advancedAttemptGetsANewIdAndKey(advance: FileChangeReportAttemptAdvance) async throws {
+    func reportRequestFollowsTheBrokerAttempt(advance: FileChangeReportAttemptAdvance) async throws {
         let (runner, mock, session, store) = try mkRunner()
         session.agentFileChangeReport = .init()
         let id = UUID()
@@ -4438,6 +4433,15 @@ struct ACPSessionRunnerQueueTests {
         // Only the terminal failure has advanced by now; the key is omitted while false.
         #expect((dispatched["brokerOperationAttemptIsFresh"] != nil) == (advance == .brokerMismatch))
         let firstId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        if advance == .transportRetry {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(fileChangeReportInfo(requestId: firstId))))
+            await runner.flushPersistence()
+            try store.db.exec("CREATE TABLE user_row_writes (seq INTEGER)")
+            try store.db.exec("""
+            CREATE TRIGGER count_user_row_writes BEFORE INSERT ON messages WHEN NEW.kind = 'user'
+            BEGIN INSERT INTO user_row_writes VALUES (NEW.seq); END;
+            """)
+        }
 
         switch advance {
         case .edit:
@@ -4462,6 +4466,9 @@ struct ACPSessionRunnerQueueTests {
         let sent = Self.sentPrompts(mock)
         let ids = Self.reportRequestIds(mock)
         #expect(ids[0] == firstId && ids[1] != nil)
+        await runner.flushPersistence()
+        let reference = try #require(Self.userAttachments(session).first?.first { $0.fileChangeReportRequestId != nil })
+        #expect(reference.fileChangeReportRequestId == ids[1])
         if advance == .transportRetry {
             #expect(sent[0].brokerOperationKey == sent[1].brokerOperationKey)
             // The broker fingerprints the method and every param, `_meta` included.
@@ -4469,9 +4476,135 @@ struct ACPSessionRunnerQueueTests {
             encoder.outputFormatting = .sortedKeys
             let params = try sent.map { try encoder.encode(#require($0.params as? ACPSessionPromptParams)) }
             #expect(params[0] == params[1])
+            #expect(reference.fileChangeReport != nil, "the report landed under this id")
+            #expect(try store.db.query("SELECT seq FROM user_row_writes").isEmpty, "the resend has nothing to write")
         } else {
             #expect(sent[0].brokerOperationKey != sent[1].brokerOperationKey)
             #expect(ids[0] != ids[1])
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func retriedTurnReplacesItsReportRequest() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let id = UUID()
+        session.enqueue(id: id, blocks: [.text("prompt")])
+        session.normalQueuedTurnIDs.insert(id)
+        let requested = QueueTestGate()
+        let fail = QueueTestGate()
+        defer { Task { await fail.open() } }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requested.open()
+            await fail.wait()
+            throw ACPClientError.jsonrpc(.init(
+                code: -32076, message: "broker state error: OperationKeyPayloadMismatch", data: nil))
+        }
+        let deliver = { (requestId: String, acknowledgement: DurableAcknowledgementRecorder) in
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "s",
+                update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId)),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }))
+        }
+        runner.flushQueueIfIdle()
+        await requested.wait()
+        let firstId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        let rowId = try #require(session.transcript.messages.first?.stableId)
+        deliver(firstId, DurableAcknowledgementRecorder())
+        #expect(Self.userAttachments(session).first?.first?.fileChangeReport != nil)
+        await fail.open()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.retryQueueItem(id: id))
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        runner.flushQueueIfIdle()
+        try await waitUntil { Self.sentPrompts(mock).count == 2 }
+        await runner.flushPersistence()
+
+        let secondId = try #require(Self.reportRequestIds(mock).last.flatMap { $0 })
+        #expect(secondId != firstId)
+        let bound: [ACPMessage.Attachment] = [.fileChangeReportReference(requestId: secondId)]
+        #expect(Self.userAttachments(session) == [bound], "one row, on the new id, with no report")
+        #expect(session.transcript.messages.first?.stableId == rowId)
+        #expect(try Self.storedUserAttachments(store) == [bound])
+
+        let lateAcknowledgement = DurableAcknowledgementRecorder()
+        deliver(firstId, lateAcknowledgement)
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session) == [bound], "the old attempt's report is stale")
+        #expect(lateAcknowledgement.recordedCount == 1)
+
+        deliver(secondId, DurableAcknowledgementRecorder())
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session).first?.first?.fileChangeReport?.requestId == secondId)
+        #expect(try Self.storedUserAttachments(store).first?.first?.fileChangeReport?.requestId == secondId)
+    }
+
+    enum RelaunchLocatabilityRow: CaseIterable, Sendable {
+        case storedId, storedIdWithReport, attemptAdvanced
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: RelaunchLocatabilityRow.allCases)
+    func relaunchRespectsLocatability(row: RelaunchLocatabilityRow) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let requestId = "alas-turn:a"
+        let reported = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let reference = row == .storedId ? try FileChangeReportRowCase.reference(nil) : reported
+        let stored: [ACPMessage] = [
+            .user(id: UUID(), text: "prompt", attachments: [reference]),
+            .agent(id: UUID(), StreamingText("working")),
+        ]
+        for (seq, message) in stored.enumerated() {
+            try store.appendMessage(sessionId: "s", id: "m\(seq)", kind: message.kind, seq: Int64(seq),
+                                    payload: ACPMessageCodec.encode(message), createdAt: 1)
+        }
+        var item = QueuedPrompt(blocks: [.text("prompt")], status: .sending, transcriptRecorded: true, dispatchCount: 1,
+                                dispatchedBrokerGeneration: ACPBrokerGeneration(rawValue: 7))
+        item.fileChangeReportRequestId = requestId
+        if row == .attemptAdvanced {
+            item.advanceBrokerOperationAttempt()
+            item.status = .pending
+            item.dispatchedBrokerGeneration = nil
+        }
+        try store.upsertQueue(sessionId: "s", items: [item])
+
+        let hydrated = try await ACPSessionHydrator(path: store.path).hydrate(sessionId: "s")
+        session.transcript.messages = hydrated.wireMessages.map { $0.toMessage() }
+        session.restoreQueue(hydrated.queue, markLegacySendingUncertain: true)
+        #expect(session.transcript.fileChangeReportIndex(requestId: requestId) == 0)
+        #expect(Self.userAttachments(session) == [[reference]], "hydration restores the row intact")
+        #expect(hydrated.deliveredQueuedPromptIDs == (row == .attemptAdvanced ? [] : [item.id]))
+        if row == .attemptAdvanced {
+            #expect(item.restorableDraft.matchesPersistedUserPrompt(text: "prompt", attachments: [reference]),
+                    "the text matches, and still must not attach")
+        }
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(Self.sentPrompts(mock).map(\.brokerOperationKey) == [item.brokerOperationKey])
+        #expect(Self.reportRequestIds(mock) == [row == .attemptAdvanced ? nil : requestId])
+        #expect(Self.userAttachments(session) == [[reference]])
+
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId))))
+        #expect(Self.userAttachments(session) == [[reported]])
+        #expect(session.transcript.messages.count == stored.count)
+    }
+
+    private static func userAttachments(_ session: ACPSession) -> [[ACPMessage.Attachment]] {
+        session.transcript.messages.compactMap {
+            if case .user(_, _, _, let attachments, _, _) = $0 { attachments } else { nil }
+        }
+    }
+
+    private static func storedUserAttachments(_ store: ACPSessionStore) throws -> [[ACPMessage.Attachment]] {
+        try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.compactMap {
+            if case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) {
+                attachments
+            } else {
+                nil
+            }
         }
     }
 

@@ -1319,6 +1319,55 @@ struct ACPSessionTests {
         #expect(Set(attachments) == [reference, .checkpointReference(id: checkpoint)])
     }
 
+    enum ReportLandingOrder: CaseIterable, Sendable {
+        case checkpointThenReport, reportThenCheckpoint, reportThenSymbolSnapshots
+    }
+
+    @Test(arguments: ReportLandingOrder.allCases)
+    func checkpointAndReportLandInEitherOrder(order: ReportLandingOrder) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.agentFileChangeReport = .init()
+        let target = ACPSymbolReference.Target(path: "A.swift", name: "run", kind: .function,
+                                               container: nil, lineRange: 0...0, includeCode: true)
+        let uri = ACPSymbolReference.uri(for: target)
+        func expansion(_ source: String) -> ACPSymbolReference.Expansion {
+            ACPSymbolReference.expansion(of: [.resourceLink(uri: uri, name: "run()")], sources: ["A.swift": source],
+                                         worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true)
+        }
+        let id = session.recordUserPrompt(
+            text: "@run() ",
+            attachments: ACPSymbolReference.attachingSnapshots(to: [.init(uri: uri, name: "run()")], from: expansion("func run() {}"))
+                + [try FileChangeReportRowCase.reference(nil)])
+        let checkpoint = UUID()
+
+        switch order {
+        case .checkpointThenReport:
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+        case .reportThenCheckpoint:
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+        case .reportThenSymbolSnapshots:
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+            #expect(session.replaceSymbolSnapshots(inUserMessage: id, from: expansion("// moved\nfunc run() {}")) == 0)
+        }
+
+        let row = session.transcript.messages[0]
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: ACPMessageCodec.encode(row))
+        let report = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        for message in [row, decoded] {
+            guard case .user(_, _, _, let attachments, _, _) = message else {
+                Issue.record("expected the user row")
+                return
+            }
+            #expect(attachments.first { $0.isCheckpointReference }?.checkpointID == checkpoint)
+            #expect(attachments.first { $0.fileChangeReportRequestId != nil } == report)
+            #expect(attachments.first { $0.symbol != nil }?.symbol?.lineRange == (order == .reportThenSymbolSnapshots ? 1...1 : 0...0))
+        }
+        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+    }
+
     // MARK: - Failure incidents
 
     @Test(arguments: FileChangeReportDecision.all)

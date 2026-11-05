@@ -2663,6 +2663,19 @@ struct ACPSessionRunnerTests {
         #expect(acknowledgement.recordedCount == 1)
     }
 
+    /// Suppression drops the echo. One that arrives past it, with a message id, rewrites the row to adopt that id.
+    @Test(arguments: [true, false], [nil, "replayed"] as [String?])
+    func replayEchoKeepsTheReference(suppressed: Bool, messageId: String?) async throws {
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let (runner, session, _) = try makeIncidentRunner(
+            seed: [.user(id: UUID(), text: "hello", attachments: [reference])], replaying: suppressed)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s", update: .userMessageChunk(.init(messageId: messageId, content: .text("hello")))))
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.count == 1)
+        #expect(reportReference(in: session) == reference)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func supersededPromptsReportLandsOnItsOwnRow() async throws {
         let fixture = try await makeGatedPromptRunner()

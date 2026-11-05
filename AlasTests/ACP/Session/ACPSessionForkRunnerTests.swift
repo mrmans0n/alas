@@ -100,6 +100,47 @@ struct ACPSessionForkRunnerTests {
         await managerB.releaseAllOwnedLeases()
     }
 
+    @Test func forkCopyCarriesNoReport() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-fork-report-\(UUID()).sqlite").path
+        let store = try ACPSessionStore(path: path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let inherited: [ACPMessage] = [
+            .user(id: UUID(), text: "Question", attachments: [reference]),
+            .agent(id: UUID(), StreamingText("Answer")),
+        ]
+        for (index, message) in inherited.enumerated() {
+            source.transcript.appendMessage(message)
+            try store.appendMessage(sessionId: source.id, id: "msg-\(source.id)-\(index)", kind: message.kind, seq: Int64(index),
+                                    payload: ACPMessageCodec.encode(message), createdAt: Int64(index))
+        }
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: inherited[1].stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false)
+
+        func storedUserAttachments(_ sessionId: String) throws -> [[ACPMessage.Attachment]] {
+            try store.loadMessages(sessionId: sessionId).compactMap {
+                if case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) {
+                    attachments
+                } else {
+                    nil
+                }
+            }
+        }
+        #expect(try storedUserAttachments(target.id) == [[]])
+        #expect(try storedUserAttachments(source.id) == [[reference]])
+        #expect(source.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+
+        manager.shutdownBackgroundTasks()
+        await manager.releaseAllOwnedLeases()
+    }
+
     @Test("fork context serializes the inherited conversation")
     func forkContextSerializesInheritedConversation() {
         let context = ACPTranscriptMarkdown.forkContext(

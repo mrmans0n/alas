@@ -4877,9 +4877,16 @@ extension ACPSessionRunner {
                 }
                 let recordedID = recordedUserMessageID
                     ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
-                if let recordedID,
-                   let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
-                    self.persistIndices([index])
+                if let recordedID {
+                    let changed = [
+                        self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion),
+                        fileChangeReportRequestId.flatMap {
+                            self.session.bindFileChangeReportRequest($0, toUserMessage: recordedID)
+                        },
+                    ].compactMap { $0 }
+                    if !changed.isEmpty {
+                        self.persistIndices(Set(changed))
+                    }
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending

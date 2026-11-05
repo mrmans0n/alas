@@ -1116,6 +1116,29 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return index
     }
 
+    /// Points a reused user row at `requestId`, clearing any earlier report: the
+    /// row describes its latest attempt, so a late report from an older one finds
+    /// no row. Returns the row to persist. Nil when the row is gone or already
+    /// holds this id, which a same-key resend does, keeping its report.
+    public func bindFileChangeReportRequest(_ requestId: String, toUserMessage id: UUID) -> Int? {
+        guard let index = transcript.messages.firstIndex(where: {
+            guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
+            return messageID == id
+        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index],
+        !attachments.contains(where: { $0.fileChangeReportRequestId == requestId })
+        else { return nil }
+        transcript.replaceMessage(at: index, with: .user(
+            id: messageID,
+            messageId: remoteMessageID,
+            text: text,
+            attachments: attachments.filter { $0.fileChangeReportRequestId == nil }
+                + [.fileChangeReportReference(requestId: requestId)],
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
+        ))
+        return index
+    }
+
     public nonisolated static func removingAlasWorkspaceContext(from text: String) -> String {
         PromptProse.removingAlasWorkspaceContext(from: text)
     }

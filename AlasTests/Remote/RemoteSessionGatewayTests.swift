@@ -1719,6 +1719,21 @@ struct RemoteSessionGatewayTests {
         #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
     }
 
+    private nonisolated static let peerCheckpoint = UUID()
+
+    @Test(arguments: [
+        (companions: [ACPMessage.Attachment](), text: "ship it", checkpoint: nil as UUID?),
+        (companions: [.checkpointReference(id: peerCheckpoint)], text: "ship it", checkpoint: peerCheckpoint),
+        (companions: [.init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil)], text: "ship it\n\n📎 App.swift", checkpoint: nil),
+    ])
+    func peerWireOmitsTheReport(companions: [ACPMessage.Attachment], text: String, checkpoint: UUID?) throws {
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let wire = RemoteSessionGateway.toWire(.user(id: UUID(), text: "ship it", attachments: companions + [reference]), index: 0)
+        #expect(wire.text == text)
+        #expect(wire.json == nil)
+        #expect(wire.checkpointId == checkpoint?.uuidString)
+    }
+
     @Test func failureIncidentWire() throws {
         let incident = try ACPFailureIncident.fixture(title: "Failed", details: "Why", actions: ["retry"], endedTurn: true)
         let wire = RemoteSessionGateway.toWire(.failureIncident(id: UUID(), incident), index: 4)
