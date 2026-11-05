@@ -111,7 +111,8 @@ public struct DeviceSnapshot: Equatable, Sendable {
     /// The `device_snapshot` reply.
     public func json(query: String?, limit: Int) -> String {
         let (shown, truncated) = filtered(query: query, limit: limit)
-        func rounded(_ value: Double) -> Double { (value * 10).rounded() / 10 }
+        // Whole points are precise enough to tap, and print without float noise.
+        func rounded(_ value: Double) -> Int { Int(value.rounded()) }
         let payload: [String: Any] = [
             "screen": ["width": rounded(screenWidth), "height": rounded(screenHeight)],
             "elements": shown.map { element -> [String: Any] in

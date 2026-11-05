@@ -6,6 +6,8 @@
 
 **Architecture:** Eight MCP-only tools travel the existing path: `mcp.rs` → `alas_client::Command::Device` → socket → `AlasCLIRequest.Command.device` → `AlasCLICommandRouter` (same caller rule as `computer_*`) → an AppState device controller. The controller reuses phase 1's XPC client for touches, keys and buttons; adds an accessibility snapshot call to `AlasSimService`; keeps an agent "lease" on a device's stream so screenshots work with the Device tab closed; and records who drives each device with the existing `VMDriver` model. The Device tab shows the driver and blocks user input while an agent drives, with Take over / Hand back.
 
+**As built (2026-11-05):** `DeviceCommand` became an enum with associated values (`.tap(udid:target:includeScreenshot:)` and so on) instead of the struct of optionals below, and `DeviceCommand.decode(toolName:data:)` takes the tool name. Snapshot frames are rounded to whole points. The lease test (`theLeaseEndsAfterTheIdleWindow`) was dropped as timer wiring; the end-to-end run checked the lease instead. `device_open` on a never-booted simulator took 139 s in that run.
+
 **Tech stack:** Rust (alas CLI and MCP server), Swift 6, SwiftUI/AppKit, NSXPCConnection, Swift Testing, `cargo test`.
 
 **Spec:** `docs/plans/2026-11-04-device-panel-design.md`, section "Phase 2 outline: agent tools". This plan changes two of its points; see Decisions.

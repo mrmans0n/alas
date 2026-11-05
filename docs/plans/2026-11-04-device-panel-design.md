@@ -106,23 +106,23 @@ on screen. The implementation plan checks both by hand.
 - If the XPC service dies, the screen shows "The simulator stream stopped."
   with a Retry button.
 
-## Phase 2 outline: agent tools
+## Phase 2: agent tools (built)
 
-- `device_list`, `device_open`, `device_snapshot`, `device_tap`, `device_type`,
-  `device_swipe`, `device_button`, and `device_screenshot` in
-  `AlasCLI/crates/alas/src/mcp.rs`, routed like `preview_*` through
-  `AlasCLIRequest` and `AlasCLICommandRouter`, scoped by `SessionOwnerID`.
-- `device_snapshot` returns `AccessibilityBridge.describeUI` output turned into
-  refs, shaped like `computer_inspect`. Taps by ref resolve to the element's
-  frame center.
-- A driver state per device, modeled on the VM tab's: the panel shows "Agent
-  is driving", a user click takes over, and the agent is told so. The spike
-  showed agent-device grabbing the foreground back without asking, so this
-  is required, not polish.
-- An "Agents can use devices" setting; tools are hidden when it is off.
-- Open question: whether AXPTranslator needs the Accessibility permission
-  when it runs inside an XPC service. The spike ran from a process that may
-  already have it.
+Planned in `docs/plans/2026-11-04-device-panel-phase2-implementation.md`.
+As built:
+
+- `device_list`, `device_open`, `device_snapshot`, `device_screenshot`,
+  `device_tap`, `device_swipe`, `device_type` and `device_button` in the
+  built-in MCP server, MCP-only like `vm_*`, available to the same callers
+  as `computer_*` (worktree ACP sessions).
+- The tools are always listed and refuse calls with `device_disabled` while
+  the setting is off, as `computer_*` does. The setting is "Let agents use
+  the device" under Advanced › Experiments.
+- Driver state reuses `VMDriver`. Taking over refuses agent calls with
+  `device_user_active`; it does not pause the agent's turn.
+- `AccessibilityBridge` runs inside `AlasSimService` and did not need the
+  Accessibility permission in testing [INFERENCE: the test host was ad hoc
+  signed, so it almost certainly had no grant].
 
 ## Phase 3 outline: Android
 
@@ -179,6 +179,11 @@ Agents (phase 2 and after):
 - [ ] Optional agent-device: when the user already has it installed, put it
   on the agent's PATH next to the native tools, for replay scripts, Metro and
   Expo integration, and profiling. Alas would not install or manage it.
+- [ ] Pause the agent's turn on takeover and resume it on hand back, as VM
+  takeover does (`VMTakeOvers`), instead of only refusing its calls.
+- [ ] Hide `device_*` from `tools/list` while the setting is off. Needs the
+  setting to reach the MCP server's environment.
+- [ ] Type non-ASCII text, for example through `simctl pbcopy` and paste.
 
 Expensive, not planned: network traffic capture (serve-sim uses mitmproxy),
 camera feed injection, and streaming to another machine over WebRTC.

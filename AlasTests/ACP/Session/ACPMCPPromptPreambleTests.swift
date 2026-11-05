@@ -127,6 +127,7 @@ struct ACPMCPPromptPreambleTests {
         let checkout = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode, computerUseAvailable: false))
         #expect(!checkout.contains("computer_"))
+        #expect(!checkout.contains("device_"))
         #expect(!checkout.contains("alas computer"))
         for phrase in Self.computerTurnGuidance + Self.computerCLIGuidance { #expect(!checkout.contains(phrase)) }
         #expect(checkout.contains("preview"))
@@ -148,6 +149,7 @@ struct ACPMCPPromptPreambleTests {
         "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.",
         "A stopped VM starts by itself on the first computer_* or vm_run call",
         "computer_vm_starting and computer_vm_slot_pending mean try again shortly",
+        "device_user_active means the user took over the device: wait for them to hand it back.",
     ]
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
@@ -212,6 +214,8 @@ struct ACPMCPPromptPreambleTests {
             "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_drag",
             "computer_open_app", "computer_wait",
             "vm_run", "vm_status",
+            "device_list", "device_open", "device_snapshot", "device_screenshot",
+            "device_tap", "device_swipe", "device_type", "device_button",
         ])
     }
 
