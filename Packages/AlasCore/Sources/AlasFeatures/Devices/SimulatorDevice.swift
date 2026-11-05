@@ -22,13 +22,16 @@ public struct SimulatorDevice: Equatable, Sendable, Identifiable {
     /// For example "iOS 26.5".
     public let runtimeName: String
     public let state: State
+    /// Its device type, such as `com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro`.
+    public let deviceTypeIdentifier: String?
     public var id: String { udid }
 
-    public init(udid: String, name: String, runtimeName: String, state: State) {
+    public init(udid: String, name: String, runtimeName: String, state: State, deviceTypeIdentifier: String? = nil) {
         self.udid = udid
         self.name = name
         self.runtimeName = runtimeName
         self.state = state
+        self.deviceTypeIdentifier = deviceTypeIdentifier
     }
 }
 
@@ -39,6 +42,7 @@ public enum SimulatorDeviceList {
             let name: String
             let state: String
             let isAvailable: Bool?
+            let deviceTypeIdentifier: String?
         }
         let devices: [String: [Device]]
     }
@@ -54,7 +58,7 @@ public enum SimulatorDeviceList {
             for device in devices where device.isAvailable == true {
                 rows.append((parts.version, SimulatorDevice(
                     udid: device.udid, name: device.name, runtimeName: runtimeName,
-                    state: .init(simctl: device.state)
+                    state: .init(simctl: device.state), deviceTypeIdentifier: device.deviceTypeIdentifier
                 )))
             }
         }
