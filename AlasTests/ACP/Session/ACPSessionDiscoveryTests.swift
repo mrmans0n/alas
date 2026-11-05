@@ -1398,6 +1398,32 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a first page that is the whole list removes a missing row without asking for it")
+    func completeFirstPageSkipsBatch() async throws {
+        let store = try temporaryStore()
+        let first = Self.batchTestRow("a", title: "Loaded")
+        let late = Self.batchTestRow("late", title: "Loaded")
+        let reconciling = OSAllocatedUnfairLock(initialState: false)
+        let client = indexClient(batchGet: true)
+        client.script(method: "session/list") { _ in
+            let rows = reconciling.withLock { $0 } ? [first] : [first, late]
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: rows))
+        }
+        client.script(method: "_session/batch_get") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [late]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        reconciling.withLock { $0 = true }
+
+        await model.reconcile()
+
+        #expect(model.sessions.map(\.remoteSessionId) == ["a"])
+        #expect(!client.sent.contains { $0.method == "_session/batch_get" })
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a local action or filter change during the batch discards its rows", .timeLimit(.minutes(1)), arguments: [
         (false, ["a:Mine", "late:Loaded"]),
         (true, ["a:Loaded"]),
