@@ -20,6 +20,7 @@ struct MergeSidePane: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let coordinator: MergeScrollCoordinator
+    let editHistory: MergeConflictTabModel
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -45,6 +46,7 @@ struct MergeSidePane: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? MergeCodeTextView else { return }
+        textView.editHistory = editHistory
         let metrics = MergePaneMetrics(fontFamily: codeFontFamily, fontSize: codeFontSize)
         let palette = MergePalette(theme: theme)
         // Scroll-only updates re-run updateNSView. Skip the O(file size)
