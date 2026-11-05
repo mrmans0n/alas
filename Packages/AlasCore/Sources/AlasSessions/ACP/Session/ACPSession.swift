@@ -316,6 +316,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the current connection's agent sent the `sessionFailure`
     /// advertisement. Runtime only; relearned on attach.
     @Tracked public var sessionFailure: ACPSessionFailureCapability?
+    /// Whether the current connection's agent sent the `agentFileChangeReport`
+    /// advertisement. Runtime only; relearned on attach.
+    @Tracked public var agentFileChangeReport: ACPAgentFileChangeReportCapability?
     /// The pending plan review's plan file, as read on the session's host,
     /// keyed by the request's `toolCallId`. Runtime only; cleared when the
     /// review is answered or cancelled.

@@ -303,6 +303,111 @@ struct ACPSessionLifecycleTests {
         #expect(stop.v1Result(failure: signal) == expected)
     }
 
+    // MARK: Agent file change reports
+
+    struct ExpectedReport: Sendable {
+        var status = ACPAgentFileChangeReport.Status.reported
+        var paths: [String] = []
+        var declaredComplete = false
+        var truncated = false
+        var uncertainty: String?
+        var reason: String?
+    }
+
+    private static func report(_ fields: String) -> String {
+        #"{"agentFileChangeReport":{"version":1,"requestId":"alas-turn:abc"\#(fields)}}"#
+    }
+
+    private static let slashHeavyPaths: [String] = {
+        // Slashes and non-ASCII, padded so the compact report is exactly the limit.
+        func compact(_ paths: [String]) -> Int {
+            let list = paths.map { "\"\($0)\"" }.joined(separator: ",")
+            return report(#","status":"reported","paths":[\#(list)]"#).utf8.count - #"{"agentFileChangeReport":"#.utf8.count - 1
+        }
+        let filler = "/" + String(String(repeating: "caf\u{E9}/日本/", count: 400).prefix(4_000))
+        var paths: [String] = []
+        while ACPAgentFileChangeReport.maxSerializedBytes - compact(paths) > 4_000 { paths.append(filler) }
+        let missing = ACPAgentFileChangeReport.maxSerializedBytes - compact(paths)
+        paths.append("/" + String(repeating: "x", count: missing - 4))
+        return paths
+    }()
+
+    private static func listJSON(_ paths: [String]) -> String {
+        #","status":"reported","paths":[\#(paths.map { "\"\($0)\"" }.joined(separator: ","))]"#
+    }
+
+    @Test(arguments: [
+        (report(#","status":"reported","paths":["/a/b","/c"],"declaredComplete":false,"truncated":true,"uncertainty":"may be partial""#),
+         ExpectedReport(paths: ["/a/b", "/c"], truncated: true, uncertainty: "may be partial")),
+        (report(#","status":"reported","paths":["/a"],"declaredComplete":false,"truncated":false"#),
+         ExpectedReport(paths: ["/a"])),
+        (report(#","status":"reported","paths":[]"#), ExpectedReport()),
+        (report(#","status":"unavailable","reason":"timeout""#), ExpectedReport(status: .unavailable, reason: "timeout")),
+        (report(#","status":"unavailable","reason":"providerError""#), ExpectedReport(status: .unavailable, reason: "providerError")),
+        (report(#","status":"unavailable","reason":"future""#), ExpectedReport(status: .unavailable, reason: "future")),
+        (report(#","status":"unavailable","reason":7,"paths":["/stray"]"#), ExpectedReport(status: .unavailable)),
+        (report(#","status":"reported","paths":["/a"],"reason":"timeout""#), ExpectedReport(paths: ["/a"])),
+        (report(#","status":"reported","paths":[],"declaredComplete":"yes","truncated":1"#), ExpectedReport()),
+        (report(#","status":"reported","paths":[],"uncertainty":4"#), ExpectedReport()),
+        (report(listJSON((0..<1_024).map { "/p\($0)" })), ExpectedReport(paths: (0..<1_024).map { "/p\($0)" })),
+        (report(listJSON(["/" + String(repeating: "a", count: 4_095)])), ExpectedReport(paths: ["/" + String(repeating: "a", count: 4_095)])),
+        (report(listJSON(slashHeavyPaths)), ExpectedReport(paths: slashHeavyPaths)),
+    ] as [(String, ExpectedReport)])
+    func fileChangeReportSignal(meta: String, expected: ExpectedReport) throws {
+        guard case .report(let report) = try fileChangeSignal(meta: meta) else {
+            Issue.record("expected a report")
+            return
+        }
+        #expect(report.requestId == "alas-turn:abc")
+        #expect(report.status == expected.status)
+        #expect(report.paths == expected.paths)
+        #expect(report.declaredComplete == expected.declaredComplete)
+        #expect(report.truncated == expected.truncated)
+        #expect(report.uncertainty == expected.uncertainty)
+        #expect(report.reason == expected.reason)
+        #expect(try JSONDecoder().decode(ACPAgentFileChangeReport.self, from: JSONEncoder().encode(report)) == report)
+    }
+
+    @Test func fileChangeReportBoundaryIsExactlyTheLimit() {
+        #expect(Self.report(Self.listJSON(Self.slashHeavyPaths)).utf8.count
+            - #"{"agentFileChangeReport":"#.utf8.count - 1 == ACPAgentFileChangeReport.maxSerializedBytes)
+    }
+
+    @Test(arguments: [
+        report(#","status":"reported","paths":["/a"]"#).replacingOccurrences(of: #""version":1"#, with: #""version":2"#),
+        #"{"agentFileChangeReport":{"requestId":"alas-turn:abc","status":"reported","paths":[]}}"#,
+        #"{"agentFileChangeReport":{"version":1,"requestId":"a/b","status":"reported","paths":[]}}"#,
+        #"{"agentFileChangeReport":{"version":1,"requestId":"","status":"reported","paths":[]}}"#,
+        #"{"agentFileChangeReport":{"version":1,"requestId":"\#(String(repeating: "a", count: 129))","status":"reported","paths":[]}}"#,
+        report(#","status":"future","paths":[]"#),
+        report(#","status":"reported""#),
+        report(#","status":"reported","paths":[3]"#),
+        report(#","status":"reported","paths":"/a""#),
+        report(listJSON((0..<1_025).map { "/p\($0)" })),
+        report(listJSON(["/" + String(repeating: "a", count: 4_096)])),
+        report(#","status":"reported","paths":[],"uncertainty":"\#(String(repeating: "u", count: 2_001))""#),
+        report(listJSON(slashHeavyPaths.dropLast() + [slashHeavyPaths.last! + "x"])),
+        #"{"agentFileChangeReport":"boom"}"#,
+    ])
+    func fileChangeReportSignalIsMalformed(meta: String) throws {
+        #expect(try fileChangeSignal(meta: meta) == .malformed)
+    }
+
+    @Test(arguments: [
+        "{}",
+        #"{"agentFileChangeReport":null}"#,
+        // The AIR location of the same report is never read.
+        #"{"jetbrains":{"air":{"agentFileChangeReport":{"version":1,"requestId":"alas-turn:abc","status":"reported","paths":["/a"]}}}}"#,
+    ])
+    func fileChangeReportSignalIsAbsentWithoutItsKey(meta: String) throws {
+        #expect(try fileChangeSignal(meta: meta) == .absent)
+        #expect(ACPAgentFileChangeReportSignal.from(metadata: nil) == .absent)
+    }
+
+    private func fileChangeSignal(meta: String) throws -> ACPAgentFileChangeReportSignal {
+        try ACPAgentFileChangeReportSignal.from(metadata: JSONDecoder().decode(AnyCodable.self, from: Data(meta.utf8)))
+    }
+
     private func failureSignal(meta: String) throws -> ACPSessionFailureSignal {
         try ACPSessionFailureSignal.from(metadata: JSONDecoder().decode(AnyCodable.self, from: Data(meta.utf8)))
     }
