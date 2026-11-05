@@ -224,7 +224,8 @@ shell_steps = builder_steps.map { |step| step["run"] }
   "bash scripts/tests/alas-build/run.sh",
   "bash scripts/tests/worktree-create/run.sh",
   "bash scripts/tests/prepare-release-project/run.sh",
-  "bash scripts/tests/verify-release-architecture/run.sh"
+  "bash scripts/tests/verify-release-architecture/run.sh",
+  "bash scripts/tests/serve-sim-native-release/run.sh"
 ].each do |command|
   raise "builder must run #{command}" unless shell_steps.include?(command)
 end

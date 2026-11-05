@@ -181,6 +181,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/verify-release-architecture/run.sh
 
+      - name: Test serve-sim-native release assembly
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/serve-sim-native-release/run.sh
+
       - name: Compute Ghostty cache key inputs
         # Use the script's authoritative fingerprint so the Actions key tracks
         # every input that can change the produced artifact.

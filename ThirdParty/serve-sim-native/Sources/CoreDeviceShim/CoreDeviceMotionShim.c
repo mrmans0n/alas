@@ -5,6 +5,8 @@
 
 static void *motionTarget, *supportsTarget, *metadataTarget, *errorTarget;
 extern int32_t SSCDMotionManagerDescriptor[2];
+void __attribute__((swiftasynccall)) SSCDMotionManager(void *, void *, void *, void *, void *,
+                                                       void * __attribute__((swift_async_context)));
 
 bool SSCoreDeviceMotionAvailable(void) {
     static dispatch_once_t once;
@@ -17,6 +19,9 @@ bool SSCoreDeviceMotionAvailable(void) {
         metadataTarget = SSCoreDeviceSymbol("$s10CoreDevice0B13MotionManagerVMa");
         errorTarget = SSCoreDeviceSymbol("$s10CoreDevice0aB5ErrorVMa");
         if (!motionTarget || !descriptor || !supportsTarget || !metadataTarget || !errorTarget) return;
+        intptr_t entryOffset = (intptr_t)&SSCDMotionManager - (intptr_t)SSCDMotionManagerDescriptor;
+        if (entryOffset < INT32_MIN || entryOffset > INT32_MAX) return;
+        SSCDMotionManagerDescriptor[0] = (int32_t)entryOffset;
         SSCDMotionManagerDescriptor[1] = descriptor[1];
         available = true;
     });
