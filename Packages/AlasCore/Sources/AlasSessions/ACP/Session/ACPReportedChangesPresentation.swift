@@ -58,9 +58,11 @@ public struct ACPReportedChangesPresentation: Equatable, Sendable {
                 truncationNotice: truncationNotice, reportedPaths: [], uncertainty: report.uncertainty, fallbackCaveat: notCleanCaveat)
         case .reported:
             let count = report.uniquePathCount
+            // An empty list the adapter cut down is not a report of no changes.
+            let emptyTitle = report.truncated ? "Reported changes · paths omitted" : "No file changes reported"
             return Self(
                 state: count == 0 ? .reportedEmpty : .reported(count: count),
-                title: count == 0 ? "No file changes reported" : "Reported changes · \(count)",
+                title: count == 0 ? emptyTitle : "Reported changes · \(count)",
                 truncationNotice: truncationNotice, reportedPaths: report.paths, uncertainty: report.uncertainty,
                 fallbackCaveat: report.declaredComplete ? nil : adapterListCaveat)
         }

@@ -69,7 +69,7 @@ struct ACPReportedChangesPresentationTests {
             notice: truncationNotice, paths: ["/wt/a"]),
         PresentationRow(
             testDescription: "truncated to nothing", report: #"{"status":"reported","paths":[],"truncated":true}"#,
-            state: .reportedEmpty, title: "No file changes reported", caveat: adapterListCaveat, notice: truncationNotice),
+            state: .reportedEmpty, title: "Reported changes · paths omitted", caveat: adapterListCaveat, notice: truncationNotice),
         PresentationRow(
             testDescription: "cancelled", report: #"{"status":"unavailable","reason":"cancelled"}"#,
             state: .unavailable(reasonText: "The turn was cancelled before a report was made."),
