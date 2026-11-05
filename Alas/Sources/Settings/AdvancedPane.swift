@@ -35,6 +35,13 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Let agents use the device",
+                        desc: "Agents in a worktree can list, open, read and drive iOS simulators with the device_* tools. You can take over from the Device tab."
+                    ) {
+                        AlasToggle(on: state.bind(\.deviceAgentsEnabled))
+                            .disabled(!state.config.devicePanelEnabled)
+                    }
                 }
 
                 if let recovery = state.workspaceRecoveryError {
