@@ -24,6 +24,20 @@ session. The storage menu also clears the preview's cookies and website data.
 Tabs restore their owner, URL, and remote-host restriction after an app restart;
 logins and navigation history do not persist across restarts.
 
+## Viewport size
+
+A preview fills its pane by default. The size menu in its toolbar sets a fixed
+page size instead: Phone (390×844), Tablet (820×1180), Laptop (1280×800),
+Desktop (1920×1080), or a custom width and height from 200 to 4096 CSS pixels.
+The size is saved with the tab.
+
+A page smaller than the pane shows at real size, centered. A larger one uses
+WebKit page zoom to fit, with the percentage shown, so `innerWidth` and media
+queries still see the full size. While zoomed, the page's `devicePixelRatio`
+drops to match, so `srcset` may pick smaller images. Only the size changes:
+WebKit cannot emulate touch input or a device's pixel density, and the user
+agent stays the same.
+
 ## Feedback
 
 Viewport capture, rectangular selection, and element selection create a local
@@ -124,6 +138,8 @@ alas preview inspect <preview-id> --selector 'button' --limit 20
 alas preview click <preview-id> <element-id>
 alas preview type <preview-id> <element-id> 'Example text'
 alas preview scroll <preview-id> 0 400
+alas preview resize <preview-id> 390 844
+alas preview resize <preview-id> --fill
 alas preview wait <preview-id> visible '#result' --timeout-ms 5000
 alas preview capture <preview-id>
 alas preview capture <preview-id> --region 10 20 320 200
@@ -143,8 +159,18 @@ trusted browser gestures are unsupported. Click and type use DOM events;
 pages requiring trusted user gestures may need manual interaction. Inspection
 omits password and file-input values, and automation cannot populate file inputs.
 
+`preview_resize` sets the viewport size described above, for the same browser
+the user sees, so their tab changes too. It accepts `width` and `height` or
+`fill`, works while the tab is hidden, and returns once the page has laid out
+at the new size. The `viewport` field there and in `preview_list` gives the size
+the page sees, whether it is fixed or fills the pane, and its on-screen scale.
+
 Captures return PNG image data plus URL, capture time, CSS viewport dimensions,
 device pixel ratio, scroll position, region, and available element metadata.
+Regions stay in CSS pixels at any scale. A capture is as sharp as the page is
+on screen, so a viewport scaled to fit yields fewer pixels. One that would
+exceed the 8-megapixel limit comes back at lower resolution, with
+`reduced_to_fit_limit` set.
 MCP returns native image content; the CLI prints JSON with base64 image data.
 Requested captures go only to the calling tool. They do not create a feedback
 draft, stage a session attachment, or send another session a prompt.
@@ -159,7 +185,7 @@ session, and each operation revalidates ownership and session access.
 Each browser accepts one operation at a time. Concurrent callers receive a busy
 error and can retry. Waits default to five seconds and are capped at twenty.
 Use cancel to interrupt outstanding work. DOM output is capped at 100 elements
-and 128 KiB; PNG captures at 8 megapixels and 8 MiB. Browser content and tool
+and 128 KiB; PNG captures at 8 megapixels (reduced to fit) and 8 MiB (an error). Browser content and tool
 results remain untrusted application data.
 
 ## Visual aids in the transcript

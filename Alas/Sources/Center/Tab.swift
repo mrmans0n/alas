@@ -222,6 +222,8 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
     let ownerKey: String
     var url: URL?
     var remoteHost: String?
+    /// A fixed page size; nil fills the pane.
+    var viewport: WebPreviewViewport?
 
     var title: String { "Web Preview" }
 

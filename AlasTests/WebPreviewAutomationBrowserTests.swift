@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Network
+import SwiftUI
 import Testing
 import WebKit
 @testable import Alas
@@ -454,6 +455,122 @@ struct WebPreviewAutomationBrowserTests {
             browserAndWindow.0.webView.url == url && !browserAndWindow.0.loading
         }
         return browserAndWindow
+    }
+
+    /// Pins the whole contract at once against real WebKit: `fit` assumes how
+    /// it rounds, and a pixel off flips a breakpoint at the width being tested.
+    @Test(arguments: [
+        (1920, 1080, CGSize(width: 1190, height: 800)),
+        (1280, 800, CGSize(width: 777, height: 501)),
+        (1441, 901, CGSize(width: 1033, height: 777)),
+        (390, 844, CGSize(width: 900, height: 400)),
+        (390, 844, CGSize(width: 2000, height: 2000)),
+    ])
+    func resizeMakesThePageSeeTheExactSizeAtAnyScale(width: Int, height: Int, pane: CGSize) async throws {
+        let server = try AutomationFixtureServer()
+        defer { server.listener.cancel() }
+        try await waitUntil("fixture listener did not bind") { (server.listener.port?.rawValue ?? 0) > 0 }
+        let port = try #require(server.listener.port)
+        let browser = WebPreviewBrowser(ownerKey: "resize-owner", remoteHost: nil)
+        defer { browser.close() }
+        browser.paneSize = pane
+        let url = URL(string: "http://127.0.0.1:\(port.rawValue)/")!
+        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
+
+        let result = try await browser.automation(command: WebPreviewCommand(action: .resize, width: width, height: height))
+
+        let viewport = try #require(result["viewport"] as? [String: Any])
+        #expect(viewport["mode"] as? String == "fixed")
+        #expect(viewport["width"] as? CGFloat == CGFloat(width))
+        #expect(viewport["height"] as? CGFloat == CGFloat(height))
+        let matched = try await browser.webView.callAsyncJavaScript(
+            "return matchMedia(`(width: ${w}px)`).matches;",
+            arguments: ["w": width], in: nil, contentWorld: .page) as? Bool
+        #expect(matched == true)
+    }
+
+    @Test func oversizedCaptureIsReducedToTheLimitAndRegionsStayInPagePixels() async throws {
+        let server = try AutomationFixtureServer()
+        defer { server.listener.cancel() }
+        try await waitUntil("fixture listener did not bind") { (server.listener.port?.rawValue ?? 0) > 0 }
+        let port = try #require(server.listener.port)
+        let browser = WebPreviewBrowser(ownerKey: "resize-capture-owner", remoteHost: nil)
+        defer { browser.close() }
+        let url = URL(string: "http://127.0.0.1:\(port.rawValue)/")!
+        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
+        _ = try await browser.automation(command: WebPreviewCommand(action: .resize, width: 4096, height: 4096))
+
+        let full = try await browser.automation(command: WebPreviewCommand(action: .capture, timeoutMS: 20_000))
+        #expect(full["reduced_to_fit_limit"] as? Bool == true)
+        let fullBitmap = try bitmap(full)
+        #expect(fullBitmap.pixelsWide * fullBitmap.pixelsHigh <= 8_000_000)
+        #expect(fullBitmap.pixelsWide > 2000)
+
+        browser.paneSize = CGSize(width: 512, height: 512)
+        let region = try await browser.automation(command: WebPreviewCommand(
+            action: .capture, region: WebPreviewRegion(x: 2048, y: 0, width: 2048, height: 2048), timeoutMS: 20_000))
+        let reported = try #require(region["region"] as? [String: CGFloat])
+        #expect(reported["x"] == 2048)
+        #expect(reported["width"] == 2048)
+        let regionBitmap = try bitmap(region)
+        #expect(regionBitmap.pixelsWide == regionBitmap.pixelsHigh)
+    }
+
+    /// Through the real tab view: the surface sits centered in the pane at the
+    /// fitted size, and a real mouse click lands on the element under it.
+    @Test func tabFitsOversizedViewportCenteredAndClicksLandOnThePage() async throws {
+        let server = try AutomationFixtureServer()
+        defer { server.listener.cancel() }
+        try await waitUntil("fixture listener did not bind") { (server.listener.port?.rawValue ?? 0) > 0 }
+        let port = try #require(server.listener.port)
+        let browser = WebPreviewBrowser(ownerKey: "resize-tab-owner", remoteHost: nil)
+        defer { browser.close() }
+        let state = AppState(store: TestPersistenceStore())
+        let view = WebPreviewTabView(state: state, tab: WebPreviewTabState(ownerKey: browser.ownerKey), browser: browser)
+        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 700),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        let url = URL(string: "http://127.0.0.1:\(port.rawValue)/")!
+        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
+
+        let result = try await browser.automation(command: WebPreviewCommand(action: .resize, width: 1920, height: 1080))
+
+        let viewport = try #require(result["viewport"] as? [String: Any])
+        #expect(viewport["width"] as? CGFloat == 1920)
+        #expect(viewport["height"] as? CGFloat == 1080)
+        let layout = try #require(browser.surfaceLayout)
+        #expect(layout.zoom < 1)
+        #expect(browser.webView.frame.size == layout.size)
+        #expect(abs(browser.webView.convert(browser.webView.bounds, to: host).midX - host.bounds.midX) <= 1)
+
+        let measured = try await browser.webView.callAsyncJavaScript(
+            "const r = document.querySelector('#go').getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2};",
+            arguments: [:], in: nil, contentWorld: .page)
+        let box = try #require(measured as? [String: Double])
+        let inWebView = CGPoint(x: box["x"]! * layout.zoom, y: box["y"]! * layout.zoom)
+        let location = browser.webView.convert(inWebView, to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            window.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+        }
+        var clicked: String?
+        for _ in 0..<100 where clicked != "yes" {
+            clicked = try await browser.webView.callAsyncJavaScript(
+                "return document.body.dataset.clicked;", arguments: [:], in: nil, contentWorld: .page) as? String
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(clicked == "yes")
+    }
+
+    private func bitmap(_ capture: [String: Any]) throws -> NSBitmapImageRep {
+        let image = try #require(capture["image"] as? [String: Any])
+        let base64 = try #require(image["data"] as? String)
+        let data = try #require(Data(base64Encoded: base64))
+        return try #require(NSBitmapImageRep(data: data))
     }
 
     private func makeVisibleBrowser(ownerKey: String) -> (WebPreviewBrowser, NSWindow) {
