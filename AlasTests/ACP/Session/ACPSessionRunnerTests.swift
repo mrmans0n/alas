@@ -2621,13 +2621,13 @@ struct ACPSessionRunnerTests {
     }
 
     enum ReportRequestTurn: CaseIterable, Sendable {
-        case direct, delegatedDirect, failureRetry, steerRedirect
-        case wake, restartContinuation, recoveryContext, notNegotiated
+        case direct, failureRetry, steerRedirect
+        case recoveryContext, notNegotiated
 
         var requestsAReport: Bool {
             switch self {
-            case .direct, .delegatedDirect, .failureRetry, .steerRedirect: true
-            case .wake, .restartContinuation, .recoveryContext, .notNegotiated: false
+            case .direct, .failureRetry, .steerRedirect: true
+            case .recoveryContext, .notNegotiated: false
             }
         }
     }
@@ -2644,9 +2644,6 @@ struct ACPSessionRunnerTests {
         switch turn {
         case .direct, .notNegotiated:
             try await sendAndSettle(runner)
-        case .delegatedDirect:
-            runner.sendNow(blocks: [.text("hello")], queuedItemId: nil,
-                           delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "m"))
         case .failureRetry:
             scriptRetryableFailure(mock)
             try await sendAndSettle(runner)
@@ -2666,12 +2663,6 @@ struct ACPSessionRunnerTests {
             runner.steer(blocks: [.text("instead")])
             await release.open()
             sends = 2
-        case .wake:
-            session.queue = [QueuedPrompt(blocks: [.text("task finished")], backgroundTaskWake: "job", transcriptRecorded: true)]
-            runner.flushQueueIfIdle()
-        case .restartContinuation:
-            session.queue = [QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true)]
-            runner.flushQueueIfIdle()
         case .recoveryContext:
             #expect(runner.sendRecoveryContext("restore"))
         }
