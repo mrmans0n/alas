@@ -1370,6 +1370,10 @@ struct ACPSessionTests {
 
     enum FileChangeReportTurnRow: String, CaseIterable, CustomTestStringConvertible {
         case latestWhileStreaming, latestWhileIdle, olderWhileNewerStreams, latestWithLaterSteeredRow
+        /// Restored after a relaunch: the transcript stays idle until attach applies the broker's state.
+        case latestWithRestoredDirectTurn, latestWithHeldInterruption, olderWhileNewerIsRestored
+        /// A prompt still waiting its turn says nothing about the row's turn.
+        case latestWithPendingQueueItem
         var testDescription: String { rawValue }
     }
 
@@ -1381,14 +1385,26 @@ struct ACPSessionTests {
         }
         var messages = [user("alas-turn:a")]
         switch row {
-        case .latestWhileStreaming, .latestWhileIdle: break
-        case .olderWhileNewerStreams: messages.append(user("alas-turn:b"))
+        case .olderWhileNewerStreams, .olderWhileNewerIsRestored: messages.append(user("alas-turn:b"))
         case .latestWithLaterSteeredRow: messages.append(user(nil))
+        default: break
         }
         session.replaceTranscriptMessages(messages)
-        session.transcript.streamingState = row == .latestWhileIdle ? .idle : .streaming
+        switch row {
+        case .latestWhileStreaming, .olderWhileNewerStreams, .latestWithLaterSteeredRow:
+            session.transcript.streamingState = .streaming
+        case .latestWithRestoredDirectTurn, .olderWhileNewerIsRestored:
+            session.directTurnInFlight = true
+        case .latestWithHeldInterruption:
+            session.queue = [QueuedPrompt(blocks: [.text("go")], awaitingInterruptionResume: true)]
+        case .latestWithPendingQueueItem:
+            session.queue = [QueuedPrompt(blocks: [.text("next")])]
+        case .latestWhileIdle:
+            break
+        }
 
-        let expected = row == .latestWhileStreaming || row == .latestWithLaterSteeredRow
+        let expected = [.latestWhileStreaming, .latestWithLaterSteeredRow, .latestWithRestoredDirectTurn, .latestWithHeldInterruption]
+            .contains(row)
         #expect(session.isFileChangeReportTurnActive(requestId: "alas-turn:a") == expected)
     }
 

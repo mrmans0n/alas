@@ -1116,11 +1116,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return index
     }
 
-    /// True while `requestId` belongs to the latest referencing user row and the
-    /// transcript is not idle. A steered row carries no reference, so it does not
-    /// end the turn that is owed the report.
+    /// True while `requestId` belongs to the latest referencing user row and its
+    /// turn may be running. A relaunch restores the turn's markers but leaves the
+    /// transcript idle until attach applies the broker's state, so they count too.
+    /// A steered row carries no reference, so it does not end the turn that is
+    /// owed the report.
     public func isFileChangeReportTurnActive(requestId: String) -> Bool {
-        guard transcript.streamingState != .idle,
+        guard transcript.streamingState != .idle || directTurnInFlight
+            || queue.contains(where: \.awaitingInterruptionResume),
               let index = transcript.fileChangeReportIndex(requestId: requestId)
         else { return false }
         return !transcript.messages[(index + 1)...].contains { message in
