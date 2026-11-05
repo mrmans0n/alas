@@ -4411,6 +4411,8 @@ struct ACPSessionRunnerQueueTests {
 
     enum FileChangeReportAttemptAdvance: CaseIterable, Sendable {
         case edit, uncertainRetry, brokerMismatch
+        /// Sent directly while a turn runs, so it mints without a queue attempt.
+        case forceSendRedirect
         /// Keeps the attempt, so the resend must match the broker's fingerprint.
         case transportRetry
     }
@@ -4433,9 +4435,17 @@ struct ACPSessionRunnerQueueTests {
         // Only the terminal failure has advanced by now; the key is omitted while false.
         #expect((dispatched["brokerOperationAttemptIsFresh"] != nil) == (advance == .brokerMismatch))
         let firstId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        let rowId = try #require(session.transcript.messages.first?.stableId)
+        let deliver = { (requestId: String, acknowledgement: DurableAcknowledgementRecorder) in
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "s",
+                update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId)),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }))
+        }
+        deliver(firstId, DurableAcknowledgementRecorder())
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session).first?.first?.fileChangeReport != nil)
         if advance == .transportRetry {
-            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(fileChangeReportInfo(requestId: firstId))))
-            await runner.flushPersistence()
             try store.db.exec("CREATE TABLE user_row_writes (seq INTEGER)")
             try store.db.exec("""
             CREATE TRIGGER count_user_row_writes BEFORE INSERT ON messages WHEN NEW.kind = 'user'
@@ -4443,6 +4453,7 @@ struct ACPSessionRunnerQueueTests {
             """)
         }
 
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         switch advance {
         case .edit:
             session.editQueueItem(id: id, blocks: [.text("edited")])
@@ -4451,24 +4462,27 @@ struct ACPSessionRunnerQueueTests {
             #expect(session.retryQueueItem(id: id))
         case .brokerMismatch, .transportRetry:
             #expect(session.retryQueueItem(id: id))
+        case .forceSendRedirect:
+            session.transcript.streamingState = .streaming
+            runner.forceSendQueuedItem(id: id)
         }
-        runner.persistQueue()
-        await runner.flushPersistence()
-        // A relaunch before the next dispatch must still see the attempt as new.
-        let persisted = try #require(store.loadQueue(sessionId: "s").first)
-        #expect(persisted.brokerOperationAttemptIsFresh == (advance != .transportRetry))
-        #expect(persisted.fileChangeReportRequestId == (advance == .transportRetry ? firstId : nil))
-
-        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
-        runner.flushQueueIfIdle()
+        if advance != .forceSendRedirect {
+            runner.persistQueue()
+            await runner.flushPersistence()
+            // A relaunch before the next dispatch must still see the attempt as new.
+            let persisted = try #require(store.loadQueue(sessionId: "s").first)
+            #expect(persisted.brokerOperationAttemptIsFresh == (advance != .transportRetry))
+            #expect(persisted.fileChangeReportRequestId == (advance == .transportRetry ? firstId : nil))
+            runner.flushQueueIfIdle()
+        }
         try await waitUntil { Self.sentPrompts(mock).count == 2 }
+        await runner.flushPersistence()
 
         let sent = Self.sentPrompts(mock)
         let ids = Self.reportRequestIds(mock)
-        #expect(ids[0] == firstId && ids[1] != nil)
-        await runner.flushPersistence()
-        let reference = try #require(Self.userAttachments(session).first?.first { $0.fileChangeReportRequestId != nil })
-        #expect(reference.fileChangeReportRequestId == ids[1])
+        #expect(ids[0] == firstId)
+        let secondId = try #require(ids[1])
+        #expect(session.transcript.messages.first?.stableId == rowId)
         if advance == .transportRetry {
             #expect(sent[0].brokerOperationKey == sent[1].brokerOperationKey)
             // The broker fingerprints the method and every param, `_meta` included.
@@ -4476,56 +4490,14 @@ struct ACPSessionRunnerQueueTests {
             encoder.outputFormatting = .sortedKeys
             let params = try sent.map { try encoder.encode(#require($0.params as? ACPSessionPromptParams)) }
             #expect(params[0] == params[1])
-            #expect(reference.fileChangeReport != nil, "the report landed under this id")
+            #expect(Self.userAttachments(session).first?.first?.fileChangeReport?.requestId == firstId, "the report landed under this id")
             #expect(try store.db.query("SELECT seq FROM user_row_writes").isEmpty, "the resend has nothing to write")
-        } else {
-            #expect(sent[0].brokerOperationKey != sent[1].brokerOperationKey)
-            #expect(ids[0] != ids[1])
+            return
         }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func retriedTurnReplacesItsReportRequest() async throws {
-        let (runner, mock, session, store) = try mkRunner()
-        session.agentFileChangeReport = .init()
-        let id = UUID()
-        session.enqueue(id: id, blocks: [.text("prompt")])
-        session.normalQueuedTurnIDs.insert(id)
-        let requested = QueueTestGate()
-        let fail = QueueTestGate()
-        defer { Task { await fail.open() } }
-        mock.scriptAsync(method: "session/prompt") { _ in
-            await requested.open()
-            await fail.wait()
-            throw ACPClientError.jsonrpc(.init(
-                code: -32076, message: "broker state error: OperationKeyPayloadMismatch", data: nil))
-        }
-        let deliver = { (requestId: String, acknowledgement: DurableAcknowledgementRecorder) in
-            runner.applyIncomingUpdateForTesting(.init(
-                sessionId: "s",
-                update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId)),
-                durableConsumptionAcknowledgement: { acknowledgement.record() }))
-        }
-        runner.flushQueueIfIdle()
-        await requested.wait()
-        let firstId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
-        let rowId = try #require(session.transcript.messages.first?.stableId)
-        deliver(firstId, DurableAcknowledgementRecorder())
-        #expect(Self.userAttachments(session).first?.first?.fileChangeReport != nil)
-        await fail.open()
-        try await waitUntil { session.queue.first?.lastError != nil }
-        #expect(session.retryQueueItem(id: id))
-
-        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
-        runner.flushQueueIfIdle()
-        try await waitUntil { Self.sentPrompts(mock).count == 2 }
-        await runner.flushPersistence()
-
-        let secondId = try #require(Self.reportRequestIds(mock).last.flatMap { $0 })
+        #expect(sent[0].brokerOperationKey != sent[1].brokerOperationKey)
         #expect(secondId != firstId)
         let bound: [ACPMessage.Attachment] = [.fileChangeReportReference(requestId: secondId)]
         #expect(Self.userAttachments(session) == [bound], "one row, on the new id, with no report")
-        #expect(session.transcript.messages.first?.stableId == rowId)
         #expect(try Self.storedUserAttachments(store) == [bound])
 
         let lateAcknowledgement = DurableAcknowledgementRecorder()

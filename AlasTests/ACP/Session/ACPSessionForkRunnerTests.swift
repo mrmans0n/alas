@@ -5,12 +5,13 @@ import Testing
 @MainActor
 @Suite("ACP session fork context delivery")
 struct ACPSessionForkRunnerTests {
-    @Test("transcript fork survives relaunch and delivers context on the first prompt")
+    @Test("transcript fork survives relaunch, delivers context on the first prompt, and copies no report")
     func transcriptForkSurvivesRelaunch() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-fork-relaunch-\(UUID()).sqlite").path
         let targetID: String
         let inheritedCount = 2
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
         do {
             let storeA = try ACPSessionStore(path: path)
             let managerA = ACPSessionManager(
@@ -21,7 +22,7 @@ struct ACPSessionForkRunnerTests {
             let source = managerA.createSession(agentId: "claude")
             await managerA.flushPersistence()
             let inherited: [ACPMessage] = [
-                .user(id: UUID(), text: "Question", attachments: []),
+                .user(id: UUID(), text: "Question", attachments: [reference]),
                 .agent(id: UUID(), StreamingText("Answer"))
             ]
             for (index, message) in inherited.enumerated() {
@@ -42,6 +43,8 @@ struct ACPSessionForkRunnerTests {
                 autoRunDefault: false
             )
             targetID = target.id
+            #expect(source.transcript.messages.first == inherited[0])
+            #expect(try storedUserAttachments(storeA, source.id) == [[reference]])
             managerA.shutdownBackgroundTasks()
             await managerA.releaseAllOwnedLeases()
         }
@@ -80,6 +83,7 @@ struct ACPSessionForkRunnerTests {
         #expect(restored.forkRecord?.mechanism == .transcriptTransfer)
         #expect(restored.forkRecord?.contextDeliveryPending == true)
         #expect(restored.transcript.messages.count == inheritedCount)
+        #expect(try storedUserAttachments(storeB, targetID) == [[]])
 
         await managerB.attach(to: targetID, freshlyCreated: false)
         let runner = try #require(managerB.runners[targetID])
@@ -98,47 +102,6 @@ struct ACPSessionForkRunnerTests {
         await managerB.detach(sessionId: targetID)
         managerB.shutdownBackgroundTasks()
         await managerB.releaseAllOwnedLeases()
-    }
-
-    @Test func forkCopyCarriesNoReport() async throws {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("acp-fork-report-\(UUID()).sqlite").path
-        let store = try ACPSessionStore(path: path)
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
-        let source = manager.createSession(agentId: "claude")
-        await manager.flushPersistence()
-        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
-        let inherited: [ACPMessage] = [
-            .user(id: UUID(), text: "Question", attachments: [reference]),
-            .agent(id: UUID(), StreamingText("Answer")),
-        ]
-        for (index, message) in inherited.enumerated() {
-            source.transcript.appendMessage(message)
-            try store.appendMessage(sessionId: source.id, id: "msg-\(source.id)-\(index)", kind: message.kind, seq: Int64(index),
-                                    payload: ACPMessageCodec.encode(message), createdAt: Int64(index))
-        }
-
-        let target = try await manager.createFork(
-            sourceSessionID: source.id,
-            boundary: .init(stableID: inherited[1].stableId, kind: .agent),
-            targetAgentID: "codex",
-            autoRunDefault: false)
-
-        func storedUserAttachments(_ sessionId: String) throws -> [[ACPMessage.Attachment]] {
-            try store.loadMessages(sessionId: sessionId).compactMap {
-                if case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) {
-                    attachments
-                } else {
-                    nil
-                }
-            }
-        }
-        #expect(try storedUserAttachments(target.id) == [[]])
-        #expect(try storedUserAttachments(source.id) == [[reference]])
-        #expect(source.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
-
-        manager.shutdownBackgroundTasks()
-        await manager.releaseAllOwnedLeases()
     }
 
     @Test("fork context serializes the inherited conversation")
@@ -461,6 +424,16 @@ struct ACPSessionForkRunnerTests {
             return false
         }
         #expect(userMessages.count == 2)
+    }
+
+    private func storedUserAttachments(_ store: ACPSessionStore, _ sessionId: String) throws -> [[ACPMessage.Attachment]] {
+        try store.loadMessages(sessionId: sessionId).compactMap {
+            if case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) {
+                attachments
+            } else {
+                nil
+            }
+        }
     }
 
     private func makeRunner() async throws -> (
