@@ -59,6 +59,30 @@ struct ACPBrokerRawClientTests {
         #expect(await service.acks.isEmpty)
     }
 
+    @Test(arguments: ["replay", "terminal"], [true, false])
+    func explicitCleanupRemainsAvailableAfterOrderedObservationLoss(reason: String, close: Bool) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        if reason == "replay" {
+            await service.failNextAttach()
+            await #expect(throws: (any Error).self) { try await client.start() }
+        } else {
+            await service.publishTerminal("adapter/stdoutClosed")
+            _ = try await client.start()
+        }
+        #expect(!intake.isValid)
+        #expect(await service.closeCount == 0)
+        #expect(await service.detachCount == 0)
+        if close { await client.shutdown()
+        await client.shutdown() }
+        else { await client.detach()
+        await client.detach() }
+        #expect(await service.closeCount == (close ? 1 : 0))
+        #expect(await service.detachCount == (close ? 0 : 1))
+        #expect(!intake.isValid)
+    }
+
     @Test func orderedBrokerPublishesInitialStateBeforeItsAckProgress() async throws {
         let service = RawBrokerFixture()
         let client = makeClient(service)
@@ -1258,6 +1282,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let context: ACPBrokerWireContext
     var acks: [UInt64] = []
     var closeCount = 0
+    var detachCount = 0
     init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil, adapterError: Data? = nil) {
         self.acceptedMessageID = acceptedMessageID
         self.adapterError = adapterError
@@ -1386,7 +1411,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     return .init(ok: true) }
     func ack(_ params: ACPBrokerAckParams) -> ACPBrokerSimpleOK { acks.append(params.cursor.rawValue)
     return .init(ok: true) }
-    func detach(_ params: ACPBrokerDetachParams) -> ACPBrokerSimpleOK { .init(ok: true) }
+    func detach(_ params: ACPBrokerDetachParams) -> ACPBrokerSimpleOK { detachCount += 1
+    return .init(ok: true) }
     func close(_ params: ACPBrokerCloseParams) -> ACPBrokerSimpleOK { closeCount += 1
     return .init(ok: true) }
 }

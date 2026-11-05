@@ -540,7 +540,9 @@ actor ACPRawBrokerTransport {
         catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
     }
     func stop(close: Bool) async {
-        guard !terminated else { return }
+        // Observation loss withdraws delivery authority, but the caller still
+        // owns one explicit lifecycle cleanup request for this attachment.
+        guard requestedClose == nil else { return }
         requestedClose = close
         loseObservation()
         guard let generation else { return }
