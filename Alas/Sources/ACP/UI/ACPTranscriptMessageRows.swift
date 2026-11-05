@@ -161,7 +161,8 @@ struct ACPReportedChangesPopover: View {
         }
         .padding(12)
         .frame(width: 420, alignment: .leading)
-        .onAppear {
+        // By identity, so a report landing while the popover is open shows its paths.
+        .task(id: presentation) {
             rows = ACPReportedPathResolver.rows(for: presentation.paths, roots: actions.roots())
         }
     }
