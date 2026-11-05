@@ -41,17 +41,20 @@ _SSCDDisplayInfoTu:
 .long 0
 .globl _SSCDMotionManagerDescriptor
 _SSCDMotionManagerDescriptor:
-.long _SSCDMotionManager - _SSCDMotionManagerDescriptor
+// The C pointer accessor fills the relative entry point at runtime. Mach-O's
+// x86_64 assembler cannot encode a subtraction relocation to a function in a
+// different object file.
+.long 0
 .long 0
 .globl _SSCDHingeReadbackDescriptor
 _SSCDHingeReadbackDescriptor:
-.long _SSCDHingeReadback - _SSCDHingeReadbackDescriptor
+.long 0
 .long 0
 .globl _SSCDDeviceStateReadbackDescriptor
 _SSCDDeviceStateReadbackDescriptor:
-.long _SSCDDeviceStateReadback - _SSCDDeviceStateReadbackDescriptor
+.long 0
 .long 0
 .globl _SSCDOrientationReadbackDescriptor
 _SSCDOrientationReadbackDescriptor:
-.long _SSCDOrientationReadback - _SSCDOrientationReadbackDescriptor
+.long 0
 .long 0

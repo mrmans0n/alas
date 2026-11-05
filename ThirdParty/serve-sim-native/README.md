@@ -10,12 +10,14 @@ and send it touches and keys. It loads Apple's private CoreSimulator and
 SimulatorKit frameworks at runtime, so expect breakage with new Xcode
 releases.
 
-- `Sources/StreamingPolicy`, `Sources/CoreDeviceShim`: upstream modules, whole.
+- `Sources/StreamingPolicy`, `Sources/CoreDeviceShim`: upstream modules, with
+  `patches/apply-core-device-shim-x86_64.rb` applied so their async descriptors
+  compile for Intel release builds.
 - `Sources/ServeSimCore`: the upstream `SimNative` files in
   `vendored-files.txt`, without the Node bindings, encoders, WebRTC and
   recording. `AlasSimulatorSession.swift` is Alas's and is the only public API.
 
-Never edit the upstream files here. To update, run `./sync.sh <commit>`,
+Never edit the upstream files here directly. To update, run `./sync.sh <commit>`,
 then build: `swift build --package-path ThirdParty/serve-sim-native`. If the
 build needs another upstream file, add its name to `vendored-files.txt` and
-sync again.
+sync again. Refresh the local patch when its upstream context changes.

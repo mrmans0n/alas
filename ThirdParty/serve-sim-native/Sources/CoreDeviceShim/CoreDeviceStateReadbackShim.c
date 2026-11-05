@@ -5,6 +5,10 @@
 
 static void *stateTarget, *stateMetadata, *stateSupport, *orientationTarget, *orientationMetadata;
 extern int32_t SSCDDeviceStateReadbackDescriptor[2], SSCDOrientationReadbackDescriptor[2];
+void __attribute__((swiftasynccall)) SSCDDeviceStateReadback(void *, void *, void *,
+                                                             void * __attribute__((swift_async_context)));
+void __attribute__((swiftasynccall)) SSCDOrientationReadback(void *, void *, void *, void *,
+                                                             void * __attribute__((swift_async_context)));
 
 bool SSCoreDeviceStateReadbackAvailable(void) {
     static dispatch_once_t once;
@@ -18,6 +22,9 @@ bool SSCoreDeviceStateReadbackAvailable(void) {
         if (!utilities) return;
         stateMetadata = dlsym(utilities, "$s19CoreDeviceUtilities0B19MotionStateSnapshotVMa");
         if (!stateTarget || !descriptor || !stateSupport || !stateMetadata) return;
+        intptr_t entryOffset = (intptr_t)&SSCDDeviceStateReadback - (intptr_t)SSCDDeviceStateReadbackDescriptor;
+        if (entryOffset < INT32_MIN || entryOffset > INT32_MAX) return;
+        SSCDDeviceStateReadbackDescriptor[0] = (int32_t)entryOffset;
         SSCDDeviceStateReadbackDescriptor[1] = descriptor[1];
         available = true;
     });
@@ -35,6 +42,9 @@ bool SSCoreDeviceOrientationReadbackAvailable(void) {
         if (!utilities) return;
         orientationMetadata = dlsym(utilities, "$s10CoreDevice15OrientationInfoVMa");
         if (!orientationTarget || !descriptor || !orientationMetadata) return;
+        intptr_t entryOffset = (intptr_t)&SSCDOrientationReadback - (intptr_t)SSCDOrientationReadbackDescriptor;
+        if (entryOffset < INT32_MIN || entryOffset > INT32_MAX) return;
+        SSCDOrientationReadbackDescriptor[0] = (int32_t)entryOffset;
         SSCDOrientationReadbackDescriptor[1] = descriptor[1];
         available = true;
     });

@@ -689,7 +689,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "computer_apps",
-            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. A window with `off_screen: true` is on another Space or workspace: screenshots and refs still work, x/y clicks and scrolls go through accessibility or are refused, and a drag brings it back by activating the app. An app showing a system password prompt has `credential_prompt: true` and no windows: it can't be seen or driven until the user answers the prompt. `credential_prompt: \"unchecked\"` means a prompt may be showing and the app wasn't checked in time; its windows are left out too. computer_open_app on that app checks it alone and lists its windows when no prompt shows. Does not need approval.",
+            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. A window with `off_screen: true` is on another Space or workspace: screenshots and refs still work, x/y clicks and scrolls go through accessibility or are refused, and a drag brings it back by activating the app. An app showing a system password prompt has `credential_prompt: true` and no windows: it can't be seen or driven until the user answers the prompt. `credential_prompt: \"unchecked\"` means a prompt may be showing and the app wasn't checked in time; its windows are left out too. computer_open_app on that app checks it alone and lists its windows when no prompt shows. Without a worktree VM these tools drive the user's real desktop: to test an app you built, ask for a VM from the worktree's VM tab first, unless the user asked you to use their Mac. Does not need approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
@@ -1051,6 +1051,21 @@ fn preview_tool_definitions() -> Vec<Value> {
                     "y": { "type": "number", "minimum": -100000, "maximum": 100000 }
                 },
                 "required": ["preview_id", "x", "y"]
+            }
+        }),
+        json!({
+            "name": "preview_resize",
+            "description": "Set the size an Alas web preview's page lays out at, in CSS pixels, to test responsive layouts: for example 390x844 (phone), 820x1180 (tablet), 1280x800 (laptop), 1920x1080 (desktop). Or pass fill to follow the pane again. The user's tab shows the same page and changes too. A size larger than the pane is scaled to fit on screen; the page still lays out at full size. Sizes only: this does not emulate touch input, pixel density, or a device's user agent. Returns once the page has re-laid out, with the size it sees in `viewport`; capture and other tools then use it. `viewport.layout_width` is the width media queries use, which is narrower on a scrolling page if the Mac shows classic scrollbars.",
+            "annotations": { "destructiveHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "width": { "type": "integer", "minimum": 200, "maximum": 4096, "description": "Requires height." },
+                    "height": { "type": "integer", "minimum": 200, "maximum": 4096, "description": "Requires width." },
+                    "fill": { "type": "boolean", "description": "Follow the pane's size. Mutually exclusive with width and height." }
+                },
+                "required": ["preview_id"]
             }
         }),
         json!({
@@ -1761,6 +1776,24 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             x: required_bounded_f64(args, "x", -100_000.0, 100_000.0)?,
             y: required_bounded_f64(args, "y", -100_000.0, 100_000.0)?,
         })),
+        "preview_resize" => {
+            let width = optional_bounded_u64(args, "width", 200, 4096)?;
+            let height = optional_bounded_u64(args, "height", 200, 4096)?;
+            let fill = optional_bool(args, "fill")?.unwrap_or(false);
+            let size = match (width, height, fill) {
+                (Some(width), Some(height), false) => Some((width as u32, height as u32)),
+                (None, None, true) => None,
+                _ => {
+                    return Err(
+                        "preview_resize takes both 'width' and 'height', or 'fill': true".into(),
+                    );
+                }
+            };
+            Ok(Command::Preview(alas_client::PreviewCommand::Resize {
+                preview_id: required_limited_string(args, "preview_id", 4096)?,
+                size,
+            }))
+        }
         "preview_wait" => {
             let condition = match required_non_blank_string(args, "condition")?.as_str() {
                 "loaded" => alas_client::PreviewWaitCondition::Loaded,
@@ -2479,6 +2512,7 @@ fn preview_id_for_cancel(command: &Command) -> Option<String> {
         | Command::Preview(alas_client::PreviewCommand::Click { preview_id, .. })
         | Command::Preview(alas_client::PreviewCommand::Type { preview_id, .. })
         | Command::Preview(alas_client::PreviewCommand::Scroll { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Resize { preview_id, .. })
         | Command::Preview(alas_client::PreviewCommand::Wait { preview_id, .. })
         | Command::Preview(alas_client::PreviewCommand::Cancel { preview_id }) => {
             Some(preview_id.clone())
@@ -3635,6 +3669,7 @@ mod tests {
                 "preview_click",
                 "preview_type",
                 "preview_scroll",
+                "preview_resize",
                 "preview_wait",
                 "preview_cancel",
                 "computer_apps",
@@ -3747,6 +3782,7 @@ mod tests {
                 "preview_click",
                 "preview_type",
                 "preview_scroll",
+                "preview_resize",
                 "preview_wait",
                 "preview_cancel",
                 "workspace_list",
@@ -4120,6 +4156,38 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(
+            command_for_tool(
+                "preview_resize",
+                &json!({ "preview_id": "p1", "width": 390, "height": 844 }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Resize {
+                preview_id: "p1".into(),
+                size: Some((390, 844)),
+            })
+        );
+        assert_eq!(
+            command_for_tool(
+                "preview_resize",
+                &json!({ "preview_id": "p1", "fill": true }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Resize {
+                preview_id: "p1".into(),
+                size: None,
+            })
+        );
+        for arguments in [
+            json!({ "preview_id": "p1" }),
+            json!({ "preview_id": "p1", "width": 390 }),
+            json!({ "preview_id": "p1", "width": 199, "height": 844 }),
+            json!({ "preview_id": "p1", "fill": true, "width": 390, "height": 844 }),
+        ] {
+            assert!(command_for_tool("preview_resize", &arguments, "/wt").is_err());
+        }
         assert!(
             command_for_tool(
                 "preview_wait",

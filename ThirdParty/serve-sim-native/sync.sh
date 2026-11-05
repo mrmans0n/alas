@@ -27,5 +27,6 @@ while read -r name; do
   cp "$src/SimNative/$name.swift" "$here/Sources/ServeSimCore/$name.swift"
 done < "$here/vendored-files.txt"
 cp "$work/repo/packages/serve-sim/LICENSE" "$work/repo/packages/serve-sim/NOTICE" "$here/"
+ruby "$here/patches/apply-core-device-shim-x86_64.rb"
 printf '%s\n' "$commit" > "$here/UPSTREAM_COMMIT"
 echo "Vendored serve-sim native code at $commit"

@@ -22,8 +22,11 @@ public struct WebPreviewRegion: Decodable, Equatable, Sendable {
 
 public struct WebPreviewCommand: Equatable, Sendable {
     public enum Action: String, CaseIterable, Sendable {
-        case list, open, navigate, reload, back, forward, inspect, capture, console, click, type, scroll, wait, cancel
+        case list, open, navigate, reload, back, forward, inspect, capture, console, click, type, scroll, resize, wait, cancel
     }
+
+    /// CSS pixels, for either side of a fixed preview viewport.
+    public static let viewportDimensions = 200...4096
 
     public var action: Action
     public var previewID: String?
@@ -40,6 +43,9 @@ public struct WebPreviewCommand: Equatable, Sendable {
     public var y: Double = 0
     public var condition = "loaded"
     public var timeoutMS = 5000
+    public var width: Int?
+    public var height: Int?
+    public var fill = false
 
     private struct Params: Decodable {
         var preview_id: String?
@@ -56,8 +62,11 @@ public struct WebPreviewCommand: Equatable, Sendable {
         var y: Double?
         var condition: String?
         var timeout_ms: Int?
+        var width: Int?
+        var height: Int?
+        var fill: Bool?
 
-        public init(preview_id: String? = nil, url: String? = nil, script_key: String? = nil, selector: String? = nil, limit: Int? = nil, region: WebPreviewRegion? = nil, element_id: String? = nil, clear: Bool? = nil, text: String? = nil, append: Bool? = nil, x: Double? = nil, y: Double? = nil, condition: String? = nil, timeout_ms: Int? = nil) {
+        public init(preview_id: String? = nil, url: String? = nil, script_key: String? = nil, selector: String? = nil, limit: Int? = nil, region: WebPreviewRegion? = nil, element_id: String? = nil, clear: Bool? = nil, text: String? = nil, append: Bool? = nil, x: Double? = nil, y: Double? = nil, condition: String? = nil, timeout_ms: Int? = nil, width: Int? = nil, height: Int? = nil, fill: Bool? = nil) {
             self.preview_id = preview_id
             self.url = url
             self.script_key = script_key
@@ -72,6 +81,9 @@ public struct WebPreviewCommand: Equatable, Sendable {
             self.y = y
             self.condition = condition
             self.timeout_ms = timeout_ms
+            self.width = width
+            self.height = height
+            self.fill = fill
         }
     }
 
@@ -82,7 +94,8 @@ public struct WebPreviewCommand: Equatable, Sendable {
             scriptKey: params?.script_key, selector: params?.selector, limit: params?.limit ?? 50,
             region: params?.region, elementID: params?.element_id, clear: params?.clear ?? false,
             text: params?.text, append: params?.append ?? false, x: params?.x ?? 0, y: params?.y ?? 0,
-            condition: params?.condition ?? "loaded", timeoutMS: params?.timeout_ms ?? 5000
+            condition: params?.condition ?? "loaded", timeoutMS: params?.timeout_ms ?? 5000,
+            width: params?.width, height: params?.height, fill: params?.fill ?? false
         )
         try command.validate()
         return command
@@ -113,11 +126,18 @@ public struct WebPreviewCommand: Equatable, Sendable {
         case .click: try require(elementID != nil)
         case .type: try require(elementID != nil && text != nil)
         case .wait: try require(condition == "loaded" || selector != nil)
+        case .resize:
+            if fill {
+                try require(width == nil && height == nil)
+            } else {
+                try require(width.map(Self.viewportDimensions.contains) == true)
+                try require(height.map(Self.viewportDimensions.contains) == true)
+            }
         default: break
         }
     }
 
-    public init(action: Action, previewID: String? = nil, url: String? = nil, scriptKey: String? = nil, selector: String? = nil, limit: Int = 50, region: WebPreviewRegion? = nil, elementID: String? = nil, clear: Bool = false, text: String? = nil, append: Bool = false, x: Double = 0, y: Double = 0, condition: String = "loaded", timeoutMS: Int = 5000) {
+    public init(action: Action, previewID: String? = nil, url: String? = nil, scriptKey: String? = nil, selector: String? = nil, limit: Int = 50, region: WebPreviewRegion? = nil, elementID: String? = nil, clear: Bool = false, text: String? = nil, append: Bool = false, x: Double = 0, y: Double = 0, condition: String = "loaded", timeoutMS: Int = 5000, width: Int? = nil, height: Int? = nil, fill: Bool = false) {
         self.action = action
         self.previewID = previewID
         self.url = url
@@ -133,5 +153,8 @@ public struct WebPreviewCommand: Equatable, Sendable {
         self.y = y
         self.condition = condition
         self.timeoutMS = timeoutMS
+        self.width = width
+        self.height = height
+        self.fill = fill
     }
 }

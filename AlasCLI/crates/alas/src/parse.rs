@@ -21,7 +21,7 @@ usage: alas workspace list
 usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
-usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
+usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|resize|wait|cancel> ...
 usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ... [--vm macos|linux]
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
@@ -442,7 +442,7 @@ fn valid_computer_ref(value: &str) -> Option<String> {
 }
 
 fn parse_preview(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...";
+    const USAGE: &str = "usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|resize|wait|cancel> ...";
     match args.first().copied() {
         Some("list") if args.len() == 1 => Ok(Command::Preview(alas_client::PreviewCommand::List)),
         Some("open") => parse_preview_open(&args[1..]),
@@ -478,6 +478,7 @@ fn parse_preview(args: &[&str]) -> Result<Command, String> {
                 y: bounded_scroll(args[3])?,
             }))
         }
+        Some("resize") => parse_preview_resize(&args[1..]),
         Some("wait") => parse_preview_wait(&args[1..]),
         Some("cancel") if args.len() == 2 => Ok(preview_id_command(args[1], |preview_id| {
             alas_client::PreviewCommand::Cancel { preview_id }
@@ -620,6 +621,29 @@ fn parse_preview_type(args: &[&str]) -> Result<Command, String> {
         element_id: non_empty(args[1], "element_id")?,
         text,
         append,
+    }))
+}
+
+fn parse_preview_resize(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str =
+        "usage: alas preview resize <preview-id> (<width> <height> | --fill), sizes 200 to 4096";
+    let size = match args {
+        [_, "--fill"] => None,
+        [_, width, height] => {
+            let dimension = |value: &str| {
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|value| (200..=4096).contains(value))
+                    .ok_or_else(|| USAGE.to_string())
+            };
+            Some((dimension(width)?, dimension(height)?))
+        }
+        _ => return Err(USAGE.into()),
+    };
+    Ok(Command::Preview(alas_client::PreviewCommand::Resize {
+        preview_id: non_empty(args[0], "preview_id")?,
+        size,
     }))
 }
 
@@ -2821,6 +2845,32 @@ mod tests {
             .unwrap(),
             Command::Preview(alas_client::PreviewCommand::Scroll { .. })
         ));
+        assert_eq!(
+            parse(
+                &s(&["preview", "resize", "p1", "390", "844"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Resize {
+                preview_id: "p1".into(),
+                size: Some((390, 844)),
+            })
+        );
+        assert_eq!(
+            parse(&s(&["preview", "resize", "p1", "--fill"]), Path::new("/b")).unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Resize {
+                preview_id: "p1".into(),
+                size: None,
+            })
+        );
+        for args in [
+            vec!["preview", "resize", "p1"],
+            vec!["preview", "resize", "p1", "390"],
+            vec!["preview", "resize", "p1", "199", "844"],
+            vec!["preview", "resize", "p1", "390", "4097"],
+        ] {
+            assert!(parse(&s(&args), Path::new("/b")).is_err());
+        }
         assert!(matches!(
             parse(&s(&["preview", "cancel", "p1"]), Path::new("/b")).unwrap(),
             Command::Preview(alas_client::PreviewCommand::Cancel { .. })

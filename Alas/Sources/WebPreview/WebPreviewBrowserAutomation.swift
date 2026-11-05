@@ -174,7 +174,17 @@ extension WebPreviewBrowser {
             "closed": isClosed,
             "can_go_back": canGoBack,
             "can_go_forward": canGoForward,
-            "document_generation": automationDocumentGeneration
+            "document_generation": automationDocumentGeneration,
+            "viewport": viewportReport(pageViewportSize)
+        ]
+    }
+
+    private func viewportReport(_ size: CGSize) -> [String: Any] {
+        [
+            "mode": viewport == nil ? "fill" : "fixed",
+            "width": size.width,
+            "height": size.height,
+            "scale": webView.pageZoom
         ]
     }
 
@@ -285,6 +295,16 @@ extension WebPreviewBrowser {
             try ensureInspectablePage(requiresLoaded: true)
             let result = try await automationCapture(command: command, operation: operation, generation: generation, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
+            return result
+        case .resize:
+            try checkAuthorized(isAuthorized)
+            viewport = try requestedViewport(command)
+            let measured = try await settleViewport(operation: operation, deadline: deadline, isAuthorized: isAuthorized)
+            try checkAuthorized(isAuthorized)
+            var result = automationSnapshot()
+            var report = viewportReport(measured.size)
+            report["layout_width"] = measured.layoutWidth
+            result["viewport"] = report
             return result
         case .console:
             let lines = consoleErrors
@@ -453,6 +473,7 @@ extension WebPreviewBrowser {
             throw WebPreviewBrowserAutomationError.invalidArgument("region and element_id are mutually exclusive")
         }
         let viewport = try await waitForNonZeroViewport(operation: operation, deadline: deadline, isAuthorized: isAuthorized)
+        let pageZoom = webView.pageZoom
         guard viewport.width >= 1, viewport.height >= 1 else {
             throw WebPreviewBrowserAutomationError.captureUnavailable("viewport is empty")
         }
@@ -492,21 +513,23 @@ extension WebPreviewBrowser {
         }
         let pixelWidth = ceil(clipped.width * devicePixelRatio)
         let pixelHeight = ceil(clipped.height * devicePixelRatio)
-        guard pixelWidth.isFinite, pixelHeight.isFinite,
-              pixelWidth > 0, pixelHeight > 0, pixelWidth * pixelHeight <= 8_000_000 else {
-            throw WebPreviewBrowserAutomationError.captureUnavailable("capture region exceeds 8 megapixels at device pixel ratio \(devicePixelRatio)")
+        guard pixelWidth.isFinite, pixelHeight.isFinite, pixelWidth > 0, pixelHeight > 0 else {
+            throw WebPreviewBrowserAutomationError.captureUnavailable("capture region is empty or too large")
         }
         try checkAutomation(operation: operation, deadline: deadline)
         try checkAuthorized(isAuthorized)
         let configuration = WKSnapshotConfiguration()
-        configuration.rect = clipped
+        configuration.rect = clipped.applying(CGAffineTransform(scaleX: pageZoom, y: pageZoom))
+        let reduction = WebPreviewSurfaceLayout.captureReduction(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                                                                 maximumPixels: Self.maximumCapturePixels)
+        if reduction < 1 { configuration.snapshotWidth = NSNumber(value: Double(configuration.rect.width * reduction)) }
         let image = try await takeBoundedSnapshot(configuration, operation: operation, deadline: deadline, isAuthorized: isAuthorized)
         try checkAutomation(operation: operation, deadline: deadline)
         try checkAuthorized(isAuthorized)
         guard automationDocumentGeneration == generation else {
             throw WebPreviewBrowserAutomationError.staleElement
         }
-        guard webView.bounds.size == viewport else {
+        guard pageViewportSize == viewport, webView.pageZoom == pageZoom else {
             throw WebPreviewBrowserAutomationError.captureUnavailable("viewport changed during capture")
         }
         let afterMetrics = try await callAutomationScript(Self.metricsScript, operation: operation, deadline: deadline, arguments: [:],
@@ -520,7 +543,7 @@ extension WebPreviewBrowser {
               let bitmap = NSBitmapImageRep(data: tiff) else {
             throw WebPreviewBrowserAutomationError.captureUnavailable("could not encode PNG")
         }
-        guard bitmap.pixelsWide * bitmap.pixelsHigh <= 8_000_000 else {
+        guard Double(bitmap.pixelsWide * bitmap.pixelsHigh) <= Self.maximumCapturePixels else {
             throw WebPreviewBrowserAutomationError.captureUnavailable("captured image exceeds 8 megapixels")
         }
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
@@ -533,8 +556,9 @@ extension WebPreviewBrowser {
             "preview_id": automationID,
             "url": webView.url.map { $0.absoluteString as Any } ?? NSNull(),
             "captured_at": ISO8601DateFormatter().string(from: Date()),
-            "viewport": ["width": viewport.width, "height": viewport.height],
+            "viewport": ["width": viewport.width, "height": viewport.height, "scale": pageZoom],
             "device_pixel_ratio": devicePixelRatio,
+            "reduced_to_fit_limit": reduction < 1,
             "scroll_position": [
                 "x": scrollX,
                 "y": scrollY
@@ -545,12 +569,51 @@ extension WebPreviewBrowser {
         ]
     }
 
+    private func requestedViewport(_ command: WebPreviewCommand) throws -> WebPreviewViewport? {
+        if command.fill { return nil }
+        guard let width = command.width, let height = command.height,
+              WebPreviewCommand.viewportDimensions.contains(width),
+              WebPreviewCommand.viewportDimensions.contains(height) else {
+            throw WebPreviewBrowserAutomationError.invalidArgument(
+                "width and height must be \(WebPreviewCommand.viewportDimensions.lowerBound) to \(WebPreviewCommand.viewportDimensions.upperBound), or set fill")
+        }
+        return WebPreviewViewport(width: width, height: height)
+    }
+
+    /// Waits for the page to lay out at the new size and returns what it sees.
+    /// `layoutWidth` is the width media queries use: a Mac showing classic
+    /// scrollbars takes theirs out of it on a page that scrolls, unlike `size`.
+    /// A visible tab applies the size on its next layout pass, so the page
+    /// lags this call. Gives up on a page that never matches and reports its
+    /// real size: the caller must see that rather than an error, since the
+    /// viewport did change.
+    private func settleViewport(operation: AutomationOperation, deadline: Date,
+                                isAuthorized: @escaping @MainActor () -> Bool) async throws -> (size: CGSize, layoutWidth: Double) {
+        guard webView.url != nil, !loading else {
+            let size = viewport?.size ?? pageViewportSize
+            return (size, size.width)
+        }
+        let settleDeadline = min(deadline, Date().addingTimeInterval(2))
+        var measured = pageViewportSize
+        var layoutWidth = measured.width
+        while true {
+            let result = try await callAutomationScript(Self.viewportScript, operation: operation, deadline: deadline, arguments: [:],
+                                                        isAuthorized: isAuthorized) as? [String: Double]
+            if let width = result?["width"], let height = result?["height"] {
+                measured = CGSize(width: width, height: height)
+                layoutWidth = result?["layoutWidth"] ?? width
+            }
+            if measured == viewport?.size ?? pageViewportSize || Date() >= settleDeadline { return (measured, layoutWidth) }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     private func waitForNonZeroViewport(operation: AutomationOperation, deadline: Date,
                                         isAuthorized: @MainActor () -> Bool) async throws -> CGSize {
         while true {
             try checkAutomation(operation: operation, deadline: deadline)
             try checkAuthorized(isAuthorized)
-            let viewport = webView.bounds.size
+            let viewport = pageViewportSize
             if viewport.width >= 1, viewport.height >= 1 { return viewport }
             guard Date() < deadline else {
                 throw WebPreviewBrowserAutomationError.captureUnavailable("viewport is zero-size; focus or open the preview before capture")
@@ -897,6 +960,21 @@ extension WebPreviewBrowser {
     const r = e.getBoundingClientRect();
     const s = getComputedStyle(e);
     return { visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' };
+    """#
+
+    static let maximumCapturePixels = 8_000_000.0
+
+    /// Resolves after two frames, so resize observers have run. Hidden pages
+    /// get no frames, hence the timer. Asks media queries for their width:
+    /// `clientWidth` rounds, so at a zoom it can read a pixel over.
+    private static let viewportScript = #"""
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, 150);
+      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
+    });
+    let layoutWidth = innerWidth;
+    while (layoutWidth > 0 && !matchMedia(`(min-width: ${layoutWidth}px)`).matches) layoutWidth--;
+    return { width: innerWidth, height: innerHeight, layoutWidth };
     """#
 
     private static let metricsScript = #"""

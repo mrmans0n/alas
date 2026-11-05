@@ -227,6 +227,24 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     var capture: WebPreviewCapture?
     private(set) var isClosed = false
     var onNavigate: ((URL) -> Void)?
+    /// The page size set by the user or an agent; nil fills the pane.
+    var viewport: WebPreviewViewport? {
+        didSet {
+            guard viewport != oldValue else { return }
+            applySurfaceLayout()
+            onViewportChange?(viewport)
+        }
+    }
+    var onViewportChange: ((WebPreviewViewport?) -> Void)?
+    /// The space the tab has for the page; nil while no tab shows this browser.
+    var paneSize: CGSize? {
+        didSet {
+            guard paneSize != oldValue else { return }
+            applySurfaceLayout()
+        }
+    }
+    /// How the web view sits in its pane for a fixed viewport; nil fills it.
+    private(set) var surfaceLayout: WebPreviewSurfaceLayout?
     private var navigationGeneration = 0
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
@@ -393,6 +411,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         urlObservation?.invalidate()
         urlObservation = nil
         onNavigate = nil
+        onViewportChange = nil
         capture = nil
         consoleErrors = []
         consoleHandler?.receive = nil
@@ -555,12 +574,32 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    /// The size the page lays out at, in CSS pixels. WebKit floors the web
+    /// view's size divided by its zoom.
+    var pageViewportSize: CGSize {
+        let zoom = webView.pageZoom
+        let size = webView.bounds.size
+        return zoom == 1 ? size : CGSize(width: floor(size.width / zoom), height: floor(size.height / zoom))
+    }
+
+    private func applySurfaceLayout() {
+        let layout = viewport.map { WebPreviewSurfaceLayout.fit($0, in: paneSize) }
+        surfaceLayout = layout
+        webView.pageZoom = layout?.zoom ?? 1
+        // A tab sizes the web view it hosts. One that no tab shows still has
+        // to lay out at this size, for agents to measure and capture, and a
+        // tab going away may not have detached it yet.
+        if paneSize == nil || webView.superview == nil, let layout { webView.setFrameSize(layout.size) }
+    }
+
+    /// `selection` and `point` are in the web view's coordinates.
     func captureRegion(_ selection: CGRect? = nil, elementAt point: CGPoint? = nil) {
         guard !isClosed, !capturing, !loading, let url = webView.url,
               WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else { return }
         capturing = true
         let generation = navigationGeneration
-        let viewport = webView.bounds.size
+        let viewport = pageViewportSize
+        let zoom = webView.pageZoom
         let capturedAt = Date()
         let errors = consoleErrors
         Task { @MainActor in
@@ -571,8 +610,9 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                     "return {scale: devicePixelRatio, x: scrollX, y: scrollY};",
                     arguments: [:], in: nil, contentWorld: .defaultClient) as? [String: Double]
                 var element: String?
-                var rect = selection ?? CGRect(origin: .zero, size: viewport)
-                if let point {
+                let scaleToPage = CGAffineTransform(scaleX: 1 / zoom, y: 1 / zoom)
+                var rect = selection?.applying(scaleToPage) ?? CGRect(origin: .zero, size: viewport)
+                if let point = point?.applying(scaleToPage) {
                     let result = try? await webView.callAsyncJavaScript(Self.elementScript,
                         arguments: ["x": point.x, "y": point.y], in: nil, contentWorld: .defaultClient)
                     if let info = result as? [String: Any],
@@ -591,10 +631,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                     return
                 }
                 let configuration = WKSnapshotConfiguration()
-                configuration.rect = region
+                configuration.rect = region.applying(CGAffineTransform(scaleX: zoom, y: zoom))
                 let image = try await webView.takeSnapshot(configuration: configuration)
                 guard !isClosed, generation == navigationGeneration, webView.url == url,
-                      viewport == webView.bounds.size else {
+                      viewport == pageViewportSize, zoom == webView.pageZoom else {
                     error = "The page changed during capture. Capture again."
                     return
                 }
