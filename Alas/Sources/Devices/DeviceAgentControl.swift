@@ -312,7 +312,7 @@ final class DeviceAgentControl {
     /// closed. A call still running keeps it, however long it takes.
     private func renewLease(_ udid: String) {
         let token = leases[udid]?.token
-            ?? input.subscribe(udid: udid, onFrame: { _ in }, onStop: { _ in })
+            ?? input.subscribe(udid: udid, onFrame: { _ in }, onStop: { [weak self] _ in self?.dropLease(udid) })
         leases[udid]?.release.cancel()
         let window = leaseWindow
         let release = Task { [weak self] in
@@ -323,6 +323,14 @@ final class DeviceAgentControl {
             self.input.unsubscribe(udid: udid, token: token)
         }
         leases[udid] = (token, release)
+    }
+
+    /// A stream that stopped (it failed, or the service died) is no longer the
+    /// agent's: dropping the lease lets the next call or the tab's Retry start it again.
+    private func dropLease(_ udid: String) {
+        guard let lease = leases.removeValue(forKey: udid) else { return }
+        lease.release.cancel()
+        input.unsubscribe(udid: udid, token: lease.token)
     }
 
     // MARK: JSON

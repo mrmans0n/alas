@@ -13,6 +13,8 @@ struct DeviceAgentControlTests {
         /// Whether the stream was still held when each key was sent.
         var keysWhileStreaming: [Bool] = []
         var subscribed: Set<String> = []
+        var subscribeCount = 0
+        var onStops: [String: @MainActor (String) -> Void] = [:]
         /// Yields before each `describe` answers, in call order, to finish calls out of order.
         var describeYields: [Int] = []
         let frame = IOSurface(properties: [
@@ -22,6 +24,8 @@ struct DeviceAgentControlTests {
         func subscribe(udid: String, onFrame: @escaping @MainActor (IOSurface) -> Void,
                        onStop: @escaping @MainActor (String) -> Void) -> UUID {
             subscribed.insert(udid)
+            subscribeCount += 1
+            onStops[udid] = onStop
             return UUID()
         }
         func unsubscribe(udid: String, token: UUID) { subscribed.remove(udid) }
@@ -179,5 +183,20 @@ extension DeviceAgentControlTests {
         let stale = await control.perform(.tap(udid: "on", target: .ref("s1e2"), includeScreenshot: false), sessionID: "s")
         #expect(error(stale)?.hasPrefix("device_stale_ref:") == true)
         #expect(await control.perform(.tap(udid: "on", target: .ref("s2e2"), includeScreenshot: false), sessionID: "s") == .ok)
+    }
+}
+
+extension DeviceAgentControlTests {
+    /// A stream that stopped must not stay counted for the agent, or nothing
+    /// can start it again.
+    @Test func aStoppedStreamDropsTheLeaseSoTheNextCallRestartsIt() async {
+        let input = FakeInput()
+        let control = control(input)
+        #expect(await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s") == .ok)
+        #expect(input.subscribeCount == 1)
+        input.onStops["on"]?("The simulator stream stopped.")
+        #expect(!input.subscribed.contains("on"))
+        #expect(await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s") == .ok)
+        #expect(input.subscribeCount == 2)
     }
 }
