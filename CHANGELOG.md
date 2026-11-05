@@ -6,9 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+## [0.23.2] - 2026-11-05
 
-- Keep plugin right-rail badges fully visible without clipping their top or right edges.
+### ✨ Features
+
+- Add an experimental Device tab for viewing and controlling an iOS Simulator beside the current session, disabled by default in Advanced settings (#2348).
+- Add unified undo and redo for typing, proposals, and local, remote, or per-block decisions in the three-way merge editor (#2351).
+- Show structured agent failure incidents with accurate turn outcomes and adapter-provided recovery actions (#2352).
+- Resize web previews to phone, tablet, laptop, desktop, or custom viewports from the tab or through agent tools (#2353).
+
+### 🐛 Fixes
+
+- Keep plugin right-rail badges fully visible without clipping their top or right edges (#2347).
+- Preserve successful Linux computer-input results when the target window closes, and keep guest apps running across helper restarts (#2350).
+- Guide agents toward a worktree VM when testing an app they built before they drive the user's Mac (#2355).
+- Build the experimental iOS Simulator service for Intel releases as well as Apple silicon.
+
+### ⚡ Performance
+
+- Keep the left sidebar responsive at 90 fps with expanded peers by reducing hover, icon, and row-update work (#2349).
+
+### 🏗️ Internal
+
+- Extend the disabled-by-default ACP 2 foundation with an opt-in FIFO runner for fresh stdio sessions (#2346).
+- Keep Swift test-product validation strict for Xcode and architecture while tolerating rolling macOS runner-image updates.
 
 ## [0.23.1] - 2026-11-04
 
