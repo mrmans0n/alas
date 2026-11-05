@@ -2558,46 +2558,6 @@ struct ACPSessionRunnerTests {
         try await waitUntil { self.reportReference(in: fixture.session, requestId: requestId)?.fileChangeReport != nil }
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
-    func reportArrivesEitherSideOfTheResponse(reportFirst: Bool) async throws {
-        var completions: [ACPTurnCompletion] = []
-        let fixture = try await makeGatedPromptRunner(onTurnCompleted: { completions.append($0) })
-        defer { fixture.runner.stop() }
-        let session = fixture.session
-        for text in ["first", "second"] {
-            let item = UUID()
-            session.enqueue(id: item, blocks: [.text(text)])
-            session.normalQueuedTurnIDs.insert(item)
-        }
-        fixture.runner.flushQueueIfIdle()
-        await fixture.entered.wait()
-        let requestId = try #require(sentReportRequestIds(fixture.mock).first)
-        let info = fileChangeReportInfo(requestId: requestId)
-
-        if reportFirst {
-            try await emitReport(info, requestId: requestId, on: fixture)
-            #expect(completions.isEmpty)
-            await fixture.respond.open()
-        } else {
-            await fixture.respond.open()
-            try await waitUntil { !completions.isEmpty }
-            try await emitReport(info, requestId: requestId, on: fixture)
-        }
-        try await waitUntil { completions.count == 2 }
-        try await settleToIdle(fixture.runner, session)
-
-        guard case .report(let report) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) else {
-            Issue.record("expected a readable report")
-            return
-        }
-        let expected = ACPMessage.Attachment.fileChangeReportReference(requestId: requestId, report: report)
-        #expect(reportReference(in: session, requestId: requestId) == expected)
-        #expect(try storedReportReference(in: fixture.store, requestId: requestId) == expected)
-        #expect(completions.map(\.result) == [.completed, .completed])
-        #expect(sentPrompts(fixture.mock).count == 2, "the next head goes out once")
-        #expect(session.queue.isEmpty)
-    }
-
     enum ReportOutcomeRow: CaseIterable {
         case cancelledUnavailable, endTurnUnavailable, failureRecordUnavailable, endTurnReported, noReport
 
@@ -2621,10 +2581,16 @@ struct ACPSessionRunnerTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: ReportOutcomeRow.allCases)
-    func reportNeverChangesTheOutcome(row: ReportOutcomeRow) async throws {
+    /// With no report to land, the order means nothing.
+    nonisolated private static let reportLandings: [(reportFirst: Bool, outcome: ReportOutcomeRow)] =
+        [true, false].flatMap { reportFirst in
+            ReportOutcomeRow.allCases.filter { reportFirst || $0.reportFields != nil }.map { (reportFirst, $0) }
+        }
+
+    @Test(.timeLimit(.minutes(1)), arguments: reportLandings)
+    func reportNeverChangesTheOutcome(reportFirst: Bool, outcome: ReportOutcomeRow) async throws {
         var completions: [ACPTurnCompletion] = []
-        let response: ACPResponse = switch row {
+        let response: ACPResponse = switch outcome {
         case .failureRecordUnavailable: try Self.failedPromptResponse()
         case .cancelledUnavailable: ACPResponse(body: Data(#"{"stopReason":"cancelled"}"#.utf8))
         case .endTurnUnavailable, .endTurnReported, .noReport: ACPResponse(body: Self.succeededPrompt)
@@ -2632,21 +2598,46 @@ struct ACPSessionRunnerTests {
         let fixture = try await makeGatedPromptRunner(response: response, onTurnCompleted: { completions.append($0) })
         defer { fixture.runner.stop() }
         let session = fixture.session
-        fixture.runner.sendNow(blocks: [.text("hello")], queuedItemId: nil)
+        // A completed turn hands over to the next head, which must go out once.
+        let results: [ACPTurnCompletion.Result] = outcome.result == .completed ? [.completed, .completed] : [outcome.result]
+        for text in ["first", "second"].prefix(results.count) {
+            let item = UUID()
+            session.enqueue(id: item, blocks: [.text(text)])
+            session.normalQueuedTurnIDs.insert(item)
+        }
+        fixture.runner.flushQueueIfIdle()
         await fixture.entered.wait()
         let requestId = try #require(sentReportRequestIds(fixture.mock).first)
-        if let fields = row.reportFields {
-            try await emitReport(fileChangeReportInfo(fields, requestId: requestId), requestId: requestId, on: fixture)
+        let info = outcome.reportFields.map { fileChangeReportInfo($0, requestId: requestId) }
+
+        if reportFirst, let info {
+            try await emitReport(info, requestId: requestId, on: fixture)
+            #expect(completions.isEmpty)
         }
         await fixture.respond.open()
         try await waitUntil { !completions.isEmpty }
+        if !reportFirst, let info {
+            try await emitReport(info, requestId: requestId, on: fixture)
+        }
+        try await waitUntil { completions.count == results.count }
         try await settleToIdle(fixture.runner, session)
 
-        #expect(completions.map(\.result) == [row.result])
-        #expect(session.turnFailure == row.turnFailure)
+        #expect(completions.map(\.result) == results)
+        #expect(session.turnFailure == outcome.turnFailure)
         #expect(session.lastError == nil)
-        let reference = try #require(reportReference(in: session, requestId: requestId))
-        #expect((reference.fileChangeReport != nil) == (row.reportFields != nil))
+        #expect(sentPrompts(fixture.mock).count == results.count)
+        #expect(session.queue.isEmpty)
+        var report: ACPAgentFileChangeReport?
+        if let info {
+            guard case .report(let landed) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) else {
+                Issue.record("expected a readable report")
+                return
+            }
+            report = landed
+        }
+        let expected = ACPMessage.Attachment.fileChangeReportReference(requestId: requestId, report: report)
+        #expect(reportReference(in: session, requestId: requestId) == expected)
+        #expect(try storedReportReference(in: fixture.store, requestId: requestId) == expected)
     }
 
     @Test func childAddressedReportNeverReachesARootRow() async throws {

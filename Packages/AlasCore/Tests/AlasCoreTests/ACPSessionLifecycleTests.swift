@@ -318,8 +318,8 @@ struct ACPSessionLifecycleTests {
         #"{"agentFileChangeReport":{"version":1,"requestId":"alas-turn:abc"\#(fields)}}"#
     }
 
-    private static let slashHeavyPaths: [String] = {
-        // Slashes and non-ASCII, padded so the compact report is exactly the limit.
+    /// Slashes and non-ASCII, padded so the compact report is exactly the limit.
+    private static func slashHeavyPaths() throws -> [String] {
         func compact(_ paths: [String]) -> Int {
             let list = paths.map { "\"\($0)\"" }.joined(separator: ",")
             return report(#","status":"reported","paths":[\#(list)]"#).utf8.count - #"{"agentFileChangeReport":"#.utf8.count - 1
@@ -329,8 +329,9 @@ struct ACPSessionLifecycleTests {
         while ACPAgentFileChangeReport.maxSerializedBytes - compact(paths) > 4_000 { paths.append(filler) }
         let missing = ACPAgentFileChangeReport.maxSerializedBytes - compact(paths)
         paths.append("/" + String(repeating: "x", count: missing - 4))
+        try #require(compact(paths) == ACPAgentFileChangeReport.maxSerializedBytes)
         return paths
-    }()
+    }
 
     private static func listJSON(_ paths: [String]) -> String {
         #","status":"reported","paths":[\#(paths.map { "\"\($0)\"" }.joined(separator: ","))]"#
@@ -351,7 +352,7 @@ struct ACPSessionLifecycleTests {
         (report(#","status":"reported","paths":[],"uncertainty":4"#), ExpectedReport()),
         (report(listJSON((0..<1_024).map { "/p\($0)" })), ExpectedReport(paths: (0..<1_024).map { "/p\($0)" })),
         (report(listJSON(["/" + String(repeating: "a", count: 4_095)])), ExpectedReport(paths: ["/" + String(repeating: "a", count: 4_095)])),
-        (report(listJSON(slashHeavyPaths)), ExpectedReport(paths: slashHeavyPaths)),
+        (report(listJSON(try slashHeavyPaths())), ExpectedReport(paths: try slashHeavyPaths())),
     ] as [(String, ExpectedReport)])
     func fileChangeReportSignal(meta: String, expected: ExpectedReport) throws {
         guard case .report(let report) = try fileChangeSignal(meta: meta) else {
@@ -366,11 +367,6 @@ struct ACPSessionLifecycleTests {
         #expect(report.uncertainty == expected.uncertainty)
         #expect(report.reason == expected.reason)
         #expect(try JSONDecoder().decode(ACPAgentFileChangeReport.self, from: JSONEncoder().encode(report)) == report)
-    }
-
-    @Test func fileChangeReportBoundaryIsExactlyTheLimit() {
-        #expect(Self.report(Self.listJSON(Self.slashHeavyPaths)).utf8.count
-            - #"{"agentFileChangeReport":"#.utf8.count - 1 == ACPAgentFileChangeReport.maxSerializedBytes)
     }
 
     @Test(arguments: [
@@ -388,7 +384,7 @@ struct ACPSessionLifecycleTests {
         report(listJSON((0..<1_025).map { "/p\($0)" })),
         report(listJSON(["/" + String(repeating: "a", count: 4_096)])),
         report(#","status":"reported","paths":[],"uncertainty":"\#(String(repeating: "u", count: 2_001))""#),
-        report(listJSON(slashHeavyPaths.dropLast() + [slashHeavyPaths.last! + "x"])),
+        report(listJSON(try slashHeavyPaths().dropLast() + [slashHeavyPaths().last! + "x"])),
         #"{"agentFileChangeReport":"boom"}"#,
     ])
     func fileChangeReportSignalIsMalformed(meta: String) throws {

@@ -180,11 +180,6 @@ struct ACPReportedChangesPresentationTests {
         #expect(resolved.display == row.display ?? row.file ?? row.path)
     }
 
-    @Test(arguments: [(false, true), (true, false)])
-    func aMirrorIsNotOffered(isMirror: Bool, expected: Bool) {
-        #expect(ACPReportedChangesPresentation.isOffered(isMirror: isMirror) == expected)
-    }
-
     @Test func fileAccessFollowsSymlinksAtClickTime() throws {
         let manager = FileManager.default
         let base = URL(fileURLWithPath: "/tmp/alas-reported-\(UUID().uuidString)")
@@ -200,7 +195,13 @@ struct ACPReportedChangesPresentationTests {
         try manager.createSymbolicLink(at: root.appendingPathComponent("self"), withDestinationURL: root)
 
         // Reached through `/tmp`, a symlink itself, as a stored root can be.
-        let roots = ACPReportedPathRoots(root: root.path, physicalRoot: ACPReportedPathRoots.physicalRoot(of: root.path))
+        let physicalRoot = try #require(ACPReportedPathRoots.physicalRoot(of: root.path))
+        #expect(physicalRoot == "/private" + root.path)
+        #expect(ACPReportedPathRoots.physicalRoot(of: root.path + "/self") == physicalRoot)
+        #expect(ACPReportedPathRoots.physicalRoot(of: root.path + "/gone") == nil)
+        #expect(ACPReportedPathRoots.physicalRoot(of: Self.remoteRoot) == nil)
+
+        let roots = ACPReportedPathRoots(root: root.path, physicalRoot: physicalRoot)
         #expect(roots.access(toFileAt: root.path + "/src/a") == .allowed)
         #expect(roots.access(toFileAt: root.path + "/alias/a") == .allowed)
         #expect(roots.access(toFileAt: root.path + "/docs/id_rsa") == .outside)
@@ -214,25 +215,5 @@ struct ACPReportedChangesPresentationTests {
         // Never probed: the same real path exists nowhere on this machine.
         let remote = ACPReportedPathRoots(root: Self.remoteRoot, physicalRoot: nil)
         #expect(remote.access(toFileAt: Self.remoteRoot + "/a") == .allowed)
-    }
-
-    @Test func physicalRootMatchesRealpath() throws {
-        let manager = FileManager.default
-        // Under `/tmp`, whose own symlink is what a lexical comparison misses.
-        let base = URL(fileURLWithPath: "/tmp/alas-reported-\(UUID().uuidString)")
-        let real = base.appendingPathComponent("real")
-        let link = base.appendingPathComponent("link")
-        try manager.createDirectory(at: real, withIntermediateDirectories: true)
-        defer { try? manager.removeItem(at: base) }
-        try manager.createSymbolicLink(at: link, withDestinationURL: real)
-
-        let expected = try #require(realpath(real.path, nil).map { pointer -> String in
-            defer { free(pointer) }
-            return String(cString: pointer)
-        })
-        #expect(expected.hasPrefix("/private/tmp/"))
-        #expect(ACPReportedPathRoots.physicalRoot(of: link.path) == expected)
-        #expect(ACPReportedPathRoots.physicalRoot(of: Self.remoteRoot) == nil)
-        #expect(ACPReportedPathRoots.physicalRoot(of: base.appendingPathComponent("missing").path) == nil)
     }
 }

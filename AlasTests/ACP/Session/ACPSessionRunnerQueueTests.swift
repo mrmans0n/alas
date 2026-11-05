@@ -4329,6 +4329,8 @@ struct ACPSessionRunnerQueueTests {
         FileChangeReportIssuanceRow(continuation: true, expected: .none),
         FileChangeReportIssuanceRow(negotiated: false, expected: .none),
         FileChangeReportIssuanceRow(dispatchCount: 1, recorded: true, locatable: true, expected: .none),
+        // Unrecorded is an exit between marking and recording: no row rule can hold this back.
+        FileChangeReportIssuanceRow(dispatchCount: 1, expected: .none),
         FileChangeReportIssuanceRow(generation: true, expected: .none),
         FileChangeReportIssuanceRow(expected: .mints),
         FileChangeReportIssuanceRow(dispatchCount: 2, fresh: true, recorded: true, locatable: true, expected: .mints),
@@ -4364,26 +4366,6 @@ struct ACPSessionRunnerQueueTests {
             #expect(ACPAgentFileChangeReport.isValidRequestId(id))
         }
         #expect(!item.brokerOperationAttemptIsFresh)
-    }
-
-    /// Unrecorded is an exit between marking and recording: no row rule can hold this back.
-    @Test func alreadyDispatchedItemWithoutAnIdSendsNone() async throws {
-        let (runner, mock, session, _) = try mkRunner()
-        session.agentFileChangeReport = .init()
-        let stored = try JSONDecoder().decode(QueuedPrompt.self, from: Data("""
-        {"id":"\(UUID().uuidString)","blocks":[{"type":"text","text":"older"}],"enqueuedAt":0,
-         "status":"sending","transcriptRecorded":false,"dispatchCount":1}
-        """.utf8))
-        session.restoreQueue([stored])
-        mock.script(method: "session/prompt") { _ in throw FileChangeReportTransportFailure() }
-
-        runner.flushQueueIfIdle()
-        try await waitUntil { session.queue.first?.lastError != nil }
-
-        let sent = Self.sentPrompts(mock)
-        #expect(sent.map(\.brokerOperationKey) == [stored.brokerOperationKey])
-        #expect((sent.first?.params as? ACPSessionPromptParams)?.meta == nil)
-        #expect(session.queue.first?.fileChangeReportRequestId == nil)
     }
 
     @Test(.timeLimit(.minutes(1)))
