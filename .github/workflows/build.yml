@@ -475,14 +475,14 @@ jobs:
           mkdir -p .build/xcode/test-artifact
           {
             xcodebuild -version
-            printf 'macOS '
-            sw_vers -productVersion
             uname -m
           } > .build/xcode/test-artifact/toolchain.txt
+          sw_vers -productVersion > .build/xcode/test-artifact/os-version.txt
           tar -czf .build/xcode/swift-test-products.tgz \
             -C .build/xcode \
             DerivedData/Build/Products \
-            test-artifact/toolchain.txt
+            test-artifact/toolchain.txt \
+            test-artifact/os-version.txt
           du -h .build/xcode/swift-test-products.tgz
 
       - name: Upload Swift test plan
@@ -606,11 +606,15 @@ jobs:
           tar -xzf .build/xcode/artifact/swift-test-products.tgz -C .build/xcode
           {
             xcodebuild -version
-            printf 'macOS '
-            sw_vers -productVersion
             uname -m
           } > .build/xcode/test-artifact/current-toolchain.txt
+          set -e
           diff -u .build/xcode/test-artifact/toolchain.txt .build/xcode/test-artifact/current-toolchain.txt
+          builder_os_version="$(cat .build/xcode/test-artifact/os-version.txt)"
+          runner_os_version="$(sw_vers -productVersion)"
+          if [[ "$builder_os_version" != "$runner_os_version" ]]; then
+            echo "::warning title=macOS runner image mismatch::Compiled on macOS $builder_os_version; running on macOS $runner_os_version. Xcode and architecture match, continuing."
+          fi
           xctestrun_count="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f | wc -l | tr -d ' ')"
           xctestrun="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f -print -quit)"
           if [[ "$xctestrun_count" -ne 1 ]]; then

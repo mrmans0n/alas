@@ -89,6 +89,50 @@ end
 raise "workers must execute both lanes assigned to their shard" unless worker_steps.any? do |step|
   step["run"] == "python3 scripts/ci_swift_tests.py run-shard --shard ${{ matrix.shard }}"
 end
+package_products = builder_steps.find { |step| step["name"] == "Package compiled Swift test products" }
+validate_products = worker_steps.find { |step| step["name"] == "Restore and validate compiled test products" }
+package_run = package_products&.fetch("run", "").to_s
+validate_run = validate_products&.fetch("run", "").to_s
+builder_fingerprint = package_run.match(/\{\n(?<body>.*?)\n\} > \.build\/xcode\/test-artifact\/toolchain\.txt/m)
+worker_fingerprint = validate_run.match(/\{\n(?<body>.*?)\n\} > \.build\/xcode\/test-artifact\/current-toolchain\.txt/m)
+[builder_fingerprint, worker_fingerprint].each do |fingerprint|
+  lines = fingerprint&.named_captures&.fetch("body", "").to_s.lines.map(&:strip).reject(&:empty?)
+  raise "compiled-product compatibility fingerprints must contain only exact Xcode and architecture" unless
+    lines == ["xcodebuild -version", "uname -m"]
+end
+raise "compiled products must archive the builder macOS version separately from the compatibility fingerprint" unless
+  package_run.match?(/tar -czf \.build\/xcode\/swift-test-products\.tgz \\\n\s+-C \.build\/xcode \\\n\s+DerivedData\/Build\/Products \\\n\s+test-artifact\/toolchain\.txt \\\n\s+test-artifact\/os-version\.txt(?:\n|\z)/)
+package_os_version_sources = package_run.lines.map(&:strip).select do |line|
+  line.include?("os-version.txt") || line.include?("sw_vers")
+end
+raise "the builder macOS version must come from sw_vers -productVersion exactly once" unless package_os_version_sources == [
+  'sw_vers -productVersion > .build/xcode/test-artifact/os-version.txt',
+  'test-artifact/os-version.txt'
+]
+strict_diff = "diff -u .build/xcode/test-artifact/toolchain.txt .build/xcode/test-artifact/current-toolchain.txt"
+raise "Xcode or architecture mismatches must remain fatal under errexit" unless
+  validate_run.lines.map(&:strip).each_cons(2).include?(["set -e", strict_diff])
+os_warning = validate_run.match(/if \[\[ "\$builder_os_version" != "\$runner_os_version" \]\]; then\n(?<body>.*?)\nfi/m)
+raise "workers must warn, not fail, when only the macOS runner image version changes" unless
+  os_warning&.named_captures&.fetch("body", "").to_s.lines.map(&:strip) == [
+    'echo "::warning title=macOS runner image mismatch::Compiled on macOS $builder_os_version; running on macOS $runner_os_version. Xcode and architecture match, continuing."'
+  ]
+os_version_lines = validate_run.lines.map(&:strip).select do |line|
+  line.include?("builder_os_version") || line.include?("runner_os_version")
+end
+raise "macOS runner image differences must only be read, compared, and warned about" unless os_version_lines == [
+  'builder_os_version="$(cat .build/xcode/test-artifact/os-version.txt)"',
+  'runner_os_version="$(sw_vers -productVersion)"',
+  'if [[ "$builder_os_version" != "$runner_os_version" ]]; then',
+  'echo "::warning title=macOS runner image mismatch::Compiled on macOS $builder_os_version; running on macOS $runner_os_version. Xcode and architecture match, continuing."'
+]
+os_version_sources = validate_run.lines.map(&:strip).select do |line|
+  line.include?("os-version.txt") || line.include?("sw_vers")
+end
+raise "workers must not use the macOS version sources for another fatal check" unless os_version_sources == [
+  'builder_os_version="$(cat .build/xcode/test-artifact/os-version.txt)"',
+  'runner_os_version="$(sw_vers -productVersion)"'
+]
 build_commands = jobs.values.flat_map { |job| job.fetch("steps", []) }.count do |step|
   step.fetch("run", "").lines.any? { |line| line.strip == "build-for-testing" }
 end
