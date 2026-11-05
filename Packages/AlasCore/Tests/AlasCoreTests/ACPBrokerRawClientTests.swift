@@ -6,6 +6,71 @@ import AlasCore
 @testable import AlasSessions
 
 struct ACPBrokerRawClientTests {
+    @Test func orderedBrokerCaptureWaitsForThePendingJournalOrigin() async throws {
+        let service = RawBrokerFixture()
+        var pending = await service.pendingRequest()
+        pending.originCursor = .init(rawValue: 3)
+        await service.publishPendingSuccessor(pending, retaining: [])
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        try client.validateV2OrderedIntake(intake)
+        await #expect(throws: (any Error).self) { try await client.claimV2OrderedIntake() }
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        var captures = intake.events.makeAsyncIterator()
+        var cursors: [UInt64] = []
+        for _ in 0..<3 {
+            let event = try #require(await captures.next())
+            switch event {
+            case .update(let delivery): cursors.append(try #require(delivery.brokerProvenance).cursor.rawValue)
+            case .inbound(let delivery):
+                guard case .broker(let provenance, let key) = delivery.source else { Issue.record("Lost broker origin")
+                return }
+                cursors.append(provenance.cursor.rawValue)
+                #expect(key == "p" && delivery.frame == pending.rawFrame?.bytes)
+            case .diagnostic: Issue.record("Unexpected diagnostic")
+            }
+        }
+        #expect(cursors == [1, 2, 3])
+        #expect(await service.acks.isEmpty)
+        try intake.claimConsumer()
+        #expect(throws: (any Error).self) { try intake.claimConsumer() }
+        await client.detach()
+        #expect(!intake.isValid)
+        var terminal = intake.invalidations.makeAsyncIterator()
+        #expect(await terminal.next() != nil)
+    }
+
+    @Test(arguments: ["attach", "stdout", "uncertain", "no-progress"])
+    func orderedBrokerFailureInvalidatesWithoutWaitingForConsumption(reason: String) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        if reason == "attach" { await service.failNextAttach() }
+        if reason == "no-progress" { await service.holdReplayProgress() }
+        if reason == "stdout" || reason == "uncertain" {
+            await service.publishTerminal(reason == "stdout" ? "adapter/stdoutClosed" : "adapter/writeUncertain")
+        }
+        if reason == "attach" || reason == "no-progress" {
+            await #expect(throws: (any Error).self) { try await client.start() }
+        } else { _ = try await client.start() }
+        defer { Task { await client.detach() } }
+        #expect(!intake.isValid)
+        #expect(await service.acks.isEmpty)
+    }
+
+    @Test func orderedBrokerPublishesInitialStateBeforeItsAckProgress() async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        var controls = intake.controls.makeAsyncIterator()
+        guard case .durableState(let initial)? = await controls.next() else { Issue.record("Missing initial broker identity")
+        return }
+        #expect(initial.brokerId.rawValue == "raw" && initial.generation.rawValue == 7 && initial.acknowledgedCursor.rawValue == 0)
+    }
+
     @Test func currentPendingViewRefreshesWithoutConsumingOrRevivingDetachedOrigins() async throws {
         let service = RawBrokerFixture(pending: true)
         let client = makeClient(service)
@@ -1118,6 +1183,11 @@ struct ACPBrokerRawClientTests {
 }
 
 private actor RawBrokerFixture: ACPBrokerServicing {
+    private var noReplayProgress = false
+    func holdReplayProgress() { noReplayProgress = true }
+    func publishTerminal(_ method: String) {
+        extraEvents.append(.init(cursor: .init(rawValue: 3), kind: .adapterNotification(method: method, params: .null)))
+    }
     private var freshBootstrap = false
     func setFreshBootstrap(_ value: Bool) { freshBootstrap = value }
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
@@ -1245,6 +1315,9 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return .init(snapshot: snapshot(), adopted: !freshBootstrap)
     }
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        if noReplayProgress {
+            return .init(snapshot: snapshot(), events: [], hasMoreEvents: true)
+        }
         // Pending-view inspection uses a one-byte replay budget. Keep this
         // fault separate from the client's concurrently running replay loop.
         if shouldFailPendingInspection, params.maxReplayBytes == 1 {
