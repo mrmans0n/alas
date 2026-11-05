@@ -22,7 +22,7 @@ struct UserMessageRow: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                let visibleAttachments = attachments.filter { !$0.isCheckpointReference }
+                let visibleAttachments = attachments.filter { !$0.isLocalReference }
                 if !visibleAttachments.isEmpty {
                     let images = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
                     let others = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }

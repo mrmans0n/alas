@@ -1277,6 +1277,50 @@ struct ACPSessionTests {
         }
     }
 
+    // MARK: - File change report references
+
+    @Test func fileChangeReportIndexFollowsMutations() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let transcript = session.transcript
+        func user(_ requestId: String?) -> ACPMessage {
+            .user(id: UUID(), text: "hi", attachments: requestId.map { [.fileChangeReportReference(requestId: $0)] } ?? [])
+        }
+
+        transcript.appendMessage(user("first"))
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == 0)
+
+        transcript.insertMessage(.systemNotice(id: UUID(), text: "earlier"), at: 0)
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == 1)
+
+        transcript.replaceMessage(at: 1, with: user("second"))
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == nil)
+        #expect(transcript.fileChangeReportIndex(requestId: "second") == 1)
+
+        transcript.replaceMessage(at: 1, with: user(nil))
+        #expect(transcript.fileChangeReportIndex(requestId: "second") == nil)
+
+        transcript.messages = [.systemNotice(id: UUID(), text: "a"), .systemNotice(id: UUID(), text: "b"), user("rebuilt")]
+        #expect(transcript.fileChangeReportIndex(requestId: "rebuilt") == 2)
+    }
+
+    @Test("attaching a checkpoint keeps the turn's report reference")
+    func attachCheckpointKeepsFileChangeReport() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let id = UUID()
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reports[1])
+        session.transcript.appendMessage(.user(id: id, text: "hi", attachments: [reference]))
+        let checkpoint = UUID()
+
+        #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(Set(attachments) == [reference, .checkpointReference(id: checkpoint)])
+        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+    }
+
     // MARK: - Failure incidents
 
     private func negotiatedSession() -> ACPSession {

@@ -57,9 +57,10 @@ public enum ACPSessionReference: Sendable {
     /// Attachments of a user message chunk the agent sent, live or replayed.
     /// Alas never sends a session link on the wire (see
     /// `replacingReferences`), so one arriving from the agent is made up and
-    /// must not be recorded: a recorded one grants `session_read`.
+    /// must not be recorded: a recorded one grants `session_read`. Neither is a
+    /// report reference ever sent, so one arriving would claim a turn's report.
     public static func agentSentAttachments(_ attachments: [ACPMessage.Attachment]) -> [ACPMessage.Attachment] {
-        attachments.filter { sessionId(fromURI: $0.uri) == nil }
+        attachments.filter { sessionId(fromURI: $0.uri) == nil && $0.fileChangeReportRequestId == nil }
     }
 
     /// Sessions the user attached in `messages`. Delegated prompts are

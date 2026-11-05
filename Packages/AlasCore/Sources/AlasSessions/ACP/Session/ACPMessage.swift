@@ -141,6 +141,7 @@ public enum ACPMessage: Equatable, Sendable {
 
     public struct Attachment: Codable, Equatable, Hashable, Sendable {
         private static let checkpointReferencePrefix = "alas-checkpoint://"
+        private static let fileChangeReportReferencePrefix = "alas-file-change-report://"
 
         public let uri: String
         public let name: String?
@@ -171,13 +172,36 @@ public enum ACPMessage: Equatable, Sendable {
         /// `textOffset`, so an agent-echoed copy still reconciles.
         public let symbol: ACPSymbolSnapshot?
 
+        /// Report references only: the report that landed for the turn, nil
+        /// while it is only requested. Stored in the user payload's own
+        /// `fileChangeReport` key, never in `attachments`, so this is not
+        /// coded here. Part of `==`, unlike `textOffset` and `symbol`: an
+        /// agent's echo never carries one, and a report landing has to read
+        /// as a changed row.
+        public let fileChangeReport: ACPAgentFileChangeReport?
+
+        private enum CodingKeys: String, CodingKey {
+            case uri, name, mimeType, textOffset, symbol
+        }
+
         public init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil,
-             symbol: ACPSymbolSnapshot? = nil) {
+             symbol: ACPSymbolSnapshot? = nil, fileChangeReport: ACPAgentFileChangeReport? = nil) {
             self.uri = uri
             self.name = name
             self.mimeType = mimeType
             self.textOffset = textOffset
             self.symbol = symbol
+            self.fileChangeReport = fileChangeReport
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            uri = try c.decode(String.self, forKey: .uri)
+            name = try c.decodeIfPresent(String.self, forKey: .name)
+            mimeType = try c.decodeIfPresent(String.self, forKey: .mimeType)
+            textOffset = try c.decodeIfPresent(Int.self, forKey: .textOffset)
+            symbol = try c.decodeIfPresent(ACPSymbolSnapshot.self, forKey: .symbol)
+            fileChangeReport = nil
         }
 
         public static func checkpointReference(id: CheckpointID) -> Self {
@@ -191,8 +215,23 @@ public enum ACPMessage: Equatable, Sendable {
 
         public var isCheckpointReference: Bool { checkpointID != nil }
 
+        /// `uri` is "alas-file-change-report://<requestId>".
+        public static func fileChangeReportReference(requestId: String, report: ACPAgentFileChangeReport? = nil) -> Self {
+            .init(uri: fileChangeReportReferencePrefix + requestId, name: nil, fileChangeReport: report)
+        }
+
+        public var fileChangeReportRequestId: String? {
+            guard uri.hasPrefix(Self.fileChangeReportReferencePrefix) else { return nil }
+            let requestId = String(uri.dropFirst(Self.fileChangeReportReferencePrefix.count))
+            return ACPAgentFileChangeReport.isValidRequestId(requestId) ? requestId : nil
+        }
+
+        /// Checkpoint and report references: Alas bookkeeping, not something the user attached.
+        public var isLocalReference: Bool { isCheckpointReference || fileChangeReportRequestId != nil }
+
         public static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.uri == rhs.uri && lhs.name == rhs.name && lhs.mimeType == rhs.mimeType
+                && lhs.fileChangeReport == rhs.fileChangeReport
         }
 
         public func hash(into hasher: inout Hasher) {
@@ -700,7 +739,7 @@ public enum ACPMessageCodec: Sendable {
     @MainActor
     public static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(_, let messageId, let text, let atts, let delegatedSource, let pastedSpans): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts, delegatedSource: delegatedSource, pastedSpans: pastedSpans.isEmpty ? nil : pastedSpans))
+        case .user(_, let messageId, let text, let atts, let delegatedSource, let pastedSpans): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts.filter { $0.fileChangeReportRequestId == nil }, delegatedSource: delegatedSource, pastedSpans: pastedSpans.isEmpty ? nil : pastedSpans, fileChangeReport: .init(attachments: atts)))
         case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .toolCall(let tc):             return try encoder.encode(tc)
@@ -718,7 +757,7 @@ public enum ACPMessageCodec: Sendable {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments + (p.fileChangeReport?.attachment.map { [$0] } ?? []), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
             return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata))
@@ -761,13 +800,57 @@ public enum ACPMessageCodec: Sendable {
         /// Absent for messages without pastes and for rows written before
         /// pasted-text badges existed; both decode as no spans.
         let pastedSpans: [ACPPastedTextSpan]?
+        /// Absent for rows without a report reference.
+        let fileChangeReport: ACPStoredFileChangeReport?
 
-        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource? = nil, pastedSpans: [ACPPastedTextSpan]? = nil) {
+        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource? = nil, pastedSpans: [ACPPastedTextSpan]? = nil, fileChangeReport: ACPStoredFileChangeReport? = nil) {
             self.messageId = messageId
             self.text = text
             self.attachments = attachments
             self.delegatedSource = delegatedSource
             self.pastedSpans = pastedSpans
+            self.fileChangeReport = fileChangeReport
         }
+    }
+}
+
+/// The `fileChangeReport` key of a stored user row. It sits beside
+/// `attachments` because an older build sharing the store would draw anything
+/// inside that array as a chip. Decoding never throws: a corrupt or future value
+/// reads as no reference, and the row itself survives.
+struct ACPStoredFileChangeReport: Codable {
+    private struct Reference: Codable {
+        let requestId: String
+        let report: ACPAgentFileChangeReport?
+    }
+
+    private let reference: Reference?
+
+    /// The row's report reference as an attachment, when the stored value was readable.
+    var attachment: ACPMessage.Attachment? {
+        reference.map { .fileChangeReportReference(requestId: $0.requestId, report: $0.report) }
+    }
+
+    /// Nil when `attachments` holds no report reference.
+    init?(attachments: [ACPMessage.Attachment]) {
+        guard let attachment = attachments.first(where: { $0.fileChangeReportRequestId != nil }),
+              let requestId = attachment.fileChangeReportRequestId
+        else { return nil }
+        reference = .init(requestId: requestId, report: attachment.fileChangeReport)
+    }
+
+    init(from decoder: Decoder) throws {
+        guard let stored = try? Reference(from: decoder),
+              ACPAgentFileChangeReport.isValidRequestId(stored.requestId),
+              stored.report.map({ $0.requestId == stored.requestId }) ?? true
+        else {
+            reference = nil
+            return
+        }
+        reference = stored
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try reference.encode(to: encoder)
     }
 }

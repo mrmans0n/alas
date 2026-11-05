@@ -21,6 +21,105 @@ struct ACPMessageTests {
         #expect(attachments.first?.isCheckpointReference == true)
     }
 
+    @Test("a file change report reference round-trips through both decoders, whichever writer landed first",
+          arguments: FileChangeReportRowCase.reports, FileChangeReportRowCase.all)
+    func fileChangeReportRowRoundTrips(reportFields: String?, row: FileChangeReportRowCase) throws {
+        let reference = try FileChangeReportRowCase.reference(reportFields)
+        let attachments = row.referenceFirst ? [reference] + row.companions : row.companions + [reference]
+        let message = ACPMessage.user(id: UUID(), text: "hi", attachments: attachments)
+
+        let payload = try ACPMessageCodec.encode(message)
+
+        #expect(message.kind == "user")
+        guard case .user(_, _, _, let codec, _, _) = try ACPMessageCodec.decode(kind: "user", payload: payload),
+              case .user(_, _, let wire, _, _) = try ACPMessageWire.decode(kind: "user", payload: payload) else {
+            Issue.record("expected user rows")
+            return
+        }
+        #expect(Set(codec) == Set(attachments))
+        #expect(Set(wire) == Set(attachments))
+    }
+
+    @Test("what an older build reads as attachments holds no report reference")
+    func fileChangeReportStaysOutOfTheAttachmentsKey() throws {
+        struct OlderBuildPayload: Decodable { let attachments: [ACPMessage.Attachment] }
+        let image = FileChangeReportRowCase.image
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reports[1])
+        func encoded(_ attachments: [ACPMessage.Attachment]) throws -> Data {
+            try ACPMessageCodec.encode(.user(id: UUID(), text: "hi", attachments: attachments))
+        }
+        func keys(_ payload: Data) throws -> [String: Any] {
+            try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        }
+
+        let payload = try encoded([reference, image])
+
+        #expect(try JSONDecoder().decode(OlderBuildPayload.self, from: payload).attachments.map(\.uri) == [image.uri])
+        #expect(try keys(payload)["fileChangeReport"] != nil)
+        #expect(try keys(encoded([image]))["fileChangeReport"] == nil)
+    }
+
+    @Test("a bad stored report keeps the user row and drops only the reference", arguments: [
+        #""boom""#,
+        #"{"requestId":"a/b"}"#,
+        #"{"requestId":"ok","report":{"version":2}}"#,
+        // The report answers some other request.
+        #"{"requestId":"ok","report":{"version":1,"requestId":"other","status":"unavailable"}}"#,
+    ])
+    func badStoredReportKeepsTheUserRow(stored: String) throws {
+        let payload = Data(#"{"text":"hi","attachments":[{"uri":"file:///a.swift","name":"a.swift"}],"fileChangeReport":\#(stored)}"#.utf8)
+        let expected: [ACPMessage.Attachment] = [.init(uri: "file:///a.swift", name: "a.swift")]
+
+        guard case .user(_, _, let codecText, let codec, _, _) = try ACPMessageCodec.decode(kind: "user", payload: payload),
+              case .user(_, let wireText, let wire, _, _) = try ACPMessageWire.decode(kind: "user", payload: payload) else {
+            Issue.record("expected user rows")
+            return
+        }
+        #expect(codecText == "hi")
+        #expect(wireText == "hi")
+        #expect(codec == expected)
+        #expect(wire == expected)
+    }
+
+    @Test("a report reference is not user content to delivery evidence, recaps, suggestions or peers")
+    func localReferencesStayInvisible() {
+        let attachments: [ACPMessage.Attachment] = [.fileChangeReportReference(requestId: "alas-turn:a")]
+        let userID = UUID()
+        let wire: [ACPMessageWire] = [
+            .user(messageId: nil, text: "ship it", attachments: attachments, delegatedSource: nil),
+            .agent(messageId: nil, text: "shipping", phase: nil, metadata: nil),
+        ]
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: userID, text: "ship it", attachments: attachments),
+            .agent(id: UUID(), StreamingText("shipping")),
+        ]
+        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true, dispatchCount: 1)
+
+        #expect(ACPComposerDraft(segments: [.text("ship it")]).matchesPersistedUserPrompt(text: "ship it", attachments: attachments))
+        #expect(QueuedPrompt.deliveredRecordedPromptIDs(in: [item], transcript: wire) == [item.id])
+        #expect(SessionSummarySource.turns(in: wire).map(\.user) == ["ship it"])
+        #expect(NextPromptContext.snapshot(session: session, completedUserID: userID)
+            == [.init(user: "ship it", assistant: "shipping")])
+        #expect(RemoteSessionGateway.toWire(session.transcript.messages[0], index: 0).text == "ship it")
+        #expect(attachments[0].isLocalReference)
+    }
+
+    @Test("recaps still skip a checkpointed turn: only the report reference is exempt")
+    func checkpointKeepsDroppingTurnsFromRecaps() {
+        let wire: [ACPMessageWire] = [
+            .user(messageId: nil, text: "ship it", attachments: [FileChangeReportRowCase.checkpoint], delegatedSource: nil),
+            .agent(messageId: nil, text: "shipping", phase: nil, metadata: nil),
+        ]
+        #expect(SessionSummarySource.turns(in: wire).isEmpty)
+    }
+
+    @Test("an agent's user chunk cannot plant a report reference")
+    func agentSentAttachmentsDropReportReferences() {
+        let mention = ACPMessage.Attachment(uri: "file:///a.swift", name: "a.swift")
+        #expect(ACPSessionReference.agentSentAttachments([.fileChangeReportReference(requestId: "alas-turn:a"), mention]) == [mention])
+    }
+
     @Test("user message round-trips through JSON")
     func userRoundtrip() throws {
         let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
@@ -735,5 +834,40 @@ private extension ACPMessage {
         case .planDocument(_, let document): .planDocument(id: id, document)
         default: self
         }
+    }
+}
+
+struct FileChangeReportRowCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let companions: [ACPMessage.Attachment]
+    let referenceFirst: Bool
+    var testDescription: String { name }
+
+    static let checkpoint = ACPMessage.Attachment.checkpointReference(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
+    static let image = ACPMessage.Attachment(uri: "file:///a.png", name: "a.png", mimeType: "image/png")
+
+    static let all: [FileChangeReportRowCase] = [
+        .init(name: "alone", companions: [], referenceFirst: false),
+        .init(name: "before a checkpoint", companions: [checkpoint], referenceFirst: true),
+        .init(name: "after a checkpoint", companions: [checkpoint], referenceFirst: false),
+        .init(name: "after an image", companions: [image], referenceFirst: false),
+        .init(name: "before an image and a checkpoint", companions: [image, checkpoint], referenceFirst: true),
+    ]
+
+    /// Requested only, reported with paths and uncertainty, unavailable with a reason.
+    static let reports: [String?] = [
+        nil,
+        #","status":"reported","paths":["/a","/b"],"uncertainty":"may be incomplete""#,
+        #","status":"unavailable","reason":"no_snapshot""#,
+    ]
+
+    static func reference(_ reportFields: String?) throws -> ACPMessage.Attachment {
+        let requestId = "alas-turn:a"
+        let report = try reportFields.map {
+            try JSONDecoder().decode(
+                ACPAgentFileChangeReport.self,
+                from: Data(#"{"version":1,"requestId":"\#(requestId)"\#($0)}"#.utf8))
+        }
+        return .fileChangeReportReference(requestId: requestId, report: report)
     }
 }

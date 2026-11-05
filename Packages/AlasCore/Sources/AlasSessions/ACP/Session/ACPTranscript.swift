@@ -61,6 +61,7 @@ public final class ACPTranscript: ChangeTracking {
     private var textMessageIndices: [TextMessageKey: Int] = [:]
     private var toolCallIndices: [String: Int] = [:]
     private var failureIncidentIndices: [String: Int] = [:]
+    private var fileChangeReportIndices: [String: Int] = [:]
     #if DEBUG
     public private(set) var planCacheRebuildCountForTests = 0
     public private(set) var messageIndexCacheRebuildCountForTests = 0
@@ -377,6 +378,11 @@ public final class ACPTranscript: ChangeTracking {
         failureIncidentIndices[id]
     }
 
+    /// The user row that holds the report reference with this request id.
+    public func fileChangeReportIndex(requestId: String) -> Int? {
+        fileChangeReportIndices[requestId]
+    }
+
     // MARK: - Incremental message index caches
 
     private func updateMessageIndexCaches(for mutation: MessagesMutation?) {
@@ -422,6 +428,19 @@ public final class ACPTranscript: ChangeTracking {
                     failureIncidentIndices[newIncidentId] = index
                 }
             }
+
+            let oldRequestId = fileChangeReportRequestId(for: old)
+            let newRequestId = fileChangeReportRequestId(for: new)
+            if oldRequestId != newRequestId {
+                if let oldRequestId, fileChangeReportIndices[oldRequestId] == index {
+                    fileChangeReportIndices.removeValue(forKey: oldRequestId)
+                    restoreFileChangeReportIndex(for: oldRequestId)
+                }
+                if let newRequestId,
+                   fileChangeReportIndices[newRequestId].map({ index < $0 }) ?? true {
+                    fileChangeReportIndices[newRequestId] = index
+                }
+            }
         case .planNeutral:
             break
         case .prepend, .insert, nil:
@@ -436,6 +455,7 @@ public final class ACPTranscript: ChangeTracking {
         textMessageIndices.removeAll(keepingCapacity: true)
         toolCallIndices.removeAll(keepingCapacity: true)
         failureIncidentIndices.removeAll(keepingCapacity: true)
+        fileChangeReportIndices.removeAll(keepingCapacity: true)
         for index in messages.indices {
             cacheMessageIndex(index, for: messages[index])
         }
@@ -450,6 +470,9 @@ public final class ACPTranscript: ChangeTracking {
         }
         if let incidentId = failureIncidentId(for: message), failureIncidentIndices[incidentId] == nil {
             failureIncidentIndices[incidentId] = index
+        }
+        if let requestId = fileChangeReportRequestId(for: message), fileChangeReportIndices[requestId] == nil {
+            fileChangeReportIndices[requestId] = index
         }
     }
 
@@ -472,6 +495,17 @@ public final class ACPTranscript: ChangeTracking {
         if let index = messages.firstIndex(where: { failureIncidentId(for: $0) == incidentId }) {
             failureIncidentIndices[incidentId] = index
         }
+    }
+
+    private func restoreFileChangeReportIndex(for requestId: String) {
+        if let index = messages.firstIndex(where: { fileChangeReportRequestId(for: $0) == requestId }) {
+            fileChangeReportIndices[requestId] = index
+        }
+    }
+
+    private func fileChangeReportRequestId(for message: ACPMessage) -> String? {
+        guard case .user(_, _, _, let attachments, _, _) = message else { return nil }
+        return attachments.lazy.compactMap(\.fileChangeReportRequestId).first
     }
 
     private func failureIncidentId(for message: ACPMessage) -> String? {

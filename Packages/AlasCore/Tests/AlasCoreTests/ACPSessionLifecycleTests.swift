@@ -380,6 +380,8 @@ struct ACPSessionLifecycleTests {
         #"{"agentFileChangeReport":{"version":1,"requestId":"","status":"reported","paths":[]}}"#,
         #"{"agentFileChangeReport":{"version":1,"requestId":"\#(String(repeating: "a", count: 129))","status":"reported","paths":[]}}"#,
         report(#","status":"future","paths":[]"#),
+        report(#","paths":["/a"]"#),
+        report(#","status":"reported","paths":null"#),
         report(#","status":"reported""#),
         report(#","status":"reported","paths":[3]"#),
         report(#","status":"reported","paths":"/a""#),
