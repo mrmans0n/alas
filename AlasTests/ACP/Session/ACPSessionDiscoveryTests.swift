@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import Alas
 
@@ -1311,6 +1312,127 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
+    struct BatchReconcileCase: Sendable, CustomTestStringConvertible {
+        var testDescription: String
+        var batchGet = true
+        /// The ids `_session/batch_get` returns; nil makes the request fail.
+        var returned: [String]?
+        var returnedArchived: Set<String> = []
+        /// The ids page 2 lists during the reconcile; nil makes that read fail.
+        var scanned: [String]?
+        /// The listed rows afterwards, as "id:title".
+        var listed: [String]
+        var pageRequests: Int
+    }
+
+    private static let batchReconcileCases: [BatchReconcileCase] = [
+        .init(testDescription: "every row returned needs no page", returned: ["late", "mid", "early"],
+              listed: ["a:Loaded", "late:Batch", "mid:Batch", "early:Batch"], pageRequests: 0),
+        .init(testDescription: "a row returned archived leaves the unarchived list", returned: ["late", "mid", "early"],
+              returnedArchived: ["mid"], listed: ["a:Loaded", "late:Batch", "early:Batch"], pageRequests: 0),
+        .init(testDescription: "a partial response scans for the rest", returned: ["late"], scanned: ["mid", "early"],
+              listed: ["a:Loaded", "late:Batch", "mid:Scan", "early:Scan"], pageRequests: 1),
+        .init(testDescription: "an omitted id stays while the scan cannot settle it", returned: ["late", "mid"],
+              listed: ["a:Loaded", "late:Batch", "mid:Batch", "early:Loaded"], pageRequests: 1),
+        .init(testDescription: "an omitted id goes once the scan settles it", returned: ["late", "mid"], scanned: [],
+              listed: ["a:Loaded", "late:Batch", "mid:Batch"], pageRequests: 1),
+        .init(testDescription: "a failed batch falls back to the scan", scanned: ["late", "mid", "early"],
+              listed: ["a:Loaded", "late:Scan", "mid:Scan", "early:Scan"], pageRequests: 1),
+        .init(testDescription: "without the capability only the scan runs", batchGet: false, scanned: ["late", "mid", "early"],
+              listed: ["a:Loaded", "late:Scan", "mid:Scan", "early:Scan"], pageRequests: 1),
+    ]
+
+    @MainActor
+    @Test("a reconcile asks for Load more rows directly and scans only for what is still unsettled", arguments: batchReconcileCases)
+    func reconcileBatchesLoadMoreRows(testCase: BatchReconcileCase) async throws {
+        let store = try temporaryStore()
+        let loaded = ["late", "mid", "early"].map { Self.batchTestRow($0, title: "Loaded") }
+        let scanRows = testCase.scanned?.map { Self.batchTestRow($0, title: "Scan") }
+        let reconciling = OSAllocatedUnfairLock(initialState: false)
+        let client = pagedBatchClient(batchGet: testCase.batchGet) {
+            reconciling.withLock { $0 } ? scanRows : loaded
+        }
+        if let returned = testCase.returned {
+            let rows = returned.map {
+                Self.batchTestRow($0, title: "Batch", archived: testCase.returnedArchived.contains($0))
+            }
+            client.script(method: "_session/batch_get") { _ in
+                try JSONEncoder().encode(ACPSessionListResult(sessions: rows))
+            }
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        try await model.loadMore()
+        let before = client.sent.count
+        reconciling.withLock { $0 = true }
+
+        await model.reconcile()
+
+        let sent = client.sent.dropFirst(before)
+        #expect(model.sessions.map { "\($0.remoteSessionId):\($0.title)" } == testCase.listed)
+        #expect(sent.filter { ($0.params as? ACPSessionListParams)?.cursor != nil }.count == testCase.pageRequests)
+        let batches = sent.compactMap { $0.method == "_session/batch_get" ? $0.params as? ACPSessionBatchGetParams : nil }
+        #expect(batches.map(\.sessionIds) == (testCase.batchGet ? [["late", "mid", "early"]] : []))
+        #expect(client.sent.filter { $0.method == "_session/list/subscribe" }.count == 1)
+        await model.stop()
+    }
+
+    @MainActor
+    @Test("batch requests carry distinct, non-blank ids in order, 50 at a time")
+    func batchRequestsAreCleanAndChunked() async throws {
+        let store = try temporaryStore()
+        let client = indexClient(batchGet: true)
+        client.script(method: "_session/batch_get") { request in
+            let ids = (request.params as? ACPSessionBatchGetParams)?.sessionIds ?? []
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: Self.listedRows(ids)))
+        }
+        let handle = try await manager(store: store, client: client).makeSessionDiscoveryHandle(agentId: "claude")
+        let ids = (0 ..< 120).map { "s\($0)" }
+
+        let rows = try await handle.batchGetSessions(sessionIds: ["s0", "", " \n"] + ids + ["s5"])
+
+        let sent = client.sent.compactMap { $0.params as? ACPSessionBatchGetParams }.map(\.sessionIds)
+        #expect(sent == [Array(ids[0 ..< 50]), Array(ids[50 ..< 100]), Array(ids[100 ..< 120])])
+        #expect(rows.map(\.remoteSessionId) == ids)
+        await handle.close()
+    }
+
+    @MainActor
+    @Test("a local action or filter change during the batch discards its rows", .timeLimit(.minutes(1)), arguments: [
+        (false, ["a:Mine", "late:Loaded"]),
+        (true, ["a:Loaded"]),
+    ])
+    func batchAcrossLocalChangeIsDiscarded(changesFilter: Bool, listed: [String]) async throws {
+        let store = try temporaryStore()
+        let gate = AsyncStream<Void>.makeStream()
+        let batchStarted = AsyncStream<Void>.makeStream()
+        let loaded = [Self.batchTestRow("late", title: "Loaded")]
+        let client = pagedBatchClient(batchGet: true) { loaded }
+        let stale = try JSONEncoder().encode(ACPSessionListResult(sessions: [Self.batchTestRow("late", title: "Stale")]))
+        client.scriptAsync(method: "_session/batch_get") { _ in
+            batchStarted.continuation.yield()
+            for await _ in gate.stream { break }
+            return stale
+        }
+        client.script(method: "_session/rename") { _ in Data("{}".utf8) }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude", worktreeResolver: Self.projectResolver)
+        try await model.loadMore()
+        let reconcile = Task { await model.reconcile() }
+        for await _ in batchStarted.stream { break }
+        let pagesBefore = client.sent.filter { ($0.params as? ACPSessionListParams)?.cursor != nil }.count
+        if changesFilter {
+            try await model.setFilter(.init(includeLinkedWorktrees: true))
+        } else {
+            try await model.rename(try #require(model.sessions.first), to: "Mine") { _, _ in nil }
+        }
+        gate.continuation.yield()
+        await reconcile.value
+        #expect(model.sessions.map { "\($0.remoteSessionId):\($0.title)" } == listed)
+        #expect(client.sent.filter { ($0.params as? ACPSessionListParams)?.cursor != nil }.count == pagesBefore)
+        await model.stop()
+    }
+
     @MainActor
     @Test("an undated missing row is settled at the end of a long history")
     func undatedRowSettledAtLongHistoryEnd() async throws {
@@ -1640,6 +1762,10 @@ struct ACPSessionDiscoveryTests {
         .init(sessionId: id, cwd: "/tmp/wt", updatedAt: time, index: .init(archived: false))
     }
 
+    private nonisolated static func listedRows(_ ids: [String]) -> [ACPAgentSessionInfo] {
+        ids.map { listedRow($0, "2026-10-16T10:00:00Z") }
+    }
+
     /// A project with only the browsing worktree at /tmp/wt: enables the
     /// linked-worktree scope, and anything else is outside Alas.
     @MainActor
@@ -1649,16 +1775,41 @@ struct ACPSessionDiscoveryTests {
     }
 
     /// An agent with the client-neutral session index and a list subscription.
-    private func indexClient() -> ACPMockClient {
+    private func indexClient(batchGet: Bool = false) -> ACPMockClient {
         let client = ACPMockClient()
+        let batchCapability = batchGet ? #""sessionBatchGet","# : ""
         client.script(method: "initialize") { _ in
-            Data(#"""
+            Data("""
             {"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{},"delete":{}}},
-             "_meta":{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}}
-            """#.utf8)
+             "_meta":{"sessionIndex":{"version":1,"capabilities":[\(batchCapability)"sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}}
+            """.utf8)
         }
         client.script(method: "_session/list/subscribe") { _ in Data(#"{"subscriptionId":"sub-1"}"#.utf8) }
         client.script(method: "_session/list/unsubscribe") { _ in Data("{}".utf8) }
+        return client
+    }
+
+    /// A row on the first page ("a") or loaded with Load more; the times keep
+    /// the listed order "a", "late", "mid", "early".
+    private static func batchTestRow(_ id: String, title: String, archived: Bool = false) -> ACPAgentSessionInfo {
+        let hour = ["a": "10", "late": "08", "mid": "07", "early": "06"][id] ?? "05"
+        return .init(sessionId: id, cwd: "/tmp/wt", title: title,
+                     updatedAt: "2026-10-16T\(hour):00:00Z", index: .init(archived: archived))
+    }
+
+    /// An agent whose first page lists "a" and whose second lists `loaded`
+    /// until `scanned` is set; page 2 then answers with `scanned`, or fails
+    /// if that holds nil.
+    private func pagedBatchClient(batchGet: Bool, scanned: @escaping @Sendable () -> [ACPAgentSessionInfo]?) -> ACPMockClient {
+        let client = indexClient(batchGet: batchGet)
+        let first = Self.batchTestRow("a", title: "Loaded")
+        client.script(method: "session/list") { request in
+            guard (request.params as? ACPSessionListParams)?.cursor == "page-2" else {
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: [first], nextCursor: "page-2"))
+            }
+            guard let rows = scanned() else { throw TestError.failed }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: rows))
+        }
         return client
     }
 
