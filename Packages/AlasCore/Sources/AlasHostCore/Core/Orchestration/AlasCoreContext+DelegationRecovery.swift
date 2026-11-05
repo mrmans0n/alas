@@ -7,6 +7,20 @@ import AlasCode
 import AlasAgents
 import AlasSessions
 
+/// Which delegations a host's recovery takes on.
+@_spi(AppHost) public enum DelegationRecoveryScope: Sendable {
+    case all
+    /// Children a paired Mac started, and messages waiting for them.
+    case peerChildren
+
+    func covers(_ record: ACPDelegationRecord?) -> Bool {
+        switch self {
+        case .all: true
+        case .peerChildren: record.flatMap { ACPPeerParent.serverId(from: $0.parentSessionId) } != nil
+        }
+    }
+}
+
 extension AlasCoreContext {
     /// Delivers the messages waiting for session `sessionID`, one delivery
     /// at a time per session.
@@ -43,10 +57,13 @@ extension AlasCoreContext {
     /// Finishes what delegations were doing when the host last stopped:
     /// children still being set up are started or failed, children with a
     /// turn in flight are attached again, and messages waiting for a session
-    /// are delivered.
-    @_spi(AppHost) public func recoverDelegations() async {
+    /// are delivered. Everything outside `scope` is left as it is. A host
+    /// stopping meanwhile leaves the rest for its next start: what its
+    /// shutdown refuses is not a failed child.
+    @_spi(AppHost) public func recoverDelegations(_ scope: DelegationRecoveryScope = .all) async {
         guard let records = try? await orchestrationPersistence.incompleteDelegations() else { return }
-        for record in records {
+        for record in records where scope.covers(record) {
+            guard !isStopping else { return }
             let worktree = record.childWorktreeId.flatMap(worktree(withId:))
                 ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
             guard let worktree,
@@ -128,6 +145,7 @@ extension AlasCoreContext {
                 continue
             }
             await manager.attach(to: record.childSessionId, freshlyCreated: !sessionAlreadyPersisted)
+            guard !isStopping else { return }
             guard let session = manager.liveSession(for: record.childSessionId),
                   session.agentState == .ready
             else {
@@ -160,8 +178,8 @@ extension AlasCoreContext {
             }
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
         }
-        await attachDelegatedChildrenWithPendingTurns()
-        await drainRecoveredDelegatedMessageTargets()
+        await attachDelegatedChildrenWithPendingTurns(scope)
+        await drainRecoveredDelegatedMessageTargets(scope)
     }
 
     /// Re-attaches ready delegated children that had a turn in flight, or
@@ -174,9 +192,9 @@ extension AlasCoreContext {
     /// and resends the queued prompt under its original broker operation, so
     /// the broker hands back the running or finished turn and the usual
     /// outcome follows.
-    private func attachDelegatedChildrenWithPendingTurns() async {
+    private func attachDelegatedChildrenWithPendingTurns(_ scope: DelegationRecoveryScope) async {
         guard let records = try? await orchestrationPersistence.readyDelegations() else { return }
-        let tasks = records.map { record in
+        let tasks = records.filter(scope.covers).map { record in
             Task { @MainActor [weak self] in
                 await self?.attachDelegatedChildWithPendingTurn(record)
             }
@@ -190,9 +208,9 @@ extension AlasCoreContext {
         // stays keyed by the worktree id recorded at creation even if the
         // worktree is no longer known under it.
         guard let childWorktreeId = record.childWorktreeId,
-              FileManager.default.fileExists(atPath: Paths.acpSessionsDB(forWorktreeId: childWorktreeId).path),
+              FileManager.default.fileExists(atPath: delegatedSessionsDB(childWorktreeId).path),
               let persistedQueue = try? await ACPSessionPersistence(
-                  path: Paths.acpSessionsDB(forWorktreeId: childWorktreeId).path
+                  path: delegatedSessionsDB(childWorktreeId).path
               ).loadQueue(sessionId: childId),
               ACPSessionOrchestrationPolicy.needsRestartAttach(phase: record.phase, queueHead: persistedQueue.first)
         else { return }
@@ -214,6 +232,7 @@ extension AlasCoreContext {
         // The attach repoints the child's socket link once it holds the
         // session's lease (the env providers run after lease acquisition).
         await manager.attach(to: childId, freshlyCreated: false)
+        guard !isStopping else { return }
         // Another live instance holding the child's lease runs it and owns
         // the outcome. Anything else that is not a ready writer is a failed
         // attach: a failure releases the lease, so ownership alone cannot
@@ -247,12 +266,13 @@ extension AlasCoreContext {
         return "Could not restore delegated ACP session."
     }
 
-    private func drainRecoveredDelegatedMessageTargets() async {
+    private func drainRecoveredDelegatedMessageTargets(_ scope: DelegationRecoveryScope) async {
         guard let targetSessionIds = try? await orchestrationPersistence.pendingMessageTargetSessionIds() else {
             return
         }
         for sessionId in targetSessionIds {
             let childRecord = try? await orchestrationPersistence.parent(childSessionId: sessionId)
+            guard scope.covers(childRecord) else { continue }
             if let childRecord {
                 rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }

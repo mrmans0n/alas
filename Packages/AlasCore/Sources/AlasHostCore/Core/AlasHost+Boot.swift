@@ -103,6 +103,9 @@ extension AlasHost {
                 alasTools: alasTools,
                 onTurnCompleted: { completion in
                     Task { @MainActor in await builtCore?.turnCompleted(completion) }
+                },
+                onChildBlocked: { blocker in
+                    Task { @MainActor in await builtCore?.orchestration.childBlocked(blocker) }
                 }
             ),
             environment: environment,
@@ -133,6 +136,9 @@ extension AlasHost {
         core.reviewShepherd.start()
         core.stackShepherd.start()
         core.runScheduler.start()
+        // Peer children only: this host may share its profile with the app,
+        // which owns the rest and may list worktrees this host does not.
+        await core.recoverDelegations(.peerChildren)
     }
 
     /// Ends every run and agent session, for a host about to exit: runs,

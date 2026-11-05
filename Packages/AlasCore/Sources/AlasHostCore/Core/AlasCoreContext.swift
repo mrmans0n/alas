@@ -85,6 +85,9 @@ public final class AlasCoreContext {
     /// branches, the prepared path, and a command on the project's host.
     @_spi(Testing) @ObservationIgnored public var worktreeBranchLoader: (@MainActor (URL) async throws -> [String])?
     @_spi(Testing) @ObservationIgnored public var worktreeDestinationPreparer: (@MainActor (URL, URL) async throws -> URL)?
+    /// The session store delegation recovery reads a child's queue from, by
+    /// the worktree id the child was persisted under.
+    @_spi(Testing) @ObservationIgnored public var delegatedSessionsDB: (String) -> URL = { Paths.acpSessionsDB(forWorktreeId: $0) }
     @_spi(Testing) @ObservationIgnored public var remoteCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
     /// Test hook that replaces connecting a new session to its agent.
     @_spi(Testing) @ObservationIgnored public var sessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
@@ -439,12 +442,18 @@ public final class AlasCoreContext {
     /// interrupted sessions, and capturing Claude session hooks as `config`
     /// says when each is decided. With `alasTools`, agents also get the
     /// built-in `alas` MCP server and CLI env. `onTurnCompleted` hears every
-    /// turn that ends.
+    /// turn that ends, and `onChildBlocked` every request a session stops on.
+    /// The last three replace where sessions are stored and how agents are
+    /// reached, for a host that does not run real ones.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
         alasTools: HeadlessAlasTools? = nil,
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
+        sessionsDB: @escaping (SessionOwnerID) -> URL = { Paths.acpSessionsDB(for: $0) },
+        setupEvaluator: ACPSessionManager.ACPSetupEvaluator? = nil,
+        connectionFactory: ACPSessionManager.ACPConnectionFactory? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
             var projectContext: ACPSessionManager.MCPProjectContextProvider?
@@ -457,11 +466,14 @@ public final class AlasCoreContext {
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 owner: owner,
-                persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
+                persistence: ACPSessionPersistence(path: sessionsDB(owner).path),
                 experimentalACP2Enabled: { config().experimentalACP2Enabled },
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
                 onTurnCompleted: onTurnCompleted,
+                onChildBlocked: onChildBlocked,
+                setupEvaluator: setupEvaluator,
+                connectionFactory: connectionFactory,
                 mcpProjectContextProvider: projectContext,
                 builtInMCPProvider: builtInMCP,
                 onChipsObserved: onChipsObserved

@@ -120,6 +120,9 @@ public final class ACPSessionOrchestrationCoordinator {
         /// does, for a child nobody here is waiting on: unapproved hooks are
         /// skipped without asking.
         public let createPeerWorktree: (String, String, String, @escaping @MainActor (URL) async throws -> Void) async -> Result<PeerWorktree, WorktreeCreationError>
+        /// What a peer child's new worktree branches from, for `(branch, base,
+        /// expectedSHA, repo)`, having made sure it is current.
+        public let resolvePeerWorktreeBase: (String, String, String?, URL) async -> Result<String, WorktreeCreationError>
         /// What a paired Mac's user knows this Mac as.
         public let machineName: () -> String
 
@@ -155,11 +158,13 @@ public final class ACPSessionOrchestrationCoordinator {
             createPeerWorktree: @escaping (String, String, String, @escaping @MainActor (URL) async throws -> Void) async -> Result<PeerWorktree, WorktreeCreationError> = { _, _, _, _ in
                 .failure(.init(message: "This host cannot create worktrees for a paired Mac."))
             },
+            resolvePeerWorktreeBase: @escaping (String, String, String?, URL) async -> Result<String, WorktreeCreationError> = { _, base, _, _ in .success(base) },
             machineName: @escaping () -> String = { "this Mac" }
         ) {
             self.admitChild = admitChild
             self.project = project
             self.createPeerWorktree = createPeerWorktree
+            self.resolvePeerWorktreeBase = resolvePeerWorktreeBase
             self.machineName = machineName
             self.persistence = persistence
             self.instanceId = instanceId
@@ -469,7 +474,12 @@ public final class ACPSessionOrchestrationCoordinator {
         let created: ACPOrchestrationNewResponse?
         switch start.target {
         case .worktree(let path):
-            guard let worktree = environment.existingWorktree(start.projectID, path) else {
+            // The exact root, as `SessionsAPI` matches it. The peer resolved
+            // names already, and the lookup would match a branch name, or the
+            // worktree containing a path that is no longer one itself.
+            guard let worktree = environment.existingWorktree(start.projectID, path),
+                  worktree.path.standardizedFileURL.path == URL(fileURLWithPath: path).standardizedFileURL.path
+            else {
                 return .refused("The worktree is not listed, or is archived.")
             }
             if await environment.manager(worktree)?.persistedSessionRow(id: start.childID) != nil {
@@ -572,7 +582,7 @@ public final class ACPSessionOrchestrationCoordinator {
         recordDestination: @escaping @MainActor (URL) async throws -> Void
     ) async -> Result<Worktree, WorktreeCreationError> {
         let resolvedBase: String
-        switch await peerWorktreeBase(branch: branch, base: base, expectedSHA: expectedBaseSHA, repo: repo) {
+        switch await environment.resolvePeerWorktreeBase(branch, base, expectedBaseSHA, repo) {
         case .success(let base): resolvedBase = base
         case .failure(let error): return .failure(error)
         }
@@ -597,60 +607,6 @@ public final class ACPSessionOrchestrationCoordinator {
             }
             return .success(created.worktree)
         }
-    }
-
-    /// What a peer child's new worktree branches from. `base` is fetched
-    /// explicitly, since a bare branch name is otherwise never refreshed, and
-    /// its remote-tracking ref is used when there is one. With `expectedSHA`
-    /// the peer is relying on this exact code, so anything but finding it is a
-    /// failure. Without, the fetch is best effort and a `base` the remote does
-    /// not have (a tag, a local branch) is used as given.
-    private func peerWorktreeBase(
-        branch: String,
-        base: String,
-        expectedSHA: String?,
-        repo: URL
-    ) async -> Result<String, WorktreeCreationError> {
-        let git = GitService()
-        // A base with a remote prefix names it. Otherwise `origin`, the remote
-        // a peer's project is matched by.
-        var source = try? await git.remoteForFetch(worktreePath: repo, ref: base)
-        if source == nil, (try? await git.remotes(worktreePath: repo))?.contains(where: { $0.name == "origin" }) == true {
-            source = ("origin", base)
-        }
-        var fetched = false
-        var tracked: String?
-        if let source {
-            fetched = (try? await git.fetchRef(worktreePath: repo, remote: source.remote, branch: source.branch)) != nil
-            tracked = await Self.commit(of: "refs/remotes/\(source.remote)/\(source.branch)", in: repo)
-        }
-        let remoteBase = source.map { "\($0.remote)/\($0.branch)" }
-        guard let expectedSHA else { return .success(tracked != nil ? remoteBase ?? base : base) }
-
-        let machine = environment.machineName()
-        let name = source?.branch ?? base
-        guard fetched, let tracked, let remoteBase else {
-            return .failure(.init(
-                message: "\(name) on \(machine) could not be fetched from \(source?.remote ?? "origin"), expected \(expectedSHA). Push and try again."
-            ))
-        }
-        guard tracked == expectedSHA else {
-            return .failure(.init(message: "\(name) on \(machine) is at \(tracked), expected \(expectedSHA). Push and try again."))
-        }
-        // A worktree checks out a branch that already exists, whatever the base.
-        if let existing = await Self.commit(of: "refs/heads/\(branch)", in: repo), existing != expectedSHA {
-            return .failure(.init(
-                message: "\(branch) already exists on \(machine) at \(existing), expected \(expectedSHA). Delete it or pick another name."
-            ))
-        }
-        return .success(remoteBase)
-    }
-
-    private static func commit(of ref: String, in repo: URL) async -> String? {
-        guard let result = try? await Process.git(["rev-parse", "--verify", "--quiet", "\(ref)^{commit}"], cwd: repo),
-              result.exitCode == 0
-        else { return nil }
-        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func framedPrompt(_ task: String, role: String?) -> String {

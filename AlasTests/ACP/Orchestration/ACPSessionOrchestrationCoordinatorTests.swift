@@ -644,6 +644,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         admitChild: @escaping @MainActor (Worktree, String) async -> String? = { _, _ in nil },
         autoRunDefault: Bool = false,
         skipsRepoHook: Bool = false,
+        peerWorktreeBase: Result<String, ACPSessionOrchestrationCoordinator.WorktreeCreationError> = .success("origin/main"),
         onPeerWorktree: @escaping (_ base: String) -> Void = { _ in }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
@@ -677,7 +678,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
             persistence: persistence, instanceId: "instance", now: { 100 },
             waitForChildResultBatch: waitForChildResultBatch, makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
-            existingWorktree: { _, _ in worktreeIsListed ? worktree : nil },
+            existingWorktree: { _, selector in
+                // Resolved as the host resolves it.
+                guard case .matched(let match) = AlasCLIWorktreeResolver.resolve(
+                    target: selector, worktrees: worktreeIsListed ? [worktree] : []
+                ) else { return nil }
+                return match
+            },
             configuredAgents: { [claude] }, availableAgents: { _, _ in [claude] },
             launchModels: { _, _ in launchModels },
             sessionLocation: { sessionId in
@@ -695,6 +702,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 onPeerWorktree(base)
                 return .success(.init(worktree: worktree, skippedRepoHook: skipsRepoHook))
             },
+            resolvePeerWorktreeBase: { _, _, _, _ in peerWorktreeBase },
             machineName: { "Mini" }
         ))
         return (coordinator, persistence, manager)
@@ -1471,7 +1479,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     private func peerStart(
         peer: String = "s1",
-        target: ACPPeerChildTarget = .worktree(path: "/tmp/worktree"),
+        target: ACPPeerChildTarget,
         modelSelection: ACPDelegatedModelSelection? = nil,
         autoRun: Bool = false,
         childID: String = "child"
@@ -1495,6 +1503,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         try await persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries
     }
 
+    private func checkout(of manager: ACPSessionManager) -> ACPPeerChildTarget {
+        .worktree(path: manager.worktreePath)
+    }
+
     /// Auto-run comes from the peer's request, not this Mac's default.
     @Test(arguments: [true, false])
     func startForPeerRecordsSentinelParentAndStartsChild(autoRun: Bool) async throws {
@@ -1502,7 +1514,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try makeModelSelectionFixture(client: client, project: peerProject(), autoRunDefault: !autoRun)
         defer { fixture.manager.shutdownBackgroundTasks() }
 
-        let result = await fixture.coordinator.startForPeer(peerStart(autoRun: autoRun))
+        let result = await fixture.coordinator.startForPeer(peerStart(target: checkout(of: fixture.manager), autoRun: autoRun))
 
         #expect(result == .started(sessionId: "child", state: "starting"))
         let started = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
@@ -1520,9 +1532,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try makeModelSelectionFixture(client: client, project: peerProject())
         defer { fixture.manager.shutdownBackgroundTasks() }
 
-        let first = await fixture.coordinator.startForPeer(peerStart())
-        let second = await fixture.coordinator.startForPeer(peerStart())
-        let otherPeer = await fixture.coordinator.startForPeer(peerStart(peer: "s2"))
+        let target = checkout(of: fixture.manager)
+        let first = await fixture.coordinator.startForPeer(peerStart(target: target))
+        let second = await fixture.coordinator.startForPeer(peerStart(target: target))
+        let otherPeer = await fixture.coordinator.startForPeer(peerStart(peer: "s2", target: target))
 
         #expect(first == .started(sessionId: "child", state: "starting"))
         guard case .started(let id, _) = second else {
@@ -1542,6 +1555,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     enum TargetKind: CaseIterable {
         case sshProject, folderProject, operationHeld, archived, unknownModel, sessionAlreadyExists
+        /// The resolver would match these to the checkout; a peer's path must
+        /// name it exactly.
+        case pathInsideTheCheckout, branchName
     }
 
     @Test(arguments: TargetKind.allCases)
@@ -1556,7 +1572,14 @@ struct ACPSessionOrchestrationCoordinatorTests {
         defer { fixture.manager.shutdownBackgroundTasks() }
         if kind == .sessionAlreadyExists { _ = fixture.manager.createSession(id: "child", agentId: "claude") }
 
+        let target: ACPPeerChildTarget = switch kind {
+        case .pathInsideTheCheckout: .worktree(path: fixture.manager.worktreePath + "/removed-nested-worktree")
+        case .branchName: .worktree(path: "main")
+        default: checkout(of: fixture.manager)
+        }
+
         let result = await fixture.coordinator.startForPeer(peerStart(
+            target: target,
             modelSelection: kind == .unknownModel ? ACPDelegatedModelSelection(model: "gpt-5.2", reasoning: nil) : nil
         ))
 
@@ -1606,6 +1629,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         defer { fixture.manager.shutdownBackgroundTasks() }
 
         _ = await fixture.coordinator.startForPeer(peerStart(
+            target: checkout(of: fixture.manager),
             modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil)
         ))
 
@@ -1626,7 +1650,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         defer { fixture.manager.shutdownBackgroundTasks() }
 
-        _ = await fixture.coordinator.startForPeer(peerStart())
+        _ = await fixture.coordinator.startForPeer(peerStart(target: checkout(of: fixture.manager)))
 
         let record = try await eventuallyLoadDelegation(
             persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
@@ -1638,98 +1662,40 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(childRequests(client).isEmpty)
     }
 
-    /// `clone`, with `origin` at the relative `../origin.git` so a copy keeps
-    /// working, both on one commit of `main`.
-    private static let peerRepositoryTemplate = Task {
-        let template = FileManager.default.temporaryDirectory.appendingPathComponent("alas-peer-base-\(UUID().uuidString)")
-        let clone = template.appendingPathComponent("clone")
-        let origin = template.appendingPathComponent("origin.git")
-        try FileManager.default.createDirectory(at: clone, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: origin, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "--bare", "-b", "main"], cwd: origin)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: clone)
-        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: clone)
-        _ = try await Process.git(["config", "user.name", "test user"], cwd: clone)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "first"], cwd: clone)
-        _ = try await Process.git(["remote", "add", "origin", "../origin.git"], cwd: clone)
-        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: clone)
-        return template
-    }
+    private let newWorktree = ACPPeerChildTarget.newWorktree(branch: "fix/parser", base: "main", expectedBaseSHA: "abc")
 
-    private func makePeerRepository() async throws -> (root: URL, clone: URL, origin: URL, head: String) {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-peer-base-\(UUID().uuidString)")
-        try FileManager.default.copyItem(at: try await Self.peerRepositoryTemplate.value, to: root)
-        let clone = root.appendingPathComponent("clone")
-        let head = try await Process.git(["rev-parse", "HEAD"], cwd: clone).stdout
-        return (root, clone, root.appendingPathComponent("origin.git"), head.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    /// A commit on top of `HEAD` in `repo`, with no working tree needed.
-    private func commitOnHead(in repo: URL) async throws -> String {
-        let identity = ["-c", "user.name=test", "-c", "user.email=test@example.com"]
-        let commit = try await Process.git(identity + ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "next"], cwd: repo)
-        return commit.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    enum StaleBase: CaseIterable {
-        case differentSHA, branchMissingOnRemote, branchAlreadyElsewhere
-    }
-
-    @Test(arguments: StaleBase.allCases)
-    func expectedBaseMismatchFailsChild(stale: StaleBase) async throws {
-        let repo = try await makePeerRepository()
-        defer { try? FileManager.default.removeItem(at: repo.root) }
-        if stale == .branchAlreadyElsewhere {
-            _ = try await Process.git(["branch", "fix/parser", try await commitOnHead(in: repo.clone)], cwd: repo.clone)
-        }
+    /// Which stale bases there are is `PeerWorktreeBaseTests`' business: any
+    /// reason fails the child, before a worktree exists.
+    @Test func expectedBaseMismatchFailsChild() async throws {
         var bases: [String] = []
         let client = makeSelectionClient()
         let fixture = try makeModelSelectionFixture(
-            client: client, project: peerProject(path: repo.clone.path), onPeerWorktree: { bases.append($0) }
+            client: client, project: peerProject(), peerWorktreeBase: .failure(.init(message: "main is stale")),
+            onPeerWorktree: { bases.append($0) }
         )
         defer { fixture.manager.shutdownBackgroundTasks() }
-        let wrong = String(repeating: "0", count: 40)
 
-        let result = await fixture.coordinator.startForPeer(peerStart(target: .newWorktree(
-            branch: "fix/parser",
-            base: stale == .branchMissingOnRemote ? "gone" : "main",
-            expectedBaseSHA: stale == .differentSHA ? wrong : repo.head
-        )))
+        let result = await fixture.coordinator.startForPeer(peerStart(target: newWorktree))
 
         #expect(result == .started(sessionId: "child", state: "creating_worktree"))
         let record = try await eventuallyLoadDelegation(
             persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
         )
-        let message = try #require(record.failureMessage)
-        switch stale {
-        case .differentSHA:
-            #expect(message == "main on Mini is at \(repo.head), expected \(wrong). Push and try again.")
-        case .branchMissingOnRemote:
-            #expect(message.hasPrefix("gone on Mini could not be fetched from origin, expected \(repo.head)."))
-        case .branchAlreadyElsewhere:
-            #expect(message.hasPrefix("fix/parser already exists on Mini at "))
-        }
+        #expect(record.failureMessage == "main is stale")
         #expect(bases.isEmpty)
         #expect(try await outbox(fixture.persistence).map(\.messageId) == ["outcome-child-failed"])
         #expect(childRequests(client).isEmpty)
     }
 
-    /// The local tracking ref is behind: the check passes only by fetching.
-    @Test func freshBaseIsFetchedAndTheWorktreeBranchesFromTheRemote() async throws {
-        let repo = try await makePeerRepository()
-        defer { try? FileManager.default.removeItem(at: repo.root) }
-        let pushed = try await commitOnHead(in: repo.origin)
-        _ = try await Process.git(["update-ref", "refs/heads/main", pushed], cwd: repo.origin)
+    @Test func newWorktreeBranchesFromTheResolvedBase() async throws {
         var bases: [String] = []
         let client = makeSelectionClient()
         let fixture = try makeModelSelectionFixture(
-            client: client, project: peerProject(path: repo.clone.path), onPeerWorktree: { bases.append($0) }
+            client: client, project: peerProject(), onPeerWorktree: { bases.append($0) }
         )
         defer { fixture.manager.shutdownBackgroundTasks() }
 
-        _ = await fixture.coordinator.startForPeer(peerStart(target: .newWorktree(
-            branch: "fix/parser", base: "main", expectedBaseSHA: pushed
-        )))
+        _ = await fixture.coordinator.startForPeer(peerStart(target: newWorktree))
 
         try await waitUntil { childRequests(client) == ["prompt:Review the parser."] }
         #expect(bases == ["origin/main"])
@@ -1737,17 +1703,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
     }
 
     @Test func skippedHookProducesANotice() async throws {
-        let repo = try await makePeerRepository()
-        defer { try? FileManager.default.removeItem(at: repo.root) }
         let client = makeSelectionClient()
-        let fixture = try makeModelSelectionFixture(
-            client: client, project: peerProject(path: repo.clone.path), skipsRepoHook: true
-        )
+        let fixture = try makeModelSelectionFixture(client: client, project: peerProject(), skipsRepoHook: true)
         defer { fixture.manager.shutdownBackgroundTasks() }
 
-        _ = await fixture.coordinator.startForPeer(peerStart(target: .newWorktree(
-            branch: "fix/parser", base: "main", expectedBaseSHA: nil
-        )))
+        _ = await fixture.coordinator.startForPeer(peerStart(target: newWorktree))
 
         try await waitUntil { childRequests(client) == ["prompt:Review the parser."] }
         let entries = try await outbox(fixture.persistence)

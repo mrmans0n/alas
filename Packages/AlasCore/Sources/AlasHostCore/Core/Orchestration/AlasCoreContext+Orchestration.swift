@@ -121,6 +121,12 @@ extension AlasCoreContext {
                         projectID: projectID, branch: branch, base: base, recordDestination: recordDestination
                     )
                 },
+                resolvePeerWorktreeBase: { [weak self] branch, base, expectedSHA, repo in
+                    let machine = self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
+                    return await PeerWorktreeBase.resolve(
+                        branch: branch, base: base, expectedSHA: expectedSHA, repo: repo, machine: machine
+                    ).mapError { .init(message: $0.message) }
+                },
                 machineName: { [weak self] in
                     self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
                 }
