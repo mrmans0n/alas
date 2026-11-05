@@ -1719,6 +1719,17 @@ struct RemoteSessionGatewayTests {
         #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
     }
 
+    @Test func failureIncidentWire() throws {
+        let incident = try ACPFailureIncident.fixture(title: "Failed", details: "Why", actions: ["retry"], endedTurn: true)
+        let wire = RemoteSessionGateway.toWire(.failureIncident(id: UUID(), incident), index: 4)
+        #expect(wire.kind == "failureIncident")
+        #expect(wire.text == "Failed\n\nWhy")
+        let decoded = try JSONDecoder().decode(ACPFailureIncident.self, from: Data(try #require(wire.json).utf8))
+        #expect(decoded.record.title == "Failed")
+        #expect(decoded.endedTurn)
+        #expect(decoded.record.actions == [])
+    }
+
     @Test(arguments: [ACPPlanDocument.markdownFixture, .fileFixture, .hiddenFixture])
     func planDocumentWire(document: ACPPlanDocument) throws {
         let wire = RemoteSessionGateway.toWire(.planDocument(id: UUID(), document), index: 4)

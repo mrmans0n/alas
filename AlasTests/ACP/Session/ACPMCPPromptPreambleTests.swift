@@ -150,7 +150,19 @@ struct ACPMCPPromptPreambleTests {
         "A stopped VM starts by itself on the first computer_* or vm_run call",
         "computer_vm_starting and computer_vm_slot_pending mean try again shortly",
         "device_user_active means the user took over the device: wait for them to hand it back.",
-    ]
+    ] + vmPreferenceGuidance
+
+    /// Worktree VMs need Apple silicon, so other builds have no VM to prefer.
+    private static let vmPreferenceGuidance: [String] = {
+        #if arch(arm64)
+        [
+            "To test an app you built, prefer a VM",
+            "ask for one to be created from its VM tab before driving the user's Mac",
+        ]
+        #else
+        []
+        #endif
+    }()
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {
@@ -209,7 +221,7 @@ struct ACPMCPPromptPreambleTests {
             "pr_create", "pr_status", "stack_ship",
             "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
             "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
-            "preview_wait", "preview_cancel",
+            "preview_resize", "preview_wait", "preview_cancel",
             "computer_apps", "computer_screenshot", "computer_inspect",
             "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_drag",
             "computer_open_app", "computer_wait",

@@ -14,6 +14,7 @@ public enum LinuxGuestSetup {
     public static let cuaDriverSource = "/mnt/alas/helper/cua-driver"
     public static let cuaDriverPath = "/usr/local/bin/cua-driver"
 
+    static let helperDropInDirectory = "/etc/systemd/user/alas-vm-guest.service.d"
     static let xfconfDirectory = "/etc/xdg/xfce4/xfconf/xfce-perchannel-xml"
 
     /// System-wide Xfce defaults that keep the desktop usable by an agent. The
@@ -76,6 +77,10 @@ public enum LinuxGuestSetup {
                 "install -m 0755 \(cuaDriverSource) \(cuaDriverPath)",
                 // apt-daily or unattended-upgrades often hold the dpkg lock on first boot.
                 "dpkg -s mousepad >/dev/null 2>&1 || { apt-get -o DPkg::Lock::Timeout=300 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y mousepad; }",
+                // A restart stops the helper alone: the apps agents opened through it stay open.
+                "install -d -m 0755 \(helperDropInDirectory)",
+                #"printf '[Service]\nKillMode=process\n' > \#(helperDropInDirectory)/keep-apps.conf"#,
+                "\(userSystemctl(user: user)) daemon-reload || true",
                 restartCommand(user: user),
             ]
     }
@@ -106,6 +111,10 @@ public enum LinuxGuestSetup {
     }
 
     private static func restartCommand(user: String, noBlock: Bool = false) -> String {
-        "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user\(noBlock ? " --no-block" : "") restart alas-vm-guest || true"
+        "\(userSystemctl(user: user))\(noBlock ? " --no-block" : "") restart alas-vm-guest || true"
+    }
+
+    private static func userSystemctl(user: String) -> String {
+        "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user"
     }
 }

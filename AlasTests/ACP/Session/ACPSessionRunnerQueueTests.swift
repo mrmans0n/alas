@@ -249,6 +249,414 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock).isEmpty, "nothing reaches the outdated agent")
     }
 
+    private static func quotaRecordResponse(title: String, severity: String = "error") throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["stopReason": "end_turn", "_meta": ["sessionFailure": [
+            "version": 1, "id": "t:quota", "revision": 1, "severity": severity,
+            "kind": ACPSessionFailureRecord.quotaExhaustedKind, "title": title,
+        ] as [String: Any]]] as [String: Any])
+    }
+
+    private static func negotiateSessionFailure(_ runner: ACPSessionRunner, _ mock: ACPMockClient) async throws {
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"sessionFailure":{"version":1}}}"#.utf8)
+        }
+        try await runner.connection.initialize()
+    }
+
+    @Test("a quota record enters Limited, consumes the queued prompt and schedules a resume", arguments: ["claude", "codex"])
+    func quotaRecordEntersLimitedAndSchedulesResume(agentID: String) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: agentID, onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        let head = try #require(session.queue.first?.id)
+        runner.persistQueue()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let databasePath = store.path
+        let body = try Self.quotaRecordResponse(title: "You've hit your usage limit.")
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: body, durableConsumptionAcknowledgement: {
+                let queue = try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s")
+                #expect(queue?.map(\.id).contains(head) == false)
+                acknowledgement.record()
+            })
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        try await waitUntil { acknowledgement.recordedCount > 0 }
+
+        runner.flushQueueIfIdle()
+        #expect(completions.map(\.result) == [.limited])
+        #expect(session.usageLimit != nil)
+        #expect(session.usageLimitResumeItem != nil)
+        #expect(session.turnFailure == nil)
+        #expect(!session.queue.map(\.id).contains(head))
+        #expect(!session.queue.contains { $0.status == .sending })
+        #expect(Self.sentPromptTexts(mock) == ["first"])
+        #expect(acknowledgement.recordedCount == 1)
+    }
+
+    @Test("a quota record on a wake acknowledges only once its delivery is saved", arguments: [true, false])
+    func quotaRecordWakeAcknowledgesAfterDeliverySave(committed: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "s")
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        if !committed { try rejectWakeDeliveryWrites(in: store) }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let body = try Self.quotaRecordResponse(title: "You've hit your usage limit.")
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: body, durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+
+        #expect(session.usageLimit != nil)
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(acknowledgement.recordedCount == (committed ? 1 : 0))
+    }
+
+    private static func failedTurnResponse(_ title: String = "Model overloaded") throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["stopReason": "end_turn", "_meta": ["sessionFailure": [
+            "version": 1, "id": "t:error", "revision": 1, "severity": "error", "title": title,
+        ] as [String: Any]]] as [String: Any])
+    }
+
+    enum FailedTurnSuccessor: CaseIterable {
+        case plain, afterWake, resumeItemNotHeld, futureScheduledNotHeld, uncertainNotOverwritten, uncertainAfterDirectTurn,
+             forceSentNotHeld, limitHeldNotHeld
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: FailedTurnSuccessor.allCases)
+    func failedTurnHoldsSuccessor(_ row: FailedTurnSuccessor) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(
+            agentID: row == .afterWake ? "codex" : "claude", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        runner.start()
+        defer { runner.stop() }
+        let body = try Self.failedTurnResponse()
+        let requested = QueueTestGate()
+        let respond = QueueTestGate()
+        let successors = ["next", "behind", ACPUsageLimitResumePolicy.continueText]
+        mock.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            if successors.contains(ACPSessionRunner.textPreview(of: params.prompt)) {
+                return Data(#"{"stopReason":"end_turn"}"#.utf8)
+            }
+            await requested.open()
+            await respond.wait()
+            // A wake with no model work would stay at the head instead.
+            if row == .afterWake { mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("partial")))) }
+            return body
+        }
+        if row == .afterWake {
+            session.transcript.streamingState = .awaitingPermission
+            session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+                state: "completed"), ownerSessionId: "s")
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            session.transcript.streamingState = .idle
+        } else if row != .uncertainAfterDirectTurn {
+            session.enqueue(blocks: [.text("head")])
+        }
+        var next = UUID()
+        switch row {
+        case .plain, .afterWake, .limitHeldNotHeld:
+            session.enqueue(blocks: [.text("next")])
+            next = try #require(session.queue.last?.id)
+        case .futureScheduledNotHeld:
+            next = session.enqueueScheduled(blocks: [.text("next")], scheduledAt: Date().addingTimeInterval(3600))
+        case .uncertainNotOverwritten, .uncertainAfterDirectTurn:
+            session.enqueue(blocks: [.text("next")])
+            next = try #require(session.queue.last?.id)
+            let index = session.queue.count - 1
+            session.queue[index].deliveryUncertain = true
+            session.queue[index].lastError = "uncertain"
+        case .forceSentNotHeld:
+            session.enqueue(blocks: [.text("behind")])
+            session.enqueue(blocks: [.text("next")])
+            next = try #require(session.queue.last?.id)
+        case .resumeItemNotHeld:
+            break
+        }
+        if row == .uncertainAfterDirectTurn {
+            runner.sendNow(blocks: [.text("head")], queuedItemId: nil)
+        } else {
+            runner.flushQueueIfIdle()
+        }
+        await requested.wait()
+        // These act on a head already sending, which they queue behind.
+        if row == .resumeItemNotHeld {
+            let limit = ACPUsageLimit(detectedAt: Date(), resetSource: .unknown, probeAttempt: 0, resettable: true)
+            session.upsertUsageLimitResume(limit: limit, scheduledAt: Date().addingTimeInterval(-1))
+        }
+        if row == .limitHeldNotHeld {
+            session.usageLimit = ACPUsageLimit(detectedAt: Date(), resetSource: .unknown, probeAttempt: 0, resettable: true)
+        }
+        if row == .forceSentNotHeld { #expect(session.forceQueueItem(id: next)) }
+        await respond.open()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+
+        switch row {
+        case .plain, .afterWake:
+            #expect(session.queue.map(\.id) == [next])
+            #expect(session.queue.first?.lastError == ACPSession.heldAfterFailedTurnMessage)
+            let stored = try store.loadQueue(sessionId: "s")
+            #expect(stored.map(\.id) == [next])
+            #expect(stored.first?.lastError == ACPSession.heldAfterFailedTurnMessage)
+            #expect(Self.sentPromptTexts(mock).count == 1)
+        case .resumeItemNotHeld:
+            try await waitUntil { Self.sentPromptTexts(mock).count == 2 }
+            #expect(Self.sentPromptTexts(mock).last == ACPUsageLimitResumePolicy.continueText)
+        case .futureScheduledNotHeld:
+            #expect(session.queue.map(\.id) == [next])
+            #expect(session.queue.first?.lastError == nil)
+            #expect(Self.sentPromptTexts(mock) == ["head"])
+        case .limitHeldNotHeld:
+            #expect(session.queue.map(\.id) == [next])
+            #expect(session.queue.first?.lastError == nil)
+            #expect(Self.sentPromptTexts(mock) == ["head"])
+        case .uncertainNotOverwritten, .uncertainAfterDirectTurn:
+            #expect(session.queue.first?.lastError == "uncertain")
+            #expect(session.queue.first?.deliveryUncertain == true)
+            #expect(Self.sentPromptTexts(mock) == ["head"])
+        case .forceSentNotHeld:
+            try await waitUntil { Self.sentPromptTexts(mock).contains("next") }
+            #expect(Self.sentPromptTexts(mock).prefix(2) == ["head", "next"])
+        }
+    }
+
+    @Test("text held during steering counts as model work", .timeLimit(.minutes(1)))
+    func failedTurnCountsTextHeldDuringSteeringAsModelWork() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, _) = try mkRunner(onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.pendingMCPPreamble = "<ctx>"
+        let body = try Self.failedTurnResponse()
+        let requested = QueueTestGate()
+        let respond = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requested.open()
+            await respond.wait()
+            return body
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        let release = QueueTestGate()
+        defer { Task { await release.open() } }
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            guard !paused, session.transcript.messages.filter({ $0.kind == "user" }).count >= 2 else { return }
+            paused = true
+            await release.wait()
+        }
+        runner.sendNow(blocks: [.text("hello")], queuedItemId: nil)
+        await requested.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("redirect")], intent: .steer) { _ in }
+        try await waitUntil { paused }
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.text("held"))))
+        #expect(runner.pendingIncomingUpdateCountForTesting == 1)
+        await respond.open()
+        try await waitUntil { !completions.isEmpty }
+
+        #expect(session.pendingMCPPreamble == nil)
+        #expect(session.mcpPreambleSent)
+        await release.open()
+    }
+
+    enum FailedHead: CaseIterable {
+        case resume, wake, wakeWithModelWork
+    }
+
+    /// A resume or a wake the agent may never have seen stays for the user, whose
+    /// retry must reach the agent: a reused broker key would replay this failure.
+    @Test(.timeLimit(.minutes(1)), arguments: FailedHead.allCases)
+    func failedHeadStaysForManualRetry(_ row: FailedHead) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(
+            agentID: row == .resume ? "claude" : "codex", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        runner.start()
+        defer { runner.stop() }
+        let body = try Self.failedTurnResponse()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let requested = QueueTestGate()
+        let respond = QueueTestGate()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await requested.open()
+            await respond.wait()
+            if row == .wakeWithModelWork {
+                mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("partial"))))
+            }
+            return ACPResponse(body: body, durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        let limit = ACPUsageLimit(detectedAt: Date(), resetSource: .unknown, probeAttempt: 0, resettable: true)
+        if row == .resume {
+            session.usageLimit = limit
+            session.upsertUsageLimitResume(limit: limit, scheduledAt: Date().addingTimeInterval(-1))
+        } else {
+            session.transcript.streamingState = .awaitingPermission
+            session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+                state: "completed"), ownerSessionId: "s")
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            session.transcript.streamingState = .idle
+        }
+        let head = try #require(session.queue.first)
+        runner.flushQueueIfIdle()
+        await requested.wait()
+        session.queue[0].dispatchedBrokerGeneration = ACPBrokerGeneration(rawValue: 7)
+        session.enqueue(blocks: [.text("behind")])
+        await respond.open()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+
+        #expect(Self.sentPromptTexts(mock).count == 1)
+        #expect(acknowledgement.recordedCount == 1)
+        #expect(!runner.failureActionContext(incidentId: "t:error").isRetryTarget, "a resume or a wake is not the user's prompt")
+        if row == .wakeWithModelWork {
+            #expect(!session.queue.contains { $0.id == head.id })
+            #expect(session.backgroundTasks[0].wakeDelivered)
+            return
+        }
+        let kept = try #require(session.queue.first)
+        #expect(kept.id == head.id)
+        #expect(kept.status == .pending)
+        #expect(kept.lastError == "Model overloaded")
+        #expect(kept.isShownToUser)
+        #expect(kept.brokerOperationAttempt == head.brokerOperationAttempt + 1)
+        #expect(kept.dispatchedBrokerGeneration == nil)
+        #expect(session.queue.last?.lastError == nil, "the head blocks the queue on its own")
+        #expect(try store.loadQueue(sessionId: "s").first?.brokerOperationAttempt == kept.brokerOperationAttempt)
+        if row == .resume {
+            #expect(session.usageLimit == limit)
+            #expect(kept.usageLimit == limit)
+        } else {
+            #expect(!session.backgroundTasks[0].wakeDelivered)
+        }
+
+        mock.scriptResponse(method: "session/prompt") { _ in ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8)) }
+        runner.forceSendQueuedItem(id: head.id)
+        // The retry goes out under a new key, and its success releases "behind".
+        try await waitUntil { Self.sentPromptTexts(mock).count == 3 }
+        let keys = mock.sent.filter { $0.method == "session/prompt" }.compactMap(\.brokerOperationKey)
+        #expect(Set(keys).count == 3)
+    }
+
+    /// The retry's acknowledgement waits for the row that says its failure is over.
+    @Test(.timeLimit(.minutes(1)), arguments: [true, false])
+    func retryAcknowledgesAfterClearingItsFailure(committed: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        runner.start()
+        defer { runner.stop() }
+        let body = try Self.failedTurnResponse()
+        mock.script(method: "session/prompt") { _ in body }
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "s")
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        let head = try #require(session.queue.first)
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+
+        if !committed {
+            try store.db.exec("""
+            CREATE TRIGGER reject_incident BEFORE INSERT ON messages WHEN NEW.kind = 'system'
+            BEGIN SELECT RAISE(ABORT, 'incident write failed'); END;
+            """)
+        }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8),
+                        durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        runner.forceSendQueuedItem(id: head.id)
+        try await waitUntil { completions.count == 2 }
+        await runner.flushPersistence()
+
+        #expect(acknowledgement.recordedCount == (committed ? 1 : 0))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func heldItemRetriesOnlyByHand() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, _) = try mkRunner(onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.failedTurnResponse()
+        let retrying = QueueTestGate()
+        let finish = QueueTestGate()
+        defer { Task { await finish.open() } }
+        mock.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            if ACPSessionRunner.textPreview(of: params.prompt) == "direct" { return body }
+            await retrying.open()
+            await finish.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        session.enqueue(blocks: [.text("held")])
+        let held = try #require(session.queue.first)
+        runner.sendNow(blocks: [.text("direct")], queuedItemId: nil)
+        try await waitUntil { !completions.isEmpty }
+        await runner.flushPersistence()
+        runner.flushQueueIfIdle()
+        #expect(Self.sentPromptTexts(mock) == ["direct"])
+        #expect(session.queue.first?.lastError == ACPSession.heldAfterFailedTurnMessage)
+
+        runner.forceSendQueuedItem(id: held.id)
+        await retrying.wait()
+        #expect(Self.sentPromptTexts(mock) == ["direct", "held"])
+        #expect(session.queue.first?.id == held.id)
+        #expect(session.queue.first?.brokerOperationAttempt == held.brokerOperationAttempt)
+    }
+
+    @Test("a quota record for a Claude billing failure shows Limited and schedules no resume")
+    func quotaRecordOnClaudeBillingSchedulesNoResume() async throws {
+        let (runner, mock, session, _) = try mkRunner(agentID: "claude")
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.quotaRecordResponse(title: "Your credit balance is too low")
+        mock.script(method: "session/prompt") { _ in body }
+        session.enqueue(blocks: [.text("first")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit?.resettable == false)
+        #expect(session.usageLimitResumeItem == nil)
+    }
+
+    @Test("a warning of the quota kind does not limit the session")
+    func quotaKindOnWarningDoesNotLimit() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, _) = try mkRunner(onTurnCompleted: { completions.append($0) })
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.quotaRecordResponse(title: "You've hit your limit", severity: "warning")
+        mock.script(method: "session/prompt") { _ in body }
+        session.enqueue(blocks: [.text("first")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { !completions.isEmpty }
+        #expect(completions.map(\.result) == [.completed])
+        #expect(session.usageLimit == nil)
+    }
+
     @Test("a resume that succeeds clears the Limited state and the queue drains")
     func usageLimitResumeSucceeds() async throws {
         let (runner, mock, session, _) = try mkRunner()

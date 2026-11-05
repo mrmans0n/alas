@@ -171,4 +171,10 @@ struct NativePeerTranscriptTests {
         let malformed = RemoteWireMessage(stableId: wire.stableId, kind: "planDocument", text: nil, json: "{", index: 2)
         #expect(NativePeerRow(message: malformed) == .systemNotice("Plan details are unavailable."))
     }
+
+    @Test func failureIncidentRowsShowTheirText() throws {
+        let wire = RemoteSessionGateway.toWire(
+            .failureIncident(id: UUID(), try .fixture(title: "Failed", details: "Why")), index: 2)
+        #expect(NativePeerRow(message: wire) == .systemNotice("Failed\n\nWhy"))
+    }
 }

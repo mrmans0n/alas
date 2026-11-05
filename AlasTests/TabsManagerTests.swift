@@ -710,6 +710,26 @@ struct TabsManagerTests {
         #expect(decoded.iconName == "globe")
     }
 
+    @Test func webPreviewViewportRestoresIntoTheBrowserAndFollowsItsChanges() throws {
+        var saved = WebPreviewTabState(ownerKey: "owner-a")
+        saved.viewport = WebPreviewViewport(width: 390, height: 844)
+        let decoded = try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(Tab.webPreview(saved)))
+        #expect(decoded == .webPreview(saved))
+        let manager = TabsManager(store: TestPersistenceStore(TabsFile(tabs: [decoded], activeTabId: decoded.id)))
+        manager.loadAll(worktreeIds: ["owner-a"])
+
+        let browser = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: nil)
+        defer { browser.close() }
+        #expect(browser.viewport == saved.viewport)
+
+        browser.viewport = nil
+        guard case .webPreview(let state)? = manager.tabs(forWorktree: "owner-a").first else {
+            Issue.record("Expected the preview tab")
+            return
+        }
+        #expect(state.viewport == nil)
+    }
+
     @Test func openWebPreviewReusesOneTabPerOwnerAndUpdatesURL() {
         let manager = TabsManager(store: TestPersistenceStore())
         let firstURL = URL(string: "http://127.0.0.1:3000")!

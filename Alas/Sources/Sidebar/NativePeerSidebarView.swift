@@ -29,6 +29,28 @@ final class NativePeerSidebarModel {
     /// The peer worktree whose rename sheet is open. Held here, not on a
     /// lazy row, so the sheet survives its row scrolling away.
     var renamingBranch: NativePeerBranchRename?
+    /// Told how much content a collapse is about to remove. Set by the visible
+    /// list's scroll view.
+    @ObservationIgnored var willShrinkContent: ((CGFloat) -> Void)?
+
+    func togglePeer(_ id: String, repos: [NativePeerRepoGroup]) {
+        guard expandedPeerIDs.contains(id) else {
+            expandedPeerIDs.insert(id)
+            return
+        }
+        willShrinkContent?(expandedHeight(ofPeer: id, repos: repos))
+        expandedPeerIDs.remove(id)
+    }
+
+    /// The peer's rows' height, near enough: a row's second line is what varies.
+    private func expandedHeight(ofPeer id: String, repos: [NativePeerRepoGroup]) -> CGFloat {
+        repos.reduce(0) { total, repo in
+            let rows = collapsedRepoIDs.contains("\(id)\u{1F}\(repo.id)") ? 0 : repo.worktrees.reduce(CGFloat(0)) {
+                $0 + ($1.updatedAt > 0 || $1.status != nil ? 46 : 33)
+            }
+            return total + 30 + rows
+        }
+    }
 }
 
 struct NativePeerBranchRename: Identifiable {
@@ -68,50 +90,12 @@ struct NativePeerSidebarView: View {
         // would only advertise infrastructure the user never wired up. The empty
         // pairing state is explained in Settings' Remote pane instead.
         if !client.snapshot.groups.isEmpty {
-            sectionHeader
+            NativePeerSectionHeader(model: model, onAddPeer: onAddPeer)
                 .padding(.top, topSpacing)
             ForEach(client.snapshot.groups) { group in
                 peerGroup(group)
             }
         }
-    }
-
-    private var sectionHeader: some View {
-        HStack(spacing: 6) {
-            Text("Peers")
-                .textCase(.uppercase)
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundColor(theme.color("fg-faint"))
-            Spacer(minLength: 0)
-            if let onAddPeer {
-                Button(action: onAddPeer) {
-                    Icon(name: "plus", size: 11,
-                         color: model.plusHovering ? theme.color("fg") : theme.color("fg-faint"))
-                        .frame(width: 19, height: 19)
-                        .background(model.plusHovering ? theme.color("bg-4") : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
-                .buttonStyle(.plain)
-                .onHover { model.plusHovering = $0 }
-                .help("Pair a peer…")
-                .opacity(model.headerHovering ? 1 : 0)
-                .allowsHitTesting(model.headerHovering)
-            }
-        }
-        .frame(minHeight: 19)
-        .padding(.leading, 7)
-        .padding(.trailing, 5)
-        .padding(.top, 10)
-        .padding(.bottom, 2)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(theme.color("line"))
-                .frame(height: 1)
-        }
-        .padding(.top, 6)
-        .contentShape(Rectangle())
-        .onHover { model.headerHovering = $0 }
     }
 
     /// Puts each repo's chevron under the peer's tile, one level in, the way
@@ -129,10 +113,10 @@ struct NativePeerSidebarView: View {
             expanded: expanded,
             onToggle: {
                 guard online else { return }
-                if model.expandedPeerIDs.contains(group.id) { model.expandedPeerIDs.remove(group.id) }
-                else { model.expandedPeerIDs.insert(group.id) }
+                model.togglePeer(group.id, repos: repos)
             }
         )
+        .equatable()
         if expanded {
             ForEach(repos) { repo in
                 repoGroup(repo, peer: group)
@@ -157,6 +141,7 @@ struct NativePeerSidebarView: View {
                 else { model.collapsedRepoIDs.insert(key) }
             }
         )
+        .equatable()
         .padding(.leading, Self.repoIndent)
         if !collapsed {
             ForEach(Array(repo.worktrees.enumerated()), id: \.element.id) { index, worktree in
@@ -170,6 +155,7 @@ struct NativePeerSidebarView: View {
                     onSelect: { client.selectWorktree(selection) },
                     onSelectTab: { client.selectTab($0, in: selection) }
                 )
+                .equatable()
                 .contextMenu { worktreeMenu(worktree, peer: peer) }
                 .padding(.top, index == 0 ? 0 : 1)
                 .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
@@ -257,10 +243,65 @@ struct NativePeerSidebarView: View {
     }
 }
 
+/// The "Peers" caption. Its own view because it reads hover state, which would
+/// otherwise re-evaluate every peer's rows each time the pointer crossed it.
+private struct NativePeerSectionHeader: View {
+    let model: NativePeerSidebarModel
+    let onAddPeer: (() -> Void)?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Peers")
+                .textCase(.uppercase)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundColor(theme.color("fg-faint"))
+            Spacer(minLength: 0)
+            if let onAddPeer {
+                Button(action: onAddPeer) {
+                    Icon(name: "plus", size: 11,
+                         color: model.plusHovering ? theme.color("fg") : theme.color("fg-faint"))
+                        .frame(width: 19, height: 19)
+                        .background(model.plusHovering ? theme.color("bg-4") : .clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .sidebarHover { model.plusHovering = $0 }
+                .help("Pair a peer…")
+                .opacity(model.headerHovering ? 1 : 0)
+                .allowsHitTesting(model.headerHovering)
+            }
+        }
+        .frame(minHeight: 19)
+        .padding(.leading, 7)
+        .padding(.trailing, 5)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(theme.color("line"))
+                .frame(height: 1)
+        }
+        .padding(.top, 6)
+        .contentShape(Rectangle())
+        .sidebarHover { model.headerHovering = $0 }
+    }
+}
+
 /// One Mac. Shaped like `RepoGroupView`'s header — chevron, 19pt tile, 12.5pt
 /// semibold name, trailing count — with a laptop tile and a presence dot in
 /// place of the project icon.
-private struct NativePeerHeaderRow: View {
+///
+/// `Equatable` on what it draws, like the rows below: each peer's session-list
+/// push would otherwise re-render every mounted row of every peer.
+private struct NativePeerHeaderRow: View, Equatable {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.group.id == rhs.group.id && lhs.group.name == rhs.group.name && lhs.group.state == rhs.group.state
+            && lhs.group.attentionCount == rhs.group.attentionCount
+            && lhs.repoCount == rhs.repoCount && lhs.expanded == rhs.expanded
+    }
+
     let group: NativePeerGroup
     let repoCount: Int
     let expanded: Bool
@@ -302,7 +343,7 @@ private struct NativePeerHeaderRow: View {
         }
         .padding(.top, 3)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .sidebarHover { hovering = $0 }
         .onTapGesture(perform: onToggle)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
@@ -369,7 +410,16 @@ private struct NativePeerHeaderRow: View {
 
 /// A peer's repo. The same header `RepoGroupView` draws, minus the actions a
 /// remote project cannot take here.
-private struct NativePeerRepoHeaderRow: View {
+private struct NativePeerRepoHeaderRow: View, Equatable {
+    /// `onNewSession` follows from the repo's id: this row only draws for an
+    /// online peer, and only the "Other sessions" bucket has no action.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.repo.id == rhs.repo.id && lhs.repo.name == rhs.repo.name
+            && lhs.repo.worktrees.count == rhs.repo.worktrees.count
+            && lhs.repo.attentionCount == rhs.repo.attentionCount
+            && lhs.icon == rhs.icon && lhs.collapsed == rhs.collapsed && lhs.peerName == rhs.peerName
+    }
+
     let repo: NativePeerRepoGroup
     let icon: ProjectIcon?
     let collapsed: Bool
@@ -435,13 +485,19 @@ private struct NativePeerRepoHeaderRow: View {
         }
         .padding(.top, 1)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .sidebarHover { hovering = $0 }
     }
 }
 
 /// A peer worktree, drawn with `WorktreeRowView`'s two-line metrics: branch
 /// plus agent and console tiles on line 1, status chip, diff and age on line 2.
-private struct NativePeerWorktreeRow: View {
+private struct NativePeerWorktreeRow: View, Equatable {
+    /// The closures only name the worktree, which `worktree` already identifies.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.worktree == rhs.worktree && lhs.peerName == rhs.peerName && lhs.isSelected == rhs.isSelected
+            && lhs.selectedTab == rhs.selectedTab
+    }
+
     let worktree: NativePeerWorktreeGroup
     let peerName: String
     let isSelected: Bool
@@ -491,7 +547,7 @@ private struct NativePeerWorktreeRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .sidebarHover { hovering = $0 }
         .onTapGesture(perform: onSelect)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
@@ -548,9 +604,12 @@ private struct NativePeerWorktreeRow: View {
             }
             Spacer(minLength: 0)
             if worktree.updatedAt > 0 {
-                Text(Self.relative(worktree.updatedAt))
-                    .monospacedDigit()
-                    .fixedSize()
+                // Keeps aging on its own: a row only re-renders when its data changes.
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(Self.relative(worktree.updatedAt, now: context.date))
+                        .monospacedDigit()
+                        .fixedSize()
+                }
             }
         }
         .font(.system(size: 10))
@@ -671,10 +730,10 @@ private struct NativePeerWorktreeRow: View {
         return nil
     }
 
-    private static func relative(_ seconds: Int64) -> String {
+    private static func relative(_ seconds: Int64, now: Date) -> String {
         relativeDateFormatter.localizedString(
             for: Date(timeIntervalSince1970: TimeInterval(seconds)),
-            relativeTo: Date()
+            relativeTo: now
         )
     }
 

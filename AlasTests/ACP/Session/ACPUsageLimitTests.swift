@@ -165,6 +165,58 @@ struct ACPUsageLimitTests {
         ))
     }
 
+    static func quotaRecord(title: String, details: String? = nil) throws -> ACPSessionFailureRecord {
+        var json: [String: Any] = [
+            "version": 1, "id": "t:quota", "revision": 1, "severity": "error",
+            "kind": ACPSessionFailureRecord.quotaExhaustedKind, "title": title,
+        ]
+        json["details"] = details
+        return try JSONDecoder().decode(ACPSessionFailureRecord.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    @Test("a quota record's resettability comes from its prefix, then its adapter", arguments: [
+        ("codex", "You've hit your usage limit. Try again at 5pm.", true, ACPUsageLimit.ResetSource.parsed),
+        ("codex", "Usage limit exceeded", true, .unknown),
+        ("claude", "You've hit your limit · resets 5pm", true, .parsed),
+        ("claude", "Fable 5 requires usage credits", false, .unknown),
+        ("claude", "Your credit balance is too low", false, .unknown),
+    ] as [(String, String, Bool, ACPUsageLimit.ResetSource)])
+    func quotaRecordResettable(agentID: String, title: String, resettable: Bool, source: ACPUsageLimit.ResetSource) throws {
+        let limit = try #require(ACPUsageLimitDetector.detect(
+            failure: Self.quotaRecord(title: title), turnAgentText: nil, claudeRateLimit: nil,
+            now: Self.now, calendar: Self.madrid,
+            resettableUnlessClaude: agentID != ACPManagedAdapterDescriptor.claude.agentID
+        ))
+        #expect(limit.resettable == resettable)
+        #expect(limit.resetSource == source)
+    }
+
+    @Test("a quota record prefers the structured reset over its text")
+    func quotaRecordPrefersStructuredReset() throws {
+        let resetsAt = Self.date(2026, 10, 3, 14, 59)
+        let limit = ACPUsageLimitDetector.detect(
+            failure: try Self.quotaRecord(title: "You've hit your limit · resets 5pm"), turnAgentText: nil,
+            claudeRateLimit: ACPClaudeRateLimit(status: "rejected", resetsAt: resetsAt),
+            now: Self.now, calendar: Self.madrid, resettableUnlessClaude: false
+        )
+        #expect(limit?.resetsAt == resetsAt)
+        #expect(limit?.resetSource == .structured)
+    }
+
+    @Test("a quota record reads its reset from details, then title, then the turn's text", arguments: [
+        ("Limit · resets 3pm", "Try again at 5pm.", "resets 7pm", 17),
+        ("Limit · resets 3pm", nil, "resets 7pm", 15),
+        ("Limit", nil, "resets 7pm", 19),
+    ] as [(String, String?, String, Int)])
+    func quotaRecordResetCandidates(title: String, details: String?, agentText: String, hour: Int) throws {
+        let limit = ACPUsageLimitDetector.detect(
+            failure: try Self.quotaRecord(title: title, details: details), turnAgentText: agentText,
+            claudeRateLimit: nil, now: Self.now, calendar: Self.madrid, resettableUnlessClaude: true
+        )
+        #expect(limit?.resetsAt == Self.date(2026, 10, 3, hour, 0))
+        #expect(limit?.resetSource == .parsed)
+    }
+
     struct ResumeCase: Sendable, CustomTestStringConvertible {
         let name: String
         let limit: ACPUsageLimit

@@ -32,12 +32,13 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
             #expect(meta["diffPatch"] as? [String: Int] == ["version": 1])
             #expect(meta["planFile"] as? [String: Int] == ["version": 1])
+            #expect(meta["sessionFailure"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -269,6 +270,81 @@ struct ACPConnectionTests {
         }
         let outcome = try await ACPConnection(client: mock).initialize()
         #expect((outcome.planFile != nil) == expected)
+    }
+
+    @Test("session failures need version 1", arguments: [
+        (#"{"sessionFailure":{"version":1}}"#, true),
+        (#"{"sessionFailure":{"version":2}}"#, false),
+        (#"{"sessionFailure":true}"#, false),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["sessionFailure"]}}}"#, false),
+        ("{}", false),
+    ] as [(String, Bool)])
+    func sessionFailureNegotiation(metadata: String, expected: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        let outcome = try await connection.initialize()
+        #expect((outcome.sessionFailure != nil) == expected)
+        #expect(connection.negotiatedSessionFailure == expected)
+    }
+
+    @Test("a prompt's session failure is honored only when negotiated", arguments: [
+        (#"{"sessionFailure":{"version":1}}"#, true),
+        (#"{"sessionFailure":{"version":2}}"#, false),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["sessionFailure"]}}}"#, false),
+        ("{}", false),
+    ] as [(String, Bool)])
+    func promptFailureHonoredOnlyWhenNegotiated(metadata: String, honored: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        mock.script(method: "session/prompt") { _ in
+            Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:error","revision":1,"severity":"error","title":"boom"}}}"#.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        try await connection.initialize()
+        let outcome = try await connection.prompt(sessionId: "s", blocks: [])
+        #expect(outcome.stopReason.rawValue == .string("end_turn"))
+        if honored {
+            guard case .record(let record) = outcome.failure else {
+                Issue.record("expected a record, got \(outcome.failure)")
+                return
+            }
+            #expect(record.title == "boom")
+        } else {
+            #expect(outcome.failure == .absent)
+        }
+
+        mock.script(method: "session/prompt") { _ in
+            Data(#"{"stopReason":"end_turn","_meta":{"sessionFailure":"boom"}}"#.utf8)
+        }
+        let unreadable = try await connection.prompt(sessionId: "s", blocks: [])
+        #expect(unreadable.failure == (honored ? .unreadable : .absent))
+    }
+
+    @Test("a prompt defers its acknowledgement only for a failure record", arguments: [
+        (#"{"stopReason":"end_turn"}"#, true, false),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:e","revision":1,"title":"boom"}}}"#, true, true),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":"boom"}}"#, true, true),
+        (#"{"stopReason":"end_turn","_meta":{"sessionFailure":{"version":1,"id":"t:e","revision":1,"title":"boom"}}}"#, false, false),
+    ] as [(String, Bool, Bool)])
+    func promptDefersAcknowledgementOnlyForARecord(body: String, negotiated: Bool, defers: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(negotiated ? #"{"sessionFailure":{"version":1}}"# : "{}")}".utf8)
+        }
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data(body.utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        let connection = ACPConnection(client: mock)
+        try await connection.initialize()
+        let outcome = try await connection.prompt(sessionId: "s", blocks: [])
+        #expect(acknowledgement.count == (defers ? 0 : 1))
+        #expect((outcome.acknowledgement != nil) == defers)
     }
 
     @Test("fork points need version 1 and a known boundary", arguments: [

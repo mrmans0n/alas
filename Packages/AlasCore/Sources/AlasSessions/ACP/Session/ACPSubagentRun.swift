@@ -309,7 +309,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         let contentTouches = touched.filter { i in
             guard messages.indices.contains(i) else { return false }
             switch messages[i] {
-            case .plan, .planDocument: return false
+            case .plan, .planDocument, .failureIncident: return false
             default: return true
             }
         }
@@ -1294,7 +1294,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return kind == .thought ? index : nil
             case .toolCall, .user, .fileEdit, .visualAid:
                 return nil
-            case .plan, .planDocument, .systemNotice:
+            case .plan, .planDocument, .systemNotice, .failureIncident:
                 continue
             }
         }

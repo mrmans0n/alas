@@ -35,7 +35,7 @@ struct SidebarView: View {
     /// filter row, so per-frame scroll updates re-render it alone rather than
     /// the whole tree.
     @State private var scrollOffsets = SidebarScrollOffsets()
-    @State private var peerSidebarModel = NativePeerSidebarModel()
+    @State var peerSidebarModel = NativePeerSidebarModel()
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -56,6 +56,8 @@ struct SidebarView: View {
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     WorkspaceSidebarTreeHost(state: state) { treeModel in
                         SidebarFilterSlotScrollView(
+                            isActive: spaceID == state.spacesManager.activeSpaceId,
+                            peerModel: peerSidebarModel,
                             scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
                             onScroll: { scrollOffsets.setOffset($0, forSpace: spaceID) }
                         ) {
@@ -85,7 +87,7 @@ struct SidebarView: View {
                                     }
                                     return RepoGroupView(
                                         project: project,
-                                        icon: { state.effectiveIcon(for: $0) },
+                                        icon: { state.sidebarIcon(for: $0) },
                                         worktrees: WorktreeSidebarFilter.apply(worktreeFilter, to: liveWorktrees),
                                         collapsed: Binding(
                                             get: { collapsedProjects.contains(project.id) },
@@ -318,7 +320,7 @@ struct SidebarView: View {
                                         icon: { name in
                                             state.projectsManager.projects
                                                 .first { $0.name == name }
-                                                .map { state.effectiveIcon(for: $0) } ?? .default()
+                                                .map { state.sidebarIcon(for: $0) } ?? .default()
                                         },
                                         onAddPeer: {
                                             state.pendingSettingsSection = .remote
@@ -527,7 +529,7 @@ private struct SidebarAttentionHeader: View {
 
     var body: some View {
         let aggregation = state.attentionAggregation
-        let peerRows = state.nativePeerSessions?.snapshot.attentionRows ?? []
+        let peerRows = state.nativePeerSessions?.attentionRows ?? []
         let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
         let appUpdate = state.updates.availableUpdate
         let cleanupReminders = state.worktreeCleanupReminders
@@ -603,6 +605,9 @@ enum SidebarFilterRowMetrics {
 /// content is kept at least a viewport plus the slot tall so a short sidebar
 /// can park too.
 private struct SidebarFilterSlotScrollView<Content: View>: View {
+    /// Whether this is the Space page on screen.
+    let isActive: Bool
+    let peerModel: NativePeerSidebarModel
     /// Worktree row to keep in view, i.e. the filter's keyboard highlight.
     let scrollTarget: String?
     /// Content offset from the top, including any top inset.
@@ -612,12 +617,16 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var parked = false
     @State private var dropTargets = SidebarWorktreeDropTargets()
+    @State private var hoverTracker = SidebarHoverTracker()
+    /// The latest geometry, for a collapse to read. Not state: it moves every frame.
+    @State private var latestGeometry = LatestScrollGeometry()
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             content()
                 .environment(\.sidebarWorktreeDropTargets, dropTargets)
                 .coordinateSpace(.named(SidebarWorktreeDropTargets.coordinateSpace))
+                .sidebarHoverTracking(hoverTracker)
                 .dropDestination(for: String.self) { ids, location in
                     guard let draggedId = ids.first else { return false }
                     return dropTargets.drop(draggedId, at: location)
@@ -631,13 +640,28 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
         }
         .scrollPosition($position)
         .scrollTargetBehavior(FilterSlotSnapBehavior())
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewportHeight = $0 }
+        .onChange(of: isActive, initial: true) { _, active in
+            hoverTracker.isEnabled = active
+            if active {
+                peerModel.willShrinkContent = { [latestGeometry] shrink in
+                    guard let geometry = latestGeometry.value,
+                          let offset = WorktreeSidebarFilter.offsetBeforeShrinking(
+                              offset: geometry.contentOffset.y,
+                              viewportHeight: geometry.containerSize.height,
+                              contentHeight: geometry.contentSize.height,
+                              shrink: shrink
+                          ) else { return }
+                    position.scrollTo(y: offset)
+                }
+            }
+        }
         .onChange(of: scrollTarget) { _, id in
             // Centered so the pinned filter row never covers the highlight.
             guard let id else { return }
             withAnimation(.snappy(duration: 0.2)) { position.scrollTo(id: id, anchor: .center) }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
+            latestGeometry.value = new
             if !parked, let initialOffset = WorktreeSidebarFilter.initialParkingOffset(
                 contentHeight: new.contentSize.height,
                 viewportHeight: new.containerSize.height,
@@ -646,9 +670,23 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
                 parked = true
                 position.scrollTo(y: initialOffset)
             }
+            if let padded = WorktreeSidebarFilter.viewportHeightToPadTo(
+                stored: viewportHeight,
+                viewportHeight: new.containerSize.height,
+                contentHeight: new.contentSize.height,
+                slot: SidebarFilterRowMetrics.parkedOffset
+            ) {
+                viewportHeight = padded
+            }
             onScroll(new.contentOffset.y + new.contentInsets.top)
+            hoverTracker.scrolled(to: new.contentOffset.y)
         }
     }
+}
+
+@MainActor
+private final class LatestScrollGeometry {
+    var value: ScrollGeometry?
 }
 
 private struct FilterSlotSnapBehavior: ScrollTargetBehavior {
@@ -671,9 +709,15 @@ final class SidebarScrollOffsets {
         offsets[spaceID] ?? 0
     }
 
+    /// Past the filter row's slot its position no longer changes, so a long
+    /// scroll settles at one value and stops invalidating it every frame.
     func setOffset(_ offset: CGFloat, forSpace spaceID: String) {
-        offsets[spaceID] = offset
+        let clamped = min(offset, Self.offsetCeiling)
+        if offsets[spaceID] != clamped { offsets[spaceID] = clamped }
     }
+
+    /// Well above the slot, whose row has fully faded by `parkedOffset`.
+    private static let offsetCeiling = SidebarFilterRowMetrics.parkedOffset + SidebarFilterRowMetrics.slotHeight
 }
 
 /// Rides its slot at the top of the scroll content, and pins over the list

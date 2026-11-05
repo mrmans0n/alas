@@ -640,6 +640,11 @@ pub enum PreviewCommand {
         x: f64,
         y: f64,
     },
+    Resize {
+        preview_id: String,
+        /// Width and height in CSS pixels; `None` fills the pane.
+        size: Option<(u32, u32)>,
+    },
     Wait {
         preview_id: String,
         condition: PreviewWaitCondition,
@@ -1508,6 +1513,17 @@ fn preview_request(command: &PreviewCommand) -> Request {
             preview_request_with_params("preview_scroll", preview_id, |params| {
                 params.insert("x".into(), serde_json::Value::from(*x));
                 params.insert("y".into(), serde_json::Value::from(*y));
+            })
+        }
+        PreviewCommand::Resize { preview_id, size } => {
+            preview_request_with_params("preview_resize", preview_id, |params| match size {
+                Some((width, height)) => {
+                    params.insert("width".into(), serde_json::Value::from(*width));
+                    params.insert("height".into(), serde_json::Value::from(*height));
+                }
+                None => {
+                    params.insert("fill".into(), serde_json::Value::Bool(true));
+                }
             })
         }
         PreviewCommand::Wait {

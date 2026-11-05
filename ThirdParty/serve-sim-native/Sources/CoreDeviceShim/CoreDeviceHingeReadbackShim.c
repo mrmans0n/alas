@@ -5,6 +5,8 @@
 
 static void *monitorTarget, *snapshotMetadata, *configMetadata;
 extern int32_t SSCDHingeReadbackDescriptor[2];
+void __attribute__((swiftasynccall)) SSCDHingeReadback(void *, void *, void *, void *,
+                                                       void * __attribute__((swift_async_context)));
 
 // Optional readback must not become a prerequisite for existing HID controls.
 bool SSCoreDeviceHingeReadbackAvailable(void) {
@@ -19,6 +21,9 @@ bool SSCoreDeviceHingeReadbackAvailable(void) {
         snapshotMetadata = dlsym(utilities, "$s19CoreDeviceUtilities0B18HingeAngleSnapshotVMa");
         configMetadata = dlsym(utilities, "$s19CoreDeviceUtilities22HingeAngleStreamConfigVMa");
         if (!monitorTarget || !descriptor || !snapshotMetadata || !configMetadata) return;
+        intptr_t entryOffset = (intptr_t)&SSCDHingeReadback - (intptr_t)SSCDHingeReadbackDescriptor;
+        if (entryOffset < INT32_MIN || entryOffset > INT32_MAX) return;
+        SSCDHingeReadbackDescriptor[0] = (int32_t)entryOffset;
         SSCDHingeReadbackDescriptor[1] = descriptor[1];
         available = true;
     });

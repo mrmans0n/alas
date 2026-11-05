@@ -28,6 +28,11 @@ struct WebPreviewCommandTests {
         (#"preview_console"#, #"{"preview_id":"p","clear":"true"}"#),
         (#"preview_wait"#, #"{"preview_id":"p","condition":"visible"}"#),
         (#"preview_reload"#, #"{}"#),
+        (#"preview_resize"#, #"{"preview_id":"p"}"#),
+        (#"preview_resize"#, #"{"preview_id":"p","width":390}"#),
+        (#"preview_resize"#, #"{"preview_id":"p","width":199,"height":844}"#),
+        (#"preview_resize"#, #"{"preview_id":"p","width":390,"height":4097}"#),
+        (#"preview_resize"#, #"{"preview_id":"p","fill":true,"width":390,"height":844}"#),
     ])
     func rejectsInvalidRequests(command: String, params: String) {
         let json = "{\"v\":1,\"kind\":\"cli\",\"session_id\":\"caller\",\"command\":\"\(command)\",\"params\":\(params)}"

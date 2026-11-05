@@ -147,11 +147,25 @@ final class MergeCodeTextView: NSTextView {
         didSet { if rowHeight != oldValue { needsDisplay = true } }
     }
 
+    /// Owns undo for all three panes, so ⌘Z works wherever the keyboard is.
+    weak var editHistory: MergeConflictTabModel?
+
+    @objc func undo(_ sender: Any?) { editHistory?.undo() }
+    @objc func redo(_ sender: Any?) { editHistory?.redo() }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): editHistory?.canUndo == true
+        case #selector(redo(_:)): editHistory?.canRedo == true
+        default: super.validateUserInterfaceItem(item)
+        }
+    }
+
     static func make(editable: Bool) -> MergeCodeTextView {
         let textView = MergeCodeTextView(usingTextLayoutManager: false)
         textView.isEditable = editable
         textView.isSelectable = true
-        textView.allowsUndo = editable
+        textView.allowsUndo = false
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false

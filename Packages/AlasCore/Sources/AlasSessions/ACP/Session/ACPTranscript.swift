@@ -60,6 +60,7 @@ public final class ACPTranscript: ChangeTracking {
     }
     private var textMessageIndices: [TextMessageKey: Int] = [:]
     private var toolCallIndices: [String: Int] = [:]
+    private var failureIncidentIndices: [String: Int] = [:]
     #if DEBUG
     public private(set) var planCacheRebuildCountForTests = 0
     public private(set) var messageIndexCacheRebuildCountForTests = 0
@@ -371,6 +372,11 @@ public final class ACPTranscript: ChangeTracking {
         toolCallIndices[toolCallId]
     }
 
+    /// The row of the failure incident whose record has this id.
+    public func failureIncidentIndex(id: String) -> Int? {
+        failureIncidentIndices[id]
+    }
+
     // MARK: - Incremental message index caches
 
     private func updateMessageIndexCaches(for mutation: MessagesMutation?) {
@@ -403,6 +409,19 @@ public final class ACPTranscript: ChangeTracking {
                     toolCallIndices[newToolCallId] = index
                 }
             }
+
+            let oldIncidentId = failureIncidentId(for: old)
+            let newIncidentId = failureIncidentId(for: new)
+            if oldIncidentId != newIncidentId {
+                if let oldIncidentId, failureIncidentIndices[oldIncidentId] == index {
+                    failureIncidentIndices.removeValue(forKey: oldIncidentId)
+                    restoreFailureIncidentIndex(for: oldIncidentId)
+                }
+                if let newIncidentId,
+                   failureIncidentIndices[newIncidentId].map({ index < $0 }) ?? true {
+                    failureIncidentIndices[newIncidentId] = index
+                }
+            }
         case .planNeutral:
             break
         case .prepend, .insert, nil:
@@ -416,6 +435,7 @@ public final class ACPTranscript: ChangeTracking {
         #endif
         textMessageIndices.removeAll(keepingCapacity: true)
         toolCallIndices.removeAll(keepingCapacity: true)
+        failureIncidentIndices.removeAll(keepingCapacity: true)
         for index in messages.indices {
             cacheMessageIndex(index, for: messages[index])
         }
@@ -427,6 +447,9 @@ public final class ACPTranscript: ChangeTracking {
         }
         if let toolCallId = toolCallId(for: message), toolCallIndices[toolCallId] == nil {
             toolCallIndices[toolCallId] = index
+        }
+        if let incidentId = failureIncidentId(for: message), failureIncidentIndices[incidentId] == nil {
+            failureIncidentIndices[incidentId] = index
         }
     }
 
@@ -443,6 +466,16 @@ public final class ACPTranscript: ChangeTracking {
         if let index = messages.indices.first(where: { self.toolCallId(for: messages[$0]) == toolCallId }) {
             toolCallIndices[toolCallId] = index
         }
+    }
+
+    private func restoreFailureIncidentIndex(for incidentId: String) {
+        if let index = messages.firstIndex(where: { failureIncidentId(for: $0) == incidentId }) {
+            failureIncidentIndices[incidentId] = index
+        }
+    }
+
+    private func failureIncidentId(for message: ACPMessage) -> String? {
+        if case .failureIncident(_, let incident) = message { incident.record.id } else { nil }
     }
 
     private func textMessageKey(for message: ACPMessage) -> TextMessageKey? {

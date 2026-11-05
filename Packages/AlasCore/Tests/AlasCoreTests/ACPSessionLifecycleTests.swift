@@ -205,6 +205,108 @@ struct ACPSessionLifecycleTests {
         #expect(update.result == .failed("Agent foreground work failed."))
     }
 
+    struct ExpectedFailureFields: Sendable {
+        var category = "limit"
+        var knownCategory = ACPSessionFailureRecord.Category.limit
+        var severity = ACPSessionFailureRecord.Severity.error
+        var details: String?
+        var reason: String?
+        var actions: [String] = []
+        var kind: String?
+    }
+
+    /// The fields every readable row needs, with `extra` appended.
+    private static func failure(_ extra: String = "") -> String {
+        #"{"version":1,"id":"t:error","revision":2,"title":"boom"\#(extra)}"#
+    }
+
+    @Test(arguments: [
+        // Claude, everything present.
+        (failure(#","category":"limit","severity":"error","details":"more","reason":"why","actions":["retry","new_session"],"kind":"rate_limited""#),
+         ExpectedFailureFields(details: "more", reason: "why", actions: ["retry", "new_session"], kind: "rate_limited")),
+        // Codex sends neither details nor reason.
+        (failure(#","category":"limit","severity":"warning","actions":[]"#),
+         ExpectedFailureFields(severity: .warning)),
+        (failure(#","category":"future""#),
+         ExpectedFailureFields(category: "future", knownCategory: .unknown)),
+        (failure(), ExpectedFailureFields(category: "unknown", knownCategory: .unknown)),
+        (failure(#","category":"limit","severity":"fatal""#), ExpectedFailureFields()),
+        (failure(#","category":"limit","actions":["retry","future","retry",3]"#),
+         ExpectedFailureFields(actions: ["retry", "future", "retry"])),
+        (failure(#","category":"limit","actions":"retry""#), ExpectedFailureFields()),
+        (failure(#","category":"limit","details":"  ","reason":3,"kind":[]"#), ExpectedFailureFields()),
+        // Unreadable: a required field is wrong, or the value is no record at all.
+        (#"{"version":2,"id":"t:error","revision":1,"title":"boom"}"#, nil),
+        (#"{"id":"t:error","revision":1,"title":"boom"}"#, nil),
+        (#"{"version":1,"revision":1,"title":"boom"}"#, nil),
+        (#"{"version":1,"id":"","revision":1,"title":"boom"}"#, nil),
+        (#"{"version":1,"id":"t:error","revision":0,"title":"boom"}"#, nil),
+        (#"{"version":1,"id":"t:error","revision":1.5,"title":"boom"}"#, nil),
+        (#"{"version":1,"id":"t:error","revision":1,"title":"  "}"#, nil),
+        (#""boom""#, nil),
+    ] as [(String, ExpectedFailureFields?)])
+    func sessionFailureRecordDecoding(json: String, expected: ExpectedFailureFields?) throws {
+        let signal = try failureSignal(meta: #"{"sessionFailure":\#(json)}"#)
+        guard let expected else {
+            #expect(signal == .unreadable)
+            return
+        }
+        guard case .record(let record) = signal else {
+            Issue.record("expected a record, got \(signal)")
+            return
+        }
+        #expect(record.version == 1)
+        #expect(record.id == "t:error")
+        #expect(record.revision == 2)
+        #expect(record.title == "boom")
+        #expect(record.category == expected.category)
+        #expect(record.knownCategory == expected.knownCategory)
+        #expect(record.severity == expected.severity)
+        #expect(record.details == expected.details)
+        #expect(record.reason == expected.reason)
+        #expect(record.actions == expected.actions)
+        #expect(record.kind == expected.kind)
+        // Rows persist through the same Codable pair, raw values included.
+        #expect(try JSONDecoder().decode(ACPSessionFailureRecord.self, from: JSONEncoder().encode(record)) == record)
+    }
+
+    @Test(arguments: [
+        "{}",
+        #"{"sessionFailure":null}"#,
+        // The AIR location of the same record is never read.
+        #"{"jetbrains":{"air":{"version":1,"sessionFailure":\#(failure())}}}"#,
+    ])
+    func sessionFailureSignalIsAbsentWithoutItsKey(meta: String) throws {
+        #expect(try failureSignal(meta: meta) == .absent)
+    }
+
+    private static let errorFailure = failure(#","severity":"error""#)
+    private static let warningFailure = failure(#","severity":"warning""#)
+    private static let quotaError = failure(#","severity":"error","kind":"quota_exhausted""#)
+    private static let quotaWarning = failure(#","severity":"warning","kind":"quota_exhausted""#)
+
+    @Test(arguments: [
+        ("end_turn", nil, .completed),
+        ("end_turn", warningFailure, .completed),
+        ("end_turn", errorFailure, .failed("boom")),
+        ("end_turn", quotaError, .limited),
+        ("end_turn", quotaWarning, .completed),
+        ("end_turn", #""boom""#, .failed(ACPSessionFailureSignal.unreadableMessage)),
+        ("cancelled", errorFailure, .cancelled),
+        ("cancelled", #""boom""#, .cancelled),
+        ("max_tokens", errorFailure, .stopped(.init(rawValue: .string("max_tokens")))),
+        (nil, errorFailure, .stopped(.init())),
+    ] as [(String?, String?, ACPTurnCompletion.Result)])
+    func terminalResolution(stopReason: String?, failure: String?, expected: ACPTurnCompletion.Result) throws {
+        let signal = try failureSignal(meta: failure.map { #"{"sessionFailure":\#($0)}"# } ?? "{}")
+        let stop = ACPStopReason(rawValue: stopReason.map(LSPJSONValue.string))
+        #expect(stop.v1Result(failure: signal) == expected)
+    }
+
+    private func failureSignal(meta: String) throws -> ACPSessionFailureSignal {
+        try ACPSessionFailureSignal.from(metadata: JSONDecoder().decode(AnyCodable.self, from: Data(meta.utf8)))
+    }
+
     private func state(_ value: String, reason: String? = nil) throws -> ACPV2StateUpdate {
         var fields: [String: String] = ["sessionUpdate": "state_update", "state": value]
         fields["stopReason"] = reason

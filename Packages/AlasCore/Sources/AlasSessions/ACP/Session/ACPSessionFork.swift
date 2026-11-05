@@ -171,7 +171,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
                     messageId: isSteeringSegment(wire) ? nil : messageId,
                     isSteeringSegment: isSteeringSegment(wire)
                 )
-            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid:
                 nil
             }
         }
@@ -208,7 +208,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         let next = decoded[(boundaryIndex + 1)...].first { wire in
             switch wire {
             case .user, .agent: true
-            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid: false
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid: false
             }
         }
         guard case .user = next else { return nil }
@@ -255,6 +255,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             true
         case let (.planDocument(_, liveDocument), .planDocument(storedDocument)):
             liveDocument.planId == storedDocument.planId
+        case let (.failureIncident(_, liveIncident), .failureIncident(storedIncident)):
+            liveIncident.record.id == storedIncident.record.id
         default:
             false
         }
@@ -294,7 +296,7 @@ public enum ACPSessionForkSourceCheck: Sendable {
                 ids.insert(id)
             case .toolCall(let call):
                 ids.insert(call.toolCallId)
-            case .user, .agent, .thought, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
+            case .user, .agent, .thought, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid:
                 break
             }
         }
@@ -309,7 +311,7 @@ extension ACPMessage {
             .user
         case .agent:
             .agent
-        case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
+        case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid:
             nil
         }
     }

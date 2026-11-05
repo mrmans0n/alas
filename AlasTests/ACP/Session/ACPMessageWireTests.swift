@@ -227,6 +227,32 @@ struct ACPMessageWireTests {
         #expect(refreshed.first?.symbol?.lineRange == 10...12)
     }
 
+    @Test func failureIncidentWireMatchesCodec() throws {
+        let incident = try ACPFailureIncident.fixture(details: "Details", actions: ["retry", "future"], endedTurn: true)
+        let message = ACPMessage.failureIncident(id: UUID(), incident)
+        let payload = try ACPMessageCodec.encode(message)
+        guard case .failureIncident(_, let codecIncident) = try ACPMessageCodec.decode(kind: "system", payload: payload) else {
+            Issue.record("expected a failure incident from the codec")
+            return
+        }
+        let wire = try ACPMessageWire.decode(kind: "system", payload: payload)
+        #expect(wire == .failureIncident(codecIncident))
+        #expect(!wire.isAgentSideProgress)
+        #expect(!message.isAgentSideProgress)
+
+        let future = Data(#"{"text":"Failed","failureIncident":{"endedTurn":false,"record":{"version":2,"id":"f1","revision":1,"title":"F"}}}"#.utf8)
+        #expect(try ACPMessageWire.decode(kind: "system", payload: future) == .systemNotice(text: "Failed"))
+    }
+
+    @Test func failureIncidentReconcileKeepsRowIdentity() throws {
+        let rowId = UUID()
+        let existing = try ACPMessage.failureIncident(id: rowId, .fixture(revision: 1))
+        let changed = try ACPFailureIncident.fixture(revision: 2)
+
+        #expect(ACPMessageWire.failureIncident(changed).toMessage(preservingIdentityFrom: existing)
+            == .failureIncident(id: rowId, changed))
+    }
+
     @Test("plan document payloads decode to the same document as the codec",
           arguments: [ACPPlanDocument.markdownFixture, .fileFixture, .hiddenFixture])
     func planDocumentWireMatchesCodec(document: ACPPlanDocument) throws {

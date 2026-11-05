@@ -76,8 +76,15 @@ final class NativePeerSessions {
         }
     }
 
+    /// `snapshot.attentionRows`, published only when it changes: the sidebar's
+    /// attention badge recomputes the whole aggregation when this moves, and most
+    /// session pushes leave it alone.
+    private(set) var attentionRows: [RemoteSessionSummary] = []
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: []) {
-        didSet { if hasGroups != !snapshot.groups.isEmpty { hasGroups.toggle() } }
+        didSet {
+            if hasGroups != !snapshot.groups.isEmpty { hasGroups.toggle() }
+            if attentionRows != snapshot.attentionRows { attentionRows = snapshot.attentionRows }
+        }
     }
     /// Whether any peer is listed. Views that only need this read it instead
     /// of `snapshot`, which changes on every streamed session update.

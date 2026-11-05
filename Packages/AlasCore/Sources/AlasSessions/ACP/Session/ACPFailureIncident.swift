@@ -1,0 +1,73 @@
+import Foundation
+import AlasACP
+
+/// A structured failure the agent reported, kept as one transcript row per
+/// record id. It is never agent output: not progress, not last-agent text,
+/// and it does not close a run of output.
+public struct ACPFailureIncident: Codable, Equatable, Sendable {
+    public let record: ACPSessionFailureRecord
+    /// Set once a prompt response carried it as an error ending the turn. Never set by
+    /// `session_info_update` or replay, so a background error is not a turn failure.
+    /// Cleared when a later turn ends other than failed or cancelled: a retry or a
+    /// wake records no user row that would otherwise close this failure.
+    public var endedTurn: Bool
+
+    public init(record: ACPSessionFailureRecord, endedTurn: Bool = false) {
+        self.record = record
+        self.endedTurn = endedTurn
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case record, endedTurn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        record = try c.decode(ACPSessionFailureRecord.self, forKey: .record)
+        endedTurn = try c.decodeIfPresent(Bool.self, forKey: .endedTurn) ?? false
+    }
+
+    /// This incident for a surface that cannot act on it.
+    public func strippingActions() -> ACPFailureIncident {
+        ACPFailureIncident(record: record.strippingActions(), endedTurn: endedTurn)
+    }
+
+    /// Whether this row says its turn failed, rather than that it hit a usage limit.
+    public var reportsTurnFailure: Bool {
+        endedTurn && record.severity == .error && !record.isUsageLimit
+    }
+
+    /// The title, then a blank line and the details when present.
+    public var displayText: String {
+        record.details.map { "\(record.title)\n\n\($0)" } ?? record.title
+    }
+}
+
+/// The persisted payload of a `"system"` row, shared by `ACPMessageCodec` and
+/// `ACPMessageWire`. An incident keeps its title in `text`, so an older build
+/// sharing the store shows it as a notice. An incident that does not decode,
+/// bad or from a future version, leaves the row a notice here too.
+struct ACPSystemRowPayload: Codable {
+    let text: String
+    let failureIncident: ACPFailureIncident?
+
+    init(text: String) {
+        self.text = text
+        failureIncident = nil
+    }
+
+    init(failureIncident: ACPFailureIncident) {
+        text = failureIncident.record.title
+        self.failureIncident = failureIncident
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, failureIncident
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        failureIncident = try? c.decodeIfPresent(ACPFailureIncident.self, forKey: .failureIncident)
+    }
+}

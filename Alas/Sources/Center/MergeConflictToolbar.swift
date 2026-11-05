@@ -25,6 +25,10 @@ struct MergeConflictToolbar: View {
     /// markers. Off for merges driven from outside alas without
     /// `merge.conflictStyle=zdiff3`, where the toggle would do nothing.
     let baseAvailable: Bool
+    let canUndo: Bool
+    let canRedo: Bool
+    let onUndo: () -> Void
+    let onRedo: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onAskAgentResolve: () -> Void
@@ -37,6 +41,8 @@ struct MergeConflictToolbar: View {
             counter
             Divider().frame(height: 18)
             navigationButtons
+            Divider().frame(height: 18)
+            undoButtons
             Divider().frame(height: 18)
             Text("Highlight")
                 .font(.system(size: 11))
@@ -107,6 +113,27 @@ struct MergeConflictToolbar: View {
         return "\(conflictCount) conflict(s)"
     }
 
+    /// ⌘Z itself goes through the panes and the Edit menu, so it can't take over a text field
+    /// elsewhere in the window.
+    private var undoButtons: some View {
+        HStack(spacing: 4) {
+            ChevronNavButton(
+                systemName: "arrow.uturn.backward",
+                tooltip: "Undo (⌘Z)",
+                shortcut: nil,
+                disabled: !canUndo,
+                action: onUndo
+            )
+            ChevronNavButton(
+                systemName: "arrow.uturn.forward",
+                tooltip: "Redo (⇧⌘Z)",
+                shortcut: nil,
+                disabled: !canRedo,
+                action: onRedo
+            )
+        }
+    }
+
     private var navigationButtons: some View {
         HStack(spacing: 4) {
             ChevronNavButton(
@@ -134,7 +161,7 @@ struct MergeConflictToolbar: View {
 private struct ChevronNavButton: View {
     let systemName: String
     let tooltip: String
-    let shortcut: KeyEquivalent
+    let shortcut: KeyEquivalent?
     let disabled: Bool
     let action: () -> Void
 
@@ -153,7 +180,7 @@ private struct ChevronNavButton: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(shortcut, modifiers: [.option])
+        .keyboardShortcut(shortcut.map { KeyboardShortcut($0, modifiers: [.option]) })
         .help(tooltip)
         .disabled(disabled)
         .onHover { hovering = $0 }

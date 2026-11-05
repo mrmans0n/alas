@@ -53,10 +53,20 @@ public struct ACPGoalState: Equatable, Hashable, Sendable {
 public struct ACPRetryStatus: Equatable, Sendable {
     public let turnId: String?
     public let detail: String?
+    /// The failure incident this retry belongs to; nil for legacy retry metadata.
+    public let incidentId: String?
 
-    public init(turnId: String?, detail: String?) {
+    public init(turnId: String?, detail: String?, incidentId: String? = nil) {
         self.turnId = turnId
         self.detail = detail
+        self.incidentId = incidentId
+    }
+
+    /// The banner's line. An adapter's detail may already say it is retrying.
+    public var bannerText: String {
+        guard let detail else { return "Retrying" }
+        let saysRetrying = detail.range(of: "retrying", options: [.anchored, .caseInsensitive]) != nil
+        return saysRetrying ? detail : "Retrying — \(detail)"
     }
 }
 

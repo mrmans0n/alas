@@ -1404,6 +1404,10 @@ public final class RemoteSessionGateway {
             )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
+        case .failureIncident(_, let incident):
+            // Web and native peers show `text`. Peers cannot act on the actions.
+            return .init(stableId: sid, kind: "failureIncident", text: incident.displayText,
+                         json: Self.encodeJSON(incident.strippingActions()), index: index)
         case .planDocument(_, let document):
             // Peers cannot open host files, so the path only travels in `text`,
             // which older peers show as plain text for this unknown kind.

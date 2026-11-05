@@ -69,6 +69,25 @@ public struct ACPTurnCompletion: Equatable, Sendable {
     }
 }
 
+extension ACPTurnCompletion.Result {
+    public var isFailedOrLimited: Bool {
+        switch self {
+        case .failed, .limited: true
+        case .completed, .cancelled, .stopped: false
+        }
+    }
+
+    /// Whether the agent took this turn, so an earlier turn's failure is no
+    /// longer its latest word. A failed turn reports its own failure, and a
+    /// cancelled one leaves the earlier failure standing.
+    public var closesEarlierTurnFailure: Bool {
+        switch self {
+        case .completed, .stopped, .limited: true
+        case .failed, .cancelled: false
+        }
+    }
+}
+
 /// A finished turn's cumulative cost: the session's, when a `usage_update` with a cost arrived during the turn, and
 /// nil when none did, so a turn never reports a stale total as its own. The turn's last update may still be on the
 /// stream when its result arrives, so `resolve` can wait, without touching the runner, until the updates sent before

@@ -1,0 +1,16 @@
+{
+  "version": "0.23.2",
+  "headline": {
+    "title": "iOS Simulator",
+    "body": "Enable the experimental Device tab to view and control an iOS Simulator beside your session.",
+    "media": "media/0.23.2-ios-simulator.gif"
+  },
+  "also": [
+    {
+      "title": "Undo merge decisions"
+    },
+    {
+      "title": "Clearer agent failures"
+    }
+  ]
+}

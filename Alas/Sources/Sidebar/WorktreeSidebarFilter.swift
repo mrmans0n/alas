@@ -47,6 +47,28 @@ enum WorktreeSidebarFilter {
         return slot
     }
 
+    /// The viewport height to pad the content to, or nil to leave it. Padding only
+    /// does anything for a list too short to park, and writing it re-evaluates the
+    /// whole tree, so a tall list ignores viewport changes while a window resizes.
+    /// `contentHeight` includes the padding, so a padded list keeps tracking.
+    static func viewportHeightToPadTo(
+        stored: CGFloat, viewportHeight: CGFloat, contentHeight: CGFloat, slot: CGFloat
+    ) -> CGFloat? {
+        guard viewportHeight != stored, contentHeight <= max(viewportHeight, stored) + slot else { return nil }
+        return viewportHeight
+    }
+
+    /// Where to scroll before content shrinks by `shrink`, or nil when the offset
+    /// stays valid. It is where the scroll view would clamp to anyway; getting
+    /// there first spares the lazy stack re-anchoring from past the new end, which
+    /// costs a visible stall.
+    static func offsetBeforeShrinking(
+        offset: CGFloat, viewportHeight: CGFloat, contentHeight: CGFloat, shrink: CGFloat
+    ) -> CGFloat? {
+        let newEnd = max(0, contentHeight - shrink - viewportHeight)
+        return offset > newEnd ? newEnd : nil
+    }
+
     /// Where the filter row draws, from the top of the scroll area. Unpinned
     /// it rides its slot at the top of the content and scrolls away with it;
     /// pinned it never rises above its rest position, but still follows a pull
