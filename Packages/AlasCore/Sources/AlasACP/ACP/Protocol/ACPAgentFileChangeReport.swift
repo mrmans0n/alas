@@ -65,9 +65,9 @@ public struct ACPAgentFileChangeReportRequest: Codable, Equatable, Sendable {
 public struct ACPAgentFileChangeReport: Codable, Equatable, Sendable {
     public enum Status: String, Codable, Sendable { case reported, unavailable }
 
-    public static let maxPaths = 1_024
-    public static let maxPathUTF16Length = 4_096
-    public static let maxUncertaintyUTF16Length = 2_000
+    static let maxPaths = 1_024
+    static let maxPathUTF16Length = 4_096
+    static let maxUncertaintyUTF16Length = 2_000
     public static let maxSerializedBytes = 256 * 1_024
 
     public let requestId: String

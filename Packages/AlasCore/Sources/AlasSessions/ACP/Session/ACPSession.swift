@@ -1146,7 +1146,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// row describes its latest attempt, so a late report from an older one finds
     /// no row. Returns the row to persist. Nil when the row is gone or already
     /// holds this id, which a same-key resend does, keeping its report.
-    public func bindFileChangeReportRequest(_ requestId: String, toUserMessage id: UUID) -> Int? {
+    func bindFileChangeReportRequest(_ requestId: String, toUserMessage id: UUID) -> Int? {
         guard let index = transcript.messages.firstIndex(where: {
             guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
             return messageID == id
