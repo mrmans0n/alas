@@ -1321,6 +1321,44 @@ struct ACPSessionTests {
 
     // MARK: - Failure incidents
 
+    @Test(arguments: FileChangeReportDecision.all)
+    func fileChangeReportDecisions(row: FileChangeReportDecision) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        if row.negotiated { session.agentFileChangeReport = .init() }
+        let rowId = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_000)
+        session.transcript.replaceMessages(
+            with: [.user(id: rowId, text: "hello", attachments: [try FileChangeReportRowCase.reference(row.seed)])],
+            createdAts: [createdAt])
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        session.turnFailure = "earlier failure"
+        session.lastError = "earlier error"
+        session.enqueue(blocks: [.text("next")])
+        let queue = session.queue
+        let usageLimit = ACPUsageLimit(detectedAt: createdAt, resetsAt: nil, resetSource: .unknown, probeAttempt: 0, resettable: true)
+        session.usageLimit = usageLimit
+
+        let dirty = session.applyFileChangeReportUpdate(row.info)
+
+        #expect(dirty == (row.writes ? [0] : []))
+        guard case .user(let id, _, let text, let attachments, _, _) = session.transcript.messages[0] else {
+            Issue.record("expected the user row")
+            return
+        }
+        #expect(id == rowId)
+        #expect(text == "hello")
+        #expect(session.transcript.createdAt(forMessageAt: 0) == createdAt)
+        #expect(attachments == [try FileChangeReportRowCase.reference(row.expected)])
+        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+        #expect(session.agentState == .ready)
+        #expect(session.transcript.streamingState == .streaming)
+        #expect(session.turnFailure == "earlier failure")
+        #expect(session.lastError == "earlier error")
+        #expect(session.queue == queue)
+        #expect(session.usageLimit == usageLimit)
+    }
+
     private func negotiatedSession() -> ACPSession {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.sessionFailure = .init()
@@ -4532,6 +4570,51 @@ extension ACPSessionTests {
                   expectedPreview: "`cmd` ran successfully"),
         ]
     }
+}
+
+/// One row of the `applyFileChangeReportUpdate` decision table.
+struct FileChangeReportDecision: Sendable, CustomTestStringConvertible {
+    let testDescription: String
+    var negotiated = true
+    /// The report already on the row.
+    var seed: String?
+    let info: ACPSessionInfoUpdate
+    /// The report on the row afterwards.
+    var expected: String?
+    var writes = false
+
+    static let all: [FileChangeReportDecision] = {
+        let reported = FileChangeReportRowCase.reported
+        let unknownReason = #","status":"unavailable","reason":"brand_new""#
+        let noPaths = #","status":"reported","paths":[]"#
+        let tooManyPaths = #","status":"reported","paths":[\#(Array(repeating: #""/a""#, count: 1_025).joined(separator: ","))]"#
+        return [
+            .init(testDescription: "no metadata", info: .init(title: nil, metadata: nil)),
+            .init(testDescription: "metadata without the key", info: .init(title: nil, metadata: AnyCodable(["other": AnyCodable(1)]))),
+            .init(testDescription: "not negotiated", negotiated: false, info: fileChangeReportInfo()),
+            .init(testDescription: "malformed", info: .init(title: nil, metadata: AnyCodable(["agentFileChangeReport": AnyCodable("boom")]))),
+            .init(testDescription: "unsupported version", info: fileChangeReportInfo(version: 2)),
+            .init(testDescription: "over the path limit", info: fileChangeReportInfo(tooManyPaths)),
+            .init(testDescription: "no matching row", info: fileChangeReportInfo(requestId: "alas-turn:stale")),
+            .init(testDescription: "first report", info: fileChangeReportInfo(), expected: reported, writes: true),
+            .init(testDescription: "unknown reason", info: fileChangeReportInfo(unknownReason), expected: unknownReason, writes: true),
+            .init(testDescription: "empty list", info: fileChangeReportInfo(noPaths), expected: noPaths, writes: true),
+            .init(testDescription: "duplicate keeps the first", seed: reported, info: fileChangeReportInfo(noPaths), expected: reported),
+        ]
+    }()
+}
+
+/// A `session_info_update` carrying one file change report. `alongside` is more
+/// raw `_meta` members, each with its leading comma.
+func fileChangeReportInfo(
+    _ fields: String = FileChangeReportRowCase.reported,
+    requestId: String = "alas-turn:a",
+    version: Int = 1,
+    title: String? = nil,
+    alongside: String = ""
+) -> ACPSessionInfoUpdate {
+    let json = #"{"agentFileChangeReport":{"version":\#(version),"requestId":"\#(requestId)"\#(fields)}\#(alongside)}"#
+    return ACPSessionInfoUpdate(title: title, metadata: try! JSONDecoder().decode(AnyCodable.self, from: Data(json.utf8)))
 }
 
 /// A `session_info_update` carrying one failure record.

@@ -1456,7 +1456,7 @@ public final class ACPSessionRunner {
                 info,
                 replaying: suppressingLoadReplay,
                 promptActive: activePromptID != nil
-            ))
+            )).union(session.applyFileChangeReportUpdate(info))
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
@@ -1914,17 +1914,25 @@ public final class ACPSessionRunner {
     }
 
     /// An update that writes nothing still acknowledges behind the queue: an
-    /// earlier update's row can be unwritten, and this ack would pass it.
+    /// earlier update's row can be unwritten, and this ack would pass it. One
+    /// update can carry a failure record and a report, and writing the row of
+    /// one says nothing about the row of the other, so each is checked even
+    /// when the other wrote.
     private func persistSessionInfoRows(
         _ dirty: Set<Int>,
         of update: ACPSessionUpdate,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         var rows = dirty
-        if dirty.isEmpty, acknowledgement != nil, session.sessionFailure != nil,
-           case .sessionInfoUpdate(let info) = update,
-           case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
-            rows = unconfirmedIncidentRow(id: record.id)
+        if acknowledgement != nil, case .sessionInfoUpdate(let info) = update {
+            if session.sessionFailure != nil,
+               case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedIncidentRow(id: record.id))
+            }
+            if session.agentFileChangeReport != nil,
+               case .report(let report) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedRow(at: session.transcript.fileChangeReportIndex(requestId: report.requestId)))
+            }
         }
         if rows.isEmpty {
             acknowledgeBehindQueuedPersistence(acknowledgement)
@@ -1933,14 +1941,18 @@ public final class ACPSessionRunner {
         }
     }
 
-    /// A record that changes nothing can still be the redelivery of one whose
-    /// row never reached the store, because the in-memory row makes it a no-op.
-    /// Acknowledging it would move the cursor past that row, so unless this
-    /// runner's own write confirmed the row, it is written again. A row
+    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
+        unconfirmedRow(at: session.transcript.failureIncidentIndex(id: id))
+    }
+
+    /// A record or report that changes nothing can still be the redelivery of
+    /// one whose row never reached the store, because the in-memory row makes it
+    /// a no-op. Acknowledging it would move the cursor past that row, so unless
+    /// this runner's own write confirmed the row, it is written again. A row
     /// hydrated from the store, or trimmed from `lastPersistedPayloads`, is
     /// rewritten with the same bytes.
-    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
-        guard let index = session.transcript.failureIncidentIndex(id: id),
+    private func unconfirmedRow(at index: Int?) -> Set<Int> {
+        guard let index,
               let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index])),
               lastPersistedPayloads[index] != payload
         else { return [] }

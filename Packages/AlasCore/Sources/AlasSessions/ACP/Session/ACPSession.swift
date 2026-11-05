@@ -8,6 +8,7 @@ import AlasACP
 import os
 
 private let sessionFailureLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-session-failure")
+private let fileChangeReportLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-file-change-report")
 
 /// Narrow observable holder for the rapidly-mutating composer draft.
 /// Keystrokes update this object instead of `ACPSession` so the transcript
@@ -2664,6 +2665,45 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if promptActive, !replaying { applyFailureRetryStatus(of: record.id) }
             return dirty
         }
+    }
+
+    /// Stores a `session_info_update`'s file change report on the user row that
+    /// requested it, when negotiated. The report's `requestId` is the only
+    /// correlation, so it lands the same before or after the prompt's response.
+    /// The first report wins. Returns the rows to persist. Never touches
+    /// lifecycle, `turnFailure`, `lastError`, queue or usage, and, like a notice,
+    /// keeps the completed-output boundary and the content touch: it is not output.
+    @discardableResult
+    public func applyFileChangeReportUpdate(_ info: ACPSessionInfoUpdate) -> Set<Int> {
+        guard agentFileChangeReport != nil else { return [] }
+        let report: ACPAgentFileChangeReport
+        switch ACPAgentFileChangeReportSignal.from(metadata: info.metadata) {
+        case .absent:
+            return []
+        case .malformed:
+            fileChangeReportLogger.error("unreadable agentFileChangeReport on session_info_update")
+            return []
+        case .report(let value):
+            report = value
+        }
+        guard let index = transcript.fileChangeReportIndex(requestId: report.requestId),
+              case .user(let id, let messageId, let text, var attachments, let delegatedSource, let pastedSpans) = transcript.messages[index],
+              let position = attachments.firstIndex(where: { $0.fileChangeReportRequestId == report.requestId })
+        else {
+            fileChangeReportLogger.info("no row for file change report \(report.requestId, privacy: .public)")
+            return []
+        }
+        guard attachments[position].fileChangeReport == nil else { return [] }
+        attachments[position] = .fileChangeReportReference(requestId: report.requestId, report: report)
+        transcript.replaceMessage(at: index, with: .user(
+            id: id,
+            messageId: messageId,
+            text: text,
+            attachments: attachments,
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
+        ))
+        return [index]
     }
 
     /// An incident that is still a warning shows as a retry, read from its row
