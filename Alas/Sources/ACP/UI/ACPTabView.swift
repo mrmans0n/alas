@@ -1019,41 +1019,56 @@ private struct ACPSessionView: View {
         )
     }
 
-    private var reportedChangesActions: ACPReportedChangesActions {
+    private var reportedChangesActions: ACPReportedChangesActions? {
+        guard ACPReportedChangesPresentation.isOffered(isMirror: isMirror) else { return nil }
         let state = state
         let worktree = worktree
         let checkout = state.workspaceCheckout(for: owner)
         // A remote checkout's members are virtual, so its root must be too.
         let root = checkout.map { $0.inAppWorktreePath($0.rootPath) } ?? worktree.path.path
-        /// A remote path is never probed here; the editor reads it on its host.
-        func reportsMissingFile(at path: String) -> Bool {
-            guard !RemotePath.isReserved(path), !FileManager.default.fileExists(atPath: path) else { return false }
-            state.showFileActionError(
-                title: "File Not Found",
-                message: "Nothing exists at \(path). It may have been moved or deleted since this turn."
+        func roots() -> ACPReportedPathRoots {
+            ACPReportedPathRoots(
+                root: root,
+                physicalRoot: ACPReportedPathRoots.physicalRoot(of: root),
+                memberRoots: checkout.map { checkout in checkout.members.map { checkout.inAppWorktreePath($0.worktreePath) } }
             )
-            return true
+        }
+        /// Whether `relativePath` may open, telling the user why when it may not.
+        func access(_ relativePath: String, allowsMissing: Bool) -> Bool {
+            let path = root + "/" + relativePath
+            let shown = ACPReportedPathResolver.sanitizedForDisplay(path)
+            switch roots().access(toFileAt: path) {
+            case .allowed:
+                return true
+            case .missing:
+                guard !allowsMissing else { return true }
+                state.showFileActionError(
+                    title: "File Not Found",
+                    message: "Nothing exists at \(shown). It may have been moved or deleted since this turn."
+                )
+            case .outside:
+                state.showFileActionError(
+                    title: "Outside this worktree",
+                    message: "\(shown) leads outside this worktree through a symbolic link, so it was not opened."
+                )
+            }
+            return false
         }
         return ACPReportedChangesActions(
-            roots: {
-                ACPReportedPathRoots(
-                    root: root,
-                    physicalRoot: ACPReportedPathRoots.physicalRoot(of: root),
-                    memberRoots: checkout.map { checkout in checkout.members.map { checkout.inAppWorktreePath($0.worktreePath) } }
-                )
-            },
+            roots: roots,
             openFile: { relativePath in
-                let path = root + "/" + relativePath
-                guard !reportsMissingFile(at: path) else { return }
+                guard access(relativePath, allowsMissing: false) else { return }
                 if checkout != nil {
                     state.tabs.openExternalEditor(
-                        worktreeId: worktree.id, absoluteURL: URL(fileURLWithPath: path),
+                        worktreeId: worktree.id, absoluteURL: URL(fileURLWithPath: root + "/" + relativePath),
                         revealLine: nil, revealCharacter: nil, editable: false)
                 } else {
                     state.openFile(relativePath: relativePath, worktreeId: worktree.id)
                 }
             },
-            openDiff: isMirror || checkout != nil ? nil : { relativePath in
+            // A deleted file still has a diff to show.
+            openDiff: checkout != nil ? nil : { relativePath in
+                guard access(relativePath, allowsMissing: true) else { return }
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             }
         )

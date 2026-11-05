@@ -70,6 +70,10 @@ extension ACPTranscriptCoreTextRowView {
         // link it selects the word, as text does.
         if let target = hitTarget(at: point), event.clickCount == 1 || target == .expansionToggle {
             armedHitTarget = target
+            if target == .reportedChanges {
+                reportedChangesPressCloses = reportedChangesPopover?.isShown == true
+                    || (reportedChangesClosedAt ?? -.infinity) >= event.timestamp
+            }
             pressOrigin = point
             return
         }
@@ -138,7 +142,11 @@ extension ACPTranscriptCoreTextRowView {
         case .codeCopy(let index):
             copyCode(index, to: .general)
         case .reportedChanges:
-            presentReportedChanges(self)
+            if reportedChangesPressCloses {
+                closeReportedChangesPopover()
+            } else {
+                presentReportedChanges(self)
+            }
         case .expansionToggle:
             // A native tool call or thought is always collapsed; a group
             // header draws either state.
@@ -162,11 +170,15 @@ extension ACPTranscriptCoreTextRowView {
         guard let control = actions.reportedChanges, let theme, bounds.width > 0,
               let rect = layout(forWidth: bounds.width).reportedChangesRect
         else { return }
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: ACPReportedChangesPopover(
+        let hosting = NSHostingController(rootView: ACPReportedChangesPopover(
             presentation: control.presentation, actions: control.actions
         ).environment(\.theme, theme))
+        hosting.sizingOptions = [.preferredContentSize]
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+        popover.contentViewController = hosting
         popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
         reportedChangesPopover = popover
     }
@@ -660,6 +672,14 @@ extension ACPTranscriptCoreTextRowView: NSMenuItemValidation {
         case #selector(quoteSelection(_:)): ACPMessageQuote.canQuote(selectedText())
         default: true
         }
+    }
+}
+
+extension ACPTranscriptCoreTextRowView: NSPopoverDelegate {
+    /// A transient popover closes on the press that lands on its own chip, before
+    /// the release would open it again; `mouseDown` compares this to that press.
+    func popoverWillClose(_ notification: Notification) {
+        reportedChangesClosedAt = ProcessInfo.processInfo.systemUptime
     }
 }
 

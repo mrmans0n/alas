@@ -408,58 +408,53 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!collapsed.isEqual(to: expanded))
     }
 
-    @Test func reportedChangesFollowATurnOnANativeRow() throws {
+    /// A checkpoint keeps the row on SwiftUI, whose control follows the same token.
+    @Test(arguments: [false, true])
+    func reportedChangesFollowATurn(hasCheckpoint: Bool) throws {
         let host = withReportedChangesActions(makeHost())
-        let checkpoint = UUID()
         let id = UUID()
+        let checkpoint: [ACPMessage.Attachment] = hasCheckpoint ? [.checkpointReference(id: UUID())] : []
         host.session.replaceTranscriptMessages([
-            .user(id: id, text: "please fix the tests", attachments: [
-                .checkpointReference(id: checkpoint), .fileChangeReportReference(requestId: "alas-turn:a"),
-            ]),
+            .user(id: id, text: "please fix the tests", attachments: checkpoint + [.fileChangeReportReference(requestId: "alas-turn:a")]),
             // Steered: the turn still owes the row above its report, and that row can already be native.
             .user(id: UUID(), text: "and the docs", attachments: []),
         ])
-        func nativeRow() throws -> (spec: ACPTranscriptRowSpec, view: ACPTranscriptCoreTextRowView) {
-            let spec = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true).first {
+        func spec(_ host: ACPTranscriptScroller) throws -> ACPTranscriptRowSpec {
+            try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true).first {
                 $0.id == host.transcript.stableId(for: host.transcript.messages[0])
             })
-            let native = try #require(spec.native)
+        }
+        /// The native row's title, when the row is native.
+        func title(_ spec: ACPTranscriptRowSpec) throws -> String? {
+            #expect((spec.native != nil) != hasCheckpoint)
+            guard let native = spec.native else { return nil }
             let view = try #require(native.make() as? ACPTranscriptCoreTextRowView)
             native.configure(view)
-            return (spec, view)
-        }
-        func title(_ view: ACPTranscriptCoreTextRowView) -> String? {
-            if case .user(_, let title) = view.content { title } else { nil }
+            guard case .user(_, let title) = view.content else { return nil }
+            #expect((view.actions.reportedChanges != nil) == (title != nil))
+            return title
         }
 
         host.transcript.streamingState = .streaming
-        let active = try nativeRow()
-        #expect(title(active.view) == nil)
-        #expect(active.view.actions.reportedChanges == nil)
-        #expect(active.view.actions.menu?.checkpointID == checkpoint)
+        let active = try spec(host)
+        #expect(try title(active) == nil)
 
         host.transcript.streamingState = .idle
-        let finished = try nativeRow()
-        #expect(title(finished.view) == "No report received")
-        #expect(finished.view.actions.reportedChanges != nil)
-        #expect(!active.spec.equalityToken.isEqual(to: finished.spec.equalityToken))
+        let finished = try spec(host)
+        #expect(try title(finished) == (hasCheckpoint ? nil : "No report received"))
+        #expect(!active.equalityToken.isEqual(to: finished.equalityToken))
 
         let report = try JSONDecoder().decode(ACPAgentFileChangeReport.self, from: Data(
             #"{"version":1,"requestId":"alas-turn:a","status":"reported","paths":["/wt/a"]}"#.utf8))
-        host.transcript.replaceMessageMetadata(at: 0, with: .user(id: id, text: "please fix the tests", attachments: [
-            .checkpointReference(id: checkpoint), .fileChangeReportReference(requestId: "alas-turn:a", report: report),
-        ]))
-        let reported = try nativeRow()
-        #expect(title(reported.view) == "Reported changes · 1")
-        #expect(reported.view.actions.reportedChanges?.presentation.paths == ["/wt/a"])
-        #expect(!finished.spec.equalityToken.isEqual(to: reported.spec.equalityToken))
+        host.transcript.replaceMessageMetadata(at: 0, with: .user(
+            id: id, text: "please fix the tests",
+            attachments: checkpoint + [.fileChangeReportReference(requestId: "alas-turn:a", report: report)]))
+        let reported = try spec(host)
+        #expect(try title(reported) == (hasCheckpoint ? nil : "Reported changes · 1"))
+        #expect(!finished.equalityToken.isEqual(to: reported.equalityToken))
 
-        // A surface without the actions, as subagent rows are, shows no control.
-        let bare = makeHost(session: host.session)
-        let native = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: bare, nativeRowsEnabled: true).first?.native)
-        let view = try #require(native.make() as? ACPTranscriptCoreTextRowView)
-        native.configure(view)
-        #expect(title(view) == nil)
+        // A surface without the actions, as subagent rows and mirrors are, shows no control.
+        #expect(try title(spec(makeHost(session: host.session))) == nil)
     }
 
     @Test("expanding a native tool row swaps it for the expanded SwiftUI card")

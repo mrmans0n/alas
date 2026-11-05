@@ -12,38 +12,57 @@ public struct ACPReportedChangesPresentation: Equatable, Sendable {
 
     public let state: State
     public let title: String
-    /// Nil only when `declaredComplete` is literally true.
-    public let caveat: String?
     public let truncationNotice: String?
-    /// Unique and sorted.
-    public let paths: [String]
+    private let reportedPaths: [String]
+    private let uncertainty: String?
+    private let fallbackCaveat: String?
+
+    /// Nil only when `declaredComplete` is literally true.
+    public var caveat: String? {
+        // An adapter's blank text says nothing, so it cannot replace a caveat.
+        guard let uncertainty, !uncertainty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fallbackCaveat }
+        return ACPReportedPathResolver.sanitizedProse(uncertainty)
+    }
+
+    /// Unique and sorted. Computed on reading, so only the popover pays for it.
+    public var paths: [String] {
+        Set(reportedPaths).sorted()
+    }
 
     private static let adapterListCaveat =
         "This is the adapter's list. Shell commands, generators and background work may have changed other files."
     private static let notCleanCaveat = "This does not mean no files changed. Check Git for the workspace's current state."
 
-    /// Nil when no control shows: no reference, or a report still awaited during an active turn.
+    /// Whether a surface offers the control at all. A lease mirror has no runner,
+    /// so its streaming state cannot tell a live turn from a turn that ended
+    /// without a report, and its files are the owner's to open.
+    public static func isOffered(isMirror: Bool) -> Bool {
+        !isMirror
+    }
+
+    /// Nil when no control shows: no reference, or a report still awaited during
+    /// an active turn. Constant-time, as every transcript rebuild calls it.
     public static func make(attachments: [ACPMessage.Attachment], isTurnActive: Bool) -> Self? {
         guard let reference = attachments.first(where: { $0.fileChangeReportRequestId != nil }) else { return nil }
         guard let report = reference.fileChangeReport else {
             guard !isTurnActive else { return nil }
-            return Self(state: .missing, title: "No report received", caveat: notCleanCaveat, truncationNotice: nil, paths: [])
+            return Self(
+                state: .missing, title: "No report received", truncationNotice: nil, reportedPaths: [],
+                uncertainty: nil, fallbackCaveat: notCleanCaveat)
         }
-        // An adapter's blank text says nothing, so it cannot replace a caveat.
-        let uncertainty = report.uncertainty.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         let truncationNotice = report.truncated ? "The adapter left out some paths." : nil
         switch report.status {
         case .unavailable:
             return Self(
                 state: .unavailable(reasonText: reasonText(report.reason)), title: "Reported changes unavailable",
-                caveat: uncertainty ?? notCleanCaveat, truncationNotice: truncationNotice, paths: [])
+                truncationNotice: truncationNotice, reportedPaths: [], uncertainty: report.uncertainty, fallbackCaveat: notCleanCaveat)
         case .reported:
-            let paths = Set(report.paths).sorted()
+            let count = report.uniquePathCount
             return Self(
-                state: paths.isEmpty ? .reportedEmpty : .reported(count: paths.count),
-                title: paths.isEmpty ? "No file changes reported" : "Reported changes · \(paths.count)",
-                caveat: uncertainty ?? (report.declaredComplete ? nil : adapterListCaveat),
-                truncationNotice: truncationNotice, paths: paths)
+                state: count == 0 ? .reportedEmpty : .reported(count: count),
+                title: count == 0 ? "No file changes reported" : "Reported changes · \(count)",
+                truncationNotice: truncationNotice, reportedPaths: report.paths, uncertainty: report.uncertainty,
+                fallbackCaveat: report.declaredComplete ? nil : adapterListCaveat)
         }
     }
 
@@ -77,10 +96,29 @@ public struct ACPReportedPathRoots: Equatable, Sendable {
     /// `realpath(3)`, never `URL.resolvingSymlinksInPath()`, which maps
     /// `/private/tmp` back to `/tmp`. Nil for a remote path or a failed resolve.
     public static func physicalRoot(of root: String) -> String? {
-        guard !RemotePath.isReserved(root), let resolved = realpath(root, nil) else { return nil }
+        guard !RemotePath.isReserved(root) else { return nil }
+        return resolvedPath(root)
+    }
+
+    private static func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
     }
+
+    /// Whether an in-root `path` may open, decided at click time. A lexically
+    /// inside path can still leave through a symlink, as `/wt/docs -> ~/.ssh`
+    /// does. A remote path is never probed here; its editor checks on its host.
+    public func access(toFileAt path: String) -> ACPReportedFileAccess {
+        guard !RemotePath.isReserved(path) else { return .allowed }
+        guard let resolved = Self.resolvedPath(path) else { return .missing }
+        guard let physicalRoot, resolved.hasPrefix(physicalRoot + "/") else { return .outside }
+        return .allowed
+    }
+}
+
+public enum ACPReportedFileAccess: Equatable, Sendable {
+    case allowed, missing, outside
 }
 
 public struct ACPReportedPathRow: Equatable, Sendable, Identifiable {
@@ -90,7 +128,7 @@ public struct ACPReportedPathRow: Equatable, Sendable, Identifiable {
 
     /// The raw path.
     public let id: String
-    /// The relative path, or the raw path with control characters replaced by U+FFFD.
+    /// The relative path, or the raw path, with characters unsafe to show replaced by U+FFFD.
     public let display: String
     public let target: Target
 }
@@ -109,7 +147,7 @@ public enum ACPReportedPathResolver {
             guard let relative = relativePath(of: path, roots: roots) else {
                 return ACPReportedPathRow(id: path, display: sanitizedForDisplay(path), target: .outside)
             }
-            return ACPReportedPathRow(id: path, display: relative, target: .file(relativePath: relative))
+            return ACPReportedPathRow(id: path, display: sanitizedForDisplay(relative), target: .file(relativePath: relative))
         }
     }
 
@@ -137,15 +175,33 @@ public enum ACPReportedPathResolver {
         return String(resolved.dropFirst(root.count + 1))
     }
 
-    private static func sanitizedForDisplay(_ path: String) -> String {
+    /// A path on one line that reads as it is: control characters, bidi and
+    /// direction marks, which can reorder how a path reads, and line separators.
+    public static func sanitizedForDisplay(_ path: String) -> String {
+        sanitized(path) { isControl($0) || isSpoofing($0) }
+    }
+
+    /// Adapter prose: as a path, but its own line breaks and tabs stay.
+    static func sanitizedProse(_ text: String) -> String {
+        sanitized(text) { $0 != "\n" && $0 != "\t" && (isControl($0) || isSpoofing($0)) }
+    }
+
+    private static func sanitized(_ text: String, replacing isUnsafe: (Unicode.Scalar) -> Bool) -> String {
         var scalars = String.UnicodeScalarView()
-        for scalar in path.unicodeScalars {
-            scalars.append(isControl(scalar) ? "\u{FFFD}" : scalar)
+        for scalar in text.unicodeScalars {
+            scalars.append(isUnsafe(scalar) ? "\u{FFFD}" : scalar)
         }
         return String(scalars)
     }
 
     private static func isControl(_ scalar: Unicode.Scalar) -> Bool {
         scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value)
+    }
+
+    private static func isSpoofing(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x200E, 0x200F, 0x2028, 0x2029, 0x202A...0x202E, 0x2066...0x2069: true
+        default: false
+        }
     }
 }

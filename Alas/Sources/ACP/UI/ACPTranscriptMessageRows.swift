@@ -90,7 +90,7 @@ struct UserMessageRow: View {
 struct ACPReportedChangesActions {
     let roots: () -> ACPReportedPathRoots
     let openFile: (String) -> Void
-    /// Nil where a Git diff tab cannot open: a mirror or a checkout.
+    /// Nil where a Git diff tab cannot open: a checkout.
     let openDiff: ((String) -> Void)?
 }
 

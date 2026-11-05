@@ -51,6 +51,10 @@ struct ACPReportedChangesPresentationTests {
             report: #"{"status":"reported","paths":["/wt/a"],"uncertainty":"Shell edits are not seen."}"#,
             state: .reported(count: 1), title: "Reported changes · 1", caveat: "Shell edits are not seen.", paths: ["/wt/a"]),
         PresentationRow(
+            testDescription: "uncertainty keeps its line breaks, not its spoofing",
+            report: #"{"status":"reported","paths":["/wt/a"],"uncertainty":"Seen\u202Eonly\nhere\u0007"}"#,
+            state: .reported(count: 1), title: "Reported changes · 1", caveat: "Seen\u{FFFD}only\nhere\u{FFFD}", paths: ["/wt/a"]),
+        PresentationRow(
             testDescription: "blank uncertainty falls back",
             report: #"{"status":"reported","paths":["/wt/a"],"uncertainty":" \n"}"#,
             state: .reported(count: 1), title: "Reported changes · 1", caveat: adapterListCaveat, paths: ["/wt/a"]),
@@ -147,6 +151,11 @@ struct ACPReportedChangesPresentationTests {
         PathRow(testDescription: "relative", path: "a/b.swift"),
         PathRow(testDescription: "controlCharacter", path: "/wt/a\nb", display: "/wt/a\u{FFFD}b"),
         PathRow(testDescription: "c1 control character", path: "/wt/a\u{0085}b", display: "/wt/a\u{FFFD}b"),
+        PathRow(testDescription: "bidi override on a foreign path", path: "/other/a\u{202E}b", display: "/other/a\u{FFFD}b"),
+        PathRow(testDescription: "bidi override stays openable", path: "/wt/a\u{202E}b", file: "a\u{202E}b", display: "a\u{FFFD}b"),
+        PathRow(testDescription: "isolate", path: "/wt/a\u{2066}b", file: "a\u{2066}b", display: "a\u{FFFD}b"),
+        PathRow(testDescription: "direction mark", path: "/wt/a\u{200F}b", file: "a\u{200F}b", display: "a\u{FFFD}b"),
+        PathRow(testDescription: "line separator", path: "/wt/a\u{2028}b", file: "a\u{2028}b", display: "a\u{FFFD}b"),
         PathRow(testDescription: "physicalRoot", root: "/tmp/wt", physicalRoot: "/private/tmp/wt", path: "/private/tmp/wt/a", file: "a"),
         PathRow(testDescription: "privateTmpRoot", root: "/private/tmp/wt", path: "/private/tmp/wt/a", file: "a"),
         PathRow(testDescription: "foreignWithPhysical", root: "/tmp/wt", physicalRoot: "/private/tmp/wt", path: "/private/tmp/other"),
@@ -169,6 +178,42 @@ struct ACPReportedChangesPresentationTests {
         #expect(resolved.id == row.path)
         #expect(resolved.target == (row.file.map { .file(relativePath: $0) } ?? .outside))
         #expect(resolved.display == row.display ?? row.file ?? row.path)
+    }
+
+    @Test(arguments: [(false, true), (true, false)])
+    func aMirrorIsNotOffered(isMirror: Bool, expected: Bool) {
+        #expect(ACPReportedChangesPresentation.isOffered(isMirror: isMirror) == expected)
+    }
+
+    @Test func fileAccessFollowsSymlinksAtClickTime() throws {
+        let manager = FileManager.default
+        let base = URL(fileURLWithPath: "/tmp/alas-reported-\(UUID().uuidString)")
+        let root = base.appendingPathComponent("wt")
+        let foreign = base.appendingPathComponent("secrets")
+        defer { try? manager.removeItem(at: base) }
+        try manager.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: foreign, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("src/a"))
+        try Data().write(to: foreign.appendingPathComponent("id_rsa"))
+        try manager.createSymbolicLink(at: root.appendingPathComponent("docs"), withDestinationURL: foreign)
+        try manager.createSymbolicLink(at: root.appendingPathComponent("alias"), withDestinationURL: root.appendingPathComponent("src"))
+        try manager.createSymbolicLink(at: root.appendingPathComponent("self"), withDestinationURL: root)
+
+        // Reached through `/tmp`, a symlink itself, as a stored root can be.
+        let roots = ACPReportedPathRoots(root: root.path, physicalRoot: ACPReportedPathRoots.physicalRoot(of: root.path))
+        #expect(roots.access(toFileAt: root.path + "/src/a") == .allowed)
+        #expect(roots.access(toFileAt: root.path + "/alias/a") == .allowed)
+        #expect(roots.access(toFileAt: root.path + "/docs/id_rsa") == .outside)
+        #expect(roots.access(toFileAt: root.path + "/self") == .outside)
+        #expect(roots.access(toFileAt: root.path + "/src/gone") == .missing)
+        #expect(roots.access(toFileAt: root.path + "/docs/gone") == .missing)
+
+        let unresolved = ACPReportedPathRoots(root: root.path, physicalRoot: nil)
+        #expect(unresolved.access(toFileAt: root.path + "/src/a") == .outside)
+
+        // Never probed: the same real path exists nowhere on this machine.
+        let remote = ACPReportedPathRoots(root: Self.remoteRoot, physicalRoot: nil)
+        #expect(remote.access(toFileAt: Self.remoteRoot + "/a") == .allowed)
     }
 
     @Test func physicalRootMatchesRealpath() throws {

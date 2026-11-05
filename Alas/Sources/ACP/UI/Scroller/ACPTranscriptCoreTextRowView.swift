@@ -112,6 +112,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     var codeLabelElements: [ACPTranscriptCodeLabelAccessibilityElement] = []
     var reportedChangesElement: ACPTranscriptCodeCopyAccessibilityElement?
     var reportedChangesPopover: NSPopover?
+    /// When the popover last began closing, on the events' uptime clock.
+    var reportedChangesClosedAt: TimeInterval?
+    /// The armed press found the popover open, so its release only closes it.
+    var reportedChangesPressCloses = false
     /// Opens the "Reported changes" popover; tests replace it.
     var presentReportedChanges: @MainActor (ACPTranscriptCoreTextRowView) -> Void = { $0.showReportedChangesPopover() }
     /// One accessible link per drawn link, kept while the links are.

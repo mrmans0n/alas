@@ -9,8 +9,9 @@ import Foundation
 /// hidden members, and plain user messages; their markdown may hold tables of
 /// up to `ACPTranscriptMarkdownLayout.maxNativeTableColumns` (5) columns.
 /// Everything else stays SwiftUI per row: live/streaming rows, expanded cards,
-/// user messages with chips or attachments the user can see (Alas's own
-/// checkpoint and report references stay native), tables wider than 5 columns,
+/// user messages with chips or attachments other than a file change report
+/// reference (a checkpoint's inline restore button is SwiftUI only), tables
+/// wider than 5 columns,
 /// images, task lists, Mermaid, file edits, plans, notices, visual aids,
 /// subagents, and compaction/background tasks.
 @MainActor
@@ -70,7 +71,7 @@ enum ACPTranscriptNativeRows {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
             // Chips are found in the rendered text (entities decoded, `&#35;12`
             // becomes `#12`), so the source and the rendering are both checked.
-            guard attachments.allSatisfy(\.isLocalReference), pastedSpans.isEmpty, delegatedSource == nil,
+            guard attachments.allSatisfy({ $0.fileChangeReportRequestId != nil }), pastedSpans.isEmpty, delegatedSource == nil,
                   !mayHoldChips(text), !mayHoldChips(ACPMarkdownInlineRenderer.plainText(text)),
                   supportsMarkdown(text)
             else { return nil }

@@ -70,6 +70,27 @@ struct ACPTranscriptRowContentTests {
         #expect(row(isForkEligible: false) != row(isForkEligible: true))
     }
 
+    /// The message does not change when a turn ends with no report, so the title must redraw the row.
+    @Test
+    @MainActor
+    func rowContentEqualityDetectsAReportedChangesTitle() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [.fileChangeReportReference(requestId: "alas-turn:a")])
+        func row(_ reportedChanges: ACPReportedChangesPresentation?) -> ACPTranscriptRowContent {
+            ACPTranscriptRowContent(
+                stableId: message.stableId, messageIndex: 0, message: message, messageCreatedAt: nil,
+                messagePhase: nil, contentMaxWidth: 800, typography: .default, trustedImageRoot: nil,
+                transcript: session.transcript, session: session, onOpenDiff: { _ in },
+                onLoadFullToolCallContent: { _ in nil }, isForkEligible: false, forkTargets: [], onFork: { _, _ in },
+                reportedChanges: reportedChanges
+            )
+        }
+        let missing = try #require(ACPReportedChangesPresentation.make(
+            attachments: [.fileChangeReportReference(requestId: "alas-turn:a")], isTurnActive: false))
+        #expect(row(nil) != row(missing))
+        #expect(row(missing) == row(missing))
+    }
+
     @Test("equality detects fork target changes")
     @MainActor
     func rowContentEqualityDetectsForkTargetChange() {

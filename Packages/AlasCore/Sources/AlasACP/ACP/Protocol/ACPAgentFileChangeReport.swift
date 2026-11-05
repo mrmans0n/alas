@@ -74,6 +74,9 @@ public struct ACPAgentFileChangeReport: Codable, Equatable, Sendable {
     public let status: Status
     /// Empty when unavailable.
     public let paths: [String]
+    /// Distinct `paths`, counted once on decoding: a row's title reads it on
+    /// every transcript rebuild.
+    public let uniquePathCount: Int
     public let declaredComplete: Bool
     public let truncated: Bool
     public let uncertainty: String?
@@ -127,9 +130,11 @@ public struct ACPAgentFileChangeReport: Codable, Equatable, Sendable {
                 }
                 return path
             }
+            uniquePathCount = Set(paths).count
             reason = nil
         case .unavailable:
             paths = []
+            uniquePathCount = 0
             reason = try? c.decodeIfPresent(String.self, forKey: .reason)
         }
     }

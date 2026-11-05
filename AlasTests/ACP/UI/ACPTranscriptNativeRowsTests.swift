@@ -22,14 +22,15 @@ import Testing
         #expect((ACPTranscriptNativeRows.content(for: message, isLive: isLive, isCommentary: false) != nil) == expected)
     }
 
-    /// Alas's own references draw nothing of their own; what the user attached does.
+    /// A report reference draws natively. A checkpoint's restore button and anything
+    /// the user attached are SwiftUI only.
     @Test(arguments: [
-        ([ACPMessage.Attachment.checkpointReference(id: UUID())], true),
-        ([.fileChangeReportReference(requestId: "alas-turn:a")], true),
-        ([.checkpointReference(id: UUID()), .fileChangeReportReference(requestId: "alas-turn:a")], true),
+        ([ACPMessage.Attachment.fileChangeReportReference(requestId: "alas-turn:a")], true),
+        ([.checkpointReference(id: UUID())], false),
+        ([.checkpointReference(id: UUID()), .fileChangeReportReference(requestId: "alas-turn:a")], false),
         ([.fileChangeReportReference(requestId: "alas-turn:a"), .init(uri: "file:///tmp/a.png", name: "a.png", mimeType: "image/png")], false),
     ])
-    func onlyLocalReferencesStayNative(attachments: [ACPMessage.Attachment], expected: Bool) {
+    func onlyReportReferencesStayNative(attachments: [ACPMessage.Attachment], expected: Bool) {
         let message = ACPMessage.user(id: UUID(), messageId: nil, text: "please fix the tests", attachments: attachments)
         #expect((ACPTranscriptNativeRows.content(for: message, isLive: false, isCommentary: false) != nil) == expected)
     }

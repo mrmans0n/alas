@@ -274,6 +274,12 @@ import Testing
         #expect(presented == 1)
         #expect(view.textSelection == nil)
 
+        // A press that dismissed the transient popover does not reopen it on release.
+        view.reportedChangesClosedAt = 1
+        click(NSPoint(x: rect.midX, y: rect.midY))
+        #expect(presented == 1)
+        view.reportedChangesClosedAt = -1
+
         let (_, origin) = try #require(view.markdown)
         click(NSPoint(x: origin.x + 2, y: origin.y + 2))
         #expect(presented == 1)
