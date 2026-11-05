@@ -205,6 +205,24 @@ struct NativePeerTranscriptTests {
         }
     }
 
+    @Test(arguments: [ACPVisualAid.Presentation.card, .embedded])
+    func idleVisualRowsReleaseTheirHostingGraph(presentation: ACPVisualAid.Presentation) throws {
+        let visual = ACPVisualAid(id: UUID(), title: "Diagram", html: "<p>Hello</p>",
+                                  question: nil, presentation: presentation, createdAt: .distantPast)
+        let visualRow = RemoteSessionGateway.toWire(.visualAid(visual), index: 0)
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [visualRow, row("text", index: 1, text: "Answer")],
+                                              firstIndex: 0, totalCount: 2, epoch: 1, revision: 0))
+        let host = NativePeerTranscriptScroller(
+            transcript: transcript, contentMaxWidth: 800, typography: .default,
+            collapsesFinishedToolCalls: false, canFetchOlder: false, isFetchingOlder: false,
+            leadingRows: [], trailingRows: [], fetchOlder: {})
+        let specs = NativePeerTranscriptScroller.Coordinator().specs(host: host)
+        #expect(try #require(specs.first { $0.id == visualRow.stableId }).parksWhenReleased == false)
+        #expect(try #require(specs.first { $0.id == "text" }).parksWhenReleased == true)
+    }
+
     @Test func planDocumentRows() {
         let wire = RemoteSessionGateway.toWire(.planDocument(id: UUID(), .markdownFixture), index: 2)
         #expect(NativePeerRow(message: wire) == .planDocument(.markdownFixture))

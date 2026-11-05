@@ -185,7 +185,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             return (rows, proxies)
         }
 
-        private func specs(host: NativePeerTranscriptScroller) -> [ACPTranscriptRowSpec] {
+        func specs(host: NativePeerTranscriptScroller) -> [ACPTranscriptRowSpec] {
             var specs: [ACPTranscriptRowSpec] = host.leadingRows.map { extraSpec($0, host: host) }
             if host.canFetchOlder || host.isFetchingOlder {
                 let isFetching = host.isFetchingOlder
@@ -263,6 +263,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             _ message: RemoteWireMessage, inGroup: Bool, isPlanActive: Bool, host: NativePeerTranscriptScroller
         ) -> ACPTranscriptRowSpec {
             let row = rowCache.row(for: message)
+            // Parking a visual would retain its WebKit page after it leaves the mount band.
+            let parksWhenReleased = if case .visualAid = row { false } else { true }
             let isPlanActive = if case .plan = row { isPlanActive } else { false }
             // A thought renders from its streaming buffer, which republishes
             // on its own; rebuilding the row per chunk would only re-measure.
@@ -292,7 +294,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                             content
                         }
                     }
-                }
+                },
+                parksWhenReleased: parksWhenReleased
             )
         }
 
