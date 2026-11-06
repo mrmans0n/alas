@@ -51,6 +51,15 @@ struct ACPBrokerRawClientTests {
         var pending = await service.pendingRequest()
         pending.originCursor = .init(rawValue: 3)
         await service.publishPendingSuccessor(pending, retaining: [])
+        let initial = await service.snapshot()
+        let snapshot = ACPBrokerSnapshot(metadata: initial.metadata, initializeResult: nil, remoteSessionResult: nil,
+            turnState: initial.turnState, acknowledgedCursor: initial.acknowledgedCursor,
+            journalTail: .init(rawValue: 5), pendingRequests: [pending], operations: [])
+        await service.setReplayPages([
+            .init(snapshot: snapshot, events: [.init(cursor: .init(rawValue: 1), kind: .rawFrame(.init(bytes: RawBrokerFixture.first)))], hasMoreEvents: true),
+            .init(snapshot: snapshot, events: [.init(cursor: .init(rawValue: 3), kind: .pendingRequest(pending))], hasMoreEvents: true),
+            .init(snapshot: snapshot, events: [.init(cursor: .init(rawValue: 5), kind: .rawFrame(.init(bytes: RawBrokerFixture.first)))])
+        ])
         let client = makeClient(service)
         let intake = try await client.claimV2OrderedIntake()
         try client.validateV2OrderedIntake(intake)
@@ -59,23 +68,43 @@ struct ACPBrokerRawClientTests {
         defer { Task { await client.detach() } }
         var captures = intake.events.makeAsyncIterator()
         var cursors: [UInt64] = []
+        var updates: [ACPV2SessionUpdateDelivery] = []
+        var request: ACPV2InboundDelivery?
         for _ in 0..<3 {
             let event = try #require(await captures.next())
             switch event {
-            case .update(let delivery): cursors.append(try #require(delivery.brokerProvenance).cursor.rawValue)
+            case .update(let delivery):
+                updates.append(delivery)
+                cursors.append(try #require(delivery.brokerProvenance).cursor.rawValue)
             case .inbound(let delivery):
                 guard case .broker(let provenance, let key) = delivery.source else { Issue.record("Lost broker origin")
                 return }
+                request = delivery
                 cursors.append(provenance.cursor.rawValue)
                 #expect(key == "p" && delivery.frame == pending.rawFrame?.bytes)
             case .diagnostic: Issue.record("Unexpected diagnostic")
             }
         }
-        #expect(cursors == [1, 2, 3])
+        #expect(cursors == [1, 3, 5])
+        #expect(await service.scriptedPageCount == 3)
+        await service.setCompletionCursor(6)
+        let response = try await client.send(.init(method: "peer/test", brokerOperationKey: "independent"))
+        #expect(response.body == Data("null".utf8))
+        response.rawDelivery?.acknowledgeDurableConsumption()
+        request?.acknowledgeDurableConsumption()
+        updates[1].acknowledgeDurableConsumption()
+        try await client.replayRawBrokerEvents()
         #expect(await service.acks.isEmpty)
+        updates[0].acknowledgeDurableConsumption()
+        try await client.replayRawBrokerEvents()
+        #expect(await service.acks.last == 6)
         try intake.claimConsumer()
         #expect(throws: (any Error).self) { try intake.claimConsumer() }
         await client.detach()
+        var splitUpdates = client.incomingV2Updates.makeAsyncIterator()
+        var splitFrames = client.incomingRawFrames.makeAsyncIterator()
+        #expect(await splitUpdates.next() == nil)
+        #expect(await splitFrames.next() == nil)
         #expect(!intake.isValid)
         var terminal = intake.invalidations.makeAsyncIterator()
         #expect(await terminal.next() != nil)
@@ -1317,6 +1346,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let isError: Bool
     let adapterError: Data?
     var completionCursor: UInt64 = 3
+    func setCompletionCursor(_ value: UInt64) { completionCursor = value }
     func preloadOutcome(_ value: ACPBrokerRPCOutcome, cursor: UInt64) { outcome = value
     completionCursor = cursor }
     var outcome: ACPBrokerRPCOutcome?
