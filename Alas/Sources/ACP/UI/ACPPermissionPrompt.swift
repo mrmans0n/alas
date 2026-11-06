@@ -21,7 +21,7 @@ struct ACPPermissionCardContent: Equatable {
     /// Optional preview block (stdin, script body). Dropped when it would
     /// only repeat `title`.
     let summary: String?
-    /// `_meta.permission.description`, the reason line under the summary.
+    /// The presentation record's description, the reason line under the summary.
     let reason: String?
     let defaultToNo: Bool
     let options: [Option]
@@ -88,7 +88,8 @@ struct ACPPermissionCardContent: Equatable {
         summary: String?, reason: String?, defaultToNo: Bool, options: [Option],
         diffSections: [ACPToolCallDiffSection] = []
     ) {
-        self.heading = Self.nonEmpty(heading)
+        // Claude's heading normally repeats the tool call's title.
+        self.heading = Self.nonEmpty(heading).flatMap { $0 == title ? nil : $0 }
         self.kind = Self.nonEmpty(kind)
         self.mcpServerName = Self.nonEmpty(mcpServerName)
         self.title = title
@@ -293,7 +294,7 @@ struct ACPPermissionCard: View {
     /// The actual `Allow … ?` body. Title (e.g. the command) sits on its
     /// own line; if the agent included a separate content block (e.g. a
     /// preview of stdin), that follows below in monospace. When the
-    /// adapter attached `_meta.permission`, its `title` replaces the
+    /// adapter attached a presentation record, its `title` replaces the
     /// generic "Allow this?" heading and its `description` renders as a
     /// reason line under the command summary.
     private var commandBody: some View {
@@ -444,7 +445,7 @@ struct ACPPermissionOptionButton: View {
 
     /// The option that should carry default-button styling and the return
     /// key. Normally the once-only allow option; when the adapter set
-    /// `_meta.permission.defaultToNo`, the once-only reject option takes
+    /// the record's `defaultToNo`, the once-only reject option takes
     /// its place instead.
     private var isDefaultStyled: Bool {
         defaultToNo ? option.kind == "reject_once" : option.kind == "allow_once"

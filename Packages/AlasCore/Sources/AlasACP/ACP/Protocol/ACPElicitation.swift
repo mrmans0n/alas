@@ -210,10 +210,20 @@ public struct ACPElicitationPropertySchema: Codable, Equatable, Sendable {
         codexMeta?["isOther"]?.value as? Bool ?? false
     }
 
-    /// The question a note field belongs to, from `_meta.codex.questionId`.
+    /// The question a free-text field belongs to, from the negotiated
+    /// `_meta.questionCustomAnswer`, else the legacy `_meta.codex.questionId`.
     /// Note ids can gain a numeric suffix on collision, so never derive this
-    /// from the field key.
+    /// from the field key or its label. A marker that isn't version 1 on a
+    /// plain string field leaves the field independent.
     public var noteQuestionId: String? {
+        if type == "string", oneOf == nil, values == nil,
+           let root = raw.value as? [String: AnyCodable],
+           let meta = root["_meta"]?.value as? [String: AnyCodable],
+           let marker = meta["questionCustomAnswer"]?.value as? [String: AnyCodable],
+           marker["version"]?.value as? Int == 1,
+           let question = marker["questionId"]?.value as? String, !question.isEmpty {
+            return question
+        }
         guard codexMeta?["role"]?.value as? String == "user_note" else { return nil }
         return codexMeta?["questionId"]?.value as? String
     }
