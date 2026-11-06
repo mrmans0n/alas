@@ -12,6 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Let worktree agents inspect and interact with the experimental iOS Simulator through `device_*` tools, with user takeover controls. The feature is disabled by default, uses private Simulator APIs, and is validated with Xcode 26.6 (#2356).
 - Show adapter-reported file changes on supported Claude and Codex turns, with safe file links and access to current Git diffs where available (#2357).
+- Refresh Load more rows in the session browser with direct batch lookups when supported, avoiding repeated scans through older pages (#2362).
 - Tell CLI-only agents when `alas computer` targets an attached worktree VM, including guest selection and transient startup retries (#2359).
 
 ### 🐛 Fixes
