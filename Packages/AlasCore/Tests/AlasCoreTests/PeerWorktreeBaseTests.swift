@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasPlatform
+@testable import AlasAgents
 
 /// Real git: a clone whose `origin` is another copy of the template.
 struct PeerWorktreeBaseTests {
@@ -71,6 +72,25 @@ struct PeerWorktreeBaseTests {
 
         #expect(result == .success("origin/main"))
         #expect(try await Repo.sha("origin/main", in: repo.clone) == pushed)
+    }
+
+    /// The state the source reads from the parent's checkout, with real git.
+    @Test func branchStateSeesAnUnpushedCommit() async throws {
+        let repo = try await Repo()
+        defer { repo.tearDown() }
+        _ = try await Process.git(["branch", "--set-upstream-to=origin/main", "main"], cwd: repo.clone)
+
+        let pushed = await ACPPeerBasePreflight.branchState(worktreePath: repo.clone)
+
+        #expect(pushed == ACPPeerBranchState(
+            isClean: true, head: repo.head, branch: "main", upstream: "origin/main", upstreamHead: repo.head, upstreamOnOrigin: true
+        ))
+        let identity = ["-c", "user.name=test", "-c", "user.email=test@example.com"]
+        _ = try await Process.git(identity + ["commit", "-q", "--allow-empty", "-m", "local"], cwd: repo.clone)
+
+        let ahead = try #require(await ACPPeerBasePreflight.branchState(worktreePath: repo.clone))
+
+        #expect(ahead.head != repo.head && ahead.upstreamHead == repo.head)
     }
 
     enum FetchFailure: CaseIterable { case branchMissing, remoteUnreachable }

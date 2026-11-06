@@ -650,6 +650,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peers: (any ACPDelegationPeers)? = nil,
         sessionPersistence: ACPSessionPersistence? = nil,
         originRemote: String? = "github.com/o/r",
+        branchState: ACPPeerBranchState? = nil,
         nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
         pause: @escaping (Duration) async -> Void = { _ in await Task.yield() },
         makeID: @escaping () -> String = { "child" },
@@ -719,6 +720,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             machineName: { "Mini" },
             delegationPeers: { peers },
             originRemote: { _ in originRemote },
+            branchState: { _ in branchState },
             resolvePeerWorktree: { selector, worktrees in
                 switch AlasCLIWorktreeResolver.resolve(target: selector, worktrees: worktrees) {
                 case .matched(let match): .matched(match)
@@ -2848,12 +2850,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peers: FakePeers, clock: TestClock = TestClock(), onPause: @escaping () async -> Void = {},
         sessionPersistence: ACPSessionPersistence? = nil,
         now: @escaping () -> Int64 = { 100 },
+        branchState: ACPPeerBranchState? = nil,
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
         peerStartUnanswered: @escaping (String) -> Void = { _ in }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         try makeModelSelectionFixture(
             client: makeSelectionClient(), setupEvaluator: { _ in .missing(reason: "Stays local") },
-            peers: peers, sessionPersistence: sessionPersistence, nowMillis: { clock.millis }, pause: { _ in
+            peers: peers, sessionPersistence: sessionPersistence, branchState: branchState, nowMillis: { clock.millis }, pause: { _ in
                 clock.millis += clock.step
                 await onPause()
                 await Task.yield()
@@ -2902,15 +2905,53 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(response.state == "starting" && response.peer == "mini" && response.worktreeId == nil)
     }
 
-    @Test func newWorktreeWithoutABaseAsksForOne() async throws {
+    @Test func newWorktreeFromAnUnpushedBranchIsRefusedBeforeAnythingIsSent() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
-        let fixture = try remoteFixture(peers: peers)
+        let fixture = try remoteFixture(peers: peers, branchState: Self.pushedState(isClean: false))
 
         let message = errorMessage(await peerCreate(fixture, worktree: .new(branch: "fix", base: nil)))
 
-        #expect(message.contains("--base"))
+        #expect(message.contains("--base") && message.contains("git remote"))
         #expect(peers.startCalls.isEmpty)
         #expect(try await phase(fixture.persistence) == nil)
+    }
+
+    @Test func newWorktreeFromAPushedBranchSendsItsBareNameAndSHA() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers, branchState: Self.pushedState())
+
+        _ = await peerCreate(fixture, worktree: .new(branch: "fix", base: nil))
+
+        #expect(peers.startCalls.map(\.target) == [
+            .newWorktree(projectID: "id-alas", branch: "fix", base: "fix/x", expectedBaseSHA: "abc"),
+        ])
+    }
+
+    @Test(arguments: [
+        (ACPPeerBranchState(isClean: false, head: "abc", branch: "x", upstream: "origin/x", upstreamHead: "abc", upstreamOnOrigin: true), "push first"),
+        (ACPPeerBranchState(isClean: true, head: "abc", branch: "x", upstream: "origin/x", upstreamHead: "def", upstreamOnOrigin: true), "push first"),
+        (ACPPeerBranchState(isClean: true, head: "abc", branch: "x", upstream: nil, upstreamHead: nil, upstreamOnOrigin: false), "push first"),
+        (ACPPeerBranchState(isClean: true, head: "abc", branch: nil, upstream: nil, upstreamHead: nil, upstreamOnOrigin: false), "pass --base"),
+        (ACPPeerBranchState(isClean: true, head: "abc", branch: "x", upstream: "fork/x", upstreamHead: "abc", upstreamOnOrigin: false), "pass --base"),
+        (nil, "pass --base"),
+    ] as [(ACPPeerBranchState?, String)])
+    func codeThatMayNotBeOnTheRemoteIsRefused(state: ACPPeerBranchState?, mentions: String) {
+        guard case .refuse(let message) = ACPPeerBasePreflight.decide(explicitBase: nil, state: state) else {
+            Issue.record("Expected a refusal")
+            return
+        }
+        #expect(message.contains(mentions) && message.contains("git remote"))
+    }
+
+    @Test func anExplicitBaseSkipsTheChecks() {
+        let dirty = ACPPeerBranchState(isClean: false, head: "abc", branch: nil, upstream: nil, upstreamHead: nil, upstreamOnOrigin: false)
+        #expect(ACPPeerBasePreflight.decide(explicitBase: "main", state: dirty) == .useBase("main", expectedSHA: nil))
+    }
+
+    private static func pushedState(isClean: Bool = true) -> ACPPeerBranchState {
+        ACPPeerBranchState(
+            isClean: isClean, head: "abc", branch: "fix/x", upstream: "origin/fix/x", upstreamHead: "abc", upstreamOnOrigin: true
+        )
     }
 
     /// The caller hears the reason in the tool's answer, so nothing wakes it.

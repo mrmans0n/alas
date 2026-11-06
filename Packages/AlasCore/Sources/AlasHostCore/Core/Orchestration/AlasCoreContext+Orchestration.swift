@@ -140,6 +140,9 @@ extension AlasCoreContext {
                     return remotes?.first { $0.name == "origin" && $0.direction == .fetch }
                         .flatMap { GitRemoteIdentity.normalized($0.url) }
                 },
+                branchState: { worktree in
+                    await ACPPeerBasePreflight.branchState(worktreePath: worktree.path)
+                },
                 resolvePeerWorktree: { selector, worktrees in
                     switch AlasCLIWorktreeResolver.resolve(target: selector, worktrees: worktrees) {
                     case .matched(let worktree): .matched(worktree)

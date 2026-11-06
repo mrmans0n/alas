@@ -145,6 +145,8 @@ public final class ACPSessionOrchestrationCoordinator {
         /// The normalized `origin` remote (`host/owner/repo`) of a worktree on
         /// this Mac, wherever it runs; nil when it has none.
         public let originRemote: (Worktree) async -> String?
+        /// Whether a worktree's code is on its remote; nil when git cannot say.
+        public let branchState: (Worktree) async -> ACPPeerBranchState?
         /// Which of a peer's worktrees a `--worktree` selector names.
         public let resolvePeerWorktree: (String, [Worktree]) -> PeerWorktreeResolution
 
@@ -187,6 +189,7 @@ public final class ACPSessionOrchestrationCoordinator {
             machineName: @escaping () -> String = { "this Mac" },
             delegationPeers: @escaping () -> ACPDelegationPeers? = { nil },
             originRemote: @escaping (Worktree) async -> String? = { _ in nil },
+            branchState: @escaping (Worktree) async -> ACPPeerBranchState? = { _ in nil },
             resolvePeerWorktree: @escaping (String, [Worktree]) -> PeerWorktreeResolution = { selector, worktrees in
                 let matches = worktrees.filter { $0.branch == selector || $0.name == selector || $0.path.path == selector }
                 return matches.count == 1 ? .matched(matches[0]) : matches.isEmpty ? .missing : .ambiguous(matches.map(\.branch))
@@ -194,6 +197,7 @@ public final class ACPSessionOrchestrationCoordinator {
         ) {
             self.delegationPeers = delegationPeers
             self.originRemote = originRemote
+            self.branchState = branchState
             self.resolvePeerWorktree = resolvePeerWorktree
             self.admitChild = admitChild
             self.project = project
@@ -537,6 +541,14 @@ public final class ACPSessionOrchestrationCoordinator {
         guard let peers = environment.delegationPeers() else {
             return .error("No paired Macs. Pair another Mac in Settings to delegate to it.")
         }
+        // Cheap and local, so before anything is asked of the peer or recorded.
+        var newWorktreeBase: (name: String, expectedSHA: String?)?
+        if case .new(_, let base) = request.worktree {
+            switch ACPPeerBasePreflight.decide(explicitBase: base, state: base == nil ? await environment.branchState(current) : nil) {
+            case .useBase(let name, let expectedSHA): newWorktreeBase = (name, expectedSHA)
+            case .refuse(let message): return .error(message)
+            }
+        }
         let peerInfo: ACPDelegationPeerInfo
         let target: ACPPeerChildStartRequest.Target
         do {
@@ -558,15 +570,14 @@ public final class ACPSessionOrchestrationCoordinator {
                 case .ambiguous(let labels):
                     throw PeerRequestError(message: "\"\(selector)\" matches several of \(chosen.name)'s worktrees: \(labels.joined(separator: ", ")).")
                 }
-            case .new(let branch, let base):
+            case .new(let branch, _):
                 if case .invalid(let message) = GitNameValidator.validateBranchName(branch) {
                     throw PeerRequestError(message: "invalid branch name: \(message)")
                 }
-                // `discover` does not say what a project's default branch is.
-                guard let base else {
-                    throw PeerRequestError(message: "Pass --base to say what the new worktree on \(found.peer.name) branches from.")
-                }
-                target = .newWorktree(projectID: chosen.id, branch: branch, base: base, expectedBaseSHA: nil)
+                guard let newWorktreeBase else { throw PeerRequestError(message: "Could not ask the peer.") }
+                target = .newWorktree(
+                    projectID: chosen.id, branch: branch, base: newWorktreeBase.name, expectedBaseSHA: newWorktreeBase.expectedSHA
+                )
             }
         } catch let failure as PeerRequestError {
             return .error(failure.message)
