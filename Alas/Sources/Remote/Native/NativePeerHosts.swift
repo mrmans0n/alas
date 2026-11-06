@@ -39,6 +39,10 @@ final class NativePeerHosts {
     /// Fired with the peer's `serverId` when it has delegation outcomes waiting to be collected.
     @ObservationIgnored var onDelegationOutboxChanged: (@MainActor (_ serverId: String) -> Void)?
 
+    /// Fired with the peer's `serverId` when its channel becomes subscribed, so a
+    /// collect sent then cannot miss the event that follows, and when it is dropped.
+    @ObservationIgnored var onAvailabilityChanged: (@MainActor (_ serverId: String) -> Void)?
+
     private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
     private let sendPortForward: @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
@@ -90,6 +94,7 @@ final class NativePeerHosts {
         for (serverId, channel) in channels where !online.contains(serverId) || !servesHostChannel(serverId) {
             channels[serverId] = nil
             channel.disconnect() // its onChange drops `worktrees[serverId]`
+            onAvailabilityChanged?(serverId)
         }
         stopForwards { !online.contains($0.serverId) || !self.servesHostChannel($0.serverId) }
         for serverId in online where servesHostChannel(serverId) {
@@ -882,6 +887,7 @@ final class NativePeerHosts {
                 subscribed.remove(serverId)
             } else if subscribed.insert(serverId).inserted {
                 subscriptions[serverId, default: 0] += 1
+                onAvailabilityChanged?(serverId)
             }
             if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
             sendGitFollow()

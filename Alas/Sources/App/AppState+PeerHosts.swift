@@ -32,6 +32,7 @@ extension AppState {
         )
         let delegation = PeerDelegationClient(links: remotePeers, channel: { [weak hosts] in hosts?.channel(for: $0) })
         hosts.onDelegationOutboxChanged = { [weak delegation] in delegation?.onOutboxChanged?($0) }
+        hosts.onAvailabilityChanged = { [weak delegation] in delegation?.onAvailabilityChanged?($0) }
         core.delegationPeers = delegation
         remotePeers.onHostMessage = { [weak hosts] serverId, message in
             hosts?.receive(serverId: serverId, message)
