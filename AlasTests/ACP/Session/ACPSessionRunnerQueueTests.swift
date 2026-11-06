@@ -4798,8 +4798,9 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
     }
 
-    @Test("a refused send leaves the Retry of an earlier failed turn in place", .timeLimit(.minutes(1)))
-    func refusedSendKeepsEarlierRetry() async throws {
+    @Test("a refused send leaves the Retry of an earlier failed turn in place", .timeLimit(.minutes(1)),
+          arguments: [false, true])
+    func refusedSendKeepsEarlierRetry(refusedOnceHydrated: Bool) async throws {
         let (runner, mock, session, _) = try mkRunner()
         defer { runner.stop() }
         try await Self.negotiateSessionFailure(runner, mock)
@@ -4809,8 +4810,11 @@ struct ACPSessionRunnerQueueTests {
             runner.sendNow(blocks: [.text("fails")], queuedItemId: nil, onPromptFinished: { continuation.resume(returning: $0) })
         }
         let retryable = try #require(session.retryableFailure)
+        let hydrationRefused = refusedOnceHydrated ? try RefusedOnceHydrated.overLimit.prepare(session) : nil
+        defer { if let staged = hydrationRefused?.staged { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) } }
+        let blocks = hydrationRefused?.blocks ?? RefusedPrompt.pdfOnCodex.prepare(session)
         let refused = await withCheckedContinuation { continuation in
-            runner.sendNow(blocks: RefusedPrompt.pdfOnCodex.prepare(session), queuedItemId: nil,
+            runner.sendNow(blocks: blocks, queuedItemId: nil,
                            onPromptFinished: { continuation.resume(returning: $0) })
         }
         #expect(!refused)

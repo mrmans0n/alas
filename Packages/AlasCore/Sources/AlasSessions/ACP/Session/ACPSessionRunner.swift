@@ -4708,13 +4708,7 @@ extension ACPSessionRunner {
     ) {
         discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
-        // Read before the retry state goes: a refused prompt starts no turn, so
-        // the Retry of an earlier failed one still stands.
         let preflight = preflightRefusal(of: blocks)
-        if preflight == nil {
-            session.clearRetryStatus()
-            clearRetryablePrompt()
-        }
         let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
@@ -4854,6 +4848,10 @@ extension ACPSessionRunner {
                     }
                     return (false, nil, nil)
                 }
+                // Only now that nothing can refuse it before the row: a refused
+                // prompt starts no turn, so the Retry of an earlier failed one stands.
+                self.session.clearRetryStatus()
+                self.clearRetryablePrompt()
                 // A queued prompt whose turn already started (its user prompt
                 // is recorded) keeps that start: this is a resend of the same
                 // turn, e.g. after a relaunch re-attached to a broker that
