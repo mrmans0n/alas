@@ -158,9 +158,11 @@ public enum ACPAttachmentStaging: Sendable {
         real.lowercased() == expected.lowercased()
     }
 
-    /// Everything that can refuse `blocks` without reading a file's bytes: where
-    /// each staged mention points, the adapter, and the size limits. Cheap enough
-    /// to run before anything irreversible, such as cancelling a turn or recording a row.
+    /// Everything that can refuse `blocks` without loading a file: where each
+    /// staged mention points, the adapter, each file's magic bytes, and the size
+    /// limits. Cheap enough to run before anything irreversible, such as cancelling
+    /// a turn or recording a row. The size is a lower bound, since it can't see
+    /// base64's escaped slashes or images, so it never refuses a prompt that fits.
     public static func preflightRefusal(
         of blocks: [ACPContentBlock],
         agentInfo: ACPImplementationInfo?,
@@ -168,10 +170,22 @@ public enum ACPAttachmentStaging: Sendable {
         attachmentsDirectory: URL
     ) -> ACPPromptRefusal? {
         do throws(ACPPromptRefusal) {
-            _ = try stagedPDFs(
+            let files = try stagedPDFs(
                 in: blocks, agentInfo: agentInfo,
                 promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
+            for file in files where !startsWithPDFMagic(file.url) {
+                throw .pdfInvalid(name: file.name)
+            }
             try ACPPromptSizeGuard.check(blocks)
+            var empty = blocks
+            for file in files {
+                empty[file.index] = .blobResource(uri: file.uri, mimeType: pdfMIMEType, blob: "")
+            }
+            let base64Bytes = files.reduce(0) { $0 + ($1.size + 2) / 3 * 4 }
+            let encodedBytes = ACPPromptSizeGuard.encodedSize(of: empty) + base64Bytes
+            guard encodedBytes <= ACPPromptSizeGuard.maxEncodedBytes else {
+                throw .promptTooLarge(encodedBytes: encodedBytes)
+            }
             return nil
         } catch {
             return error
@@ -207,7 +221,7 @@ public enum ACPAttachmentStaging: Sendable {
         agentInfo: ACPImplementationInfo?,
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         attachmentsDirectory: URL
-    ) throws(ACPPromptRefusal) -> [(index: Int, uri: String, name: String, url: URL)] {
+    ) throws(ACPPromptRefusal) -> [(index: Int, uri: String, name: String, url: URL, size: Int)] {
         var staged: [(index: Int, uri: String, name: String, reference: StagedReference)] = []
         for (index, block) in blocks.enumerated() {
             guard case .resourceLink(let uri, let name) = block else { continue }
@@ -223,19 +237,25 @@ public enum ACPAttachmentStaging: Sendable {
         }
         guard staged.count <= maxPDFsPerMessage else { throw ACPPromptRefusal.tooManyPDFs(count: staged.count) }
         var totalBytes = 0
-        var files: [(index: Int, uri: String, name: String, url: URL)] = []
+        var files: [(index: Int, uri: String, name: String, url: URL, size: Int)] = []
         for item in staged {
             guard case .file(let url) = item.reference, let size = regularFileSize(atPath: url.path) else {
                 throw .pdfMissing(name: item.name)
             }
             totalBytes += size
             guard totalBytes <= maxPDFBytesPerMessage else { throw .pdfsTooLarge(name: item.name) }
-            files.append((item.index, item.uri, item.name, url))
+            files.append((item.index, item.uri, item.name, url, size))
         }
         return files
     }
 
     // MARK: - Files
+
+    private static func startsWithPDFMagic(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: pdfMagic.count)).flatMap { $0 }.map(hasPDFMagic) ?? false
+    }
 
     /// `attributesOfItem`, not `URL.resourceValues`, which caches.
     private static func regularFileSize(atPath path: String) -> Int? {

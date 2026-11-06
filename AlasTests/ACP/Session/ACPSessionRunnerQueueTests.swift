@@ -4631,17 +4631,16 @@ struct ACPSessionRunnerQueueTests {
             }
         }
 
-        /// A staged PDF at the raw cap encodes to about 26.7 MiB; this text passes
-        /// preflight alone and tips the encoded prompt over.
+        /// All 0xFF encodes to base64 slashes, which `JSONEncoder` escapes: about
+        /// 53 MiB once hydrated, while preflight can only count 26.7 MiB.
         @MainActor func prepare(_ session: ACPSession) throws -> (blocks: [ACPContentBlock], staged: URL) {
             session.agentInfo = .init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")
             session.promptCapabilities = .init(embeddedContext: true)
             var bytes = Data("%PDF-1.7 \(UUID().uuidString)".utf8)
-            if self == .overLimit { bytes.append(Data(count: ACPAttachmentStaging.maxPDFBytesPerMessage - bytes.count)) }
+            if self == .overLimit { bytes.append(Data(repeating: 0xFF, count: ACPAttachmentStaging.maxPDFBytesPerMessage - bytes.count)) }
             let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: session.attachmentsDirectory)
             if self == .fileChanged { try Data("changed".utf8).write(to: staged) }
-            let text = self == .overLimit ? String(repeating: "x", count: 6 * 1024 * 1024) : "read"
-            return ([.text(text), .resourceLink(uri: staged.absoluteString, name: "a.pdf")], staged)
+            return ([.text("read"), .resourceLink(uri: staged.absoluteString, name: "a.pdf")], staged)
         }
     }
 

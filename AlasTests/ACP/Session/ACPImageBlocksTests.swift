@@ -289,6 +289,17 @@ struct ACPImageBlocksTests {
         #expect(preflight(exact) == nil)
         let over = try exact + [stage("c")]
         #expect(preflight(over) == .pdfsTooLarge(name: "c.pdf"))
+
+        // Refused before a turn is cancelled: the PDFs count as base64, and their contents are checked.
+        let padded = preflight(exact + [.text(String(repeating: "x", count: 6 * 1024 * 1024))])
+        guard case .promptTooLarge = padded else {
+            Issue.record("expected promptTooLarge, got \(String(describing: padded))")
+            return
+        }
+        let changed = try stage("d")
+        guard case .resourceLink(let uri, _) = changed, let url = URL(string: uri) else { throw CocoaError(.fileNoSuchFile) }
+        try Data("changed".utf8).write(to: url)
+        #expect(preflight([changed]) == .pdfInvalid(name: "d.pdf"))
     }
 
     @Test("another worktree's staged PDF is refused naming the file, on any adapter")
