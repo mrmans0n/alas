@@ -19,10 +19,18 @@ public final class ACPPeerOutboxCollector {
     private let parentIsGone: @MainActor (_ child: ACPDelegationRecord) async -> Bool
     private let outboxChanged: @MainActor (_ serverId: String) -> Void
     private let availabilityChanged: @MainActor (_ serverId: String) -> Void
+    private let collected: @MainActor (_ entry: ACPPeerOutboxEntry) -> Void
+    private let retryStarts: @MainActor (_ serverId: String) async -> Void
+    private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
     private var pulling: Set<String> = []
     private var queued: Set<String> = []
+    private var failedPulls: Set<String> = []
+    private var retryArmed: Set<String> = []
+
+    /// How often a live link is asked again while something is left open.
+    private static let retrySeconds = 60
 
     /// - Parameters:
     ///   - deliver: Hands the parent of `child` its waiting messages, attaching
@@ -32,13 +40,20 @@ public final class ACPPeerOutboxCollector {
     ///   - outboxChanged: Also told whenever a peer reports outcomes waiting.
     ///   - availabilityChanged: Also told whenever a peer may have become
     ///     reachable or unreachable.
+    ///   - collected: Told about each entry for one of the peer's children
+    ///     that was settled here.
+    ///   - retryStarts: Asks again about children still starting on a peer.
+    ///   - schedule: Arranges for work to run after a number of seconds.
     public init(
         peers: ACPDelegationPeers,
         persistence: ACPOrchestrationPersistence,
         deliver: @escaping @MainActor (_ child: ACPDelegationRecord) async -> Void,
         parentIsGone: @escaping @MainActor (_ child: ACPDelegationRecord) async -> Bool = { _ in false },
         outboxChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
-        availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in }
+        availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
+        collected: @escaping @MainActor (_ entry: ACPPeerOutboxEntry) -> Void = { _ in },
+        retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
+        schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) {
         self.peers = peers
         self.persistence = persistence
@@ -46,6 +61,9 @@ public final class ACPPeerOutboxCollector {
         self.parentIsGone = parentIsGone
         self.outboxChanged = outboxChanged
         self.availabilityChanged = availabilityChanged
+        self.collected = collected
+        self.retryStarts = retryStarts
+        self.schedule = schedule
     }
 
     /// Starts listening, and collects from every peer that is online now: its
@@ -71,26 +89,60 @@ public final class ACPPeerOutboxCollector {
     /// Pulls and delivers everything `serverId` has waiting. A call during a
     /// pull queues one more pull behind it and returns; the running pull
     /// makes it. A failed page ends the pull with the cursor where it was,
-    /// and nothing retries until the next signal.
+    /// to be tried again by `retryWhileNeeded` or the next signal.
     public func collect(serverId: String) async {
         guard pulling.insert(serverId).inserted else {
             queued.insert(serverId)
             return
         }
-        defer { pulling.remove(serverId) }
         repeat {
             queued.remove(serverId)
-            await pull(serverId)
+            if await pull(serverId) {
+                failedPulls.remove(serverId)
+            } else {
+                failedPulls.insert(serverId)
+            }
         } while queued.contains(serverId)
+        pulling.remove(serverId)
+        await retryWhileNeeded(serverId: serverId)
     }
 
-    private func pull(_ serverId: String) async {
+    /// Arranges to ask an online peer again while a pull failed or a child is
+    /// still starting there: with the link up, no signal is coming. A peer that
+    /// is down needs no timer, since coming back is a signal. One timer per
+    /// peer at a time, and it ends once neither applies.
+    public func retryWhileNeeded(serverId: String) async {
+        guard !retryArmed.contains(serverId), isOnline(serverId) else { return }
+        var needed = failedPulls.contains(serverId)
+        if !needed {
+            let children = try? await persistence.peerChildren(peerServerId: serverId)
+            needed = children?.contains { $0.phase == .starting } == true
+        }
+        guard needed, isOnline(serverId), retryArmed.insert(serverId).inserted else { return }
+        schedule(Self.retrySeconds) { [weak self] in await self?.retry(serverId) }
+    }
+
+    private func retry(_ serverId: String) async {
+        // Pull first: asking about starts can hold a row for a minute each.
+        await collect(serverId: serverId)
+        await retryStarts(serverId)
+        // Held until here, so a slow retry does not get a second one beside it.
+        retryArmed.remove(serverId)
+        await retryWhileNeeded(serverId: serverId)
+    }
+
+    private func isOnline(_ serverId: String) -> Bool {
+        peers.peers.first { $0.serverId == serverId }?.state == .online
+    }
+
+    /// False when it stopped on something a retry could get past.
+    private func pull(_ serverId: String) async -> Bool {
         let cursor: Int64
         do {
             cursor = try await persistence.peerCursor(peerServerId: serverId)
         } catch {
             logger.error("Could not read the cursor for peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
-            return
+            return false
         }
         var after = cursor
         var gone: [String: Bool] = [:]
@@ -102,12 +154,13 @@ public final class ACPPeerOutboxCollector {
             case .success(let answer): page = answer
             case .failure(let error):
                 logger.notice("Outbox of peer \(serverId, privacy: .public) not collected after \(after): \(String(describing: error), privacy: .public)")
-                return
+                return false
             }
             // The whole page is committed before anyone is woken, so a slow
             // parent holds up neither another parent nor the next page.
             var parents: [ACPDelegationRecord] = []
             var stopped = false
+            var settled = true
             for entry in page.entries {
                 guard entry.seq > after else {
                     logger.error("Peer \(serverId, privacy: .public) sent seq \(entry.seq) after \(after); ignoring the rest")
@@ -116,6 +169,7 @@ public final class ACPPeerOutboxCollector {
                 }
                 guard let child = await settle(entry, from: serverId, gone: &gone) else {
                     stopped = true
+                    settled = false
                     break
                 }
                 if let child, !parents.contains(where: { $0.parentSessionId == child.parentSessionId }) {
@@ -126,7 +180,7 @@ public final class ACPPeerOutboxCollector {
             for child in parents {
                 Task { @MainActor [deliver] in await deliver(child) }
             }
-            guard !stopped, page.hasMore, !page.entries.isEmpty else { return }
+            guard !stopped, page.hasMore, !page.entries.isEmpty else { return settled }
         }
     }
 
@@ -154,9 +208,11 @@ public final class ACPPeerOutboxCollector {
             }
             if isGone {
                 try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq)
+                collected(entry)
                 return .some(nil)
             }
             _ = try await persistence.collectPeerEntry(entry, peerServerId: serverId, parentSessionId: child.parentSessionId)
+            collected(entry)
             // The parent is woken even when another collector won: delivery
             // is idempotent, and that one may have stopped before it got there.
             return .some(child)

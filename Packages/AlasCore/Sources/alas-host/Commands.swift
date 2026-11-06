@@ -248,9 +248,13 @@ enum HostCommands {
     }
 
     static func forgetPeer(_ id: String) async throws {
-        try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { _ in
+        try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { host in
             // The pairing service's revoke persists the device revocation.
-            localPeerManager().forget(peerId: id)
+            let peers = localPeerManager()
+            let serverId = peers.peers.first { $0.id == id }?.serverId
+            peers.forget(peerId: id)
+            // Awaited, as this process ends next.
+            if let serverId { await host.coreContext.orchestration.deletePeerRecords(serverId: serverId) }
         }
     }
 

@@ -82,6 +82,9 @@ public final class RemotePeerManager {
     /// peer's access immediately: revoking the device record alone would leave
     /// an already-open socket authorized until it happened to close.
     @ObservationIgnored public var onRevokeDevice: (@MainActor (String) -> Void)?
+    /// Called when the pairing with a peer ended: its link refused this Mac's
+    /// confirmed token, or (`forgotten`) the user forgot it here.
+    @ObservationIgnored public var onPeerRevoked: (@MainActor (_ serverId: String, _ name: String, _ forgotten: Bool) -> Void)?
     /// `FederatedPeerLinks` sink. Set by `FederatedSessionsProvider`.
     @ObservationIgnored public var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
     /// Peer console events, kept off the federation fan-out: they belong to
@@ -956,6 +959,7 @@ public final class RemotePeerManager {
             onRevokeDevice?(deviceId)
         }
         savePeers()
+        onPeerRevoked?(peer.serverId, peer.name, true)
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
@@ -1137,8 +1141,15 @@ public final class RemotePeerManager {
     private func handle(_ event: RemotePeerConnection.Event, peerId: String) {
         switch event {
         case .stateChanged(let state):
+            let wasUnauthorized = states[peerId] == .unauthorized
             states[peerId] = state
             if let peer = peers.first(where: { $0.id == peerId }) {
+                // A token still being tried out says nothing about the pairing:
+                // a failed re-pair revokes it and restores the confirmed one.
+                if state == .unauthorized, !wasUnauthorized,
+                   peer.token == durableStateByServerId[peer.serverId]?.token {
+                    onPeerRevoked?(peer.serverId, peer.name, false)
+                }
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
             }
         case .hello(_, let name, let protocolVersion, _, let advertised):

@@ -112,6 +112,13 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "Delegated session \(label(context)) finished its turn."
     }
 
+    /// A child whose peer has been out of reach for a while. Nothing is known
+    /// about the child, so it is not called failed.
+    public static func peerOffline(_ context: Context, peer: String, minutes: Int) -> String {
+        "Delegated session \(label(context)) may still be running: \(peer) has been out of reach for \(minutes) minutes. "
+            + "Its result arrives when \(peer) is back."
+    }
+
     /// Cancellation does not identify who initiated it. A notice only,
     /// preserving the policy that cancelled work never wakes its parent.
     public static func cancelled(_ context: Context) -> String {

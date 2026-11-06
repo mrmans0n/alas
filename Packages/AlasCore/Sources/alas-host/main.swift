@@ -255,6 +255,7 @@ let peers = RemotePeerManager(
     localIdentity: { localPeerIdentity?() ?? .init(serverId: "", name: "", origins: []) }
 )
 peers.onRevokeDevice = { remote?.disconnectDevice($0) }
+host.coreContext.watchForRevokedPeers(of: peers)
 protocolServer.remotePeers = peers
 if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {

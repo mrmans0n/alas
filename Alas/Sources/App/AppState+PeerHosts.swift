@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import AppKit
 
 /// The client side of paired Macs' host channels. Host messages from peers
@@ -34,6 +35,7 @@ extension AppState {
         hosts.onDelegationOutboxChanged = { [weak delegation] in delegation?.onOutboxChanged?($0) }
         hosts.onAvailabilityChanged = { [weak delegation] in delegation?.onAvailabilityChanged?($0) }
         core.delegationPeers = delegation
+        core.watchForRevokedPeers(of: remotePeers)
         remotePeers.onHostMessage = { [weak hosts] serverId, message in
             hosts?.receive(serverId: serverId, message)
         }

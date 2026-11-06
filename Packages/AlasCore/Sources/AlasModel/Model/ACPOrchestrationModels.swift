@@ -352,7 +352,7 @@ public struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
 public struct ACPOrchestrationPeer: Codable, Equatable, Sendable {
     public let serverId: String
     public let name: String
-    /// `online`, `offline`, `unverified` or `incompatible`.
+    /// `online`, `offline`, `unverified`, `incompatible` or `revoked`.
     public let state: String
     public let supportsDelegation: Bool
 

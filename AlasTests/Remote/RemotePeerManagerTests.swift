@@ -891,6 +891,66 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    /// Children on that peer fail on this signal, so it says "this pairing is
+    /// over" only once, and never about a token still being tried out.
+    @Test func revokedSignalFiresOncePerTransitionAndOnForget() throws {
+        final class Heard { var signals: [String] = [] }
+        let heard = Heard()
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "tok", protocolVersion: 1, localDeviceId: nil, addedAt: Date())])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.onPeerRevoked = { heard.signals.append("\($0) \($1) \($2)") }
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+
+        link.emit(.stateChanged(.offline))
+        #expect(heard.signals.isEmpty)
+        link.emit(.stateChanged(.unauthorized))
+        link.emit(.stateChanged(.unauthorized))
+        #expect(heard.signals == ["srv-a Mac A false"])
+        link.emit(.stateChanged(.offline))
+        link.emit(.stateChanged(.unauthorized))
+        #expect(heard.signals.count == 2)
+
+        manager.forget(peerId: "p1")
+        #expect(heard.signals.last == "srv-a Mac A true")
+        #expect(heard.signals.count == 3)
+    }
+
+    /// A re-pair that goes wrong revokes the token it just minted while the
+    /// record holds it. The pairing this Mac had is still fine and is restored.
+    @Test func refusingATokenStillBeingTriedOutIsNotARevocation() async throws {
+        final class Heard { var signals = 0 }
+        let heard = Heard()
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "old-token", protocolVersion: 1, localDeviceId: "dev-a", addedAt: Date())])
+        let links = Links()
+        let requests = Requests()
+        let manager = makeManager(
+            store: store,
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"new-token","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+            links: links, reciprocalConfirmationTimeout: 60)
+        manager.onPeerRevoked = { _, _, _ in heard.signals += 1 }
+        manager.connectAll()
+
+        let attempt = Task { await manager.addPeer(code: "ABC", origins: ["http://10.0.0.1:8765"]) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while manager.peers.first?.token != "new-token", ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(manager.peers.first?.token == "new-token")
+        links.byPeerId["p1"]?.emit(.stateChanged(.unauthorized))
+        #expect(heard.signals == 0)
+
+        // Giving up now rolls the attempt back without waiting out its window.
+        attempt.cancel()
+        #expect(await attempt.value == .reciprocalPairingFailed)
+        #expect(manager.peers.first?.token == "old-token")
+    }
+
     @Test func rePairingAnExistingPeerReplacesTheTokenMergesOriginsAndSwapsTheLink() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],

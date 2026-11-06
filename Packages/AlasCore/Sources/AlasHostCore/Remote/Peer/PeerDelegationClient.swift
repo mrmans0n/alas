@@ -36,12 +36,13 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     }
 
     /// Every state short of a proven, online link that is not a build problem
-    /// is offline for an agent: it cannot be used now.
+    /// or a refused token is offline for an agent: it cannot be used now.
     static func state(of helloState: String) -> ACPDelegationPeerState {
         switch helloState {
         case "online": .online
         case "unverified": .unverified
         case "incompatible": .incompatible
+        case "unauthorized": .revoked
         default: .offline
         }
     }
@@ -137,7 +138,10 @@ public final class PeerDelegationClient: ACPDelegationPeers {
         _ serverId: String, _ request: HostRequest, timeout: Duration? = nil
     ) async -> Result<HostResponse, ACPPeerError> {
         guard let carrying = links.sessionCarryingPeers.first(where: { $0.serverId == serverId }) else {
-            return .failure(.unreachable(peer: name(of: serverId)))
+            let known = links.helloPeers.first { $0.serverId == serverId }
+            return .failure(known.map { Self.state(of: $0.state) } == .revoked
+                ? .revoked(peer: name(of: serverId))
+                : .unreachable(peer: name(of: serverId)))
         }
         guard links.peerSupports(HostProtocolCapability.delegationV1, serverId: serverId) else {
             return .failure(.outdated(peer: carrying.name))

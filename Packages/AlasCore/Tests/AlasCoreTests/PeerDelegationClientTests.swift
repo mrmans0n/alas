@@ -54,6 +54,14 @@ struct PeerDelegationClientTests {
         #expect(peer.requests.isEmpty)
     }
 
+    @Test func peerWhoseLinkWasRefusedIsRevoked() async {
+        links.sessionCarryingPeers = []
+        links.hello = [RemoteHelloPeer(serverId: "mini", name: "Mini", state: "unauthorized")]
+        let result = await client().status(serverId: "mini", sessionIDs: ["c1"])
+        #expect(result.failureValue == .revoked(peer: "Mini"))
+        #expect(peer.requests.isEmpty)
+    }
+
     @Test func peerWithoutAChannelIsUnreachable() async {
         let result = await client(channelAvailable: false).status(serverId: "mini", sessionIDs: ["c1"])
         #expect(result.failureValue == .unreachable(peer: "Mini"))
@@ -105,7 +113,7 @@ struct PeerDelegationClientTests {
 
     @Test(arguments: [
         ("online", ACPDelegationPeerState.online), ("unverified", .unverified), ("incompatible", .incompatible),
-        ("offline", .offline), ("connecting", .offline), ("unauthorized", .offline),
+        ("offline", .offline), ("connecting", .offline), ("unauthorized", .revoked),
     ])
     func peersReportTheirLinkState(helloState: String, state: ACPDelegationPeerState) {
         links.hello = [RemoteHelloPeer(serverId: "mini", name: "Mini", state: helloState)]

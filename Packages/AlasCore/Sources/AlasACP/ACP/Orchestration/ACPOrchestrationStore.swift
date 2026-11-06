@@ -391,6 +391,13 @@ public final class ACPOrchestrationStore {
         ).first?["seq"] as? Int64 ?? 0
     }
 
+    public func deletePeerCursor(peerServerId: String) throws {
+        _ = try db.execChanges(
+            "DELETE FROM peer_delegation_cursors WHERE peer_server_id = ?",
+            bindings: [peerServerId]
+        )
+    }
+
     public func peerChildren(peerServerId: String) throws -> [ACPDelegationRecord] {
         try db.query(
             """

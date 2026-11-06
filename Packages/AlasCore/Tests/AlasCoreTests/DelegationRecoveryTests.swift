@@ -29,6 +29,44 @@ struct DelegationRecoveryTests {
         #expect(record.failureMessage == "Alas stopped before delegated session setup completed.")
     }
 
+    /// Wired this way on the app and on a headless host, which has no
+    /// collector: a peer forgotten here will never collect what waits for it.
+    @Test func forgettingAPeerDeletesWhatWaitsForItToCollect() async throws {
+        final class Store: RemotePeerStore {
+            var peers = [RemotePeer(id: "peer-1", serverId: "mac-1", name: "Laptop", origins: [], token: "t", addedAt: .distantPast)]
+            func load() -> [RemotePeer] { peers }
+            func save(_ peers: [RemotePeer]) { self.peers = peers }
+        }
+        final class Devices: RemoteDeviceStore {
+            func load() -> [RemoteDevice] { [] }
+            func save(_ devices: [RemoteDevice]) {}
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-recovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
+        for server in ["mac-1", "mac-2"] {
+            try await persistence.enqueue(.init(
+                id: "to-\(server)", sourceSessionId: "child", targetSessionId: ACPPeerParent.sentinel(serverId: server),
+                prompt: "done", createdAt: 1, kind: .prompt
+            ))
+        }
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, attentionStore: .scratch(), orchestrationPersistence: persistence
+        )
+        let peers = RemotePeerManager(
+            store: Store(), pairing: RemotePairingService(store: Devices()), localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
+        core.watchForRevokedPeers(of: peers)
+
+        peers.forget(peerId: "peer-1")
+
+        try await eventually {
+            (try? await persistence.outbox(peerServerId: "mac-1", after: 0, maxBytes: 1 << 20).entries.isEmpty) == true
+        }
+        #expect(try await persistence.outbox(peerServerId: "mac-2", after: 0, maxBytes: 1 << 20).entries.count == 1)
+    }
+
     /// A child a paired Mac started, caught by a restart before its session
     /// existed, restarts like a local one. What the peer allowed is not
     /// stored, so it cannot auto-run on this Mac's default, and it joins no

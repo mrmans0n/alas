@@ -44,6 +44,8 @@ public enum ACPPeerError: Error, Equatable, Sendable {
 
 public enum ACPDelegationPeerState: String, Equatable, Sendable {
     case online, offline, unverified, incompatible
+    /// The peer refused this Mac's token: the pairing is over.
+    case revoked
 }
 
 public struct ACPDelegationPeerInfo: Equatable, Sendable {

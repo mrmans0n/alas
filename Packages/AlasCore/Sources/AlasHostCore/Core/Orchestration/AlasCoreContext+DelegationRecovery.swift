@@ -72,10 +72,31 @@ extension AlasCoreContext {
             // The record lets delivery find a parent that has no live session.
             deliver: { await orchestration.deliverPendingMessages(to: $0.parentSessionId, callerParent: $0) },
             parentIsGone: { await orchestration.parentIsGone(of: $0) },
-            outboxChanged: { orchestration.peerOutboxDidChange(serverId: $0) }
+            outboxChanged: { orchestration.peerOutboxDidChange(serverId: $0) },
+            availabilityChanged: { orchestration.peerAvailabilityChanged(serverId: $0) },
+            collected: { orchestration.peerEntryCollected($0) },
+            retryStarts: { await orchestration.retryPeerStarts(serverId: $0) },
+            schedule: { delay, work in
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(delay))
+                    await work()
+                }
+            }
         )
         peerOutboxCollector = collector
         collector.start()
+    }
+
+    /// Makes a peer's link being refused, or the peer being forgotten here,
+    /// reach delegation: on the app and on a headless host, which has no
+    /// collector but keeps outcomes for peers to collect.
+    @_spi(AppHost) public func watchForRevokedPeers(of peers: RemotePeerManager) {
+        peers.onPeerRevoked = { [weak self] serverId, name, forgotten in
+            guard let orchestration = self?.orchestration else { return }
+            Task { @MainActor in
+                await orchestration.peerRevoked(serverId: serverId, name: name, forgotten: forgotten)
+            }
+        }
     }
 
     /// Finishes what delegations were doing when the host last stopped:
