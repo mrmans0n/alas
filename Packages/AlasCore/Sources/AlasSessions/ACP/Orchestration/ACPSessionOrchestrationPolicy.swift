@@ -143,6 +143,12 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         queue.contains { $0.lastError == nil && $0.scheduledAt == nil }
     }
 
+    /// Why a settled session still holds a prompt for the user's Retry. Such a
+    /// prompt owes no turn, so without this a wait would read it as delivered.
+    public static func heldPromptFailure(_ queue: [QueuedPrompt]) -> String? {
+        queue.first { $0.lastError != nil && $0.scheduledAt == nil }?.lastError
+    }
+
     public static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
         guard let target else { return true }
         return target.phase != .failed && target.phase != .closed

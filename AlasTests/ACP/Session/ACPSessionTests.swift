@@ -4697,6 +4697,35 @@ extension ACPSessionTests {
                   expectedPreview: "`cmd` ran successfully"),
         ]
     }
+
+    @Test("an incoming blob on a tool call keeps its name and type, not its bytes")
+    func toolCallBlobKeepsNoBytes() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let block = ACPContentBlock.blobResource(uri: "file:///tmp/tiny.pdf", mimeType: "application/pdf", blob: "QkxPQkJZVEVT")
+        session.apply(.toolCall(.init(toolCallId: "tc", title: "read", kind: "read", status: "completed", content: [.content(block)])))
+        session.apply(.toolCallUpdate(.init(toolCallId: "tc", content: [.content(block)])))
+        guard case .toolCall(let tc) = session.transcript.messages[0] else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        #expect(tc.assets == [.resource(uri: "file:///tmp/tiny.pdf", name: "tiny.pdf", mimeType: "application/pdf")])
+        #expect(tc.appliedItemsSnapshot == [.content(.blobResource(uri: "file:///tmp/tiny.pdf", mimeType: "application/pdf", blob: ""))])
+        let payload = try ACPMessageCodec.encode(session.transcript.messages[0])
+        #expect(!String(decoding: payload, as: UTF8.self).contains("QkxPQkJZVEVT"))
+    }
+
+    @Test("a restored row keeps its PDF when suppressed replay has only the link text")
+    func restoredRowKeepsPDFAttachmentUnderSuppressedReplay() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(uri: "file:///attachments/abc/tiny.pdf", name: "tiny.pdf")
+        let rows: [ACPMessage] = [.user(id: UUID(), text: "read this", attachments: [attachment])]
+        session.transcript.replaceMessages(with: rows)
+        session.beginSuppressedReplaySideEffects()
+        // The chunks Claude replays for a PDF blob: the text, then a link, no document.
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("read this"))).isEmpty)
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("[@tiny.pdf](file:///attachments/abc/tiny.pdf)"))).isEmpty)
+        #expect(session.transcript.messages == rows)
+    }
 }
 
 /// One row of the `applyFileChangeReportUpdate` decision table.
