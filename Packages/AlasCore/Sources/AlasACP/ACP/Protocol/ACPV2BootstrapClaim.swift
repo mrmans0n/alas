@@ -44,6 +44,13 @@ final class ACPV2BootstrapClaims: Sendable {
             return claim
         }
     }
+    func completeInstallation(_ claim: ACPV2BootstrapClaim) throws {
+        try claim.check()
+        try state.withLock { value in
+            guard value.claim === claim, value.phase == 2 else { throw ACPV2BootstrapClaimError.used }
+            value.phase = 3
+        }
+    }
     func external(_ method: String) throws {
         guard method == "initialize" || method.hasPrefix("session/") else { return }
         try state.withLock { value in
