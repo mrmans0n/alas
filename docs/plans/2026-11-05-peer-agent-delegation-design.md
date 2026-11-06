@@ -372,11 +372,12 @@ The child keeps running on the peer when the link drops, so its record is not fa
 |---|---|---|
 | App to app | Both directions | Pairing is reciprocal, so each side has a link and its own switch |
 | App to headless host | Yes | The host serves `.delegation` over its inbound link |
-| Headless host to a machine it can reach | Yes, in the last PR | Move channel ownership from `NativePeerHosts` to `AlasHostCore`, activate links on the host, and add `alas-host peers add`, because pairing with a host creates no link back |
-| To a Mac the source cannot dial | No | Needs requests sent back over the Mac's own connection |
+| Headless host to a machine when the two can reach each other | Yes, in the last PR | Move channel ownership from `NativePeerHosts` to `AlasHostCore`, activate links on the host, and add `alas-host peers add`, because pairing with a host creates no link back. `peers add` is the ordinary two-way pairing: a Mac's server always pairs back and revokes the token if it can't, so the Mac must reach the host too and also gets a token for it |
+| To a Mac the source cannot dial, or that cannot dial back | No | Needs requests sent back over the Mac's own connection, and pairing without a pair-back |
 
-The last row is what's left of T3's "theirs here". It is a larger protocol change that needs its own design. Tailscale or a
-LAN covers the common cases through the row above it.
+The last row is what's left of T3's "theirs here". It is a larger protocol change that needs its own design. Tailscale
+covers the common cases through the row above it. A LAN may not for a host running as a launch agent: macOS may silently deny
+its connections to LAN addresses, which is untested on this path.
 
 The source's Remote must be on, as for any peer link.
 
@@ -457,4 +458,5 @@ The user skipped design questions, so these are the choices most worth a second 
 - An unreachable child is never failed by a timeout alone.
 - Peer children lose computer use, VM and device tools, which limits one interesting use of the feature: a host agent handing UI
   testing to a Mac.
-- A headless host needs its own `alas-host peers add` to send work to a Mac, and that Mac must be reachable from it.
+- A headless host needs its own `alas-host peers add` to send work to a Mac. The two must reach each other, and pairing is two-way, so the Mac also gets a token for the host.
+- That add keeps the Mac's existing access to the host, a narrow exception to "a re-pair starts at off", because the person at the host started it and access to the host is a separate decision.

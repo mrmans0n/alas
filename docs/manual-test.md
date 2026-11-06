@@ -884,8 +884,7 @@ two-Mac acceptance gate when that fixture is available.
 
 These checks need two Macs running Alas, or one Mac and a headless host,
 paired and reachable on a LAN or tailnet. CI has no two-machine setup, so they
-stay pending until someone runs them. A headless host can receive delegated
-work but not send it, so a host is only ever the target. The UI built for this
+stay pending until someone runs them. The UI built for this
 has not been seen by its author: check the tab, the sidebar row, the Settings
 row and the child row by eye, along with the steps below.
 
@@ -960,3 +959,11 @@ row and the child row by eye, along with the steps below.
 15. With a headless host as target, repeat steps 3, 5, 9 and 10 against it, and
     confirm a child whose agent is not installed or signed in fails the child
     with a reason instead of sitting idle.
+16. With a headless host as source, on a tailnet: pair a Mac with the host and
+    set `alas-host peers agents <mac> ask`. Then run
+    `alas-host peers add <pairing-link>` with a link from that Mac. Confirm that
+    `alas-host peers list` still shows `ask`, and that the Mac's row now shows
+    the host's access switch. Allow it, start an agent on the host, and repeat
+    steps 3, 5 and 9 from the host. Confirm a loopback-only host refuses the add
+    with a message about its address. Run the add once with the host as a launch
+    agent over the LAN, and note whether macOS lets it through.

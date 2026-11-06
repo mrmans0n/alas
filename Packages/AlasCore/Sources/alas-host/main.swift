@@ -16,7 +16,7 @@ usage: alas-host [--wait-for-lock]
        alas-host pair
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
-       alas-host peers list | remove <id|name|serverId>
+       alas-host peers list | add <pairing-link> | remove <id|name|serverId>
        alas-host project list | add <path> [--name <name>] | remove <id|path>
        alas-host registry search [<query>] | install <id> | uninstall <id>
        alas-host restart
@@ -41,6 +41,8 @@ pairing link a Mac pastes into Add Peer.
 
 `alas-host peers` lists the Macs paired with this host and removes one,
 revoking its access, through the running host when one serves the profile.
+`peers add` pairs the running host with the Mac whose pairing link it is given,
+so this host's agents can delegate there. The two must reach each other.
 
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
@@ -230,13 +232,15 @@ var isStopping = false
 // Other Macs pair as peers, as with the app: the host proves its identity key
 // on `/pair` and on every later socket. It pairs back only to a Mac too old to
 // pair without it: macOS silently denies a launch agent's connections to LAN
-// addresses. It never connects out to peers' sessions, and has no federation
-// or Bonjour.
+// addresses. It connects out to the Macs it holds a token for, which `peers add`
+// gives it, so its agents can delegate; it has no federation or Bonjour.
 var remote: RemoteServer?
 /// Starts Remote once the open sessions are restored; nil when Remote is off.
 var startRemote: (@MainActor () async -> Void)?
 // Held here: `RemoteServer.presenter` is weak.
 var openSessions: HeadlessSessionPresenter?
+/// How this host's agents reach paired Macs; nil when Remote is off.
+var peerDelegation: HostPeerDelegation?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
@@ -334,6 +338,9 @@ if let listen = config.hostRemoteListen {
             publicKey: identityKey.publicKey
         )
     }
+    let delegation = HostPeerDelegation(links: peers)
+    host.coreContext.delegationPeers = delegation.client
+    peerDelegation = delegation
     server.pairsBackWithPeers = false
     server.admitsInboundOnlyPeer = { peers.admitsInboundOnlyPeer($0) }
     server.onPeerPaired = { request in
@@ -405,6 +412,7 @@ if let listen = config.hostRemoteListen {
         } catch {
             fail("cannot serve Remote: \(error.localizedDescription)")
         }
+        peers.connectAll()
     }
 }
 
@@ -421,9 +429,15 @@ Task {
     await host.coreContext.loadDelegatedSessionParents()
     await host.loadProjectWorktrees()
     // Off Remote's path: probing gg can take a while, and Remote doesn't need it.
-    Task { await host.startAutomation() }
+    let automation = Task { await host.startAutomation() }
     await startRemote?()
     await host.coreContext.loadStoredSessionManagers()
+    // Last: delivering an outcome needs the projects and sessions loaded, and
+    // recovery, which the automation runs, may have children to report on.
+    // Does nothing with Remote off, which installs no peers to collect from.
+    await automation.value
+    guard !isStopping else { return }
+    host.coreContext.startCollectingPeerOutcomes()
 }
 
 // Installed before the path is printed, so a stop sent as soon as the host
@@ -438,6 +452,8 @@ func stop() {
     socket.stop()
     tailscaleServe?.stop()
     openSessions?.peerConsoleHost?.shutdown()
+    peerDelegation?.stop()
+    peers.disconnectAll()
     remote?.stop()
     keepAwake.update(enabled: false, serverRunning: false)
     Task { @MainActor in

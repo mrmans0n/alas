@@ -1797,6 +1797,77 @@ struct RemotePeerManagerTests {
         #expect(peer?.localDeviceId == "dev-a")
     }
 
+    /// The person at a host who adds a Mac that already reaches it did not
+    /// decide anything about that Mac's access, so it survives the new device
+    /// the pair-back mints. Any other re-pair starts at off.
+    @Test(arguments: [("", RemoteDeviceAgentAccess.autoRun), ("old-token", .off)])
+    func addingAnInboundOnlyPeerKeepsItsAccessWhileARePairStartsAtOff(previousToken: String, expected: RemoteDeviceAgentAccess) async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let old = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        #expect(pairing.setAgentAccess(.autoRun, deviceId: old.deviceId))
+        let new = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "old", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               token: previousToken, localDeviceId: old.deviceId, addedAt: .distantPast)])
+        let key = Curve25519.Signing.PrivateKey()
+        let requests = Requests()
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, requests: requests),
+                                  links: Links(), reciprocalConfirmationTimeout: 2)
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: new.deviceId)
+
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+
+        let peer = try #require(manager.peers.first)
+        #expect(manager.peers.count == 1)
+        #expect(peer.token == "tokA")
+        #expect(peer.publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
+        #expect(peer.localDeviceId == new.deviceId)
+        #expect(pairing.device(id: new.deviceId)?.agentAccess == expected)
+    }
+
+    /// Another host answers an add inbound-only, minting nothing here, so the
+    /// record still names the device that host reaches this one with.
+    @Test func anInboundOnlyAnswerKeepsTheDeviceOfAnInboundOnlyRecord() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "old", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               token: "", localDeviceId: "dev-a", addedAt: .distantPast)])
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(), inboundOnly: true, requests: Requests()),
+                                  links: Links())
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        #expect(manager.peers.first?.token == "tokA")
+        #expect(manager.peers.first?.localDeviceId == "dev-a")
+    }
+
+    /// No path dials a record with no token: not connecting everything, not
+    /// recording one while links are up, and not restoring one after an add
+    /// whose pair-back never came.
+    @Test func anInboundOnlyRecordIsNeverDialled() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "old", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               token: "", localDeviceId: "dev-a", addedAt: .distantPast)])
+        let links = Links()
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(), requests: Requests()),
+                                  links: links)
+        manager.connectAll()
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-c", peerName: "Mac C", origins: ["http://10.0.0.3:8765"],
+            counterCode: "COUNTER", localDeviceId: "dev-c", redeemedCode: "CODE", inboundOnly: true))
+        #expect(manager.peers.count == 2)
+        #expect(links.byPeerId.isEmpty)
+
+        #expect(await manager.addPeer(link: linkFromA) == .reciprocalPairingFailed)
+
+        let restored = try #require(manager.peers.first { $0.id == "old" })
+        #expect(restored.token == "")
+        #expect(restored.localDeviceId == "dev-a")
+        // The attempt's own link, on the token it tried: dropped, not redialled.
+        #expect(links.byPeerId.count == 1)
+        #expect(links.byPeerId["old"]?.disconnectCalls == 1)
+    }
+
     @Test func addPeerPinsTheProvedKeyOnTheRecord() async throws {
         let key = Curve25519.Signing.PrivateKey()
         let requests = Requests()

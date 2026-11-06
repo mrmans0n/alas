@@ -3232,6 +3232,31 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// Pairing here redeems a code and hands that Mac a token for this host,
+    /// so only someone at this host may start it. With Remote off or no address
+    /// to advertise, the Mac could not pair back, and the refusal says why.
+    @Test(arguments: [
+        (HostCaller.remotePeer(deviceID: "d"), true, ["http://host:1"], "This host does not serve Mac peers."),
+        (.localUser(uid: 501), false, ["http://host:1"], HostProtocolConnection.remoteOffRefusal),
+        (.localUser(uid: 501), true, [], HostProtocolConnection.noAddressRefusal),
+    ])
+    func addPeerRefusesARemoteCallerAndAHostThatCantBePairedBack(caller: HostCaller, servesRemote: Bool, origins: [String], refusal: String) async throws {
+        let fixture = try Fixture()
+        let pairing = RemotePairingService(store: MemoryDeviceStore(devices: []))
+        let peerStore = MemoryPeerStore(peers: [])
+        fixture.server.remotePairing = servesRemote ? pairing : nil
+        fixture.server.remotePeers = RemotePeerManager(
+            store: peerStore, pairing: pairing, localIdentity: { .init(serverId: "host", name: "Host", origins: origins) }
+        )
+        let client = Client()
+        let connection = fixture.server.connect(caller: caller, send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .addPeer(link: "http://mac:1/?code=ABC&hosts=http%3A%2F%2Fmac%3A1")))
+
+        #expect(client.messages == [.response(id: 1, result: .failure(error: .failed(message: refusal)))])
+        #expect(peerStore.peers.isEmpty)
+    }
+
     private final class MemoryPeerStore: RemotePeerStore {
         var peers: [RemotePeer]
         init(peers: [RemotePeer]) { self.peers = peers }

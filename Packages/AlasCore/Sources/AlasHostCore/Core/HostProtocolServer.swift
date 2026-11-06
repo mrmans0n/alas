@@ -352,6 +352,11 @@ public final class HostProtocolConnection {
             )
         case .listPeers:
             return .peers(peers: try localPeers().summaries)
+        case .addPeer(let link):
+            let peers = try localPeers()
+            guard remotePairing() != nil else { throw HostError.failed(message: Self.remoteOffRefusal) }
+            if let error = await peers.addPeer(link: link) { throw HostError.failed(message: Self.describe(error)) }
+            return .done
         case .forgetPeer(let peerID):
             let peers = try localPeers()
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
@@ -469,6 +474,24 @@ public final class HostProtocolConnection {
             throw HostError.failed(message: "This host does not serve Mac peers.")
         }
         return peers
+    }
+
+    nonisolated static let remoteOffRefusal = "Remote is off on this host. Set host.reachability to lan or tailscale, restart the host, and try again."
+    nonisolated static let noAddressRefusal = "This host has no address the Mac could reach it at, and the Mac must pair back. Set host.reachability to lan or tailscale; with tailscale, tailscale serve must be running."
+
+    private static func describe(_ error: RemotePeerManager.AddError) -> String {
+        switch error {
+        case .invalidLink: "That is not a pairing link."
+        case .expiredCode: "That pairing code is not valid any more. Make a new one on the Mac."
+        case .originRejected: "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+        case .approvalExpired, .approvalDisabled: "That Mac refused the pairing request."
+        case .unreachable: "Couldn't reach that Mac at any of its addresses. It must be reachable from this host, for example over Tailscale."
+        case .noLocalAddress: noAddressRefusal
+        case .reciprocalPairingFailed: "That Mac couldn't pair back. Check it can reach this host at the addresses alas-host pair prints."
+        case .cancelled: "Cancelled: that peer was forgotten while pairing was in progress."
+        case .identityUnproven: "That Mac answered with a key it couldn't prove it holds. Nothing was paired."
+        case .identityRebindRefused: "This host is already paired with that Mac under a different key. If the Mac was reinstalled, run alas-host peers remove first, then pair again."
+        }
     }
 
     /// Following acts on the connection's subscription, so it needs one.

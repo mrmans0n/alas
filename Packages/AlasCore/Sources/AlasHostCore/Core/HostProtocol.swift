@@ -121,6 +121,10 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case listPeers
     /// Forgets a paired Mac and revokes its token; local client only.
     case forgetPeer(peerID: String)
+    /// Pairs this host with the Mac a pairing link names, so its agents can
+    /// delegate there; local client only. Answers once the Mac paired back,
+    /// which takes up to `RemotePeerManager`'s confirmation wait.
+    case addPeer(link: String)
     /// Sets what agents on a paired Mac may do on this one; local client only.
     case setPeerAgentAccess(peerID: String, access: RemoteDeviceAgentAccess)
     /// Reads a listed worktree's code as a session in it would

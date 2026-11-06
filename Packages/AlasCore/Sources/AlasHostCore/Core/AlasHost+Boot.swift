@@ -106,7 +106,8 @@ extension AlasHost {
                 },
                 onChildBlocked: { blocker in
                     Task { @MainActor in await builtCore?.orchestration.childBlocked(blocker) }
-                }
+                },
+                delegationPeerNames: { ACPDelegationPeerInfo.delegationNames(builtCore?.delegationPeers?.peers ?? []) }
             ),
             environment: environment,
             harness: harness,

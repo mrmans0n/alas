@@ -551,6 +551,12 @@ An explicit `--base` skips these checks. The other Mac still tries to fetch it,
 but a failed fetch does not stop the child. `--worktree` names a checkout that
 already exists there, so no check applies.
 
+### Delegating from a headless host
+
+A headless host can delegate too, once `alas-host peers add <pairing-link>` has
+paired it with the Mac. The two must be able to reach each other, and pairing is
+two-way. See [the headless host guide](headless-host.md#delegate-from-the-host-to-a-mac).
+
 ### Letting another Mac's agents in
 
 Off by default, per paired Mac. On the Mac that would run the work:
@@ -565,7 +571,10 @@ Off by default, per paired Mac. On the Mac that would run the work:
 | `ask` | Children run, and their permission requests wait for a person |
 | `autoRun` | A child may auto-run if its parent was auto-running |
 
-Pairing again starts at `off`; a person has to consent again. Turning access off
+Pairing again starts at `off`; a person has to consent again. The one exception
+is `alas-host peers add` for a Mac that had paired with that host but had no link
+back: the Mac keeps the access it had on the host, because the person at the host
+started the add and it changes nothing about that access. Turning access off
 does not stop work already running: queued prompts and running turns finish, the
 child can still be read and stopped, and its result still reaches the parent.
 

@@ -466,14 +466,16 @@ public final class AlasCoreContext {
     /// says when each is decided. With `alasTools`, agents also get the
     /// built-in `alas` MCP server and CLI env. `onTurnCompleted` hears every
     /// turn that ends, and `onChildBlocked` every request a session stops on.
-    /// The last three replace where sessions are stored and how agents are
-    /// reached, for a host that does not run real ones.
+    /// `delegationPeerNames` names the paired Macs a new root session may be
+    /// told about. The last three replace where sessions are stored and how
+    /// agents are reached, for a host that does not run real ones.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
         alasTools: HeadlessAlasTools? = nil,
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
+        delegationPeerNames: (@MainActor () -> [String])? = nil,
         sessionsDB: @escaping (SessionOwnerID) -> URL = { Paths.acpSessionsDB(for: $0) },
         setupEvaluator: ACPSessionManager.ACPSetupEvaluator? = nil,
         connectionFactory: ACPSessionManager.ACPConnectionFactory? = nil
@@ -502,6 +504,7 @@ public final class AlasCoreContext {
                 onChipsObserved: onChipsObserved
             )
             manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            if let delegationPeerNames { manager.delegationPeerNamesProvider = delegationPeerNames }
             if let alasTools {
                 manager.alasCLIEnvProvider = { await alasTools.environment(worktreePath: $0, sessionId: $1) }
             }

@@ -187,20 +187,44 @@ back to it.
 alas-host peers list                  # id, name, serverId, agent access
 alas-host peers agents <id|name|serverId> off|ask|auto
 alas-host peers remove <id|name|serverId>
+alas-host peers add <pairing-link>    # let this host's agents delegate to that Mac
 ```
 
 `peers remove` revokes the peer and disconnects it. Like the other commands,
-all three go through the running host when one serves the profile.
+these go through the running host when one serves the profile. `peers add`
+works only through a running host, because it needs the host's Remote server.
 
 `peers agents` sets whether agents on that Mac may start sessions on this host
 (see [Delegating to another machine](agent-delegation.md#delegating-to-another-machine)).
-It is `off` by default and after any new pairing. `ask` lets their sessions run
+It is `off` by default and after any new pairing, except the `peers add` case in
+[Delegate from the host to a Mac](#delegate-from-the-host-to-a-mac). `ask` lets their sessions run
 with permission requests waiting for a person; `auto` also lets a session
 auto-run, if the agent that started it was auto-running. Turning it off stops new
 sessions and prompts; work already running finishes and reports back.
 
-Today a host can receive delegated work but not send it: it has inbound links
-only, so its own agents cannot delegate to a paired Mac.
+### Delegate from the host to a Mac
+
+Pairing a Mac with the host gives the host no way to reach that Mac, so the
+host's agents can't delegate there yet. To allow it, choose **Pair a device** in
+the Mac's Remote settings, copy the pairing link, then run
+`alas-host peers add <pairing-link>` on the host. Unlike the pairing above, this is two-way: the host redeems the
+link, then the Mac pairs back to the host, so that Mac also gets a link to the
+host.
+
+- The host and the Mac must be able to reach each other. Tailscale is the
+  recommended route. The host needs an address other than loopback, so set
+  `host.reachability` to `tailscale` or `lan`. A host that only listens on
+  loopback refuses the add and says so.
+- macOS may silently deny a launch agent's connections to LAN addresses, so a
+  host running through `install-agent` may not reach a Mac over the LAN. This is
+  untested. If the add can't reach the Mac, use Tailscale.
+- The Mac must allow it: on the host's row in Settings > Remote > Peers, set
+  *Let agents on this Mac use this machine*.
+
+If the Mac had paired with the host and had no link back, its `peers agents`
+value stays as it was: access to the host is a separate decision. Running
+`peers add` again for a Mac that already has a link back is an ordinary re-pair,
+and that Mac's access starts at `off`.
 
 Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the
