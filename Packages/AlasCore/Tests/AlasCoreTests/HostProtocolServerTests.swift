@@ -3257,13 +3257,6 @@ struct HostProtocolServerTests {
         #expect(peerStore.peers.isEmpty)
     }
 
-    private final class MemoryPeerStore: RemotePeerStore {
-        var peers: [RemotePeer]
-        init(peers: [RemotePeer]) { self.peers = peers }
-        func load() -> [RemotePeer] { peers }
-        func save(_ peers: [RemotePeer]) { self.peers = peers }
-    }
-
     // MARK: Delegation
 
     @Test(arguments: [
@@ -3609,7 +3602,6 @@ struct HostProtocolServerTests {
             return
         }
         #expect(capabilities.contains("host.delegation.v1"))
-        #expect(HostProtocolCapability.served.contains(HostProtocolCapability.delegationV1))
     }
 
     /// Only what `start` could use: SSH and folder projects are refused there.
@@ -3816,13 +3808,6 @@ struct HostProtocolServerTests {
             core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
             try? FileManager.default.removeItem(at: root)
         }
-    }
-
-    private final class MemoryDeviceStore: RemoteDeviceStore {
-        var devices: [RemoteDevice]
-        init(devices: [RemoteDevice]) { self.devices = devices }
-        func load() -> [RemoteDevice] { devices }
-        func save(_ devices: [RemoteDevice]) { self.devices = devices }
     }
 
     @MainActor

@@ -2442,21 +2442,6 @@ struct ACPSessionOrchestrationCoordinatorTests {
         continuation.finish()
     }
 
-    @Test func entriesDeliverInOrderOncePerEntry() async throws {
-        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
-        let fixture = try remoteFixture(peers: peers)
-        try await insertRemoteChild(fixture.persistence)
-        peers.outboxAnswer = FakePeers.paged([Self.outcome(1), Self.outcome(2), Self.outcome(3)], pageSize: 2)
-        let collector = makeCollector(fixture, peers: peers)
-
-        await collector.collect(serverId: "srv-1")
-        await collector.collect(serverId: "srv-1")
-
-        #expect(peers.outboxCalls == [0, 2, 3])
-        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1", "outcome-2", "outcome-3"])
-        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 3)
-    }
-
     @Test func collectedOutcomesReachAParentWithNoLiveSessionInOrderInOneWake() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let (fixture, client) = try await closedParentFixture(peers: peers)

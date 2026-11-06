@@ -546,6 +546,9 @@ struct ACPOrchestrationStoreTests {
         var record = newRecord(parentSessionId: sentinel)
         record.peerServerId = "s1"
         try store.insert(record)
+        var another = newRecord(childSessionId: "another", parentSessionId: ACPPeerParent.sentinel(serverId: "s2"))
+        another.peerServerId = "s2"
+        try store.insert(another)
 
         #expect(try store.claimFailedPhase(
             childSessionId: "child", failureMessage: "boom", updatedAt: 700,

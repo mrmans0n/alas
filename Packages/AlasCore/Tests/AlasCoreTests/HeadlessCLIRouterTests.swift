@@ -61,24 +61,11 @@ struct HeadlessCLIRouterTests {
         func send(_ message: RemoteClientMessage) {}
     }
 
-    private final class PeerRecords: RemotePeerStore {
-        var peers: [RemotePeer]
-        init(_ peers: [RemotePeer]) { self.peers = peers }
-        func load() -> [RemotePeer] { peers }
-        func save(_ peers: [RemotePeer]) { self.peers = peers }
-    }
-
-    private final class PeerDevices: RemoteDeviceStore {
-        var devices: [RemoteDevice] = []
-        func load() -> [RemoteDevice] { devices }
-        func save(_ devices: [RemoteDevice]) { self.devices = devices }
-    }
-
     /// A host's links over `records`, connected, and the link each one dialled.
     private func hostLinks(_ records: [RemotePeer]) -> (delegation: HostPeerDelegation, dialled: () -> [String: FakeLink]) {
         var dialled: [String: FakeLink] = [:]
         let links = RemotePeerManager(
-            store: PeerRecords(records), pairing: RemotePairingService(store: PeerDevices()),
+            store: MemoryPeerStore(peers: records), pairing: RemotePairingService(store: MemoryDeviceStore()),
             localIdentity: { .init(serverId: "", name: "", origins: []) },
             makeConnection: { peer, onEvent in
                 let link = FakeLink(emit: onEvent)

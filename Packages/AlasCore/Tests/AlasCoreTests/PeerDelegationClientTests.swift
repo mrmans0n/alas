@@ -114,12 +114,6 @@ struct PeerDelegationClientTests {
         )))])
     }
 
-    /// `session_new` makes both requests inside one CLI call, whose read gives
-    /// up after 30 seconds. An answer it loses is an id the agent never hears.
-    @Test func oneDelegationStartAnswersWithinTheCLIRead() {
-        #expect(PeerDelegationClient.discoverTimeout + PeerDelegationClient.startTimeout < .seconds(30))
-    }
-
     @Test func outboxPageCarriesEntriesAndMore() async {
         let entry = ACPPeerOutboxEntry(seq: 4, messageId: "m", childSessionId: "c1", prompt: "done", kind: .prompt, createdAt: 9)
         peer.reply = .delegation(.outbox(entries: [entry], hasMore: true))

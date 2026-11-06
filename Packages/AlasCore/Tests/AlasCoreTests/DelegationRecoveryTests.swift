@@ -32,15 +32,6 @@ struct DelegationRecoveryTests {
     /// Wired this way on the app and on a headless host, which has no
     /// collector: a peer forgotten here will never collect what waits for it.
     @Test func forgettingAPeerDeletesWhatWaitsForItToCollect() async throws {
-        final class Store: RemotePeerStore {
-            var peers = [RemotePeer(id: "peer-1", serverId: "mac-1", name: "Laptop", origins: [], token: "t", addedAt: .distantPast)]
-            func load() -> [RemotePeer] { peers }
-            func save(_ peers: [RemotePeer]) { self.peers = peers }
-        }
-        final class Devices: RemoteDeviceStore {
-            func load() -> [RemoteDevice] { [] }
-            func save(_ devices: [RemoteDevice]) {}
-        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-recovery-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -55,7 +46,8 @@ struct DelegationRecoveryTests {
             projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, attentionStore: .scratch(), orchestrationPersistence: persistence
         )
         let peers = RemotePeerManager(
-            store: Store(), pairing: RemotePairingService(store: Devices()), localIdentity: { .init(serverId: "", name: "", origins: []) }
+            store: MemoryPeerStore(peers: [RemotePeer(id: "peer-1", serverId: "mac-1", name: "Laptop", origins: [], token: "t", addedAt: .distantPast)]),
+            pairing: RemotePairingService(store: MemoryDeviceStore()), localIdentity: { .init(serverId: "", name: "", origins: []) }
         )
         core.watchForRevokedPeers(of: peers)
 

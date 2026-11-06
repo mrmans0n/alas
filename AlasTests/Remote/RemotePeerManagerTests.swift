@@ -389,8 +389,8 @@ struct RemotePeerManagerTests {
     /// Polls `condition` until it holds, the deadline passes, or the task is
     /// cancelled. Returns whether it held, so a missed state fails the test
     /// instead of spinning forever.
-    private func awaitCondition(_ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    private func awaitCondition(within timeout: Duration = .seconds(2), _ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
             if Task.isCancelled { return false }
             if condition() { return true }
@@ -937,11 +937,7 @@ struct RemotePeerManagerTests {
         manager.connectAll()
 
         let attempt = Task { await manager.addPeer(code: "ABC", origins: ["http://10.0.0.1:8765"]) }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while manager.peers.first?.token != "new-token", ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        #expect(manager.peers.first?.token == "new-token")
+        #expect(await awaitCondition(within: .seconds(10)) { manager.peers.first?.token == "new-token" })
         links.byPeerId["p1"]?.emit(.stateChanged(.unauthorized))
         #expect(heard.signals == 0)
 
