@@ -36,6 +36,9 @@ final class NativePeerHosts {
     /// console can be listed without waiting for the next poll.
     @ObservationIgnored var onRunsChanged: (@MainActor (_ serverId: String) -> Void)?
 
+    /// Fired with the peer's `serverId` when it has delegation outcomes waiting to be collected.
+    @ObservationIgnored var onDelegationOutboxChanged: (@MainActor (_ serverId: String) -> Void)?
+
     private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
     private let sendPortForward: @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
@@ -857,6 +860,11 @@ final class NativePeerHosts {
         supports(serverId, HostProtocolCapability.v1) && supports(serverId, HostProtocolCapability.eventsV1)
     }
 
+    /// The peer's channel, if one exists, for requests that are not tied to a view.
+    func channel(for serverId: String) -> PeerHostChannel? {
+        channels[serverId]
+    }
+
     private func makeChannel(_ serverId: String) -> PeerHostChannel {
         let channel = PeerHostChannel(timeout: timeout) { [weak self] in self?.send(serverId, $0) }
         channel.onChange = { [weak self, weak channel] in
@@ -887,6 +895,7 @@ final class NativePeerHosts {
                 onRunsChanged?(serverId)
             }
         }
+        channel.onDelegationOutboxChanged = { [weak self] in self?.onDelegationOutboxChanged?(serverId) }
         channel.onNotice = { [notice] in notice(serverId, $0) }
         channel.onWorktreeNotice = { [worktreeNotice] in worktreeNotice(serverId, $0) }
         channel.onFileChanged = { [weak self] worktreeID, path, version in

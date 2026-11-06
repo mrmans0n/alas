@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged", "delegationOutboxChanged"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 

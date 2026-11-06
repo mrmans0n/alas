@@ -140,9 +140,9 @@ public final class PeerHostChannel {
         onChange?()
         subscribeID = nextID
         // Channels exist only for `host.events.v1` peers, which serve it; a host
-        // that predates `worktreeNotice`, `reviewStatus`, `reviewsChanged` or `fileChanged` just never matches that kind.
+        // that predates `worktreeNotice`, `reviewStatus`, `reviewsChanged`, `fileChanged` or `delegationOutboxChanged` just never matches that kind.
         _ = await request(.subscribeAccepting(
-            after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]
+            after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged", "delegationOutboxChanged"]
         )) // `finish` sets isSubscribed on .subscribed
     }
 

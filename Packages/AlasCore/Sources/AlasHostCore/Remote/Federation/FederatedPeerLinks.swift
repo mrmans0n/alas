@@ -43,4 +43,13 @@ public protocol FederatedPeerLinks: AnyObject {
     func sendToPeer(_ message: RemoteClientMessage, serverId: String)
     /// Whether `serverId`'s last `hello` advertised `capability`.
     func peerSupports(_ capability: String, serverId: String) -> Bool
+    /// Every paired peer with its link state, as `hello` reports it.
+    var helloPeers: [RemoteHelloPeer] { get }
+}
+
+extension FederatedPeerLinks {
+    /// A fake that does not track link state reports its carrying peers online.
+    public var helloPeers: [RemoteHelloPeer] {
+        sessionCarryingPeers.map { RemoteHelloPeer(serverId: $0.serverId, name: $0.name, state: "online") }
+    }
 }

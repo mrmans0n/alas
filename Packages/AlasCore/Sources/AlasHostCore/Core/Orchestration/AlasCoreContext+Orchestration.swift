@@ -130,7 +130,8 @@ extension AlasCoreContext {
                 },
                 machineName: { [weak self] in
                     self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
-                }
+                },
+                delegationPeers: { [weak self] in self?.delegationPeers }
             )
         )
     }

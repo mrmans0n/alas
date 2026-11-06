@@ -137,6 +137,9 @@ public final class AlasCoreContext {
     @ObservationIgnored var reviewStatusDidRefresh: (@MainActor (String) -> Void)?
     /// Told the server id of a paired Mac that has outcomes waiting in its outbox.
     @ObservationIgnored var peerOutboxDidChange: (@MainActor (String) -> Void)?
+    /// How agents here reach paired Macs' hosts; the app installs it with its
+    /// peer links, and a host without any leaves it nil.
+    @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)?
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// When each worktree's local-changes review was opened, by worktree id,

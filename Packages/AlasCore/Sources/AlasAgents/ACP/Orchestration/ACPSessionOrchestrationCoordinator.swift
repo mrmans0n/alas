@@ -127,6 +127,8 @@ public final class ACPSessionOrchestrationCoordinator {
         public let resolvePeerWorktreeBase: (String, String, String?, URL) async -> Result<String, WorktreeCreationError>
         /// What a paired Mac's user knows this Mac as.
         public let machineName: () -> String
+        /// How to reach paired Macs' hosts; nil when this build has no peer links.
+        public let delegationPeers: () -> ACPDelegationPeers?
 
         public init(
             persistence: ACPOrchestrationPersistence,
@@ -162,8 +164,10 @@ public final class ACPSessionOrchestrationCoordinator {
                 .failure(.init(message: "This host cannot create worktrees for a paired Mac."))
             },
             resolvePeerWorktreeBase: @escaping (String, String, String?, URL) async -> Result<String, WorktreeCreationError> = { _, base, _, _ in .success(base) },
-            machineName: @escaping () -> String = { "this Mac" }
+            machineName: @escaping () -> String = { "this Mac" },
+            delegationPeers: @escaping () -> ACPDelegationPeers? = { nil }
         ) {
+            self.delegationPeers = delegationPeers
             self.admitChild = admitChild
             self.project = project
             self.createPeerWorktree = createPeerWorktree
