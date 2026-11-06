@@ -72,8 +72,14 @@ public final class ACPV2AttachmentRuntime {
             localSessionId = nil
         }
         @MainActor
-        public init(brokerClient: ACPBrokerClient, opened: ACPBrokerOpenResult) throws {
-            orderedIntake = nil
+        public init(brokerClient: ACPBrokerClient, opened: ACPBrokerOpenResult, orderedIntake: ACPV2OrderedIntake? = nil) throws {
+            try brokerClient.validateV2OrderedIntake(orderedIntake)
+            if orderedIntake != nil {
+                guard !opened.adopted, opened.snapshot.acknowledgedCursor.rawValue == 0,
+                      opened.snapshot.operations.isEmpty, opened.snapshot.initializeRawResponse == nil,
+                      opened.snapshot.remoteSessionRawResponse == nil else { throw Failure.invalidAttachment }
+            }
+            self.orderedIntake = orderedIntake
             inbound = try .init(brokerClient: brokerClient, opened: opened)
             response = try .init(brokerClient: brokerClient, opened: opened)
             updates = try .init(brokerConnectionID: inbound.connectionID, opened: opened)
@@ -149,6 +155,11 @@ public final class ACPV2AttachmentRuntime {
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
+        if let intake = attachment.orderedIntake {
+            monitors.append(Task { [weak self] in
+                for await _ in intake.invalidations { self?.finish(.observationLost) }
+            })
+        }
     }
 
     deinit {
@@ -313,6 +324,8 @@ public final class ACPV2AttachmentRuntime {
 
     private func current() -> Bool {
         guard active, isCurrent(), active else { return false }
+        if attachment.orderedIntake?.isValid == false { finish(.observationLost)
+        return false }
         // A child may fail before its monitor task runs. Every worker and
         // consumption boundary must observe that loss synchronously.
         if let terminal = terminalChildStatus() { finish(terminal)

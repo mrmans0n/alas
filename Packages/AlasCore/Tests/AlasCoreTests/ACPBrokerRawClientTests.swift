@@ -355,11 +355,13 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
-    @Test func freshBrokerBootstrapInstallsQueuedTrafficWithoutCrossingItsAckPrefix() async throws {
+    @Test(arguments: ["split", "ordered", "ordered-loss"])
+    func freshBrokerBootstrapInstallsQueuedTrafficWithoutCrossingItsAckPrefix(mode: String) async throws {
         let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
         let service = RawBrokerFixture(pending: true, rawBytes: bytes)
         await service.setFreshBootstrap(true)
         let client = makeClient(service)
+        let intake = mode == "split" ? nil : try await client.claimV2OrderedIntake()
         let opened = try await client.start()
         defer { Task { await client.detach() } }
         let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("bootstrap-broker-\(UUID()).sqlite").path)
@@ -373,7 +375,7 @@ struct ACPBrokerRawClientTests {
         let fence = ACPSessionLeaseFence(sessionId: "s", ownerInstance: "A", token: "owner")
         let updates = RuntimeUpdateGate(base: persistence, operation: .append)
         var offers: [ACPV2AttachmentRuntime.Request] = []
-        let bootstrap = try await ACPV2SessionBootstrap(attachment: .init(brokerClient: client, opened: opened), fence: fence,
+        let bootstrap = try await ACPV2SessionBootstrap(attachment: .init(brokerClient: client, opened: opened, orderedIntake: intake), fence: fence,
             persistence: persistence, deadline: .now.advanced(by: .seconds(60)), journals: .init(persistence: persistence, updates: updates),
             isCurrent: { true }, onRequest: { offers.append($0) })
         defer { bootstrap.stop()
@@ -385,6 +387,13 @@ struct ACPBrokerRawClientTests {
         try await eventually { await MainActor.run { offers.count == 1 } }
         #expect(await service.acks.allSatisfy { $0 <= 1 })
         #expect(try await persistence.loadSession(id: "s")?.remoteSessionId == "upstream")
+        if mode == "ordered-loss" {
+            await client.detach()
+            try await eventually { await MainActor.run { installed.runtime.status == .observationLost } }
+            #expect(await updates.entered)
+            #expect(await service.acks.allSatisfy { $0 <= 1 })
+            return
+        }
         await updates.release()
         try await client.replayRawBrokerEvents()
         try await eventually { await service.acks.last == 4 }

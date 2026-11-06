@@ -247,7 +247,7 @@ public final class ACPV2SessionUpdateOwner {
     private var didEstablishDefault = false
 
     func prepareFreshOrdered() async throws {
-        guard !started, status == .idle, case .stdio = attachment.source else { throw Failure.invalidAttachment }
+        guard !started, status == .idle else { throw Failure.invalidAttachment }
         started = true
         do { try await prepare(fresh: true)
         orderedPrepared = true }
