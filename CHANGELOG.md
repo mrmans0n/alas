@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.3] - 2026-11-06
+
+### ✨ Features
+
+- Let worktree agents inspect and interact with the experimental iOS Simulator through `device_*` tools, with user takeover controls. The feature is disabled by default, uses private Simulator APIs, and is validated with Xcode 26.6 (#2356).
+- Show adapter-reported file changes on supported Claude and Codex turns, with safe file links and access to current Git diffs where available (#2357).
+- Tell CLI-only agents when `alas computer` targets an attached worktree VM, including guest selection and transient startup retries (#2359).
+
+### 🐛 Fixes
+
+- Show visual aids in paired-session transcripts instead of only their titles, with expanded previews and question answering when the peer owns the session (#2360).
+- Warn agents when a Linux app stops answering accessibility reads after a ref click and suggest screenshot coordinates as a fallback (#2358).
+
+### 🏗️ Internal
+
+- Add groundwork for ordered ACP broker intake while keeping production ACP 2 selection unchanged (#2354).
+- Update the Scala tree-sitter grammar to 0.26.4 for more accurate syntax highlighting (#2315).
+
 ## [0.23.2] - 2026-11-05
 
 ### ✨ Features
