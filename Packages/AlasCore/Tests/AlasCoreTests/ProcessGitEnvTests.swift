@@ -25,4 +25,31 @@ struct ProcessGitEnvTests {
             if case ProcessError.outputTooLarge(maxBytes: 64 * 1024) = error { true } else { false }
         }
     }
+
+    /// A child can reach the cap before launch has marked it running, which only
+    /// shows among many at once. Each must stop rather than block on a full pipe
+    /// until its timeout.
+    @Test(arguments: [false, true])
+    func childrenReachingTheCapDuringLaunchAreStillStopped(capped: Bool) async {
+        let timedOut = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+            for _ in 0..<400 {
+                group.addTask {
+                    do {
+                        if capped {
+                            _ = try await Process.runCapped("/usr/bin/yes", args: [], maxOutputBytes: 64 * 1024, timeout: 15)
+                        } else {
+                            _ = try await Process.runData("/usr/bin/yes", args: [], timeout: 15, maxOutputBytes: 64 * 1024)
+                        }
+                        return false
+                    } catch ProcessError.timedOut {
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            return await group.reduce(0) { $0 + ($1 ? 1 : 0) }
+        }
+        #expect(timedOut == 0)
+    }
 }
