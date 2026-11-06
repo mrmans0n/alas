@@ -3304,6 +3304,26 @@ struct HostProtocolServerTests {
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
     }
 
+    /// The gate reads the device that authenticated, so a token from before a
+    /// re-pair must follow the access `peers list` shows for that Mac.
+    @Test func turningAPeerOffRefusesItsOlderTokenToo() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let peers = RemotePeerManager(
+            store: MemoryPeerStore(peers: [RemotePeer(
+                id: "p", serverId: "s1", name: "s1", origins: [], token: "t", localDeviceId: "s1-repaired", addedAt: .distantPast
+            )]),
+            pairing: fixture.pairing, localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
+
+        #expect(peers.setAgentAccess(.off, peerId: "p"))
+
+        #expect(fixture.pairing.device(id: "s1")?.agentAccess == .off)
+        #expect(fixture.pairing.device(id: "s2")?.agentAccess == .ask)
+        let response = await fixture.ask(.start(fixture.start(child: "child")), as: .remotePeer(deviceID: "s1"))
+        #expect(response == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
+    }
+
     @Test func startIsRefusedWhileOffAndNoSessionIsCreated() async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }

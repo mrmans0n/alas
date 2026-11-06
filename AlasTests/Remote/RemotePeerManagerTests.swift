@@ -1840,6 +1840,41 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.localDeviceId == "dev-a")
     }
 
+    /// Both records hold no token, but only the one with no key is inbound
+    /// only. A key proves this Mac paired out, so its empty token was lost,
+    /// say to a failed secret read: that link must still dial, be refused,
+    /// show as revoked, and start again at off when added again.
+    @Test(arguments: [(false, RemoteDeviceAgentAccess.autoRun), (true, .off)])
+    func onlyAnUnpinnedRecordWithNoTokenIsInboundOnly(pinned: Bool, accessAfterAdd: RemoteDeviceAgentAccess) async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let old = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        #expect(pairing.setAgentAccess(.autoRun, deviceId: old.deviceId))
+        let new = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let key = Curve25519.Signing.PrivateKey()
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"], token: "",
+                               publicKey: pinned ? RemoteIdentityCrypto.publicKeyString(key.publicKey) : nil,
+                               localDeviceId: old.deviceId, addedAt: .distantPast)])
+        let links = Links()
+        let requests = Requests()
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, requests: requests),
+                                  links: links, reciprocalConfirmationTimeout: 2)
+        var revoked: [String] = []
+        manager.onPeerRevoked = { serverId, _, _ in revoked.append(serverId) }
+
+        manager.connectAll()
+        links.byPeerId["p1"]?.emit(.stateChanged(.unauthorized))
+
+        #expect((links.byPeerId["p1"] != nil) == pinned)
+        #expect(manager.helloPeers == (pinned ? [RemoteHelloPeer(serverId: "srv-a", name: "Mac A", state: "unauthorized")] : []))
+        #expect(revoked == (pinned ? ["srv-a"] : []))
+
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: new.deviceId)
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        #expect(pairing.device(id: new.deviceId)?.agentAccess == accessAfterAdd)
+    }
+
     /// No path dials a record with no token: not connecting everything, not
     /// recording one while links are up, and not restoring one after an add
     /// whose pair-back never came.

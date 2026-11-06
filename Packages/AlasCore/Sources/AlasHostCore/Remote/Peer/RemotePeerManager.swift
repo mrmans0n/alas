@@ -937,11 +937,27 @@ public final class RemotePeerManager {
         }
     }
 
-    /// Sets the access of the inbound device `peerId` reaches this Mac with.
+    /// Sets the access of the inbound device `peerId` reaches this Mac with,
+    /// and of every other device carrying its identity: a re-pair leaves the
+    /// earlier ones with live tokens, and the gate reads whichever authenticated.
     /// False when the peer has no such device (reciprocal pairing never completed).
     public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
-        guard let deviceId = peers.first(where: { $0.id == peerId })?.localDeviceId else { return false }
-        return pairing.setAgentAccess(access, deviceId: deviceId)
+        guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
+              pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
+        for other in deviceIds(of: peer) where other != deviceId {
+            pairing.setAgentAccess(access, deviceId: other)
+        }
+        return true
+    }
+
+    /// The devices carrying `peer`'s identity, and the one its record names,
+    /// for a record written before a peer's device carried a `peerServerId`.
+    private func deviceIds(of peer: RemotePeer) -> [String] {
+        var ids = pairing.devices
+            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
+            .map(\.id)
+        if let hint = peer.localDeviceId, !ids.contains(hint) { ids.append(hint) }
+        return ids
     }
 
     public func forget(peerId: String) {
@@ -967,14 +983,8 @@ public final class RemotePeerManager {
         // meantime is represented by several devices, at most one of which
         // the record remembers, and revoking the remembered id alone would
         // leave live tokens behind. Sweeping the identity is also what makes
-        // that additive redeem safe. The stored id is still revoked as a
-        // hint, for records written before the peer's device carried a
-        // `peerServerId`.
-        var deviceIds = pairing.devices
-            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
-            .map(\.id)
-        if let hint = peer.localDeviceId, !deviceIds.contains(hint) { deviceIds.append(hint) }
-        for deviceId in deviceIds {
+        // that additive redeem safe.
+        for deviceId in deviceIds(of: peer) {
             pairing.revoke(deviceId: deviceId)
             onRevokeDevice?(deviceId)
         }
@@ -1153,8 +1163,8 @@ public final class RemotePeerManager {
     private func connect(_ peer: RemotePeer) {
         connections[peer.id]?.disconnect()
         connections[peer.id] = nil
-        // Every path to a link comes through here, and a record without a
-        // token has nothing to present.
+        // Every path to a link comes through here, and this record has no
+        // token to present.
         guard !peer.isInboundOnly else { return }
         let id = peer.id
         let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }

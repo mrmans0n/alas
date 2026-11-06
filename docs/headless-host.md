@@ -207,9 +207,9 @@ sessions and prompts; work already running finishes and reports back.
 Pairing a Mac with the host gives the host no way to reach that Mac, so the
 host's agents can't delegate there yet. To allow it, choose **Pair a device** in
 the Mac's Remote settings, copy the pairing link, then run
-`alas-host peers add <pairing-link>` on the host. Unlike the pairing above, this is two-way: the host redeems the
-link, then the Mac pairs back to the host, so that Mac also gets a link to the
-host.
+`alas-host peers add <pairing-link>` on the host. Unlike the pairing above, this
+is two-way: the host redeems the link, then the Mac pairs back to the host, so
+that Mac also gets a link to the host.
 
 - The host and the Mac must be able to reach each other. Tailscale is the
   recommended route. The host needs an address other than loopback, so set
@@ -220,6 +220,11 @@ host.
   untested. If the add can't reach the Mac, use Tailscale.
 - The Mac must allow it: on the host's row in Settings > Remote > Peers, set
   *Let agents on this Mac use this machine*.
+
+When Remote serves, the host keeps a link open to each peer it holds a token for.
+That includes tokens written by an app sharing the profile, not only those from
+`peers add`. Agents on the host see those peers in `agent_list`, and each peer
+still refuses them until it allows it.
 
 If the Mac had paired with the host and had no link back, its `peers agents`
 value stays as it was: access to the host is a separate decision. Running

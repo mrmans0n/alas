@@ -40,10 +40,13 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// real session data over it. Re-pairing is what upgrades it.
     public var isVerified: Bool { publicKey?.isEmpty == false }
 
-    /// Whether this Mac holds no token for the peer: it paired with a host
-    /// that never paired back. Kept so it can be listed and forgotten; no
-    /// path dials it, and it is offered to nobody as a place to reach.
-    public var isInboundOnly: Bool { token.isEmpty }
+    /// Whether the peer paired with this server and this server never paired
+    /// back, so it has a device here and this side holds no token for it. Kept
+    /// so it can be listed and forgotten; no path dials it, and it is offered
+    /// to nobody as a place to reach. Such a record never pins a key. An empty
+    /// token beside a pinned key is a lost one, say from a failed secret read:
+    /// that link still dials, is refused and shows as revoked.
+    public var isInboundOnly: Bool { token.isEmpty && publicKey == nil }
 
     public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil) {
         self.id = id

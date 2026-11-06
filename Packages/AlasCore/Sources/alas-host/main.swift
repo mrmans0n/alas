@@ -232,8 +232,9 @@ var isStopping = false
 // Other Macs pair as peers, as with the app: the host proves its identity key
 // on `/pair` and on every later socket. It pairs back only to a Mac too old to
 // pair without it: macOS silently denies a launch agent's connections to LAN
-// addresses. It connects out to the Macs it holds a token for, which `peers add`
-// gives it, so its agents can delegate; it has no federation or Bonjour.
+// addresses. It connects out to every Mac it holds a token for, which `peers
+// add` gives it and an app sharing the profile may have written, so its agents
+// can delegate; it has no federation or Bonjour.
 var remote: RemoteServer?
 /// Starts Remote once the open sessions are restored; nil when Remote is off.
 var startRemote: (@MainActor () async -> Void)?

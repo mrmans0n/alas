@@ -68,9 +68,10 @@ public final class PeerHostChannels {
         for serverId in online where serves(serverId) {
             let channel = channels[serverId] ?? makeChannel(serverId)
             guard !channel.isSubscribed, !channel.isConnecting else { continue }
-            // ponytail: unthrottled retry, once per refresh (each session-list or
-            // availability change); add a failure counter with backoff if a peer
-            // that keeps refusing the snapshot or subscribe shows up.
+            // ponytail: unthrottled retry, once per call: in the app each session-list
+            // or availability change, on a host each federation frame too; add a failure
+            // counter with backoff if a peer that keeps refusing the snapshot or subscribe
+            // shows up.
             Task { await channel.connect() }
         }
     }
