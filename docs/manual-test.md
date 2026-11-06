@@ -966,3 +966,13 @@ row and the child row by eye, along with the steps below.
     steps 3, 5 and 9 from the host. Confirm a loopback-only host refuses the add
     with a message about its address. Run the add once with the host as a launch
     agent over the LAN, and note whether macOS lets it through.
+17. Remote turned on without a relaunch: quit with Remote off, launch, and turn
+    Remote on in Settings. Delegate to a peer, and confirm the parent wakes when
+    the child's turn ends. Turn Remote off and on again, delegate again, and
+    confirm the same wake, plus one for a turn that ended while Remote was off.
+18. An older build on a shared store: with a peer child running, open a release
+    from before delegation on the same data (Alas Dev and the release app share
+    it). Confirm it opens the store, which stays at schema 5, and note what it
+    does with the row whose parent is `peer:<serverId>` and the row carrying
+    `peer_server_id`: neither should run or fail there. Reopen this build and
+    confirm the child's outcome still reaches its parent once.
