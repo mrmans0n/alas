@@ -6375,7 +6375,8 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { session.contextRestoreWarning == nil }
         #expect(session.transcript.messages.count == messageCountBefore)
         #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"])
-        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
+        // Cleared through the persistence queue, after the warning.
+        try await waitUntil { (try? store.loadSession(id: "local")?.contextRecoveryPending) == false }
     }
 
     @Test("failed transcript context send keeps warning and transcript")

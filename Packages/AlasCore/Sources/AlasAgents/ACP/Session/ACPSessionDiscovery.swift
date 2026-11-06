@@ -317,9 +317,19 @@ public final class ACPSessionDiscoveryModel {
         // beyond the first page is settled the same way. Cleanup-retry rows
         // are left out: the agent deleted them and never lists them again.
         let listedIds = Set(sessions.map(\.remoteSessionId)).subtracting(cleanupRetryIds)
-        let candidates = ACPSessionBrowserReducer.unsettledCandidates(
+        var candidates = ACPSessionBrowserReducer.unsettledCandidates(
             firstPage: page.rows, listedBefore: listedIds, rows: sessions
         )
+        // Ask for them directly first, when the agent can. A row it leaves out
+        // may still exist, and a failed request tells nothing either: those
+        // stay candidates, because only a list read can show a row is gone.
+        if !candidates.isEmpty, page.cursor != nil {
+            let ids = sessions.map(\.remoteSessionId).filter { candidates.contains($0) }
+            let rows = (try? await handle.batchGetSessions(sessionIds: ids)) ?? []
+            guard generation == filterGeneration, listedFilter == appliedFilter, actions == localActionGeneration else { return }
+            found = rows.filter { candidates.contains($0.remoteSessionId) }
+            candidates.subtract(found.map(\.remoteSessionId))
+        }
         if !candidates.isEmpty, var cursor = page.cursor {
             let candidateDates = sessions.filter { candidates.contains($0.remoteSessionId) }.map(\.lastActivity)
             // Rows come newest first: once a row older than every candidate
@@ -356,7 +366,7 @@ public final class ACPSessionDiscoveryModel {
             browsingWorktreeId: handle.browsingWorktreeId,
             confirmedGone: confirmedGone
         )
-        // Rows the boundary scan found are current too.
+        // Rows the batch or the boundary scan found are current too.
         if !found.isEmpty {
             notePageRows(found, read: read)
             sessions = ACPSessionBrowserReducer.applying(

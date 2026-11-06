@@ -12,7 +12,38 @@ public struct ACPV2FreshSessionBinding: Equatable, Sendable {
 
 public enum ACPV2FreshSessionBindingError: Error, Equatable, Sendable { case staleLease, conflict }
 
+enum ACPV2BrokerStateWriteError: Error { case invalidated }
+
 extension ACPSessionStore {
+    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence,
+        authorize: @Sendable () -> Bool = { true }) throws -> Bool {
+        guard state.wireContext == .rawV2, state.generation.rawValue > 0,
+              state.generation.rawValue <= UInt64(Int64.max), state.acknowledgedCursor.rawValue == 0 else { return false }
+        guard authorize(), !Task.isCancelled else { return false }
+        do { return try withLeaseFence(fence, {
+            guard authorize(), !Task.isCancelled else { return false }
+            guard let lease = try loadLease(sessionId: fence.sessionId),
+                  lease.ownerInstance.utf8.elementsEqual(fence.ownerInstance.utf8),
+                  lease.token.utf8.elementsEqual(fence.token.utf8),
+                  let row = try loadSession(id: fence.sessionId), row.remoteSessionId == nil,
+                  !row.archived, row.recoveryProcId == nil, !row.contextRecoveryPending else { return false }
+            for table in ["acp_v2_update_streams", "acp_v2_inbound_streams", "acp_v2_submissions"] {
+                guard try db.query("SELECT 1 FROM \(table) WHERE session_id = ? LIMIT 1", bindings: [fence.sessionId]).isEmpty else { return false }
+            }
+            let empty = row.acpBrokerId == nil && row.acpBrokerGeneration == nil && row.acpBrokerWireContextJSON == nil
+                && row.acpBrokerAcknowledgedCursor == 0
+            let recordedContext = try? ACPBrokerRestorePolicy.context(from: row.acpBrokerWireContextJSON)
+            let identical = row.acpBrokerId?.utf8.elementsEqual(state.brokerId.rawValue.utf8) == true
+                && row.acpBrokerGeneration == Int64(state.generation.rawValue) && row.acpBrokerAcknowledgedCursor == 0
+                && recordedContext == state.wireContext
+            guard empty || identical else { return false }
+            let updated = try updateACPBrokerState(sessionId: fence.sessionId, brokerId: state.brokerId.rawValue,
+                generation: Int64(state.generation.rawValue), acknowledgedCursor: 0, wireContext: state.wireContext)
+            guard authorize(), !Task.isCancelled else { throw ACPV2BrokerStateWriteError.invalidated }
+            return updated
+        }) ?? false } catch ACPV2BrokerStateWriteError.invalidated { return false }
+    }
+
     public func bindV2FreshSession(upstreamSessionId: String, source: ACPV2InboundLedgerSource,
         fence: ACPSessionLeaseFence) throws -> ACPV2FreshSessionBinding {
         guard !upstreamSessionId.isEmpty else { throw ACPV2FreshSessionBindingError.conflict }

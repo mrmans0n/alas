@@ -1,0 +1,15 @@
+{
+  "version": "0.23.3",
+  "headline": {
+    "title": "Agent Simulator Control",
+    "body": "Experimental and disabled by default, device_* tools let worktree agents inspect and interact with iOS Simulator using private APIs validated with Xcode 26.6."
+  },
+  "also": [
+    {
+      "title": "Reported file changes"
+    },
+    {
+      "title": "Visual aids in peer sessions"
+    }
+  ]
+}

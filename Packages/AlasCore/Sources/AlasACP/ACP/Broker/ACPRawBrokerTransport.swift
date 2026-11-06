@@ -126,6 +126,13 @@ actor ACPRawBrokerTransport {
 
     private var orderedIntake: ACPV2OrderedIntake?
     private var stagedPending: [ACPBrokerEventCursor: ACPBrokerPendingRequest] = [:]
+    private struct DeliveredOrigin {
+        let frame: Data
+        let pendingID: String?
+    }
+    private var deliveredOrigins: [ACPBrokerEventCursor: DeliveredOrigin] = [:]
+    private var pendingReconciliationOrigins: Set<ACPBrokerEventCursor> = []
+    private var validatedSnapshotTail: ACPBrokerEventCursor?
 
     func claimOrderedIntake() throws -> ACPV2OrderedIntake {
         guard !started, !terminated, orderedIntake == nil else { throw ACPClientError.notRunning }
@@ -215,8 +222,16 @@ actor ACPRawBrokerTransport {
             }
         }
         for pending in snapshot.pendingRequests {
-            guard let frame = pending.rawFrame, let cursor = pending.originCursor,
-                  !seen.contains(cursor) else { continue }
+            guard let frame = pending.rawFrame, let cursor = pending.originCursor else { continue }
+            if seen.contains(cursor) {
+                if orderedIntake != nil {
+                    guard let delivered = deliveredOrigins[cursor], delivered.frame == frame.bytes,
+                          delivered.pendingID?.utf8.elementsEqual(pending.requestId.utf8) == true else {
+                        throw ACPClientError.decoding("Conflicting delivered snapshot origin")
+                    }
+                }
+                continue
+            }
             if orderedIntake != nil {
                 if let previous = stagedPending[cursor],
                    previous.requestId != pending.requestId || previous.rawFrame?.bytes != frame.bytes {
@@ -229,6 +244,20 @@ actor ACPRawBrokerTransport {
                 // Standalone split mode supports historical pending snapshots.
                 publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
             }
+        }
+        if validatedSnapshotTail.map({ snapshot.journalTail >= $0 }) ?? true {
+            validatedSnapshotTail = snapshot.journalTail
+            pendingReconciliationOrigins = Set(snapshot.pendingRequests.compactMap(\.originCursor))
+            pruneDeliveredOrigins()
+        }
+    }
+
+    private func pruneDeliveredOrigins() {
+        guard orderedIntake != nil, let tail = validatedSnapshotTail else { return }
+        // ACK closes journal redelivery, but unresolved requests can still be
+        // reconciled through snapshots after that ACK. Keep their exact bytes.
+        deliveredOrigins = deliveredOrigins.filter { cursor, _ in
+            cursor > acknowledged || cursor > tail || pendingReconciliationOrigins.contains(cursor)
         }
     }
 
@@ -264,7 +293,9 @@ actor ACPRawBrokerTransport {
     private func performReplay() async throws {
         try await flushAcknowledgements()
         guard !terminated, let generation else { return }
+        var barrier: ACPBrokerEventCursor?
         while !terminated {
+            let previousCursor = replayCursor
             var params = ACPBrokerAttachParams(brokerId: openParams.brokerId, generation: generation,
                 acknowledgedCursor: acknowledged, replayAfterCursor: replayCursor, maxReplayBytes: 4 * 1024 * 1024,
                 snapshotOnLastPageOnly: false)
@@ -274,14 +305,40 @@ actor ACPRawBrokerTransport {
             // Require the context fence on every page before publishing any event.
             guard let snapshot = page.snapshot else { throw ACPClientError.decoding("Raw replay missing context snapshot") }
             try validate(snapshot, expected: generation)
+            if orderedIntake != nil, barrier == nil { barrier = snapshot.journalTail }
             for event in page.events.sorted(by: { $0.cursor < $1.cursor }) where event.cursor > acknowledged {
+                try validateOrderedOrigin(event)
                 if !seen.contains(event.cursor) { try dispatch(event) }
                 replayCursor = max(replayCursor, event.cursor)
             }
             try apply(snapshot)
             try await flushAcknowledgements()
+            if let barrier, replayCursor >= barrier { return }
             if page.hasMoreEvents != true { return }
-            guard !page.events.isEmpty else { throw ACPClientError.decoding("Raw replay made no progress") }
+            guard replayCursor > previousCursor else { throw ACPClientError.decoding("Raw replay made no progress") }
+        }
+    }
+
+    private func validateOrderedOrigin(_ event: ACPBrokerEvent) throws {
+        guard orderedIntake != nil else { return }
+        let expected: DeliveredOrigin?
+        if let staged = stagedPending[event.cursor], let raw = staged.rawFrame {
+            expected = .init(frame: raw.bytes, pendingID: staged.requestId)
+        } else { expected = deliveredOrigins[event.cursor] }
+        guard let expected else { return }
+        let actual: DeliveredOrigin
+        switch event.kind {
+        case .rawFrame(let frame): actual = .init(frame: frame.bytes, pendingID: nil)
+        case .pendingRequest(let pending):
+            guard let frame = pending.rawFrame, pending.originCursor == event.cursor else {
+                throw ACPClientError.decoding("Missing repeated journal origin")
+            }
+            actual = .init(frame: frame.bytes, pendingID: pending.requestId)
+        default: throw ACPClientError.decoding("Journal control replaced a method origin")
+        }
+        guard actual.frame == expected.frame,
+              actual.pendingID.map({ Data($0.utf8) }) == expected.pendingID.map({ Data($0.utf8) }) else {
+            throw ACPClientError.decoding("Conflicting repeated journal origin")
         }
     }
 
@@ -332,6 +389,7 @@ actor ACPRawBrokerTransport {
                          origin: ACPBrokerFrameProvenance.Origin, pendingID: String? = nil) {
         guard !terminated, let generation else { return }
         seen.insert(cursor)
+        if orderedIntake != nil { deliveredOrigins[cursor] = .init(frame: frame.bytes, pendingID: pendingID) }
         // A restored unresolved request may already have a durable receipt.
         // Restore its resolution identity without protecting or consuming it again.
         if cursor > acknowledged { protected.insert(cursor) }
@@ -387,6 +445,7 @@ actor ACPRawBrokerTransport {
         _ = try await service.ack(params)
         guard !terminated, self.generation == generation else { return }
         acknowledged = max(acknowledged, target)
+        pruneDeliveredOrigins()
         let state = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2)
         orderedIntake?.publishDurableState(state)
         durable?(state)
@@ -562,6 +621,9 @@ actor ACPRawBrokerTransport {
     private func loseObservation() {
         terminated = true
         orderedIntake?.invalidate(message: "Broker observation lost")
+        deliveredOrigins.removeAll()
+        stagedPending.removeAll()
+        pendingReconciliationOrigins.removeAll()
         poll?.cancel()
         poll = nil
         updatesCont.finish()

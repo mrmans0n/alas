@@ -1943,10 +1943,10 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
 			files = (
-				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1964,10 +1964,10 @@
 		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
 			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

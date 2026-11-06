@@ -399,7 +399,9 @@ struct RemoteServerPane: View {
                 // Hashes the bundled host binary; keep it off the main thread.
                 let install = await Task.detached { setup.decision(for: probe) }.value
                 hostActivity[peer.id] = HostSSHSetupSheet.summary(install) + "…"
-                let host = try await setup.install(probe, progress: { _ in })
+                let host = try await setup.install(probe, progress: { note in
+                    Task { @MainActor in hostActivity[peer.id] = note + "…" }
+                })
                 hostActivity[peer.id] = "Restarting the host…"
                 try await setup.start(host: host)
             } catch {

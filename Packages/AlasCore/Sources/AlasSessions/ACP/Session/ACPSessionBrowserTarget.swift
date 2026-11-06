@@ -51,6 +51,9 @@ public final class ACPSessionDiscoveryHandle {
     /// Session index pages that hold no row for this browser but still have
     /// a cursor are followed, at most this many requests per load.
     static let maxPagesPerLoad = 10
+    /// Session ids per `_session/batch_get`; the agent reads each one, and
+    /// Codex can walk its stored history for an unknown id.
+    static let batchGetLimit = 50
 
     public init(
         worktreeId: String,
@@ -117,6 +120,29 @@ public final class ACPSessionDiscoveryHandle {
     ) async throws -> (rows: [ACPDiscoveredSession], cursor: String?) {
         guard !closed else { return ([], nil) }
         return try await readPages(from: cursor, filter: filter)
+    }
+
+    /// The current rows of `sessionIds`, wherever they are in the list. Empty
+    /// when the agent cannot batch. It leaves out ids it cannot read, so a
+    /// missing row says nothing about whether the session still exists.
+    public func batchGetSessions(sessionIds: [String]) async throws -> [ACPDiscoveredSession] {
+        guard !closed, sessionIndex?.batchGet == true else { return [] }
+        var seen: Set<String> = []
+        let ids = sessionIds.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && seen.insert($0).inserted
+        }
+        var rows: [ACPDiscoveredSession] = []
+        for start in stride(from: 0, to: ids.count, by: Self.batchGetLimit) {
+            let chunk = Array(ids[start ..< min(start + Self.batchGetLimit, ids.count)])
+            for info in try await connection.batchGetSessions(sessionIds: chunk) {
+                // Mapped with the linked scope, like a list change: the model
+                // scopes rows by its current filter.
+                if let row = await discoveredSession(info, filter: .init(includeLinkedWorktrees: true)) {
+                    rows.append(row)
+                }
+            }
+        }
+        return rows
     }
 
     /// Makes `filter` the handle's filter, continuing after its first page.

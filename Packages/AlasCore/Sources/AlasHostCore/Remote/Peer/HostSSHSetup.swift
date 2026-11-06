@@ -86,7 +86,8 @@ public struct HostSSHProbe: Equatable, Sendable {
 public enum HostSSHInstall: Equatable, Sendable {
     case brewUpgrade(cask: String)
     case brewInstall
-    /// The remote's own Alas.app host: used as is, not ours to replace.
+    /// The host inside the remote's own Alas.app: used as is, not ours to
+    /// replace or upgrade.
     case existing(path: String)
     /// Copy this app's host files into `~/.alas/host`, every time: the web
     /// client, zmx and the CLI change without the host binary changing.
@@ -97,14 +98,19 @@ public enum HostSSHInstall: Equatable, Sendable {
         if probe.os != "Darwin" {
             return .unsupported("alas-host runs on macOS only.")
         }
-        if let cask = probe.cask {
-            return .brewUpgrade(cask: cask)
+        // A cask counts only with its own host behind it: Homebrew keeps listing
+        // a cask whose app was deleted by hand, and upgrading that one fails. A
+        // host copied here is ours, whatever cask is listed beside it.
+        if let path = probe.hostPath, !path.hasSuffix(HostSSHSetup.copiedHostSuffix) {
+            if probe.cask == "alas" || path.hasPrefix(HostSSHSetup.appHostPath) {
+                return .existing(path: path)
+            }
+            if let cask = probe.cask {
+                return .brewUpgrade(cask: cask)
+            }
         }
         if probe.brew != nil {
             return .brewInstall
-        }
-        if let path = probe.hostPath, path.hasPrefix(HostSSHSetup.appHostPath) {
-            return .existing(path: path)
         }
         if probe.arch == bundleArch {
             return .copy
@@ -179,6 +185,8 @@ public struct HostSSHSetup: Sendable {
         self.sleep = sleep ?? { try await Task.sleep(for: $0) }
     }
 
+    static let copiedHostSuffix = "/.alas/host/alas-host/alas-host"
+
     /// `uname -m` name of the architecture this app's host binary is built for.
     public static var bundleArch: String {
         RemoteZmxInstaller.localArch == "aarch64" ? "arm64" : RemoteZmxInstaller.localArch
@@ -226,7 +234,8 @@ public struct HostSSHSetup: Sendable {
     }
 
     /// Installs or updates the host as `decision(for:)` says and returns its
-    /// executable path on the remote.
+    /// executable path on the remote. `progress` hears when the plan changes:
+    /// a Homebrew install that failed and fell back to copying.
     public func install(_ probe: HostSSHProbe, progress: @Sendable (String) -> Void) async throws -> String {
         switch decision(for: probe) {
         case .unsupported(let reason):
@@ -234,22 +243,35 @@ public struct HostSSHSetup: Sendable {
         case .existing(let path):
             return path
         case .brewUpgrade(let cask):
-            progress("Updating alas-host with Homebrew")
             return try await brew("upgrade --cask \(SSHCommand.shellQuote(cask))")
         case .brewInstall:
-            progress("Installing alas-host with Homebrew")
-            return try await brew("install --cask mrmans0n/tap/alas-host")
+            do {
+                return try await brew("install --cask mrmans0n/tap/alas-host")
+            } catch let failure as Failure where !failure.connectionFailed && probe.arch == Self.bundleArch {
+                progress("Homebrew failed; copying alas-host from this app")
+                do {
+                    return try await copy()
+                } catch let copying as Failure {
+                    throw Failure(
+                        step: "Install",
+                        message: "Homebrew: \(failure.message)\nCopying from this app: \(copying.message)",
+                        connectionFailed: copying.connectionFailed
+                    )
+                }
+            }
         case .copy:
-            progress("Copying alas-host from this app")
             return try await copy()
         }
     }
 
     private func brew(_ arguments: String) async throws -> String {
+        // No cleanup: on its 30-day schedule it would delete old versions and
+        // caches of everything on a Mac that only asked for a host.
         // brew's chatter goes to stderr so a failure shows it and stdout is the path.
         let result = try await step(
             "Install",
-            "brew \(arguments) 1>&2 || exit $?\n\(Self.locateHost)\n[ -n \"$h\" ] && echo \"$h\"",
+            "HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1 brew \(arguments) 1>&2 || exit $?\n"
+                + "\(Self.locateHost)\n[ -n \"$h\" ] && echo \"$h\"",
             timeout: 900
         )
         guard let path = result.stdout.split(separator: "\n").last.map(String.init), !path.isEmpty else {
@@ -417,9 +439,19 @@ public struct HostSSHSetup: Sendable {
         )
     }
 
+    /// What fits in the sheet of a failing command's output: Homebrew's own
+    /// `Error:` lines when it printed any, else both ends of the output.
+    static func summarizedOutput(_ output: String) -> String {
+        let lines = output.components(separatedBy: "\n")
+        let errors = lines.filter { $0.hasPrefix("Error:") }
+        if !errors.isEmpty { return errors.joined(separator: "\n") }
+        guard lines.count > 15 else { return output }
+        return (lines.prefix(5) + ["… \(lines.count - 15) lines omitted …"] + lines.suffix(10)).joined(separator: "\n")
+    }
+
     private static func message(_ result: ProcessResult) -> String {
         let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return stderr.isEmpty ? (stdout.isEmpty ? "Exited with status \(result.exitCode)." : stdout) : stderr
+        return summarizedOutput(stderr.isEmpty ? (stdout.isEmpty ? "Exited with status \(result.exitCode)." : stdout) : stderr)
     }
 }
