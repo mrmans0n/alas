@@ -2312,7 +2312,7 @@ public final class ACPSessionRunner {
         // A settling session's report is deferred into
         // `applyPendingCompletedOutputBoundaryIfReady` (for its background
         // work, not its text); a legacy one keeps reporting here.
-        let lastAgentText = currentTurnLastAgentText()
+        let lastAgentText = turnFinalAgentText()
         let completion = ACPTurnCompletion(
             sessionId: sessionId,
             startedAt: startedAt,
@@ -2474,6 +2474,18 @@ public final class ACPSessionRunner {
                 return tail.isEmpty ? nil : tail
             }
             .first
+    }
+
+    /// What the turn ended on, for its completion. An agent that ends its turn
+    /// right after its last message leaves that message in the coalescing
+    /// buffer, and it may be the rest of the message the transcript ends on.
+    private func turnFinalAgentText() -> String? {
+        guard let buffered = bufferedAgentText() else { return currentTurnLastAgentText() }
+        let messages = session.transcript.messages
+        let floor = min(activePromptTranscriptFloor ?? 0, messages.count)
+        let started = messages[floor...].last.flatMap { ACPSessionTranscriptReader.agentText($0) } ?? ""
+        let tail = ACPDelegatedOutcomeText.tail(started + buffered, limit: ACPTurnCompletion.lastAgentTextLimit)
+        return tail.isEmpty ? currentTurnLastAgentText() : tail
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
