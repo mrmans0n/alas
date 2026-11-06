@@ -170,6 +170,7 @@ public final class ACPSessionRunner {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     public var onPersistenceFlushForTesting: (@MainActor () -> Void)?
     public var activePromptIDForTesting: Int? { activePromptID }
+    public var nativeSteeringInProgressForTesting: Bool { nativeSteeringInProgress }
     public func visualAidFirstWriteWaiterCountForTesting(id: UUID) -> Int { unconfirmedVisualAids[id]?.count ?? 0 }
 #endif
     private var updatesTask: Task<Void, Never>?
@@ -3231,6 +3232,10 @@ extension ACPSessionRunner {
     /// readable text resource links inside the worktree become ACP `resource`
     /// blocks. Persisted queue state stays lightweight either way.
     ///
+    /// A mention of this worktree's staged PDF becomes a blob, or throws an
+    /// `ACPPromptRefusal` naming the file: a link would be dead over SSH, and
+    /// silently losing the document is what attaching it was meant to avoid.
+    ///
     /// `nonisolated async` so the synchronous file reads + downscale/base64
     /// encoding (up to 10 × 20 MB) run off the main actor; awaiting it from the
     /// main-actor send path hops to the cooperative pool instead of freezing
@@ -3238,9 +3243,15 @@ extension ACPSessionRunner {
     public nonisolated static func hydrate(
         _ blocks: [ACPContentBlock],
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
-        worktreePath: String
-    ) async -> [ACPContentBlock] {
-        blocks.map { block in
+        worktreePath: String,
+        agentInfo: ACPImplementationInfo?,
+        attachmentsDirectory: URL
+    ) async throws -> [ACPContentBlock] {
+        let embeddedPDFs = try ACPAttachmentStaging.embeddedPDFBlocks(
+            in: blocks, agentInfo: agentInfo,
+            promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
+        return blocks.enumerated().map { index, block in
+            if let pdf = embeddedPDFs[index] { return pdf }
             if case .image(let data, let uri, _) = block, data == nil, let uri {
                 let name = (URL(string: uri)?.lastPathComponent) ?? "image"
                 if promptCapabilities.image,
@@ -3316,11 +3327,6 @@ extension ACPSessionRunner {
             contexts[id] = await sessionReferenceContext?(id)
         }
         return ACPSessionReference.replacingReferences(in: blocks, contexts: contexts, selfSessionId: sessionId)
-    }
-
-    /// Backwards-compatible helper for existing image-only tests.
-    public nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
-        await hydrate(blocks, promptCapabilities: .init(image: imageInputSupported), worktreePath: "/")
     }
 
     /// Primary entry. Resolves the routing then dispatches to one of:
@@ -4193,6 +4199,7 @@ extension ACPSessionRunner {
             var recordedMessagePersisted = durableQueueItem.item.transcriptRecorded
             var ownedContinuationStarted = false
             var steeringAcknowledgement: ACPDurableConsumptionAcknowledgement?
+            var refusal: ACPPromptRefusal?
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
                 if let self, !self.stopped, self.isConnectionCurrent() {
                     if succeeded {
@@ -4214,8 +4221,13 @@ extension ACPSessionRunner {
                         var item = durableQueueItem.item
                         item.transcriptRecorded = recordedMessagePersisted
                         item.status = .pending
-                        item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
-                        item.markDeliveryUncertain()
+                        if let refusal {
+                            // It never left Alas, so there is no delivery to doubt.
+                            item.lastError = refusal.errorDescription
+                        } else {
+                            item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
+                            item.markDeliveryUncertain()
+                        }
                         if let index = self.session.queue.firstIndex(where: { $0.id == item.id }) {
                             self.session.queue[index] = item
                         } else {
@@ -4251,9 +4263,10 @@ extension ACPSessionRunner {
                     of: blocks, worktreeRoot: URL(fileURLWithPath: self.worktreePath),
                     embeddedContext: self.session.promptCapabilities.embeddedContext)
                 var wireBlocks = ACPSymbolReference.replacingReferences(
-                    in: await self.expandingSessionReferences(Self.hydrate(
+                    in: try await self.expandingSessionReferences(Self.hydrate(
                         blocks, promptCapabilities: self.session.promptCapabilities,
-                        worktreePath: self.worktreePath)),
+                        worktreePath: self.worktreePath, agentInfo: self.session.agentInfo,
+                        attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: self.session.worktreeId))),
                     with: symbolExpansion)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
@@ -4369,6 +4382,7 @@ extension ACPSessionRunner {
                 if self.session.readOnlyRestricted {
                     wireBlocks.insert(.text(ACPSideQuestion.guidance), at: context.count)
                 }
+                try ACPPromptSizeGuard.check(wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -4462,6 +4476,7 @@ extension ACPSessionRunner {
                         code: -32000, message: "The agent could not inject the follow-up.", data: nil))
                 }
             } catch {
+                refusal = error as? ACPPromptRefusal
                 if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
                     if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
                         // Method-not-found proves the content was not consumed.
@@ -4923,12 +4938,21 @@ extension ACPSessionRunner {
                         messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
                     )
                 }()
-                var wireBlocks = ACPSymbolReference.replacingReferences(
-                    in: await self.expandingSessionReferences(Self.hydrate(
+                let hydrated: [ACPContentBlock]
+                do {
+                    hydrated = try await Self.hydrate(
                         blocks,
                         promptCapabilities: promptCapabilities,
-                        worktreePath: self.worktreePath
-                    )),
+                        worktreePath: self.worktreePath,
+                        agentInfo: self.session.agentInfo,
+                        attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: self.session.worktreeId)
+                    )
+                } catch {
+                    onDispatchRegistered?()
+                    throw error
+                }
+                var wireBlocks = ACPSymbolReference.replacingReferences(
+                    in: await self.expandingSessionReferences(hydrated),
                     with: symbolExpansion)
                 // Wire-only context is prepended for the agent and never part
                 // of the recorded transcript — recording above used `blocks`.
@@ -4938,6 +4962,12 @@ extension ACPSessionRunner {
                 for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
                 if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
+                do {
+                    try ACPPromptSizeGuard.check(wireBlocks)
+                } catch {
+                    onDispatchRegistered?()
+                    throw error
+                }
                 // A queued turn is found at launch by its `.sending` row, saved
                 // before dispatch; a direct one needs its marker saved just as
                 // durably before the prompt can reach the agent. Set after the
@@ -5479,6 +5509,9 @@ extension ACPSessionRunner {
                 return ACPMessage.Attachment(uri: uri, name: name)
             }
             if case .resource(let uri, _, _) = b {
+                return ACPMessage.Attachment(uri: uri, name: URL(string: uri)?.lastPathComponent)
+            }
+            if case .blobResource(let uri, _, _) = b {
                 return ACPMessage.Attachment(uri: uri, name: URL(string: uri)?.lastPathComponent)
             }
             if case .image(_, let uri, let mime) = b, let uri {

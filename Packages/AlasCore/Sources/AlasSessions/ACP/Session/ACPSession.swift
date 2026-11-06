@@ -297,6 +297,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Tracked public var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// The adapter's self-report from `initialize`. Capabilities cannot tell
+    /// Claude from Codex; see `ACPEmbeddedPDFSupport`.
+    @Tracked public var agentInfo: ACPImplementationInfo?
     /// Relearned on attach; adapters must explicitly advertise this extension.
     @Tracked public var supportsSteering = false
     public var supportsCodexSteeringCompletion = false
@@ -2360,6 +2363,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case (.content(.resource(let u1, let m1, _)),
               .content(.resource(let u2, let m2, _))):
             return u1 == u2 && m1 == m2
+        case (.content(.blobResource(let u1, let m1, _)),
+              .content(.blobResource(let u2, let m2, _))):
+            return u1 == u2 && m1 == m2
         case (.unknown, .unknown):
             return true
         default:
@@ -3952,7 +3958,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             switch item {
             case .content(.text(let s)):
                 out.append(s)
-            case .content(.resourceLink), .content(.image):
+            case .content(.resourceLink), .content(.image), .content(.blobResource):
                 // Asset blocks are preserved on `ToolCall.assets`; including
                 // text placeholders here corrupts wrapped prose/code output
                 // when an update contains both text and assets.
@@ -4266,7 +4272,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 return .image(data: data, uri: uri, mimeType: mime, name: Self.assetName(from: uri))
             case .resourceLink(let uri, let name):
                 return .resource(uri: uri, name: name)
-            case .resource(let uri, let mime, _):
+            case .resource(let uri, let mime, _), .blobResource(let uri, let mime, _):
+                // Name and type only: bytes must not reach a persisted asset.
                 return .resource(uri: uri, name: Self.assetName(from: uri), mimeType: mime)
             case .text:
                 return nil
@@ -4868,7 +4875,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     private func isEchoedSymbolExpansion(_ block: ACPContentBlock) -> Bool {
         expectedSymbolExpansionEchoes.contains { sent in
             switch (sent, block) {
-            case (.resource(let sentURI, _, _), .resourceLink(let echoedURI, _)):
+            case (.resource(let sentURI, _, _), .resourceLink(let echoedURI, _)),
+                 (.resource(let sentURI, _, _), .blobResource(let echoedURI, _, _)):
                 return sentURI == echoedURI
             default:
                 return sent == block

@@ -7279,6 +7279,7 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = attaching
             }
             session.promptCapabilities = initialized.promptCapabilities
+            session.agentInfo = initialized.agentInfo
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.settlesAtResult = initialized.settlesAtResult
