@@ -43,7 +43,6 @@ final class NativePeerHosts {
     /// collect sent then cannot miss the event that follows, and when it is dropped.
     @ObservationIgnored var onAvailabilityChanged: (@MainActor (_ serverId: String) -> Void)?
 
-    private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
     private let sendPortForward: @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
     let confirm: @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool
@@ -52,8 +51,8 @@ final class NativePeerHosts {
     private let notice: @MainActor (_ serverId: String, HostNotice) -> Void
     /// Shows a notice about one of a peer's worktrees, with the peer's server id.
     private let worktreeNotice: @MainActor (_ serverId: String, HostWorktreeNotice) -> Void
-    private let timeout: Duration
-    @ObservationIgnored private var channels: [String: PeerHostChannel] = [:]
+    /// The peers' channels; this follows them and derives its state.
+    let channels: PeerHostChannels
     /// The worktree whose review status is followed, and whether its channel's
     /// current subscription was sent the follow.
     @ObservationIgnored private var gitFollow: GitFollow?
@@ -68,52 +67,41 @@ final class NativePeerHosts {
     @ObservationIgnored var onForwardStopped: (@MainActor (ForwardKey) -> Void)?
 
     init(
-        send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
+        /// Sends over the channels this makes when none are passed.
+        send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void = { _, _ in },
         sendPortForward: @escaping @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void = { _, _ in },
         supports: @escaping @MainActor (_ serverId: String, _ capability: String) -> Bool,
         confirm: @escaping @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool = { _, _ in false },
         showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in },
         notice: @escaping @MainActor (_ serverId: String, HostNotice) -> Void = { _, _ in },
         worktreeNotice: @escaping @MainActor (_ serverId: String, HostWorktreeNotice) -> Void = { _, _ in },
+        channels: PeerHostChannels? = nil,
         timeout: Duration = PeerHostChannel.defaultTimeout
     ) {
-        self.send = send
         self.sendPortForward = sendPortForward
         self.supports = supports
         self.confirm = confirm
         self.showError = showError
         self.notice = notice
         self.worktreeNotice = worktreeNotice
-        self.timeout = timeout
+        self.channels = channels ?? PeerHostChannels(timeout: timeout, supports: supports, send: send)
+        self.channels.onChannelMade = { [weak self] in self?.channelMade($0, $1) }
+        self.channels.onChannelChanged = { [weak self] in self?.channelChanged($0, $1) }
+        self.channels.onChannelDropped = { [weak self] in self?.onAvailabilityChanged?($0) }
     }
 
-    /// Reconciles with the peers whose links currently carry sessions. A
-    /// channel that is not subscribed, because its snapshot or resync
-    /// failed, connects again here.
+    /// Reconciles with the peers whose links currently carry sessions.
     func peersChanged(online: Set<String>) {
-        for (serverId, channel) in channels where !online.contains(serverId) || !servesHostChannel(serverId) {
-            channels[serverId] = nil
-            channel.disconnect() // its onChange drops `worktrees[serverId]`
-            onAvailabilityChanged?(serverId)
-        }
-        stopForwards { !online.contains($0.serverId) || !self.servesHostChannel($0.serverId) }
-        for serverId in online where servesHostChannel(serverId) {
-            let channel = channels[serverId] ?? makeChannel(serverId)
-            guard !channel.isSubscribed, !channel.isConnecting else { continue }
-            // ponytail: unthrottled retry, once per refresh (each session-list or
-            // availability change); add a failure counter with backoff if a peer
-            // that keeps refusing the snapshot or subscribe shows up.
-            Task { await channel.connect() }
-        }
+        channels.peersChanged(online: online)
+        stopForwards { !online.contains($0.serverId) || !self.channels.serves($0.serverId) }
     }
 
     func receive(serverId: String, _ message: HostServerMessage) {
-        channels[serverId]?.receive(message)
+        channels.receive(serverId: serverId, message)
     }
 
     func stop() {
-        let stopped = channels.values
-        channels = [:]
+        channels.stop()
         worktrees = [:]
         archivedWorktrees = [:]
         runs = [:]
@@ -125,15 +113,11 @@ final class NativePeerHosts {
         gitFollowSent = false
         fileFollows = [:]
         stopForwards()
-        for channel in stopped {
-            channel.onChange = nil
-            channel.disconnect()
-        }
     }
 
     /// Whether `serverId`'s worktrees can be read over its host channel.
     func canRead(serverId: String) -> Bool {
-        channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.worktreesReadV1)
+        channels.channel(for: serverId)?.isSubscribed == true && supports(serverId, HostProtocolCapability.worktreesReadV1)
     }
 
     /// Whether `serverId` serves `HostWorktreeRead.fileBytes`, for previews.
@@ -159,7 +143,7 @@ final class NativePeerHosts {
     /// The reply a session in `worktree` would get for `read`. Nil when the
     /// host cannot be read, refused, or did not answer in time.
     func read(_ read: HostWorktreeRead, in worktree: PeerHostWorktree, serverId: String) async -> RemoteServerMessage? {
-        guard canRead(serverId: serverId), let channel = channels[serverId] else { return nil }
+        guard canRead(serverId: serverId), let channel = channels.channel(for: serverId) else { return nil }
         guard case .worktreeRead(let reply) = await channel.request(.readWorktree(worktree: Self.ref(worktree), read: read)) else {
             return nil
         }
@@ -174,7 +158,7 @@ final class NativePeerHosts {
     /// The scripts `worktree`'s Run tab lists on the host. Nil when the host
     /// does not serve runs, refused, or did not answer.
     func runScripts(in worktree: PeerHostWorktree, serverId: String) async -> [HostRunScript]? {
-        guard servesRuns(serverId: serverId), let channel = channels[serverId] else { return nil }
+        guard servesRuns(serverId: serverId), let channel = channels.channel(for: serverId) else { return nil }
         guard case .runScripts(let scripts) = await channel.request(.listRunScripts(worktree: Self.ref(worktree))) else { return nil }
         return scripts
     }
@@ -182,7 +166,7 @@ final class NativePeerHosts {
     func perform(
         _ command: PeerRuns.Command, on row: PeerRuns.Row, in worktree: PeerHostWorktree, serverId: String
     ) async -> PeerRuns.Reply {
-        guard servesRuns(serverId: serverId), let channel = channels[serverId] else {
+        guard servesRuns(serverId: serverId), let channel = channels.channel(for: serverId) else {
             return .refused(title: "Run Script Failed", message: FederatedSessionsProvider.peerUnavailableMessage)
         }
         return await PeerRuns.perform(command, on: row, in: Self.ref(worktree)) { await channel.request($0) }
@@ -301,12 +285,12 @@ final class NativePeerHosts {
 
     /// Whether `serverId` unarchives its archived worktrees.
     func canUnarchive(serverId: String) -> Bool {
-        channels[serverId] != nil && supports(serverId, HostProtocolCapability.worktreesLifecycleV1)
+        channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.worktreesLifecycleV1)
     }
 
     /// The host's events then move the row back; only a refusal is shown here.
     func unarchive(_ worktree: PeerHostWorktree, serverId: String) {
-        guard canUnarchive(serverId: serverId), let channel = channels[serverId] else { return }
+        guard canUnarchive(serverId: serverId), let channel = channels.channel(for: serverId) else { return }
         let showError = showError
         Task {
             if case .failure(let error) = await channel.request(.unarchiveWorktree(worktree: Self.ref(worktree))) {
@@ -317,13 +301,13 @@ final class NativePeerHosts {
 
     /// Whether `serverId` archives its sessions.
     func canArchiveSessions(serverId: String) -> Bool {
-        channels[serverId] != nil && supports(serverId, HostProtocolCapability.sessionsV1)
+        channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.sessionsV1)
     }
 
     /// Archives host session `sessionID`. The host's next session list then
     /// drops its tab; only a refusal is shown here.
     func archiveSession(_ sessionID: String, serverId: String) {
-        guard canArchiveSessions(serverId: serverId), let channel = channels[serverId] else { return }
+        guard canArchiveSessions(serverId: serverId), let channel = channels.channel(for: serverId) else { return }
         let showError = showError
         Task {
             switch await channel.request(.archiveSession(sessionID: sessionID)) {
@@ -343,14 +327,14 @@ final class NativePeerHosts {
 
     /// Whether `worktree`'s branch can be renamed, on a host that serves it.
     func canRenameBranch(_ worktree: PeerHostWorktree, serverId: String) -> Bool {
-        channels[serverId] != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)
+        channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)
             && worktree.canRenameBranch
     }
 
     /// The error message for the rename sheet; nil once renamed. The host's
     /// events then relabel the row.
     func renameBranch(_ worktree: PeerHostWorktree, to branch: String, serverId: String) async -> String? {
-        guard canRenameBranch(worktree, serverId: serverId), let channel = channels[serverId] else {
+        guard canRenameBranch(worktree, serverId: serverId), let channel = channels.channel(for: serverId) else {
             return FederatedSessionsProvider.peerUnavailableMessage
         }
         switch await channel.request(.renameBranch(worktree: Self.ref(worktree), from: worktree.snapshot.worktree.branch, to: branch)) {
@@ -362,7 +346,7 @@ final class NativePeerHosts {
 
     /// Whether `serverId` stages, commits, pushes and pulls its worktrees.
     func servesGit(serverId: String) -> Bool {
-        worktrees[serverId] != nil && channels[serverId]?.isSubscribed == true
+        worktrees[serverId] != nil && channels.channel(for: serverId)?.isSubscribed == true
             && supports(serverId, HostProtocolCapability.worktreesGitV1)
     }
 
@@ -386,7 +370,7 @@ final class NativePeerHosts {
 
     /// What the host suggests `worktree`'s commit message from; nil when it cannot say.
     func commitMessageInput(in worktree: PeerHostWorktree, serverId: String) async -> CommitMessageSuggestionInput? {
-        guard servesGit(serverId: serverId), let channel = channels[serverId],
+        guard servesGit(serverId: serverId), let channel = channels.channel(for: serverId),
               case .commitMessageInput(let input) = await channel.request(.commitMessageInput(worktree: Self.ref(worktree)))
         else { return nil }
         return input
@@ -395,7 +379,7 @@ final class NativePeerHosts {
     /// `worktree`'s review status, read again on the host. Nil for none, and
     /// for a refusal or no answer.
     func reviewStatus(in worktree: PeerHostWorktree, serverId: String) async -> ReviewLoopSnapshot? {
-        guard servesGit(serverId: serverId), let channel = channels[serverId],
+        guard servesGit(serverId: serverId), let channel = channels.channel(for: serverId),
               case .reviewStatus(let snapshot) = await channel.request(.reviewStatus(worktree: Self.ref(worktree)))
         else { return nil }
         return snapshot
@@ -419,7 +403,7 @@ final class NativePeerHosts {
 
     /// The repository's stashes as `worktree` lists them. Nil for a refusal or no answer.
     func stashes(in worktree: PeerHostWorktree, serverId: String) async -> [GitStash]? {
-        guard servesStash(serverId: serverId), let channel = channels[serverId],
+        guard servesStash(serverId: serverId), let channel = channels.channel(for: serverId),
               case .stashes(let stashes) = await channel.request(.listStashes(worktree: Self.ref(worktree)))
         else { return nil }
         return stashes
@@ -492,7 +476,7 @@ final class NativePeerHosts {
 
     /// Whether `serverId` saves its worktrees' files, makes folders in them and reports their changes.
     func servesFiles(serverId: String) -> Bool {
-        worktrees[serverId] != nil && channels[serverId]?.isSubscribed == true
+        worktrees[serverId] != nil && channels.channel(for: serverId)?.isSubscribed == true
             && supports(serverId, HostProtocolCapability.worktreesFilesV1)
     }
 
@@ -501,7 +485,7 @@ final class NativePeerHosts {
     func writeFile(
         _ path: String, text: String, expected: WorktreeFileVersion?, in worktree: PeerHostWorktree, serverId: String
     ) async throws -> WorktreeFileVersion {
-        guard servesFiles(serverId: serverId), let channel = channels[serverId] else {
+        guard servesFiles(serverId: serverId), let channel = channels.channel(for: serverId) else {
             throw NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
         }
         switch await channel.request(.writeFile(worktree: Self.ref(worktree), path: path, text: text, expected: expected)) {
@@ -554,7 +538,7 @@ final class NativePeerHosts {
                   fileFollows[key] === follow
             else { return }
             fileFollows[key] = nil
-            guard let sent = follow.sent, let channel = channels[serverId] else { return }
+            guard let sent = follow.sent, let channel = channels.channel(for: serverId) else { return }
             Task {
                 await sent.value // an unfollow overtaking its follow would leave the file followed
                 // A re-follow since then owns the host's follow (a set, not a count); its stop unfollows.
@@ -602,7 +586,7 @@ final class NativePeerHosts {
     /// Host-side follows end with the subscription, so each one is sent the follow. After a
     /// resubscription (`nudge`) the followers look again, since changes in between were not sent.
     private func sendFileFollow(_ key: FileFollowKey, _ follow: FileFollow, nudge: Bool) {
-        guard follow.sent == nil, servesFiles(serverId: key.serverId), let channel = channels[key.serverId] else { return }
+        guard follow.sent == nil, servesFiles(serverId: key.serverId), let channel = channels.channel(for: key.serverId) else { return }
         let worktree = follow.worktree
         follow.sent = Task { [weak follow] in
             let reply = await channel.request(.followFile(worktree: worktree, path: key.path))
@@ -626,7 +610,7 @@ final class NativePeerHosts {
     func checkpoints(
         in worktree: PeerHostWorktree, serverId: String
     ) async -> (catalog: CheckpointCatalogSnapshot, interruptedRestore: Bool)? {
-        guard servesCheckpoints(serverId: serverId), let channel = channels[serverId],
+        guard servesCheckpoints(serverId: serverId), let channel = channels.channel(for: serverId),
               case .checkpoints(let catalog, let interrupted) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
         else { return nil }
         return (catalog, interrupted == true && supports(serverId, HostProtocolCapability.worktreesCheckpointRecoveryV1))
@@ -683,12 +667,12 @@ final class NativePeerHosts {
 
     /// Whether `serverId` lists, reads and changes its worktrees' draft reviews.
     func servesReviews(serverId: String) -> Bool {
-        channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.reviewsV1)
+        channels.channel(for: serverId)?.isSubscribed == true && supports(serverId, HostProtocolCapability.reviewsV1)
     }
 
     /// `worktree`'s draft reviews, newest first. Nil for a refusal or no answer.
     func reviews(in worktree: PeerHostWorktree, serverId: String) async -> [HostReviewSummary]? {
-        guard servesReviews(serverId: serverId), let channel = channels[serverId],
+        guard servesReviews(serverId: serverId), let channel = channels.channel(for: serverId),
               case .reviews(let reviews) = await channel.request(.listReviews(worktree: Self.ref(worktree)))
         else { return nil }
         return reviews
@@ -696,7 +680,7 @@ final class NativePeerHosts {
 
     /// Review `sessionID` of `worktree` with every comment. Nil for a refusal or no answer.
     func review(_ sessionID: String, in worktree: PeerHostWorktree, serverId: String) async -> HostReview? {
-        guard servesReviews(serverId: serverId), let channel = channels[serverId],
+        guard servesReviews(serverId: serverId), let channel = channels.channel(for: serverId),
               case .review(let review) = await channel.request(.readReview(worktree: Self.ref(worktree), sessionID: sessionID))
         else { return nil }
         return review
@@ -707,7 +691,7 @@ final class NativePeerHosts {
     func mutateReview(
         _ mutation: HostReviewMutation, sessionID: String, in worktree: PeerHostWorktree, serverId: String
     ) async -> String? {
-        guard servesReviews(serverId: serverId), let channel = channels[serverId] else {
+        guard servesReviews(serverId: serverId), let channel = channels.channel(for: serverId) else {
             return FederatedSessionsProvider.peerUnavailableMessage
         }
         switch await channel.request(.mutateReview(worktree: Self.ref(worktree), sessionID: sessionID, mutation: mutation)) {
@@ -781,7 +765,7 @@ final class NativePeerHosts {
         unavailable: NativePeerReviewGitClientError = .unavailable, showsInvalidRequest: Bool = false,
         notFound: (what: String, message: String)? = nil, reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
-        guard served, let channel = channels[serverId] else { return .failure(unavailable) }
+        guard served, let channel = channels.channel(for: serverId) else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
             // Only the missing item: a missing worktree keeps its own message.
@@ -807,7 +791,7 @@ final class NativePeerHosts {
         gitFollow = next
         gitFollowSent = false
         gitFollowKey = nil
-        if let old, let channel = channels[old.serverId] {
+        if let old, let channel = channels.channel(for: old.serverId) {
             if oldSent { Task { _ = await channel.request(.unfollowWorktree(worktreeID: old.worktreeID)) } }
             // Its status goes stale unfollowed; its onChange may send the new follow.
             channel.forgetReviewStatus(worktreeID: old.worktreeID)
@@ -823,7 +807,7 @@ final class NativePeerHosts {
     /// Host-side follows end with the subscription, so each one is sent the follow.
     private func sendGitFollow() {
         guard let follow = gitFollow, !gitFollowSent, servesGit(serverId: follow.serverId),
-              let channel = channels[follow.serverId]
+              let channel = channels.channel(for: follow.serverId)
         else { return }
         gitFollowSent = true
         gitFollowSends += 1
@@ -836,7 +820,7 @@ final class NativePeerHosts {
         _ worktree: PeerHostWorktree, _ action: PeerWorktreeRemoval.Action, failureTitle: String,
         serverId: String, peerName: String
     ) {
-        guard controls(for: worktree, serverId: serverId) == .available, let channel = channels[serverId] else { return }
+        guard controls(for: worktree, serverId: serverId) == .available, let channel = channels.channel(for: serverId) else { return }
         let confirm = confirm, showError = showError
         Task {
             let outcome = await PeerWorktreeRemoval.run(
@@ -861,46 +845,41 @@ final class NativePeerHosts {
         var refusalShown = false
     }
 
-    private func servesHostChannel(_ serverId: String) -> Bool {
-        supports(serverId, HostProtocolCapability.v1) && supports(serverId, HostProtocolCapability.eventsV1)
-    }
-
     /// The peer's channel, if one exists, for requests that are not tied to a view.
     func channel(for serverId: String) -> PeerHostChannel? {
-        channels[serverId]
+        channels.channel(for: serverId)
     }
 
-    private func makeChannel(_ serverId: String) -> PeerHostChannel {
-        let channel = PeerHostChannel(timeout: timeout) { [weak self] in self?.send(serverId, $0) }
-        channel.onChange = { [weak self, weak channel] in
-            guard let self, let channel else { return }
-            worktrees[serverId] = channel.state?.visibleWorktrees()
-            archivedWorktrees[serverId] = channel.state?.archivedWorktrees()
-            let newRuns = channel.state?.runs
-            let runsChanged = runs[serverId] != newRuns
-            runs[serverId] = newRuns
-            shepherds[serverId] = channel.state?.shepherds
-            delegatedFromNames[serverId] = channel.state?.delegatedFromNames
-            reviewStatuses[serverId] = channel.state?.reviewStatuses
-            reviewRevisions[serverId] = channel.state?.reviewRevisions
-            if !channel.isSubscribed {
-                subscribed.remove(serverId)
-            } else if subscribed.insert(serverId).inserted {
-                subscriptions[serverId, default: 0] += 1
-                onAvailabilityChanged?(serverId)
-            }
-            if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
-            sendGitFollow()
-            for (key, follow) in fileFollows where key.serverId == serverId {
-                if !channel.isSubscribed { follow.sent = nil }
-                sendFileFollow(key, follow, nudge: true)
-            }
-            onChange?()
-            if runsChanged {
-                stopForwards { $0.serverId == serverId && !self.isRunning($0.runID, serverId: serverId) }
-                onRunsChanged?(serverId)
-            }
+    private func channelChanged(_ serverId: String, _ channel: PeerHostChannel) {
+        worktrees[serverId] = channel.state?.visibleWorktrees()
+        archivedWorktrees[serverId] = channel.state?.archivedWorktrees()
+        let newRuns = channel.state?.runs
+        let runsChanged = runs[serverId] != newRuns
+        runs[serverId] = newRuns
+        shepherds[serverId] = channel.state?.shepherds
+        delegatedFromNames[serverId] = channel.state?.delegatedFromNames
+        reviewStatuses[serverId] = channel.state?.reviewStatuses
+        reviewRevisions[serverId] = channel.state?.reviewRevisions
+        if !channel.isSubscribed {
+            subscribed.remove(serverId)
+        } else if subscribed.insert(serverId).inserted {
+            subscriptions[serverId, default: 0] += 1
+            onAvailabilityChanged?(serverId)
         }
+        if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
+        sendGitFollow()
+        for (key, follow) in fileFollows where key.serverId == serverId {
+            if !channel.isSubscribed { follow.sent = nil }
+            sendFileFollow(key, follow, nudge: true)
+        }
+        onChange?()
+        if runsChanged {
+            stopForwards { $0.serverId == serverId && !self.isRunning($0.runID, serverId: serverId) }
+            onRunsChanged?(serverId)
+        }
+    }
+
+    private func channelMade(_ serverId: String, _ channel: PeerHostChannel) {
         channel.onDelegationOutboxChanged = { [weak self] in self?.onDelegationOutboxChanged?(serverId) }
         channel.onNotice = { [notice] in notice(serverId, $0) }
         channel.onWorktreeNotice = { [worktreeNotice] in worktreeNotice(serverId, $0) }
@@ -909,7 +888,5 @@ final class NativePeerHosts {
             guard let handlers = self?.fileFollows[key]?.handlers.values else { return }
             for handler in handlers { handler(version) }
         }
-        channels[serverId] = channel
-        return channel
     }
 }
