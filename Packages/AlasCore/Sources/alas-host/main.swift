@@ -415,6 +415,9 @@ if let listen = config.hostRemoteListen {
 Task {
     // Before Remote lists them.
     await shells.restore()
+    // Before anything lists sessions, so finished delegated children carry
+    // their parent and origin without having been recovered.
+    await host.coreContext.loadDelegatedSessionParents()
     await host.loadProjectWorktrees()
     // Off Remote's path: probing gg can take a while, and Remote doesn't need it.
     Task { await host.startAutomation() }

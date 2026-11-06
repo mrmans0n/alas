@@ -51,6 +51,26 @@ struct DelegationRecoveryTests {
         #expect(await fixture.core.delegatedParentSessionID(for: "child") == "peer:s1")
     }
 
+    /// A finished peer child nobody recovers or reopens still names its Mac
+    /// after the one backfill the host runs at boot.
+    @Test(.timeLimit(.minutes(1))) func bootBackfillNamesFinishedPeerChildren() async throws {
+        let fixture = try PeerHostFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.peerRecord(phase: .ready, pendingInitialPrompt: nil))
+        let devices = FileDeviceStore(url: fixture.root.appendingPathComponent("devices.json"))
+        devices.save([RemoteDevice(
+            id: "d1", name: "Studio", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+            kind: .alasInstance, peerServerId: "s1"
+        )])
+        let pairing = RemotePairingService(store: devices)
+        fixture.core.delegationPairing = { pairing }
+        #expect(fixture.core.delegatedFromName(of: "child") == nil)
+
+        await fixture.core.loadDelegatedSessionParents()
+
+        #expect(fixture.core.delegatedFromName(of: "child") == "Studio")
+    }
+
     /// A headless host, which may share its profile with the app, re-attaches
     /// a peer child that had a turn in flight and touches nothing else: a
     /// local child it does not list would otherwise fail, and a local

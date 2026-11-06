@@ -596,6 +596,8 @@ final class HostEventSource {
             _ = core.runRecords
             _ = core.sessionManagers
             _ = core.delegatedSessionParents
+            // Summaries carry the "From" name, which a backfill sets late.
+            _ = core.delegatedPeerOrigins
             // Session summaries carry the shepherd pill.
             _ = core.reviewShepherd.records
             _ = core.reviewShepherd.snapshots

@@ -1829,6 +1829,9 @@ final class AppState {
             self?.config.worktrees.defaultOrdering ?? .lastUpdateDesc
         }
         WindowAppearance.apply(darkMode: themeStore.current.darkMode)
+        // Read when a delegated session's summary is built, so the devices
+        // load only once one exists.
+        core.delegationPairing = { [weak self] in self?.remotePairing }
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
@@ -2347,7 +2350,6 @@ final class AppState {
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         reconcileAttention(observations: currentAttentionObservations)
-        core.delegationPairing = { [weak self] in self?.remotePairing }
         Task { [weak self] in
             await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()

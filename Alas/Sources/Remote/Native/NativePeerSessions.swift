@@ -593,6 +593,16 @@ final class NativePeerSessions {
         return hosts?.delegatedFromNames[id.serverId]?[id.sessionId]
     }
 
+    /// The listed sessions' delegating Macs, by session id as listed.
+    func delegatedFromNames(of sessions: [RemoteSessionSummary]) -> [String: String] {
+        let peers = Set(snapshot.groups.map(\.serverId))
+        return Dictionary(sessions.compactMap { session in
+            RemoteFederatedSessionID.parse(session.id, peers: peers)
+                .flatMap { hosts?.delegatedFromNames[$0.serverId]?[$0.sessionId] }
+                .map { (session.id, $0) }
+        }) { first, _ in first }
+    }
+
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.first { selectedSessionId.hasPrefix($0.serverId + ":") }
