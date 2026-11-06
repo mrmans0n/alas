@@ -9,8 +9,11 @@ import AlasAgents
 @MainActor
 public final class PeerDelegationClient: ACPDelegationPeers {
     /// `start` answers once the child's row exists, which is quick; the
-    /// worktree work continues in the background on the peer.
-    static let startTimeout: Duration = .seconds(60)
+    /// worktree work continues in the background on the peer. With `discover`,
+    /// it runs inside one `session_new`, which must answer within the CLI's
+    /// 30-second read, or the agent loses the child's id and may start another.
+    static let startTimeout: Duration = .seconds(12)
+    static let discoverTimeout: Duration = .seconds(10)
 
     private let links: FederatedPeerLinks
     private let channel: @MainActor (String) -> PeerHostChannel?
@@ -44,7 +47,7 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     }
 
     public func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError> {
-        await ask(serverId, .discover(repository: repository)) { response in
+        await ask(serverId, .discover(repository: repository), timeout: Self.discoverTimeout) { response in
             guard case .discovered(let found) = response else { return nil }
             return ACPPeerDiscovery(
                 access: found.access.rawValue,

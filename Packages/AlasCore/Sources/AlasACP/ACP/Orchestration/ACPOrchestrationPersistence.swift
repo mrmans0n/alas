@@ -54,6 +54,11 @@ public actor ACPOrchestrationPersistence {
         try openedStore().delegationParents()
     }
 
+    @discardableResult
+    public func markReadyIfStarting(childSessionId: String, updatedAt: Int64) throws -> Bool {
+        try openedStore().markReadyIfStarting(childSessionId: childSessionId, updatedAt: updatedAt)
+    }
+
     public func updatePhase(
         childSessionId: String,
         phase: ACPDelegationPhase,

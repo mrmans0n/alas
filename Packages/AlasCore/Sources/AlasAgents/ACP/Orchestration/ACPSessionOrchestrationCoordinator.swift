@@ -581,6 +581,13 @@ public final class ACPSessionOrchestrationCoordinator {
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
         case .failure(.unreachable(let name)):
             pendingPeerStarts[childID] = start
+            // A live link that lost one answer sends no availability signal.
+            if peers.peers.first(where: { $0.serverId == peerInfo.serverId })?.state == .online {
+                let serverId = peerInfo.serverId
+                environment.scheduleEscalationCheck(Self.peerStartRetryDelaySeconds) { [weak self] in
+                    await self?.retryPeerStarts(serverId: serverId)
+                }
+            }
             return json(ACPOrchestrationNewResponse(
                 sessionId: childID, state: ACPOrchestrationPublicState.starting.rawValue, worktreeId: nil, peer: peerInfo.name,
                 note: "\(name) did not answer. Alas will retry once when it is back, and tell you if that fails."
@@ -596,14 +603,17 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// Moves a child the peer confirmed to `.ready`. If that cannot be stored
-    /// it stays `.starting`, and `start` is kept for a retry, which the peer
-    /// answers with the same child.
+    private static let peerStartRetryDelaySeconds = 30
+    /// How long a `.starting` row with no request in memory may belong to
+    /// another instance on this store that is still starting it.
+    private static let peerStartGraceSeconds: Int64 = 120
+
+    /// Moves a child the peer confirmed to `.ready`, unless it already ended.
+    /// If that cannot be stored it stays `.starting`, and `start` is kept for
+    /// a retry, which the peer answers with the same child.
     private func markPeerChildReady(_ childID: String, keepingForRetry start: ACPPeerChildStartRequest?) async {
         do {
-            try await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
-            )
+            try await environment.persistence.markReadyIfStarting(childSessionId: childID, updatedAt: environment.now())
             pendingPeerStarts[childID] = nil
         } catch {
             pendingPeerStarts[childID] = start
@@ -612,8 +622,10 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     /// Gives each child still starting on the peer `serverId` its one further
-    /// attempt. Failing now wakes the parent, which has moved on since the
-    /// tool call. A peer that is not online gets no request and uses up
+    /// attempt. Only proof fails a child, with a wake since the parent has
+    /// moved on: the peer answering no, or `status` finding nothing there. No
+    /// answer proves nothing, so the row stays `.starting` and `status` decides
+    /// next time. A peer that is not online gets no request and uses up
     /// nothing, since availability signals also fire as a peer goes away.
     public func retryPeerStarts(serverId: String) async {
         guard let peers = environment.delegationPeers(),
@@ -625,36 +637,47 @@ public final class ACPSessionOrchestrationCoordinator {
             let childID = child.childSessionId
             guard peerStartsInFlight.insert(childID).inserted else { continue }
             defer { peerStartsInFlight.remove(childID) }
+            // The list is as old as the requests before this one took.
+            guard let current = try? await environment.persistence.delegation(childSessionId: childID) else { continue }
+            guard current.phase == .starting else {
+                pendingPeerStarts[childID] = nil
+                continue
+            }
             if let start = pendingPeerStarts[childID] {
                 switch await peers.start(serverId: serverId, start) {
                 case .success:
                     await markPeerChildReady(childID, keepingForRetry: start)
+                case .failure(.unreachable):
+                    pendingPeerStarts[childID] = nil
                 case .failure(let error):
                     pendingPeerStarts[childID] = nil
                     await markChildFailed(childSessionId: childID, message: Self.message(for: error))
                 }
             } else {
-                await settleInterruptedPeerStart(childID, serverId: serverId, peers: peers)
+                await settlePeerStart(current, serverId: serverId, peers: peers)
             }
         }
     }
 
-    /// A restart lost where the child was to run, so its start cannot be sent
-    /// again. If it reached the peer the child exists there; if the peer has
-    /// no such child, it never will. No clear answer leaves it for next time.
-    private func settleInterruptedPeerStart(_ childID: String, serverId: String, peers: ACPDelegationPeers) async {
+    /// For a `.starting` row with no request to send: its retry was spent, this
+    /// Mac restarted, or another instance on this store is starting it. If the
+    /// peer knows the child it started. If not, the row is failed only once it
+    /// is too old to be another instance's. No clear answer leaves it as it is.
+    private func settlePeerStart(_ child: ACPDelegationRecord, serverId: String, peers: ACPDelegationPeers) async {
+        let childID = child.childSessionId
         guard case .success(let data) = await peers.status(serverId: serverId, sessionIDs: [childID]),
               let reply = try? JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data),
               let session = reply.sessions.first(where: { $0.sessionId == childID })
         else { return }
-        if session.state == ACPOrchestrationWaitResponse.Session.goneState {
-            await markChildFailed(
-                childSessionId: childID,
-                message: "Alas restarted before \(peerName(serverId)) started the delegated session."
-            )
-        } else {
+        guard session.state == ACPOrchestrationWaitResponse.Session.goneState else {
             await markPeerChildReady(childID, keepingForRetry: nil)
+            return
         }
+        guard environment.now() - child.updatedAt > Self.peerStartGraceSeconds else { return }
+        await markChildFailed(
+            childSessionId: childID,
+            message: "\(peerName(serverId)) never started the delegated session."
+        )
     }
 
     private func peerName(_ serverId: String) -> String {
@@ -816,6 +839,16 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
+    /// A child's phase changed, so what was heard about it, or is still being
+    /// asked, predates that: a `gone` from before a start reached the peer
+    /// would otherwise be reported for the running child.
+    private func forgetPeerAnswers(about id: String, serverId: String, state: PeerWaitState) {
+        state.heard[id] = nil
+        state.rounds.removeAll { $0.serverId == serverId }
+        state.nextAskAt[serverId] = nil
+        peerStatusRounds[serverId] = nil
+    }
+
     private static func peerUnreachable(_ id: String) -> ACPOrchestrationWaitResponse.Session {
         .init(
             sessionId: id, state: ACPOrchestrationWaitResponse.Session.peerUnreachableState, settled: true,
@@ -827,7 +860,7 @@ public final class ACPSessionOrchestrationCoordinator {
     /// its interval passed or it signalled, one question at a time per peer.
     private func askPeers(about children: [ACPDelegationRecord], state: PeerWaitState) {
         let open = children.filter { child in
-            guard child.phase == .starting || child.phase == .ready else { return false }
+            guard child.phase == .ready else { return child.phase == .starting }
             guard let heard = state.heard[child.childSessionId] else { return true }
             return !heard.settled || heard.state == ACPOrchestrationWaitResponse.Session.peerUnreachableState
         }
@@ -839,7 +872,8 @@ public final class ACPSessionOrchestrationCoordinator {
             else { continue }
             state.nextAskAt[serverId] = now + Self.peerStatusPollMillis
             state.seenSignals[serverId] = signal
-            let ids = children.map(\.childSessionId)
+            // Sorted: rounds are shared by exactly this list.
+            let ids = children.map(\.childSessionId).sorted()
             guard let peers = environment.delegationPeers() else {
                 for id in ids { state.heard[id] = Self.peerUnreachable(id) }
                 continue
@@ -1453,8 +1487,12 @@ public final class ACPSessionOrchestrationCoordinator {
         while true {
             if !peerChildren.isEmpty {
                 // A retry can move a child on during the wait.
-                for id in peerChildren.keys {
-                    if let current = await peerChild(id) { peerChildren[id] = current }
+                for (id, known) in peerChildren {
+                    guard let current = await peerChild(id) else { continue }
+                    if current.phase != known.phase, let serverId = current.peerServerId {
+                        forgetPeerAnswers(about: id, serverId: serverId, state: peerState)
+                    }
+                    peerChildren[id] = current
                 }
                 collectPeerAnswers(into: peerState)
                 askPeers(about: Array(peerChildren.values), state: peerState)

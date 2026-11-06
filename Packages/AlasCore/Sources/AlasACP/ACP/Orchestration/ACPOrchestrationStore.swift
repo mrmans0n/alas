@@ -138,6 +138,20 @@ public final class ACPOrchestrationStore {
         """, bindings: [phase.rawValue, failureMessage, updatedAt, childSessionId])
     }
 
+    /// Moves a delegation still `.starting` to `.ready`, returning whether it
+    /// did. Conditional so a late answer cannot revive a child already failed,
+    /// whose parent has been told.
+    @discardableResult
+    public func markReadyIfStarting(childSessionId: String, updatedAt: Int64) throws -> Bool {
+        try db.execChanges("""
+        UPDATE delegations
+        SET phase = ?, failure_message = NULL, updated_at = ?
+        WHERE child_session_id = ? AND phase = ?
+        """, bindings: [
+            ACPDelegationPhase.ready.rawValue, updatedAt, childSessionId, ACPDelegationPhase.starting.rawValue,
+        ]) == 1
+    }
+
     /// Atomically transitions a delegation to `.failed` AND enqueues the
     /// outcome that tells its parent, returning `true` only for the caller
     /// that made the transition.
