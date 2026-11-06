@@ -29,6 +29,9 @@ public final class HostProtocolServer {
     /// The pairing link for a code that `remotePairing` minted, with the
     /// addresses the server is reached at now; nil leaves the code alone.
     public var remotePairingLink: (@MainActor (String) -> String?)?
+    /// Who the paired devices are, for their `delegation` requests; without it
+    /// those are refused. Only the connections of a peer link need it.
+    public var delegationPairing: RemotePairingService?
 
     public init(
         host: AlasHost,
@@ -51,7 +54,8 @@ public final class HostProtocolServer {
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
             isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
-            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink }, send: send
+            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink },
+            delegationPairing: { [self] in delegationPairing }, send: send
         )
     }
 
@@ -71,6 +75,7 @@ public final class HostProtocolConnection {
     private let remotePairing: @MainActor () -> RemotePairingService?
     private let remotePeers: @MainActor () -> RemotePeerManager?
     private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
+    private let delegationPairing: @MainActor () -> RemotePairingService?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -87,6 +92,7 @@ public final class HostProtocolConnection {
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
         remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
+        delegationPairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -96,6 +102,7 @@ public final class HostProtocolConnection {
         self.remotePairing = remotePairing
         self.remotePeers = remotePeers
         self.remotePairingLink = remotePairingLink
+        self.delegationPairing = delegationPairing
         self.send = send
     }
 
@@ -154,6 +161,7 @@ public final class HostProtocolConnection {
     private func subscribe(after cursor: HostCursor, accepting: Set<String>, id: Int) async {
         close()
         let next = host.subscribe(after: cursor)
+        next.delegationPeerServerId = delegationDevice.flatMap { PeerDelegationGate.allows(.outbox, device: $0) ? $0.peerServerId : nil }
         subscription = next
         await enqueue(.response(id: id, result: .subscribed))
         guard subscription === next else { return }
@@ -432,11 +440,20 @@ public final class HostProtocolConnection {
             let listed = try fileWorktree(ref)
             caller.log("worktrees.files", path)
             try await host.core.createListedFolder(path, in: listed)
+        case .delegation(let request):
+            return try await host.delegation.serve(request, device: delegationDevice, caller: caller)
         }
         return .done
     }
 
     private var sessions: SessionsAPI { host.sessions }
+
+    /// The paired device this connection's transport authenticated; nil for
+    /// any other caller.
+    private var delegationDevice: RemoteDevice? {
+        guard case .remotePeer(let deviceID) = caller else { return nil }
+        return delegationPairing()?.device(id: deviceID)
+    }
 
     /// Someone at this Mac may be asked about a repository hook; a paired
     /// peer may not.

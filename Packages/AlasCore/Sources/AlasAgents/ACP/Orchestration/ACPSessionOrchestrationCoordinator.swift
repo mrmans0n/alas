@@ -111,6 +111,8 @@ public final class ACPSessionOrchestrationCoordinator {
         public let rememberParent: (String, String) -> Void
         public let autoRunDefault: () -> Bool
         public let notifyChanged: () -> Void
+        /// Outcomes wait in the outbox of the paired Mac with this server id.
+        public let peerOutboxChanged: (String) -> Void
         /// Suspends `session_wait` between polls. Tests replace it to change
         /// state between polls instead of sleeping.
         public let pause: (Duration) async -> Void
@@ -152,6 +154,7 @@ public final class ACPSessionOrchestrationCoordinator {
             rememberParent: @escaping (String, String) -> Void,
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void,
+            peerOutboxChanged: @escaping (String) -> Void = { _ in },
             pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) },
             admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil },
             project: @escaping (String) -> ProjectConfig? = { _ in nil },
@@ -189,6 +192,7 @@ public final class ACPSessionOrchestrationCoordinator {
             self.rememberParent = rememberParent
             self.autoRunDefault = autoRunDefault
             self.notifyChanged = notifyChanged
+            self.peerOutboxChanged = peerOutboxChanged
             self.pause = pause
         }
     }
@@ -862,6 +866,32 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
+    /// What `session_wait` with no timeout reports for a paired Mac's
+    /// children, whichever projects they are in. An id that is not a child of
+    /// that peer reports `Session.goneState` instead of failing the others, so
+    /// one lost child can be told apart; a store that cannot say answers an
+    /// error, never gone.
+    public func peerStatus(peerServerId: String, sessionIDs: [String]) async -> AlasCLIResponse {
+        var seen = Set<String>()
+        var sessions: [ACPOrchestrationWaitResponse.Session] = []
+        for id in sessionIDs where seen.insert(id).inserted {
+            let record: ACPDelegationRecord?
+            do {
+                record = try await environment.persistence.delegation(childSessionId: id)
+            } catch {
+                return .error("Could not verify session delegation.")
+            }
+            if let record, ACPPeerParent.serverId(from: record.parentSessionId) == peerServerId {
+                sessions.append(await waitSnapshot(sessionId: id))
+            } else {
+                sessions.append(.init(
+                    sessionId: id, state: ACPOrchestrationWaitResponse.Session.goneState, settled: true, lastAgentText: nil, failure: nil
+                ))
+            }
+        }
+        return json(ACPOrchestrationWaitResponse(sessions: sessions, timedOut: !sessions.allSatisfy(\.settled)))
+    }
+
     /// `session_interrupt`: cancels a direct child's running turn, as the
     /// Stop button would. A pending permission request is cancelled with the
     /// turn, never approved.
@@ -1270,6 +1300,7 @@ public final class ACPSessionOrchestrationCoordinator {
         }
         environment.notifyChanged()
         guard wonTransition else { return }
+        notifyPeerOutbox(of: outcome.targetSessionId)
         await deliverPendingMessages(
             to: outcome.targetSessionId,
             callerParent: record,
@@ -1350,11 +1381,20 @@ public final class ACPSessionOrchestrationCoordinator {
             return
         }
         environment.notifyChanged()
+        notifyPeerOutbox(of: message.targetSessionId)
         await deliverPendingMessages(
             to: message.targetSessionId,
             callerParent: child,
             targetParent: nil
         )
+    }
+
+    /// Tells the paired Mac a message waits for, when its target is one's
+    /// sentinel. Every store path that writes an outcome comes through here.
+    private func notifyPeerOutbox(of targetSessionId: String) {
+        if let peerServerId = ACPPeerParent.serverId(from: targetSessionId) {
+            environment.peerOutboxChanged(peerServerId)
+        }
     }
 
     /// Nil when the child could not be recorded. `autoRun`, when given,

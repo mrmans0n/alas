@@ -133,6 +133,14 @@ struct HostProtocolTests {
         HostClientMessage(id: 41, request: .writeFile(worktree: ref, path: "new.txt", text: "", expected: nil)),
         HostClientMessage(id: 42, request: .createFolder(worktree: ref, path: "docs")),
         HostClientMessage(id: 43, request: .followFile(worktree: ref, path: "docs/a.txt")),
+        HostClientMessage(id: 44, request: .delegation(.start(HostDelegationStart(
+            childID: "c", target: .newWorktree(projectID: "p", branch: "b", base: "main", expectedBaseSHA: "abc"), agentID: "codex",
+            modelID: "fast", reasoning: nil, role: "Reviewer", autoRun: true, prompt: "Go"
+        )))),
+        HostClientMessage(id: 45, request: .delegation(.start(HostDelegationStart(
+            childID: "c", target: .worktree(ref), agentID: "codex", modelID: nil, reasoning: nil, role: nil, autoRun: false, prompt: "Go"
+        )))),
+        HostClientMessage(id: 46, request: .delegation(.read(sessionID: "c", offset: 1, limit: nil, maxChars: 10))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -148,6 +156,10 @@ struct HostProtocolTests {
             sessions: [session]
         ))),
         .response(id: 2, result: .runStart(start: .refused(title: "No", message: "Busy"))),
+        .response(id: 900, result: .delegation(.discovered(HostDelegationDiscovery(access: .ask, projects: [], worktrees: [], agents: [])))),
+        .response(id: 901, result: .delegation(.outbox(entries: [ACPPeerOutboxEntry(
+            seq: 1, messageId: "m", childSessionId: "c", prompt: "Done", kind: .notice, createdAt: 1
+        )], hasMore: true))),
         .response(id: 3, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty")))),
         .response(id: 4, result: .failure(error: .workspace(error: .checkoutNotFound))),
         .response(id: 5, result: .session(session: session)),
@@ -211,6 +223,7 @@ struct HostProtocolTests {
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
         .events(events: [
+            .delegationOutboxChanged,
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),
             .sessionChanged(session),

@@ -3003,6 +3003,17 @@ struct HostProtocolServerTests {
             projectID = try await host.projects.add(path: repo, displayName: "repo", icon: .default(), caller: .app).id
         }
 
+        /// A connection for a paired Mac with `access`.
+        func delegationPeer(access: RemoteDeviceAgentAccess) throws -> (connection: HostProtocolConnection, client: Client) {
+            let server = HostProtocolServer(host: host)
+            server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+                id: "s1", name: "s1", tokenHash: "s1", createdAt: .distantPast, lastSeenAt: nil, kind: .alasInstance,
+                peerServerId: "s1", agentAccess: access
+            )]))
+            let client = Client()
+            return (server.connect(caller: .remotePeer(deviceID: "s1"), send: client.receive), client)
+        }
+
         /// The project's main checkout, on `main`, with a committer set.
         func mainWorktree() async throws -> (URL, WorktreeRef) {
             let worktree = try #require(core.projects.worktrees(projectId: projectID).first)
@@ -3226,6 +3237,517 @@ struct HostProtocolServerTests {
         init(peers: [RemotePeer]) { self.peers = peers }
         func load() -> [RemotePeer] { peers }
         func save(_ peers: [RemotePeer]) { self.peers = peers }
+    }
+
+    // MARK: Delegation
+
+    @Test(arguments: [
+        ("git@github.com:o/r.git", "github.com/o/r"),
+        ("https://user:token@github.com/o/r.git", "github.com/o/r"),
+        ("ssh://git@github.com:22/o/r", "github.com/o/r"),
+        ("user:token@github.com:o/r.git", "github.com/o/r"),
+        ("https://GitHub.com/group/sub/r/", "github.com/group/sub/r"),
+        ("/local/path", nil as String?),
+        ("../relative/path", nil),
+        ("file:///srv/o/r.git", nil),
+        ("https://github.com", nil),
+    ])
+    func normalizesRemotes(url: String, expected: String?) {
+        #expect(GitRemoteIdentity.normalized(url) == expected)
+    }
+
+    @Test(arguments: [
+        HostCaller.app, .cli, .session(id: "child"), .localUser(uid: 501),
+        .remotePeer(deviceID: "browser"), .remotePeer(deviceID: "unknown"), .remotePeer(deviceID: "no-server-id"),
+    ])
+    func delegationIsRefusedForEveryCallerExceptAPeerInstance(caller: HostCaller) async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+
+        for request in [HostDelegationRequest.discover(repository: nil), .status(sessionIDs: ["child"]), .outbox(after: 0)] {
+            let response = await fixture.ask(request, as: caller)
+            guard case .failure(.failed) = response else {
+                Issue.record("\(request) answered \(response)")
+                continue
+            }
+        }
+    }
+
+    @Test func startIsRefusedWhileOffAndNoSessionIsCreated() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+
+        let response = await fixture.ask(.start(fixture.start(child: "child")), as: fixture.offPeer)
+
+        guard case .failure(.failed) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        #expect(try await fixture.persistence.delegation(childSessionId: "child") == nil)
+    }
+
+    /// The id comes from the peer, and a sentinel is what marks a peer's parent.
+    @Test(arguments: ["", "peer:s2"])
+    func startRefusesAChildIDThatCouldNotBeAChild(childID: String) async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+
+        let response = await fixture.ask(.start(fixture.start(child: childID)), as: fixture.peer1)
+
+        guard case .failure(.invalidRequest) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        #expect(try await fixture.persistence.delegation(childSessionId: childID) == nil)
+    }
+
+    /// The target names the project and the worktree `startForPeer` looks up.
+    @Test func startLooksUpTheWorktreeItsTargetNames() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        func refusal(_ ref: WorktreeRef) async -> String? {
+            var start = fixture.start(child: "child")
+            start.target = .worktree(ref)
+            if case .failure(.failed(let message)) = await fixture.ask(.start(start), as: fixture.peer1) { return message }
+            return nil
+        }
+        let listed = fixture.worktree.path.path
+        let notListed = "The worktree is not listed, or is archived."
+
+        #expect(await refusal(WorktreeRef(projectID: "other", path: listed)) == "The project is no longer available.")
+        #expect(await refusal(WorktreeRef(projectID: "p", path: "/not/listed")) == notListed)
+        #expect(await refusal(WorktreeRef(projectID: "p", path: listed)) != notListed)
+    }
+
+    /// Neither a child of another peer nor a local one can be told from a
+    /// missing one.
+    @Test func childOfAnotherPeerIsNotFound() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "theirs", peer: "s1"))
+        try await fixture.persistence.insert(fixture.record(child: "local", parent: "local-parent"))
+        try fixture.seedSessions(["theirs", "local"])
+
+        for id in ["theirs", "local", "missing"] {
+            for request in [
+                HostDelegationRequest.send(sessionID: id, prompt: "Go"),
+                .read(sessionID: id, offset: nil, limit: nil, maxChars: nil),
+                .interrupt(sessionID: id),
+            ] {
+                #expect(await fixture.ask(request, as: fixture.peer2) == .failure(error: .session(refusal: .notFound)))
+            }
+        }
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "theirs").isEmpty)
+    }
+
+    /// One lost child does not cost a source the state of the others.
+    @Test func statusReportsAnIDThisPeerDoesNotOwnAsGone() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "mine", peer: "s2"))
+        try await fixture.persistence.insert(fixture.record(child: "theirs", peer: "s1"))
+        try await fixture.persistence.insert(fixture.record(child: "local", parent: "local-parent"))
+        try fixture.seedSessions(["mine"])
+
+        let response = await fixture.ask(.status(sessionIDs: ["mine", "theirs", "local", "missing", "mine"]), as: fixture.peer2)
+
+        guard case .delegation(.status(let data)) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        let status = try JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data)
+        #expect(status.sessions.map(\.sessionId) == ["mine", "theirs", "local", "missing"])
+        #expect(status.sessions[0].state != ACPOrchestrationWaitResponse.Session.goneState)
+        for gone in status.sessions.dropFirst() {
+            #expect(gone == .init(
+                sessionId: gone.sessionId, state: ACPOrchestrationWaitResponse.Session.goneState, settled: true,
+                lastAgentText: nil, failure: nil
+            ))
+        }
+    }
+
+    /// Ownership follows the server id, consent the device: a re-paired Mac
+    /// keeps its running children but asks for nothing new until allowed.
+    @Test func rePairedPeerReachesItsChildButCannotSendUntilAllowed() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        try fixture.seedSessions(["child"])
+        let rePaired = fixture.offPeer
+
+        guard case .delegation(.status(let data)) = await fixture.ask(.status(sessionIDs: ["child"]), as: rePaired) else {
+            Issue.record("status was refused")
+            return
+        }
+        #expect(try JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data).sessions.first?.state != "gone")
+        let read = await fixture.ask(.read(sessionID: "child", offset: nil, limit: nil, maxChars: nil), as: rePaired)
+        guard case .delegation(.read(let page)) = read else {
+            Issue.record("\(read)")
+            return
+        }
+        #expect(try JSONDecoder().decode(ACPOrchestrationReadResponse.self, from: page).sessionId == "child")
+        #expect(await fixture.ask(.interrupt(sessionID: "child"), as: rePaired) == .delegation(.interrupted(cancelRequested: false)))
+        #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false)))
+
+        let send = HostDelegationRequest.send(sessionID: "child", prompt: "Go")
+        guard case .failure(.failed) = await fixture.ask(send, as: rePaired) else {
+            Issue.record("send was not refused while off")
+            return
+        }
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
+
+        #expect(fixture.pairing.setAgentAccess(.ask, deviceId: "s1-repaired"))
+        #expect(await fixture.ask(send, as: rePaired) == .done)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aPeerPromptReachesItsChild() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        try fixture.seedSessions(["child"])
+
+        #expect(await fixture.ask(.send(sessionID: "child", prompt: "Go on"), as: fixture.peer1) == .done)
+
+        try await eventually {
+            guard case .delegation(.read(let page)) = await fixture.ask(
+                .read(sessionID: "child", offset: nil, limit: nil, maxChars: nil), as: fixture.peer1
+            ) else { return false }
+            return String(decoding: page, as: UTF8.self).contains("Go on")
+        }
+    }
+
+    /// Prompts of quotes, whose encoding is twice their size: counting the
+    /// stored text alone would overrun the frame.
+    @Test func outboxPageStaysUnderFrameLimitAndPages() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let prompt = String(repeating: "\"", count: 3_000_000)
+        for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: prompt) }
+
+        let first = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
+        guard case .delegation(.outbox(let page, let hasMore)) = first else {
+            Issue.record("expected a page")
+            return
+        }
+        #expect(page.map(\.messageId) == ["m1", "m2"])
+        #expect(hasMore)
+        #expect(page.allSatisfy { $0.prompt == prompt })
+        #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: first))).count <= RemoteServerMessage.sendBudget)
+
+        let next = await fixture.ask(.outbox(after: try #require(page.last?.seq)), as: fixture.peer1)
+        guard case .delegation(.outbox(let rest, let more)) = next else {
+            Issue.record("expected a page")
+            return
+        }
+        #expect(rest.map(\.messageId) == ["m3"])
+        #expect(!more)
+    }
+
+    /// An entry no frame could carry still gets through, as far as one can.
+    @Test func anOversizedOutboxEntryIsTruncatedWithANote() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.enqueueOutcome(id: "big", peer: "s1", prompt: String(repeating: "\u{1}", count: 3_000_000))
+        try await fixture.enqueueOutcome(id: "after", peer: "s1", prompt: "Small")
+
+        let response = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
+
+        guard case .delegation(.outbox(let page, let hasMore)) = response else {
+            Issue.record("expected a page")
+            return
+        }
+        #expect(page.map(\.messageId) == ["big"])
+        #expect(page.first?.prompt.contains("session_read") == true)
+        #expect(hasMore)
+        #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: response))).count <= RemoteServerMessage.sendBudget)
+    }
+
+    @Test func outboxAcknowledgesEntriesThroughAfter() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: "Done") }
+        try await fixture.enqueueOutcome(id: "other", peer: "s2", prompt: "Done")
+
+        let response = await fixture.ask(.outbox(after: 2), as: fixture.peer1)
+
+        guard case .delegation(.outbox(let page, false)) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        #expect(page.map(\.messageId) == ["m3"])
+        #expect(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["m3"])
+        #expect(try await fixture.persistence.outbox(peerServerId: "s2", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["other"])
+    }
+
+    /// A failed child's outcome is written with its failure, away from the
+    /// path every other outcome takes; both tell the owning peer, and only it.
+    @Test(arguments: [true, false])
+    func outboxEventReachesOnlyTheOwningPeer(childFails: Bool) async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        let owner = try await fixture.subscribed(as: fixture.peer1, accepting: ["delegationOutboxChanged"])
+        let otherPeer = try await fixture.subscribed(as: fixture.peer2, accepting: ["delegationOutboxChanged"])
+        let notAccepting = try await fixture.subscribed(as: fixture.peer1, accepting: [])
+        let local = try await fixture.subscribed(as: .localUser(uid: 501), accepting: ["delegationOutboxChanged"])
+        defer { [owner, otherPeer, notAccepting, local].forEach { $0.connection.close() } }
+
+        if childFails {
+            await fixture.core.orchestration.markChildFailed(childSessionId: "child", message: "No such agent")
+        } else {
+            await fixture.core.orchestration.childBlocked(ACPChildBlocker(
+                sessionId: "child", requestKey: "r1", kind: .permission, summary: "Run ls"
+            ))
+        }
+
+        try await owner.client.waitFor { Self.events(in: $0).contains(.delegationOutboxChanged) }
+        #expect(!(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.isEmpty))
+        // Every subscriber hears this, after any earlier event.
+        fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
+        for subscriber in [otherPeer, notAccepting, local] {
+            try await subscriber.client.waitFor { Self.events(in: $0).contains { if case .worktreeChanged = $0 { true } else { false } } }
+            #expect(!Self.events(in: subscriber.client.messages).contains(.delegationOutboxChanged))
+        }
+    }
+
+    /// A peer link's connection is opened by its gateway, which is where it
+    /// learns who the device is.
+    @Test func aPeerLinkGatewayServesDelegation() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let replies = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host, caller: fixture.peer1) { replies.continuation.yield($0) }
+        gateway.delegationPairing = fixture.pairing
+        defer {
+            gateway.close()
+            replies.continuation.finish()
+        }
+
+        await gateway.handle(.host(HostClientMessage(id: 9, request: .delegation(.discover(repository: nil)))))
+
+        for await reply in replies.stream {
+            guard case .host(.response(9, let result)) = reply else { continue }
+            guard case .delegation(.discovered(let discovery)) = result else {
+                Issue.record("\(result)")
+                return
+            }
+            #expect(discovery.access == .ask)
+            return
+        }
+        Issue.record("No answer")
+    }
+
+    @Test func capabilityIsAdvertised() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        guard case .capabilities(let capabilities) = await fixture.respond(.capabilities, as: .localUser(uid: 501)) else {
+            Issue.record("expected capabilities")
+            return
+        }
+        #expect(capabilities.contains("host.delegation.v1"))
+        #expect(HostProtocolCapability.served.contains(HostProtocolCapability.delegationV1))
+    }
+
+    /// Only what `start` could use: SSH and folder projects are refused there.
+    @Test func discoverListsLocalGitProjectsWhenNoRepositoryIsNamed() async throws {
+        let fixture = try DelegationFixture(extraProjects: [
+            ProjectConfig(id: "ssh", name: "ssh", path: "/srv/ssh", color: "blue", addedAt: .distantPast, host: "mini"),
+            ProjectConfig(id: "folder", name: "folder", path: "/srv/folder", color: "blue", addedAt: .distantPast, kind: .folder),
+        ])
+        defer { fixture.tearDown() }
+
+        let response = await fixture.ask(.discover(repository: nil), as: fixture.peer1)
+
+        guard case .delegation(.discovered(let discovery)) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        #expect(discovery.access == .ask)
+        #expect(discovery.projects.map(\.id) == ["p"])
+        #expect(discovery.worktrees.map(\.worktree.id) == [fixture.worktree.id])
+    }
+
+    @Test(arguments: [
+        ("github.com/o/r", true),
+        ("https://user:token@github.com/o/r.git", true),
+        ("github.com/o/other", false),
+    ])
+    func discoverMatchesTheOriginRemote(repository: String, matches: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (path, _) = try await fixture.mainWorktree()
+        _ = try await Process.git(["remote", "add", "origin", "git@github.com:o/r.git"], cwd: path)
+        let peer = try fixture.delegationPeer(access: .ask)
+
+        await peer.connection.receive(HostClientMessage(id: 1, request: .delegation(.discover(repository: repository))))
+
+        guard case .response(1, .delegation(.discovered(let discovery))) = peer.client.messages.first else {
+            Issue.record("\(peer.client.messages)")
+            return
+        }
+        #expect(discovery.projects.map(\.id) == (matches ? [fixture.projectID] : []))
+        #expect(discovery.worktrees.isEmpty == !matches)
+    }
+
+    /// The parent's state, as the source reports it, only ever lowered here.
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (RemoteDeviceAgentAccess.ask, true, false),
+        (.autoRun, true, true),
+    ])
+    func startLowersAutoRunToWhatThePeerIsAllowed(access: RemoteDeviceAgentAccess, parent: Bool, expected: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        fixture.core.worktreeDestinationPreparer = { [root = fixture.root] _, destination in
+            root.appendingPathComponent(destination.lastPathComponent)
+        }
+        let peer = try fixture.delegationPeer(access: access)
+        let persistence = fixture.core.orchestrationPersistence
+
+        await peer.connection.receive(HostClientMessage(id: 1, request: .delegation(.start(HostDelegationStart(
+            childID: "child",
+            target: .newWorktree(projectID: fixture.projectID, branch: "feature", base: "main", expectedBaseSHA: nil),
+            agentID: "gemini", modelID: nil, reasoning: nil, role: nil, autoRun: parent, prompt: "Go"
+        )))))
+
+        #expect(peer.client.messages.first == .response(id: 1, result: .delegation(.started(sessionID: "child", state: "creating_worktree"))))
+        try await eventually { (try? await persistence.delegation(childSessionId: "child"))??.phase == .ready }
+        let session = fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: "child") }.first
+        #expect(session?.autoRunEnabled == expected)
+    }
+
+    private static func events(in messages: [HostServerMessage]) -> [HostEvent] {
+        messages.flatMap { message -> [HostEvent] in
+            if case .events(let events, _) = message { events } else { [] }
+        }
+    }
+
+    /// A host with one local project and worktree, and these devices paired:
+    /// `s1` and `s2` allowed to ask, a re-paired `s1` that is off, and three
+    /// that may never delegate. Sessions run on a scripted agent.
+    @MainActor
+    private struct DelegationFixture {
+        let peer1 = HostCaller.remotePeer(deviceID: "s1")
+        let peer2 = HostCaller.remotePeer(deviceID: "s2")
+        let offPeer = HostCaller.remotePeer(deviceID: "s1-repaired")
+        let root: URL
+        let agent = ACPMockClient()
+        let persistence: ACPOrchestrationPersistence
+        let projects: ProjectsManager
+        let worktree: Worktree
+        let core: AlasCoreContext
+        let host: AlasHost
+        let pairing: RemotePairingService
+        let server: HostProtocolServer
+
+        init(extraProjects: [ProjectConfig] = []) throws {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delegation-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            self.root = root
+            let path = root.appendingPathComponent("feature")
+            let worktree = Worktree(
+                id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+                path: path, status: .clean, lastActivity: .distantPast
+            )
+            self.worktree = worktree
+            let projects = ProjectsManager(persistedProjects: [
+                ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast),
+            ] + extraProjects)
+            projects.insertOptimisticWorktree(worktree)
+            self.projects = projects
+            let agent = agent
+            agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
+            agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-1"}"#.utf8) }
+            agent.script(method: "session/load") { _ in Data("null".utf8) }
+            agent.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+            let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
+            self.persistence = persistence
+            let database = root.appendingPathComponent("sessions.sqlite")
+            core = AlasCoreContext(
+                projects: projects, runHistoryStore: nil, attentionStore: .scratch(),
+                makeSessionManager: AlasCoreContext.sessionManagerFactory(
+                    config: { .defaults },
+                    onChildBlocked: { _ in },
+                    sessionsDB: { _ in database },
+                    setupEvaluator: { _ in .ready },
+                    connectionFactory: { _, _, _ in ACPConnection(client: agent) }
+                ),
+                environment: HeadlessHostEnvironment(),
+                orchestrationPersistence: persistence
+            )
+            core.delegatedSessionsDB = { _ in database }
+            host = AlasHost(core: core)
+            func device(_ id: String, _ server: String?, _ access: RemoteDeviceAgentAccess, _ kind: RemoteDeviceKind = .alasInstance) -> RemoteDevice {
+                RemoteDevice(id: id, name: id, tokenHash: id, createdAt: .distantPast, lastSeenAt: nil, kind: kind, peerServerId: server, agentAccess: access)
+            }
+            pairing = RemotePairingService(store: MemoryDeviceStore(devices: [
+                device("s1", "s1", .ask), device("s2", "s2", .ask), device("s1-repaired", "s1", .off),
+                device("browser", nil, .autoRun, .browser), device("no-server-id", nil, .autoRun),
+            ]))
+            server = HostProtocolServer(host: host)
+            server.delegationPairing = pairing
+        }
+
+        func record(child: String, peer: String) -> ACPDelegationRecord {
+            record(child: child, parent: ACPPeerParent.sentinel(serverId: peer))
+        }
+
+        func record(child: String, parent: String) -> ACPDelegationRecord {
+            ACPDelegationRecord(
+                childSessionId: child, parentSessionId: parent, projectId: "p",
+                parentWorktreeId: worktree.id, childWorktreeId: worktree.id, agentId: "gemini",
+                worktreeRequest: .existing(worktreeId: worktree.id),
+                pendingInitialPrompt: nil, phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1
+            )
+        }
+
+        func start(child: String) -> HostDelegationStart {
+            HostDelegationStart(
+                childID: child, target: .worktree(WorktreeRef(projectID: "p", path: worktree.path.path)), agentID: "gemini",
+                modelID: nil, reasoning: nil, role: nil, autoRun: false, prompt: "Go"
+            )
+        }
+
+        /// Stores sessions, for a child to be read or hydrated from.
+        func seedSessions(_ ids: [String]) throws {
+            guard let manager = core.orchestrationManager(for: worktree) else { throw CancellationError() }
+            for id in ids { _ = manager.createSession(id: id, agentId: "gemini") }
+        }
+
+        func enqueueOutcome(id: String, peer: String, prompt: String) async throws {
+            try await persistence.enqueue(ACPDelegatedMessage(
+                id: id, sourceSessionId: "child", targetSessionId: ACPPeerParent.sentinel(serverId: peer),
+                prompt: prompt, createdAt: 1, kind: .prompt
+            ))
+        }
+
+        func ask(_ request: HostDelegationRequest, as caller: HostCaller) async -> HostResponse {
+            await respond(.delegation(request), as: caller)
+        }
+
+        func respond(_ request: HostRequest, as caller: HostCaller) async -> HostResponse {
+            let client = Client()
+            let connection = server.connect(caller: caller, send: client.receive)
+            defer { connection.close() }
+            await connection.receive(HostClientMessage(id: 1, request: request))
+            guard case .response(1, let result) = client.messages.first else {
+                return .failure(error: .failed(message: "No answer"))
+            }
+            return result
+        }
+
+        func subscribed(as caller: HostCaller, accepting: [String]) async throws -> (connection: HostProtocolConnection, client: Client) {
+            let client = Client()
+            let connection = server.connect(caller: caller, send: client.receive)
+            guard case .snapshot(let snapshot) = await respond(.snapshot, as: caller) else { throw CancellationError() }
+            await connection.receive(HostClientMessage(id: 1, request: .subscribeAccepting(after: snapshot.cursor, events: accepting)))
+            return (connection, client)
+        }
+
+        func tearDown() {
+            core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
+            try? FileManager.default.removeItem(at: root)
+        }
     }
 
     private final class MemoryDeviceStore: RemoteDeviceStore {

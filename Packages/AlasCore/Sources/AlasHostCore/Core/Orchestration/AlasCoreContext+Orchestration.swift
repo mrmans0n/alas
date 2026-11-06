@@ -110,6 +110,7 @@ extension AlasCoreContext {
                 },
                 autoRunDefault: { [weak self] in self?.environment.configuration().harness.acpAutoRunByDefault ?? false },
                 notifyChanged: {},
+                peerOutboxChanged: { [weak self] in self?.peerOutboxDidChange?($0) },
                 admitChild: { [weak self] worktree, agentID in
                     guard let self else { return "Alas is not available." }
                     return await SessionsAPI(core: self).refusal(toStart: agentID, in: worktree).map(Self.childRefusalMessage)

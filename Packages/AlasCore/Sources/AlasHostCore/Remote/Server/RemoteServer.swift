@@ -320,6 +320,7 @@ public final class RemoteServer {
                     caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
                     send: channel.send)
                 gateway.presenter = self?.presenter
+                gateway.delegationPairing = self?.pairing
                 self?.configureGateway?(gateway)
                 return gateway
             },

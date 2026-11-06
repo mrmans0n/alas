@@ -183,6 +183,100 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// follows the file (`host.worktrees.files.v1`).
     case followFile(worktree: WorktreeRef, path: String)
     case unfollowFile(worktree: WorktreeRef, path: String)
+    /// What a paired Mac's agents ask of this one (`host.delegation.v1`).
+    case delegation(HostDelegationRequest)
+
+    private enum DelegationCodingKeys: String, CodingKey { case _0 = "request" }
+}
+
+/// One thing an agent on a paired Mac asks of this one. Every request needs the
+/// caller to be a paired Mac; see `PeerDelegationGate` for which need consent.
+public enum HostDelegationRequest: Codable, Equatable, Sendable {
+    /// The caller's access, projects matching `repository` (a `GitRemoteIdentity`,
+    /// or nil for all), their worktrees, and agents.
+    case discover(repository: String?)
+    /// Records a child and starts it, answering once the row exists. A repeat
+    /// with the same id answers with the existing child.
+    case start(HostDelegationStart)
+    /// Queues a prompt for a child of this peer.
+    case send(sessionID: String, prompt: String)
+    /// One transcript page, in the shape `session_read` returns.
+    case read(sessionID: String, offset: Int?, limit: Int?, maxChars: Int?)
+    /// Each child's state, in the shape `session_wait` returns; an id that is
+    /// not this peer's child has `ACPOrchestrationWaitResponse.Session.goneState`.
+    case status(sessionIDs: [String])
+    /// Cancels a child's running turn, as `session_interrupt` does.
+    case interrupt(sessionID: String)
+    /// Outbox entries after `seq`, a page at a time. Asking also acknowledges
+    /// everything up to `after`.
+    case outbox(after: Int64)
+
+    private enum StartCodingKeys: String, CodingKey { case _0 = "start" }
+}
+
+public struct HostDelegationStart: Codable, Equatable, Sendable {
+    /// Minted by the source; repeats are idempotent.
+    public var childID: String
+    public var target: HostDelegationTarget
+    public var agentID: String
+    public var modelID: String?
+    public var reasoning: String?
+    public var role: String?
+    /// The parent's state; this Mac can only lower it.
+    public var autoRun: Bool
+    public var prompt: String
+
+    public init(
+        childID: String, target: HostDelegationTarget, agentID: String, modelID: String?, reasoning: String?,
+        role: String?, autoRun: Bool, prompt: String
+    ) {
+        self.childID = childID
+        self.target = target
+        self.agentID = agentID
+        self.modelID = modelID
+        self.reasoning = reasoning
+        self.role = role
+        self.autoRun = autoRun
+        self.prompt = prompt
+    }
+}
+
+public enum HostDelegationTarget: Codable, Equatable, Sendable {
+    case worktree(WorktreeRef)
+    /// This Mac picks where the new worktree goes.
+    case newWorktree(projectID: String, branch: String, base: String, expectedBaseSHA: String?)
+
+    private enum WorktreeCodingKeys: String, CodingKey { case _0 = "worktree" }
+}
+
+/// The answer to `HostDelegationRequest.discover`.
+public struct HostDelegationDiscovery: Codable, Equatable, Sendable {
+    public var access: RemoteDeviceAgentAccess
+    public var projects: [ProjectSnapshot]
+    public var worktrees: [WorktreeSnapshot]
+    public var agents: [RemoteAgentOption]
+
+    public init(access: RemoteDeviceAgentAccess, projects: [ProjectSnapshot], worktrees: [WorktreeSnapshot], agents: [RemoteAgentOption]) {
+        self.access = access
+        self.projects = projects
+        self.worktrees = worktrees
+        self.agents = agents
+    }
+}
+
+/// The answers to `HostDelegationRequest`s; a `send` answers `done`.
+public enum HostDelegationResponse: Codable, Equatable, Sendable {
+    case discovered(HostDelegationDiscovery)
+    /// `state` is an `ACPOrchestrationPublicState` raw value.
+    case started(sessionID: String, state: String)
+    /// `ACPOrchestrationReadResponse`, encoded.
+    case read(data: Data)
+    /// `ACPOrchestrationWaitResponse`, encoded.
+    case status(data: Data)
+    case interrupted(cancelRequested: Bool)
+    case outbox(entries: [ACPPeerOutboxEntry], hasMore: Bool)
+
+    private enum DiscoveredCodingKeys: String, CodingKey { case _0 = "discovery" }
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -619,7 +713,11 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case checkpointRestorePreview(preview: CheckpointRestorePreview)
     /// The answer to `writeFile`: the version now on disk.
     case fileWritten(version: WorktreeFileVersion)
+    /// The answer to `delegation`, except a `send`'s.
+    case delegation(HostDelegationResponse)
     case failure(error: HostError)
+
+    private enum DelegationCodingKeys: String, CodingKey { case _0 = "response" }
 }
 
 /// Why the host did not do what a request asked: the domain's own typed

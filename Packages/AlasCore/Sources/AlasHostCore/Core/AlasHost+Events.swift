@@ -63,6 +63,11 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// gone (or no longer a regular file within the cap). Sent over the host
     /// protocol only to clients that accept `fileChanged`.
     case fileChanged(worktreeID: String, path: String, version: WorktreeFileVersion?)
+    /// Delegation outcomes wait for this client's Mac to collect them with
+    /// `HostDelegationRequest.outbox`. Not a change to the log: sent only to the
+    /// subscription of the peer they are for, and only to clients that accept
+    /// `delegationOutboxChanged`.
+    case delegationOutboxChanged
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -96,6 +101,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .reviewStatus(let worktreeID, _): .reviewStatus(worktreeID)
         case .reviewsChanged(let worktreeID): .reviews(worktreeID)
         case .fileChanged(let worktreeID, let path, _): .file(worktreeID: worktreeID, path: path)
+        case .delegationOutboxChanged: .delegationOutbox
         case .resync: .resync
         }
     }
@@ -154,6 +160,7 @@ enum HostEventKey: Hashable {
     case reviewStatus(String)
     case reviews(String)
     case file(worktreeID: String, path: String)
+    case delegationOutbox
     case resync
 }
 
@@ -186,6 +193,9 @@ public final class HostSubscription {
     /// The log position the events `next()` last returned reach: a client
     /// that read them resumes after it.
     public private(set) var cursor: HostCursor
+    /// The paired Mac this subscription serves, which hears when delegation
+    /// outcomes wait for it.
+    var delegationPeerServerId: String?
 
     init(
         after cursor: HostCursor,
@@ -353,6 +363,11 @@ public final class HostSubscription {
         wake()
     }
 
+    /// Tells the client to collect, without moving its place in the log.
+    func delegationOutboxChanged() {
+        receive([.delegationOutboxChanged], through: pendingThrough)
+    }
+
     private func drain() -> [HostEvent] {
         cursor = pendingThrough
         var events = pendingKeys.compactMap { pending[$0] }
@@ -400,6 +415,14 @@ final class HostEventLog {
         subscriptions = subscriptions.filter { $0.value.subscription != nil }
         for entry in subscriptions.values {
             entry.subscription?.receive(events, through: cursor)
+        }
+    }
+
+    /// Tells only the peer's subscriptions, so no other client learns of it,
+    /// and logs nothing: a peer collects whenever it subscribes anyway.
+    func delegationOutboxChanged(peerServerId: String) {
+        for entry in subscriptions.values where entry.subscription?.delegationPeerServerId == peerServerId {
+            entry.subscription?.delegationOutboxChanged()
         }
     }
 
@@ -487,6 +510,7 @@ final class HostEventSource {
             unfollow: { [weak fileWatcher] in fileWatcher?.unfollow(worktreeID: $0, path: $1) }
         )
         core.reviewStatusDidRefresh = { [weak self] in self?.publishReviewStatus($0) }
+        core.peerOutboxDidChange = { [weak log] in log?.delegationOutboxChanged(peerServerId: $0) }
         observeInMemoryState()
         renewSessionSignals()
         let store = core.workspaceStore
@@ -659,6 +683,7 @@ extension HostEvent {
         case .reviewStatus: "reviewStatus"
         case .reviewsChanged: "reviewsChanged"
         case .fileChanged: "fileChanged"
+        case .delegationOutboxChanged: "delegationOutboxChanged"
         default: nil
         }
     }

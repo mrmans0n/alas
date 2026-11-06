@@ -525,6 +525,10 @@ public struct ACPOrchestrationSearchResponse: Codable, Equatable, Sendable {
 
 public struct ACPOrchestrationWaitResponse: Codable, Equatable, Sendable {
     public struct Session: Codable, Equatable, Sendable {
+        /// The `state` of an id a paired Mac asked about that holds no child of
+        /// its own here: it never existed, was removed, or is another's.
+        public static let goneState = "gone"
+
         public let sessionId: String
         public let state: String
         /// False while the session still has a turn running or queued.

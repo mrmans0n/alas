@@ -135,6 +135,8 @@ public final class AlasCoreContext {
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
     /// Called with a worktree's id after its followed review status was read.
     @ObservationIgnored var reviewStatusDidRefresh: (@MainActor (String) -> Void)?
+    /// Told the server id of a paired Mac that has outcomes waiting in its outbox.
+    @ObservationIgnored var peerOutboxDidChange: (@MainActor (String) -> Void)?
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// When each worktree's local-changes review was opened, by worktree id,

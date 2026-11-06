@@ -75,7 +75,7 @@ public final class PeerHostChannel {
             case .reviewsChanged(let worktreeID):
                 reviewRevisions[worktreeID, default: 0] += 1
             case .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .notice, .worktreeNotice, .fileChanged, .resync:
+                 .sessionState, .notice, .worktreeNotice, .fileChanged, .delegationOutboxChanged, .resync:
                 break
             }
         }
@@ -103,6 +103,8 @@ public final class PeerHostChannel {
     public var onWorktreeNotice: (@MainActor (HostWorktreeNotice) -> Void)?
     /// Called with each change to a file this connection follows: its new version, or nil once gone.
     public var onFileChanged: (@MainActor (_ worktreeID: String, _ path: String, _ version: WorktreeFileVersion?) -> Void)?
+    /// Called when delegation outcomes wait to be collected from this peer.
+    public var onDelegationOutboxChanged: (@MainActor () -> Void)?
 
     private let timeout: Duration
     private let send: @MainActor (HostClientMessage) -> Void
@@ -167,6 +169,7 @@ public final class PeerHostChannel {
             for case .notice(let notice) in events { onNotice?(notice) }
             for case .worktreeNotice(let notice) in events { onWorktreeNotice?(notice) }
             for case .fileChanged(let worktreeID, let path, let version) in events { onFileChanged?(worktreeID, path, version) }
+            if events.contains(.delegationOutboxChanged) { onDelegationOutboxChanged?() }
             if events.contains(.resync) {
                 isSubscribed = false
                 onChange?()
