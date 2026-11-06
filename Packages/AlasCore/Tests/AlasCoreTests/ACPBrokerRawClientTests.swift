@@ -6,6 +6,40 @@ import AlasCore
 @testable import AlasSessions
 
 struct ACPBrokerRawClientTests {
+    @Test(arguments: [false, true])
+    func acknowledgedOrderedPayloadsAreReleasedAfterPendingReconciliation(pending: Bool) async throws {
+        let service = RawBrokerFixture()
+        let released = NSLockState(false)
+        await service.preloadTrackedOrderedCapture(pending: pending) { released.update { $0 = true } }
+        let client = makeClient(service)
+        let intake = try await client.claimV2OrderedIntake()
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        func drain() async throws {
+            var captures = intake.events.makeAsyncIterator()
+            for _ in 0..<2 {
+                switch try #require(await captures.next()) {
+                case .update(let delivery): delivery.acknowledgeDurableConsumption()
+                case .inbound(let delivery): delivery.acknowledgeDurableConsumption()
+                case .diagnostic: Issue.record("Unexpected diagnostic")
+                }
+            }
+        }
+        try await drain()
+        try await client.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 2 }
+        if pending {
+            #expect(!released.read())
+            // An ACK does not resolve the request. Its old origin must still validate.
+            try await client.replayRawBrokerEvents()
+            #expect(!released.read())
+            await service.setPendingOverride([])
+            try await client.replayRawBrokerEvents()
+        }
+        try await eventually { released.read() }
+        #expect(intake.isValid)
+    }
+
     @Test func growingBrokerTailDoesNotMoveTheCapturedReplayBarrier() async throws {
         let service = RawBrokerFixture()
         let initial = await service.snapshot()
@@ -1490,6 +1524,26 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         self.replaceHookDuringSend = replaceHookDuringSend
     }
     func clearOutcome() { outcome = nil }
+    func preloadTrackedOrderedCapture(pending: Bool, onRelease: @escaping @Sendable () -> Void) {
+        let source = Data((#"{"jsonrpc":"2.0","id":"p","method":"peer/request","params":{"padding":""# + String(repeating: "x", count: 2048) + #""}}"#).utf8)
+        let memory = UnsafeMutableRawPointer.allocate(byteCount: source.count, alignment: 1)
+        source.copyBytes(to: memory.assumingMemoryBound(to: UInt8.self), count: source.count)
+        let bytes = Data(bytesNoCopy: memory, count: source.count, deallocator: .custom { pointer, _ in
+            pointer.deallocate()
+            onRelease()
+        })
+        let first: ACPBrokerEvent
+        if pending {
+            var request = ACPBrokerPendingRequest(requestId: "tracked", adapterRequestId: .string("p"), kind: .question, payload: .null)
+            request.rawFrame = .init(bytes: bytes)
+            request.originCursor = .init(rawValue: 1)
+            pendingOverride = [request]
+            first = .init(cursor: .init(rawValue: 1), kind: .pendingRequest(request))
+        } else { first = .init(cursor: .init(rawValue: 1), kind: .rawFrame(.init(bytes: bytes))) }
+        scriptedPages = [.init(snapshot: snapshot(), events: [first,
+            .init(cursor: .init(rawValue: 2), kind: .rawFrame(.init(bytes: Self.first)))])]
+    }
+
     func preloadTrackedOutcome(onRelease: @escaping @Sendable () -> Void) {
         let source = Data((#"{"jsonrpc":"2.0","id":9,"result":{"padding":""# + String(repeating: "x", count: 2048) + #""}}"#).utf8)
         let memory = UnsafeMutableRawPointer.allocate(byteCount: source.count, alignment: 1)

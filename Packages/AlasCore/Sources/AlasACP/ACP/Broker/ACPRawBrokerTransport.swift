@@ -131,6 +131,8 @@ actor ACPRawBrokerTransport {
         let pendingID: String?
     }
     private var deliveredOrigins: [ACPBrokerEventCursor: DeliveredOrigin] = [:]
+    private var pendingReconciliationOrigins: Set<ACPBrokerEventCursor> = []
+    private var validatedSnapshotTail: ACPBrokerEventCursor?
 
     func claimOrderedIntake() throws -> ACPV2OrderedIntake {
         guard !started, !terminated, orderedIntake == nil else { throw ACPClientError.notRunning }
@@ -242,6 +244,20 @@ actor ACPRawBrokerTransport {
                 // Standalone split mode supports historical pending snapshots.
                 publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
             }
+        }
+        if validatedSnapshotTail.map({ snapshot.journalTail >= $0 }) ?? true {
+            validatedSnapshotTail = snapshot.journalTail
+            pendingReconciliationOrigins = Set(snapshot.pendingRequests.compactMap(\.originCursor))
+            pruneDeliveredOrigins()
+        }
+    }
+
+    private func pruneDeliveredOrigins() {
+        guard orderedIntake != nil, let tail = validatedSnapshotTail else { return }
+        // ACK closes journal redelivery, but unresolved requests can still be
+        // reconciled through snapshots after that ACK. Keep their exact bytes.
+        deliveredOrigins = deliveredOrigins.filter { cursor, _ in
+            cursor > acknowledged || cursor > tail || pendingReconciliationOrigins.contains(cursor)
         }
     }
 
@@ -429,6 +445,7 @@ actor ACPRawBrokerTransport {
         _ = try await service.ack(params)
         guard !terminated, self.generation == generation else { return }
         acknowledged = max(acknowledged, target)
+        pruneDeliveredOrigins()
         let state = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2)
         orderedIntake?.publishDurableState(state)
         durable?(state)
@@ -604,6 +621,9 @@ actor ACPRawBrokerTransport {
     private func loseObservation() {
         terminated = true
         orderedIntake?.invalidate(message: "Broker observation lost")
+        deliveredOrigins.removeAll()
+        stagedPending.removeAll()
+        pendingReconciliationOrigins.removeAll()
         poll?.cancel()
         poll = nil
         updatesCont.finish()
