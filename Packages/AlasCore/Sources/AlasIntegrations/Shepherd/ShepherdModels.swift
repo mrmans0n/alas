@@ -115,8 +115,8 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// Attempts per unresolved problem, independent of commit SHA or CI run ID.
     /// Nil in older records, whose aggregate count is migrated conservatively.
     public var problemAttempts: [String: Int]?
-    /// The original dispatch time, retained while awaiting a push so background
-    /// work started by that fix can be distinguished from an existing dev server.
+    /// The original dispatch time, retained across idle waits and delivery
+    /// rollback so a late result can be matched to the same fix attempt.
     public var lastFixDispatchedAt: Date?
     /// Definite delivery failures are retried without spending a fix attempt.
     public var deliveryFailures: Int?

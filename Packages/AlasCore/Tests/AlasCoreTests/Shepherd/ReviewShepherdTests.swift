@@ -7,22 +7,47 @@ private typealias F = ShepherdFixtures
 
 @MainActor
 struct ReviewShepherdTests {
-    @Test("only live background work started by the fix holds Ship open", arguments: [
-        // Ready adapter, started before dispatch, task state, expected busy.
-        (true, false, "running", true),
-        (true, true, "running", false),
-        (true, false, "completed", false),
-        (true, false, "lost", false),
-        (false, false, "running", false),
+    @Test("a service started during a fix does not keep Ship busy", arguments: [nil, "shell", "service"] as [String?])
+    func backgroundServiceDoesNotBlockShip(taskType: String?) {
+        let session = ACPSession(id: "session-1", agentId: "claude", worktreeId: "wt-1", title: "Fix")
+        session.agentState = .ready
+        session.settlesAtResult = true
+        var service = ACPBackgroundTask(ownerSessionId: session.id, asyncTaskId: "preview", name: "Preview server")
+        service.taskType = taskType
+        service.startedAt = F.now.addingTimeInterval(1)
+        session.saveBackgroundTask(service)
+        #expect(!AlasCoreContext.shepherdSessionIsBusy(session, now: F.now))
+    }
+
+    @Test("autonomous turns and live children keep Ship busy", arguments: [
+        // Ready adapter, settles at result, work kind, state, expected busy.
+        (true, true, "turn", "running", true),
+        (true, true, "turn", "completed", false),
+        (true, true, "turn", "lost", false),
+        (false, true, "turn", "running", false),
+        (true, false, "turn", "running", false),
+        (true, false, "child", "running", true),
+        (true, false, "child", "requires_action", true),
+        (true, false, "child", "completed", false),
     ])
-    func backgroundFixActivity(ready: Bool, predatesFix: Bool, state: String, expected: Bool) {
+    func backgroundFixActivity(ready: Bool, settles: Bool, kind: String, state: String, expected: Bool) {
         let session = ACPSession(id: "session-1", agentId: "claude", worktreeId: "wt-1", title: "Fix")
         session.agentState = ready ? .ready : .disconnected
-        var task = ACPBackgroundTask(ownerSessionId: session.id, asyncTaskId: "tests", name: "Run tests")
-        task.startedAt = F.now.addingTimeInterval(predatesFix ? -1 : 1)
-        task.state = state
-        session.saveBackgroundTask(task)
-        #expect(AlasCoreContext.shepherdSessionIsBusy(session, now: F.now, fixDispatchedAt: F.now) == expected)
+        session.settlesAtResult = settles
+        if kind == "child" {
+            session.registerSubagent(.init(subagentSessionId: "child"))
+            if state == "completed" {
+                session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+            } else if state == "requires_action" {
+                session.applySubagentState(.init(subagentSessionId: "child", state: .requiresAction))
+            }
+        } else {
+            var task = ACPBackgroundTask(ownerSessionId: session.id, asyncTaskId: "cycle", name: "Run tests")
+            task.taskType = kind
+            task.state = state
+            session.saveBackgroundTask(task)
+        }
+        #expect(AlasCoreContext.shepherdSessionIsBusy(session, now: F.now) == expected)
     }
 
     @Test func backgroundWorkStartsTheIdleGraceOnlyAfterItFinishes() {
