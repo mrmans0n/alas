@@ -110,6 +110,12 @@ struct ACPToolbar: View {
                     }
                 }
             }
+            if let name = state.delegatedFromName(of: session.id) {
+                Text("From \(name)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .lineLimit(1)
+            }
             if showsShepherdButton {
                 ACPShepherdButton(session: session, worktree: worktree, state: state)
             }

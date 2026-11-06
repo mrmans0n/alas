@@ -22,6 +22,8 @@ public final class PeerHostChannel {
         public var runs: [RunRecord]
         /// Shepherd pills by session id; sessions without one are absent.
         public var shepherds: [String: HostSessionShepherd]
+        /// The paired Mac that delegated each session, by session id; sessions no Mac delegated are absent.
+        public var delegatedFromNames: [String: String] = [:]
         /// Review statuses by worktree id, as the followed ones change.
         public var reviewStatuses: [String: ReviewLoopSnapshot] = [:]
         /// Counts each `reviewsChanged` per worktree, for a view to refetch on; dropped with the worktree.
@@ -33,6 +35,7 @@ public final class PeerHostChannel {
             workspaceCheckouts = snapshot.workspaceCheckouts
             runs = snapshot.runs
             shepherds = Dictionary(snapshot.sessions.compactMap { s in s.shepherd.map { (s.id, $0) } }) { _, last in last }
+            delegatedFromNames = Dictionary(snapshot.sessions.compactMap { s in s.delegatedFromName.map { (s.id, $0) } }) { _, last in last }
         }
 
         /// Upserts or removes by key; transcript and request events are ignored.
@@ -68,8 +71,10 @@ public final class PeerHostChannel {
                 runs.removeAll { $0.id == id }
             case .sessionChanged(let summary):
                 shepherds[summary.id] = summary.shepherd
+                delegatedFromNames[summary.id] = summary.delegatedFromName
             case .sessionRemoved(_, let id):
                 shepherds[id] = nil
+                delegatedFromNames[id] = nil
             case .reviewStatus(let worktreeID, let snapshot):
                 reviewStatuses[worktreeID] = snapshot
             case .reviewsChanged(let worktreeID):

@@ -16,6 +16,7 @@ final class NativePeerHosts {
     private(set) var runs: [String: [RunRecord]] = [:]
     /// Each peer's shepherd pills by session id, keyed like `worktrees`.
     private(set) var shepherds: [String: [String: HostSessionShepherd]] = [:]
+    private(set) var delegatedFromNames: [String: [String: String]] = [:]
     /// Each peer's followed worktrees' review statuses by worktree id, keyed like `worktrees`.
     private(set) var reviewStatuses: [String: [String: ReviewLoopSnapshot]] = [:]
     /// Each peer's count of `reviewsChanged` by worktree id, keyed like
@@ -109,6 +110,7 @@ final class NativePeerHosts {
         archivedWorktrees = [:]
         runs = [:]
         shepherds = [:]
+        delegatedFromNames = [:]
         reviewStatuses = [:]
         reviewRevisions = [:]
         subscribed = []
@@ -865,6 +867,7 @@ final class NativePeerHosts {
             let runsChanged = runs[serverId] != newRuns
             runs[serverId] = newRuns
             shepherds[serverId] = channel.state?.shepherds
+            delegatedFromNames[serverId] = channel.state?.delegatedFromNames
             reviewStatuses[serverId] = channel.state?.reviewStatuses
             reviewRevisions[serverId] = channel.state?.reviewRevisions
             if !channel.isSubscribed {

@@ -585,6 +585,14 @@ final class NativePeerSessions {
         return hosts?.shepherds[id.serverId]?[id.sessionId]
     }
 
+    /// The paired Mac that delegated the selected session, as its host names it.
+    var selectedDelegatedFromName: String? {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return nil }
+        return hosts?.delegatedFromNames[id.serverId]?[id.sessionId]
+    }
+
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.first { selectedSessionId.hasPrefix($0.serverId + ":") }

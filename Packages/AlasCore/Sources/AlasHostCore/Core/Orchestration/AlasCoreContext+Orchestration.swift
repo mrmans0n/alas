@@ -169,10 +169,22 @@ extension AlasCoreContext {
     }
 
     /// A paired Mac's sentinel is not a session, so it is no one's parent
-    /// here; `delegatedParentSessionID` still reads it from the record.
+    /// here; `delegatedParentSessionID` still reads it from the record, and
+    /// `delegatedPeerOrigins` remembers which Mac it was.
     @_spi(AppHost) public func rememberDelegatedSessionParent(childID: String, parentID: String) {
-        guard ACPPeerParent.serverId(from: parentID) == nil else { return }
+        if let serverId = ACPPeerParent.serverId(from: parentID) {
+            delegatedPeerOrigins[childID] = serverId
+            return
+        }
         delegatedSessionParents[childID] = parentID
+    }
+
+    /// What a summary says about the Mac that delegated `sessionID`: its
+    /// device's name, or "another Mac" once it has been forgotten.
+    @_spi(AppHost) public func delegatedFromName(of sessionID: String) -> String? {
+        guard let serverId = delegatedPeerOrigins[sessionID] else { return nil }
+        let device = delegationPairing()?.devices.first { $0.kind == .alasInstance && $0.peerServerId == serverId }
+        return device?.name ?? "another Mac"
     }
 
     /// The parent that delegated `sessionID`, from memory or its persisted
@@ -191,6 +203,8 @@ extension AlasCoreContext {
         delegatedSessionParents = links
             .filter { ACPPeerParent.serverId(from: $0.value) == nil }
             .merging(delegatedSessionParents) { _, live in live }
+        delegatedPeerOrigins = links.compactMapValues { ACPPeerParent.serverId(from: $0) }
+            .merging(delegatedPeerOrigins) { _, live in live }
     }
 
     /// What a parent hears when its child is refused as a new session.

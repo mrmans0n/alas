@@ -2347,6 +2347,7 @@ final class AppState {
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         reconcileAttention(observations: currentAttentionObservations)
+        core.delegationPairing = { [weak self] in self?.remotePairing }
         Task { [weak self] in
             await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()
@@ -12096,6 +12097,9 @@ final class AppState {
     /// sidebar draws delegated children under their parent from it.
     var delegatedSessionParents: [String: String] { core.delegatedSessionParents }
 
+    /// The paired Mac that delegated `sessionId`, when one did.
+    func delegatedFromName(of sessionId: String) -> String? { core.delegatedFromName(of: sessionId) }
+
     /// The parent that delegated `sessionId`, from memory or the persisted
     /// delegation record.
     func delegatedParentSessionID(for sessionId: String) async -> String? {
@@ -12335,7 +12339,12 @@ final class AppState {
             terminalTabs: terminalTabs,
             harnessActivity: harness.activityBySession,
             remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
-            delegatedParents: delegatedSessionParents
+            delegatedParents: delegatedSessionParents,
+            delegatedFromNames: Dictionary(
+                uniqueKeysWithValues: core.delegatedPeerOrigins.keys.compactMap { id in
+                    core.delegatedFromName(of: id).map { (id, $0) }
+                }
+            )
         ))
     }
 

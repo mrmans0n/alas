@@ -340,6 +340,19 @@ private struct NativePeerUnsupportedElicitation: View {
     }
 }
 
+/// Which paired Mac delegated the session, in the secondary text style.
+private struct NativePeerFromLabel: View {
+    let name: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text("From \(name)")
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-muted"))
+            .lineLimit(1)
+    }
+}
+
 /// The host's shepherd pill for the session, read-only: the local pill's
 /// look without its popover. A badge this Mac doesn't know shows nothing.
 private struct NativePeerShepherdPill: View {
@@ -780,6 +793,7 @@ private struct NativePeerComposer: View {
                 shortcutHint
             }
             Spacer(minLength: 0)
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
             if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
@@ -794,6 +808,7 @@ private struct NativePeerComposer: View {
     private var compactToolbar: some View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
             if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }

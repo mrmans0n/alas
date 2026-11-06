@@ -163,6 +163,16 @@ public final class AlasCoreContext {
         didSet { if delegatedSessionParents != oldValue { environment.delegatedSessionParentsChanged() } }
     }
 
+    /// The paired Mac's `serverId` that delegated each session, by child id.
+    /// Kept apart from `delegatedSessionParents`: a paired Mac is no one's
+    /// parent here, and summaries read this without touching the database.
+    public internal(set) var delegatedPeerOrigins: [String: String] = [:]
+    /// Who the paired Macs are, to name a delegated session's origin. The app
+    /// and the headless host install theirs, read on demand so a profile with
+    /// no delegated session never loads the devices; without one every origin
+    /// is "another Mac".
+    @ObservationIgnored public var delegationPairing: @MainActor () -> RemotePairingService? = { nil }
+
     /// Relayed notices waiting for their user's input, by session id. Each
     /// holds while the session runs on the transcript it was sent from.
     @ObservationIgnored var noticeAwaitingClears: [String: NoticeAwaitingInput] = [:]

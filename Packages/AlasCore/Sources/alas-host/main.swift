@@ -241,6 +241,7 @@ var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
 let pairing = RemotePairingService(store: FileDeviceStore())
+host.coreContext.delegationPairing = { pairing }
 // Reads the profile's key wherever the app left it, and writes only the
 // owner-only file, so an app and a host taking turns keep one identity.
 let secrets = RemoteHostSecretStore()
