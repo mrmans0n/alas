@@ -10,7 +10,7 @@
 
 **Spec:** [Approved design](2026-11-04-acp-v2-broker-runner-design.md). Read both documents before execution.
 
-**Implementation status:** Partial. The branch adds the ordered broker claim, snapshot staging and terminal invalidation with focused regressions. Task 1 still needs bounded replay watermarks, complete duplicate validation and broader ACK/RPC barrier tests. Tasks 2-4 and the final review have not run. Production selection is unchanged.
+**Implementation status:** Implemented in the opt-in package runner and reviewed. Broker capture ordering, fresh fenced binding, ordered runtime installation, stable operation keys, full startup deadlines and transactional write authorization are in place. Production selection remains v1; reattach/resume, UI, SSH and live adapter qualification remain out of scope.
 
 ## Global constraints
 
@@ -73,7 +73,7 @@ Commands below run from the implementation checkout. `rtk swift test --package-p
 
 **Interfaces:**
 
-- Add store and persistence actor method `public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence) throws -> Bool`. The actor forwards to the store; its external call is awaited.
+- Add store and persistence actor method `public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence, authorize: @Sendable () -> Bool = { true }) throws -> Bool`. The actor forwards to the store; its external call is awaited.
 - Return `true` only after the exact fresh identity is recorded or verified idempotently. Return `false` for conflicting/stale state or lease loss. Storage failures throw. Require raw-v2, positive generation and ACK 0.
 - Use existing `updateACPBrokerAcknowledgedCursor(sessionId:state:fence:)` for subsequent cursor mirrors. Never use broad `updateACPBrokerState` to replace source identity in this runner.
 
@@ -122,3 +122,9 @@ Commands below run from the implementation checkout. `rtk swift test --package-p
 Spec coverage: claims, snapshot order, finite replay barrier and protected ACKs are Task 1; fresh identity and cursor fences are Task 2; driven durability, subjects, controls and independent invalidation are Task 3; keys, lifecycle, local ACK mirror failures and caller-owned detach are Task 4. All nine spec acceptance items have an owning test step. The two notification streams have distinct sole consumers and use one shared validity state. Signatures introduced above remain consistent between transport, bootstrap and runner. Implementation stays within the existing package and test suites.
 
 Recommended execution is native in this session. These four tasks share transport and lifetime contracts; one implementer can maintain those contracts without repeated handoff, followed by the chosen workflow's fresh final review. This plan requires review before product edits.
+
+## Completion evidence
+
+The final review found three important issues, all addressed in one fix pass: local-session validation now precedes broker binding, the startup deadline includes open/replay/binding, and queued storage writes check Sendable installation authority inside the transaction and roll back on withdrawal. Every mirror worker is tracked for cancellation. Regression evidence includes a held open beyond deadline, an unchanged destination on wrong-session refusal, withdrawn authority before and after SQL writes, and accepted remote ACK followed by local lease loss. ID-reuse scenarios run through split and ordered runtime modes.
+
+The final local selection covers broker transport, runner, bootstrap, runtime, update/response owners, decisions, persistence and physical reply writer behavior. These are fixture checks, not live adapter qualification. Repository-wide configured validation remains CI responsibility.

@@ -1,6 +1,6 @@
 # ACP v2 broker runner and ordered replay
 
-Status: approved on 2026-11-04. Implementation requires the accompanying plan review.
+Status: approved on 2026-11-04; opt-in package implementation completed and reviewed on 2026-11-06. See the accompanying implementation plan for validation and deferred production work.
 
 ## Intent and scope
 
