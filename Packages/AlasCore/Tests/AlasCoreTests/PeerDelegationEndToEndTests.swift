@@ -256,9 +256,9 @@ struct PeerDelegationEndToEndTests {
             let autoParent = try await lab.startParent(autoRun: true)
 
             // Parent auto-running, target on ask: the permission waits for a person.
-            _ = try await lab.startChild(parent: autoParent, prompt: "E2E-PERMISSION E2E-TOKEN=ask")
+            let asked = try await lab.startChild(parent: autoParent, prompt: "E2E-PERMISSION E2E-TOKEN=ask")
             try await eventually { [b = lab.b] in b.log(event: "permission_asked").count == 1 }
-            try await lab.settle()
+            try await lab.waitUntilBlocked(parent: autoParent, child: asked)
             #expect(lab.b.log(event: "permission_answered").isEmpty, "the child auto-ran under ask: \(lab.b.log(event: "permission_answered"))")
 
             // Parent auto-running, target allowing it: answered without anyone.
@@ -271,9 +271,9 @@ struct PeerDelegationEndToEndTests {
 
             // Parent not auto-running, target allowing it: still waits.
             let plainParent = try await lab.startParent(autoRun: false)
-            _ = try await lab.startChild(parent: plainParent, prompt: "E2E-PERMISSION E2E-TOKEN=plain")
+            let plain = try await lab.startChild(parent: plainParent, prompt: "E2E-PERMISSION E2E-TOKEN=plain")
             try await eventually { [b = lab.b] in b.log(event: "permission_asked").count == 3 }
-            try await lab.settle()
+            try await lab.waitUntilBlocked(parent: plainParent, child: plain)
             #expect(lab.b.log(event: "permission_answered").count == 1, "\(lab.b.log(event: "permission_answered"))")
         }
     }
@@ -818,10 +818,30 @@ final class PeerLab {
         }
     }
 
-    /// Long enough for a second delivery to show if one is coming: what a
-    /// count taken next is asserting about is the absence of an event.
+    /// Until everything the target reported has been collected and delivered.
+    /// A second wake could only come from another inbox row, so a count taken
+    /// after this is final.
     func settle() async throws {
-        try await Task.sleep(for: .seconds(4))
+        let (a, b) = (a, b)
+        try await eventually {
+            guard let cursor = try? await a.rows("SELECT COALESCE(MAX(seq), 0) FROM peer_delegation_cursors").first.flatMap({ Int($0) }),
+                  let last = try? await b.rows("SELECT COALESCE(MAX(seq), 0) FROM peer_outbox").first.flatMap({ Int($0) }),
+                  let inbox = try? await a.rows("SELECT COUNT(*) FROM delegated_messages").first.flatMap({ Int($0) })
+            else { return false }
+            return cursor >= last && inbox == 0
+        }
+    }
+
+    /// Until the target reports `child` waiting on a person, which it never does
+    /// for a request that was answered automatically.
+    func waitUntilBlocked(parent: String, child: String) async throws {
+        let a = a
+        try await eventually {
+            guard let answer = try? await a.cli(
+                "session_wait", session: parent, params: ["session_ids": [child], "timeout_ms": 1000]
+            ), let sessions = answer.json?["sessions"] as? [[String: Any]] else { return false }
+            return sessions.first { $0["session_id"] as? String == child }?["state"] as? String == "awaiting_input"
+        }
     }
 
     func commitAndPushOnA(_ message: String) async throws -> String {
