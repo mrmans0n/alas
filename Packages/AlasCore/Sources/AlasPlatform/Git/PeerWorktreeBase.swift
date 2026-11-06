@@ -14,9 +14,10 @@ public enum PeerWorktreeBase {
     private static let fetchTimeout: TimeInterval = 90
 
     /// Fetches `base` explicitly, since a bare branch name is otherwise never
-    /// refreshed, and returns its remote-tracking ref when there is one. With
-    /// `expectedSHA` the peer is relying on this exact code, so anything but
-    /// finding it is a failure. Without, the fetch is best effort and a `base`
+    /// refreshed. With `expectedSHA` the peer is relying on this exact code, so
+    /// anything but finding it is a failure, and that commit is returned.
+    /// Without, the remote-tracking ref is returned when there is one, the
+    /// fetch is best effort, and a `base`
     /// the remote does not have (a tag, a local branch) is returned as given,
     /// unless `branch` already exists elsewhere: the child would then run on
     /// that branch's code rather than on `base`.
@@ -75,7 +76,9 @@ public enum PeerWorktreeBase {
                 message: "\(branch) already exists on \(machine) at \(existing), expected \(expectedSHA). Delete it or pick another name."
             ))
         }
-        return .success(remoteBase)
+        // The commit, not the ref: another child's fetch can move the ref
+        // before the worktree is created.
+        return .success(expectedSHA)
     }
 
     /// `resolved`, unless `branch` exists at another commit than `ref`. A

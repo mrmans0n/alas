@@ -61,8 +61,9 @@ struct PeerWorktreeBaseTests {
         #expect(message == "main on Mini is at \(repo.head), expected \(wrong). Push and try again.")
     }
 
-    /// The tracking ref was behind, so this passes only by fetching.
-    @Test func aPushedCommitIsFetchedAndTheRemoteRefReturned() async throws {
+    /// The tracking ref was behind, so this passes only by fetching. The answer
+    /// is the commit, since another fetch can move the ref before it is used.
+    @Test func aPushedCommitIsFetchedAndTheCommitReturned() async throws {
         let repo = try await Repo()
         defer { repo.tearDown() }
         let pushed = try await repo.commitOnHead(in: repo.origin)
@@ -70,7 +71,7 @@ struct PeerWorktreeBaseTests {
 
         let result = await repo.resolve(expectedSHA: pushed)
 
-        #expect(result == .success("origin/main"))
+        #expect(result == .success(pushed))
         #expect(try await Repo.sha("origin/main", in: repo.clone) == pushed)
     }
 
