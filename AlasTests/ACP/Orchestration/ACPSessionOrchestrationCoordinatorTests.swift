@@ -1655,6 +1655,22 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(response.sessions.first?.failure == "prompt failed: boom")
     }
 
+    /// A refused prompt stays at the head for the user's Retry and owes no turn:
+    /// the delegating session must not read the child's old text as its answer.
+    @Test func waitReportsAPromptHeldWithAnError() async throws {
+        let fixture = try makeOutcomeFixture()
+        let child = try await insertLiveChild(fixture, messages: [.agent(id: UUID(), StreamingText("Old answer."))])
+        child.enqueue(blocks: [.text("Read this")])
+        child.setQueueHeadError("Couldn't send a.pdf: this agent can't read attached PDFs.")
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.first?.settled == true)
+        #expect(response.sessions.first?.failure == "Couldn't send a.pdf: this agent can't read attached PDFs.")
+    }
+
     /// A failure is rewritten only when a turn ends. While the child runs it
     /// describes the last turn, and a parent reading it would give up on this one.
     @Test(arguments: [false, true])

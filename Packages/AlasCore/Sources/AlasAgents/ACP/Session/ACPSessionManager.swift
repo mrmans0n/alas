@@ -8843,7 +8843,10 @@ extension ACPSessionManager {
                 // The flush restarts now if idle, else at the next idle point.
                 runner.flushQueueIfIdle()
             } else if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
-                if !sendPendingQueueForceSend(sessionId: sessionId) {
+                // A recovery refused outright holds the queue like one that
+                // failed in flight: these prompts need the context it carries.
+                if case .failed = session.contextRecoveryStatus, shouldHoldQueueForRecovery {
+                } else if !sendPendingQueueForceSend(sessionId: sessionId) {
                     runner.flushQueueIfIdle()
                 }
             }

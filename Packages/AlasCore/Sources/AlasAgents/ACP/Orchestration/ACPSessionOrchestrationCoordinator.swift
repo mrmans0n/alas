@@ -841,13 +841,16 @@ public final class ACPSessionOrchestrationCoordinator {
         let phase = record?.phase ?? .closed
         var queued = session.map { ACPSessionOrchestrationPolicy.queueOwesTurn($0.queue) } ?? false
         var archived = false
+        var storedQueue: [QueuedPrompt] = []
         if session == nil, phase == .ready, let record {
             // Not live here: restored later, or driven by another instance.
             // Judge it by its stored queue, whose head stays until the turn
             // ends, and keep it unsettled when its store is out of reach.
             switch await storedTurnState(record) {
             case .archived: archived = true
-            case .queue(let stored): queued = ACPSessionOrchestrationPolicy.queueOwesTurn(stored)
+            case .queue(let stored):
+                storedQueue = stored
+                queued = ACPSessionOrchestrationPolicy.queueOwesTurn(stored)
             case nil: queued = true
             }
         }
@@ -871,6 +874,7 @@ public final class ACPSessionOrchestrationCoordinator {
             // A turn's failure is rewritten only when a turn ends, so until the
             // child settles it describes an earlier turn, not the running one.
             failure: record?.failureMessage ?? (settled ? session?.turnFailure
+                ?? ACPSessionOrchestrationPolicy.heldPromptFailure(session?.queue ?? storedQueue)
                 ?? transcriptSession.flatMap { ACPSessionTranscriptReader.trailingTurnFailure($0.transcript.messages) } : nil)
         )
     }

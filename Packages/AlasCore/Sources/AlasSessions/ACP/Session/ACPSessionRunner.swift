@@ -3923,8 +3923,13 @@ extension ACPSessionRunner {
         guard session.agentState == .ready else { return }
         // Below, the item leaves the queue and a running turn may be cancelled.
         if let refusal = preflightRefusal(of: session.queue[idx].blocks) {
-            session.queue[idx].lastError = refusal.errorDescription
-            persistQueue()
+            if session.queue[idx].deliveryUncertain {
+                // Its `lastError` is what delivery reconciliation matches on.
+                session.lastError = "prompt failed: \(refusal.localizedDescription)"
+            } else {
+                session.queue[idx].lastError = refusal.errorDescription
+                persistQueue()
+            }
             return
         }
         if session.queue[idx].deliveryUncertain {
@@ -4703,8 +4708,13 @@ extension ACPSessionRunner {
     ) {
         discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
-        session.clearRetryStatus()
-        clearRetryablePrompt()
+        // Read before the retry state goes: a refused prompt starts no turn, so
+        // the Retry of an earlier failed one still stands.
+        let preflight = preflightRefusal(of: blocks)
+        if preflight == nil {
+            session.clearRetryStatus()
+            clearRetryablePrompt()
+        }
         let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
@@ -4781,8 +4791,9 @@ extension ACPSessionRunner {
             // Before the row, the checkpoint and the title: resending a refused
             // prompt must not show it twice. A prompt no longer current falls
             // through to the checks below, which end it without touching state.
-            if self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent(),
-               let refusal = self.preflightRefusal(of: blocks) {
+            if let refusal = preflight, self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent() {
+                // As a failed turn does, so a wait and the sidebar see it.
+                self.session.turnFailure = refusal.localizedDescription
                 if queuedItemId != nil {
                     self.session.setQueueHeadError(refusal.localizedDescription)
                     self.persistQueue()

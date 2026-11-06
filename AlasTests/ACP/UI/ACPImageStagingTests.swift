@@ -153,7 +153,7 @@ struct ACPImageStagingTests {
 
     enum StagedShape: CaseIterable, Sendable {
         case own, missing, otherWorktree, otherWorktreeMissing, otherWorktreeLink
-        case dotDotEscape, encodedDotDot, encodedSlash, linkEscape, worktreeLinkIn, flatFile, notAFileURI
+        case dotDotEscape, rootDotDotMissing, encodedDotDot, encodedSlash, linkEscape, worktreeLinkIn, flatFile, notAFileURI
     }
 
     @Test("only this worktree's own staged path counts as staged", arguments: StagedShape.allCases)
@@ -187,6 +187,8 @@ struct ACPImageStagingTests {
             (uri, expected) = (link.absoluteString, .notStaged)
         case .dotDotEscape:
             (uri, expected) = ("file://\(own.path)/\(hash)/../../wt-b/\(hash)/b.pdf", .notStaged)
+        case .rootDotDotMissing:
+            (uri, expected) = ("file://\(root.path)/../\(hash)/gone.pdf", .notStaged)
         case .encodedDotDot:
             (uri, expected) = ("file://\(own.path)/\(hash)/%2e%2e/%2e%2e/wt-b/\(hash)/b.pdf", .notStaged)
         case .encodedSlash:

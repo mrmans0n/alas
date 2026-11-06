@@ -114,7 +114,8 @@ public enum ACPAttachmentStaging: Sendable {
         let root = attachmentsDirectory.deletingLastPathComponent()
         guard let relative = relativePath(path, under: root) else { return .notStaged }
         let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 3, isStagedShape(hash: parts[1], name: parts[2]) else { return .notStaged }
+        guard parts.count == 3, parts[0] != "..", parts[0] != ".",
+              isStagedShape(hash: parts[1], name: parts[2]) else { return .notStaged }
         guard let real = realPath(path) else { return .otherWorktree }
         return real == resolvedPath(of: root) + "/" + relative ? .otherWorktree : .notStaged
     }

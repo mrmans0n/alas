@@ -4616,6 +4616,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
         #expect(runner.activePromptIDForTesting == nil)
         #expect(session.transcript.messages.isEmpty, "resending must not show the prompt twice")
+        #expect(session.turnFailure?.contains(refused.expectedInError) == true)
         #expect(session.transcript.streamingState == .idle)
     }
 
@@ -4643,7 +4644,9 @@ struct ACPSessionRunnerQueueTests {
     @Test("a refused native steer keeps the follow-up queued with the reason, unrecorded, and frees the next one",
           .timeLimit(.minutes(1)), arguments: RefusedPrompt.allCases)
     func refusedSteer(refused: RefusedPrompt) async throws {
-        let (runner, mock, session, _) = try mkRunner()
+        let (runner, mock, session, store) = try mkRunner()
+        // `.oversized` keeps tens of MiB in the store; don't leave it in the temporary directory.
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: store.path + suffix) } }
         defer { runner.stop() }
         session.supportsSteering = true
         session.transcript.streamingState = .streaming
@@ -4707,6 +4710,39 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.first?.draft == draft)
         #expect(session.queue.first?.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
         #expect(!mock.sent.contains { ["session/cancel", "session/prompt", "_session/steering"].contains($0.method) })
+    }
+
+    @Test("a refused force-send of an uncertain item keeps what reconciliation matches on, and says why elsewhere")
+    func refusedForceSendKeepsUncertainMessage() async throws {
+        let (runner, _, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: RefusedPrompt.pdfOnCodex.prepare(session))
+        session.queue[0].markDeliveryUncertain()
+        let id = try #require(session.queue.first?.id)
+        runner.forceSendQueuedItem(id: id)
+        #expect(session.queue.first?.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        #expect(session.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+    }
+
+    @Test("a refused send leaves the Retry of an earlier failed turn in place", .timeLimit(.minutes(1)))
+    func refusedSendKeepsEarlierRetry() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.failedTurnResponse()
+        mock.script(method: "session/prompt") { _ in body }
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: [.text("fails")], queuedItemId: nil, onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        let retryable = try #require(session.retryableFailure)
+        let refused = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: RefusedPrompt.pdfOnCodex.prepare(session), queuedItemId: nil,
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(!refused)
+        #expect(session.retryableFailure == retryable)
     }
 
     @Test("an oversized recovery context is refused before it claims the session")
