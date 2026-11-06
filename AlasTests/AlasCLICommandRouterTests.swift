@@ -1366,6 +1366,30 @@ struct AlasCLICommandRouterTests {
         ("workspace_list", .workspace(.list)),
     ]
 
+    /// A store that cannot say whose session this is proves nothing, and these
+    /// tools are the ones a paired Mac's child may never reach.
+    @Test func routerRefusesARemovedToolWhenItCannotTellWhoIsAsking() async throws {
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        // A directory, which no store can open.
+        let unreadable = FileManager.default.temporaryDirectory.appendingPathComponent("router-peer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: unreadable) }
+        let router = AlasCLICommandRouter(
+            host: AlasHost.routerFixture(
+                [worktree], sessionWorktree: { _ in worktree.id },
+                orchestrationPersistence: ACPOrchestrationPersistence(path: unreadable.path)
+            ),
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            workspaceCommand: { _, _ in .ok },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "anyone", cwd: worktree.path.path, command: .workspace(.list)))
+
+        #expect(response == .error("workspace_list is not available: Alas could not check whether this session was delegated from another machine."))
+    }
+
     @Test(arguments: peerChildRemovedCommands.map(\.tool))
     func routerRefusesRemovedToolsFromPeerChild(tool: String) async throws {
         let command = try #require(Self.peerChildRemovedCommands.first { $0.tool == tool }).command

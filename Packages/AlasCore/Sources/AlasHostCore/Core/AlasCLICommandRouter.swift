@@ -136,9 +136,14 @@ public struct AlasCLICommandRouter {
         let callers = host.callers
         // Attributed to the session only once the host knows it.
         let caller: HostCaller = request.sessionId.flatMap { id in callers.owner(ofSession: id).map { _ in .session(id: id) } } ?? .cli
-        if let sessionId = request.sessionId, let removed = Self.peerChildRemovedTool(request.command),
-           await callers.isPeerChild(sessionId) {
-            return .error("\(removed) is not available to a session delegated from another machine.")
+        if let sessionId = request.sessionId, let removed = Self.peerChildRemovedTool(request.command) {
+            do {
+                if try await callers.isPeerChild(sessionId) {
+                    return .error("\(removed) is not available to a session delegated from another machine.")
+                }
+            } catch {
+                return .error("\(removed) is not available: Alas could not check whether this session was delegated from another machine.")
+            }
         }
         switch request.command {
         case .preview(let command):

@@ -28,9 +28,10 @@ public struct CallersAPI {
     }
 
     /// Whether session `id` is a child delegated from another Mac, whose
-    /// parent is a `peer:` sentinel.
-    public func isPeerChild(_ id: String) async -> Bool {
-        guard let record = try? await core.orchestrationPersistence.parent(childSessionId: id) else { return false }
+    /// parent is a `peer:` sentinel. Throws when the store cannot say, which
+    /// must not pass for "no".
+    public func isPeerChild(_ id: String) async throws -> Bool {
+        guard let record = try await core.orchestrationPersistence.parent(childSessionId: id) else { return false }
         return ACPPeerParent.serverId(from: record.parentSessionId) != nil
     }
 
