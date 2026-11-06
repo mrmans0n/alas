@@ -31,7 +31,9 @@ struct ShellEnvResolverTests {
     /// of its own, which has no terminal.
     @Test func theShellRunsInASessionOfItsOwn() async throws {
         let shell = try fakeShell("""
-        if /usr/bin/python3 -c "import os,sys; sys.exit(0 if os.getsid($$) == $$ else 1)"; then where=/own-session; else where=/callers-session; fi
+        # A session leader leads its process group too. Not python3: it is an Xcode
+        # shim that can outlast the resolver's timeouts on a loaded machine.
+        if [ "$(/bin/ps -o pgid= -p $$ | tr -d ' ')" = "$$" ]; then where=/own-session; else where=/callers-session; fi
         printf '%s' "___ALAS_PATH___${where}___ALAS_END___"
         """)
         defer { try? FileManager.default.removeItem(at: shell) }
