@@ -15,10 +15,10 @@ struct HostSSHSetupTests {
             self.reply = reply
         }
 
-        func setup() -> HostSSHSetup {
+        func setup(bundle: URL = URL(fileURLWithPath: "/nonexistent")) -> HostSSHSetup {
             HostSSHSetup(
                 destination: "me@mini",
-                bundleResources: URL(fileURLWithPath: "/nonexistent"),
+                bundleResources: bundle,
                 run: { command, _ in
                     let index = self.commands.withLock {
                         $0.append(command)
@@ -65,10 +65,18 @@ struct HostSSHSetupTests {
     static let appHost = "/Applications/Alas.app/Contents/Resources/alas-host/alas-host"
     static let copiedHost = "/Users/me/.alas/host/alas-host/alas-host"
 
+    static let brew = "/opt/homebrew/bin/brew"
+    static let brewHost = "/opt/homebrew/bin/alas-host"
+
     @Test(arguments: [
         (HostSSHProbe(os: "Linux", arch: "x86_64"), "unsupported"),
-        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew", cask: "alas"), "brewUpgrade(alas)"),
-        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew"), "brewInstall"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas-host", hostPath: brewHost), "brewUpgrade(alas-host)"),
+        // The full app is the user's: setting up a host must not upgrade it.
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas", hostPath: brewHost), "existing"),
+        // A cask record with no host behind it is stale, whichever cask it names.
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas"), "brewInstall"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas-host"), "brewInstall"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew), "brewInstall"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: appHost), "existing"),
         // The web client, zmx and CLI change without the host binary: always copied.
         (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost), "copy"),
@@ -81,8 +89,8 @@ struct HostSSHSetupTests {
             break
         case let (.unsupported(reason), "unsupported Homebrew"):
             #expect(reason.contains("Homebrew"))
-        case let (.brewUpgrade(cask), "brewUpgrade(alas)"):
-            #expect(cask == "alas")
+        case let (.brewUpgrade(cask), "brewUpgrade(alas-host)"):
+            #expect(cask == "alas-host")
         case let (.existing(path), "existing"):
             #expect(path == probe.hostPath)
         default:
@@ -102,6 +110,69 @@ struct HostSSHSetupTests {
             timeout: 10
         )
         #expect((result.exitCode == 0) == found)
+    }
+
+    @Test func homebrewRunsWithoutItsCleanup() async throws {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "\(Self.brewHost)\n", stderr: "") }
+        let probe = HostSSHProbe(os: "Darwin", arch: "arm64", brew: Self.brew)
+
+        #expect(try await remote.setup().install(probe, progress: { _ in }) == Self.brewHost)
+
+        let command = try #require(remote.commands.withLock { $0.first })
+        #expect(command.contains("HOMEBREW_NO_INSTALL_CLEANUP=1"))
+        #expect(command.contains("install --cask mrmans0n/tap/alas-host"))
+    }
+
+    @Test func aFailedHomebrewInstallFallsBackToCopyingTheHost() async throws {
+        let bundle = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let cliArch = HostSSHSetup.bundleArch == "arm64" ? "macos-aarch64" : "macos-x86_64"
+        for path in ["alas-host/alas-host", "RemoteWeb/index.html", "zmx/zmx", "alas-cli/\(cliArch)/alas"] {
+            let file = bundle.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: file)
+        }
+        let copied = "/Users/me/.alas/host/alas-host/alas-host"
+        let remote = FakeRemote { command, _ in
+            command.contains("brew ")
+                ? ProcessResult(exitCode: 1, stdout: "", stderr: "Error: broken")
+                : ProcessResult(exitCode: 0, stdout: "\(copied)\n", stderr: "")
+        }
+        let probe = HostSSHProbe(os: "Darwin", arch: HostSSHSetup.bundleArch, brew: Self.brew)
+        let notes = Mutex<[String]>([])
+
+        let host = try await remote.setup(bundle: bundle).install(probe, progress: { note in notes.withLock { $0.append(note) } })
+
+        #expect(host == copied)
+        #expect(notes.withLock { $0.count } == 1)
+    }
+
+    @Test(arguments: [
+        // A host is already installed: a failed upgrade leaves it alone.
+        HostSSHProbe(os: "Darwin", arch: HostSSHSetup.bundleArch, brew: brew, cask: "alas-host", hostPath: brewHost),
+        // This app's host can't run there, so copying can't help.
+        HostSSHProbe(os: "Darwin", arch: "other", brew: brew),
+    ])
+    func aHomebrewFailureThatCopyingCannotHelpIsReported(probe: HostSSHProbe) async {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "Error: broken") }
+
+        await #expect(throws: HostSSHSetup.Failure(step: "Install", message: "Error: broken", connectionFailed: false)) {
+            try await remote.setup().install(probe, progress: { _ in })
+        }
+    }
+
+    @Test func aLongFailureKeepsItsEndsAndHomebrewsErrorLines() {
+        let long = (1...40).map { "line \($0)" }.joined(separator: "\n")
+        let summary = HostSSHSetup.summarizedOutput(long)
+        #expect(summary.hasPrefix("line 1\n"))
+        #expect(summary.hasSuffix("\nline 40"))
+        #expect(summary.contains("25 lines omitted"))
+        #expect(!summary.contains("line 20\n"))
+
+        let cleanup = (["==> Upgrading", "Error: mrmans0n/tap/alas: gone"] + (1...40).map { "Removing: \($0)" }).joined(separator: "\n")
+        #expect(HostSSHSetup.summarizedOutput(cleanup) == "Error: mrmans0n/tap/alas: gone")
+
+        #expect(HostSSHSetup.summarizedOutput("short\nfailure") == "short\nfailure")
     }
 
     @Test func pairingLinkIsTheSecondLine() {
