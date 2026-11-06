@@ -247,10 +247,12 @@ public struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
     public let failure: String?
     public let createdAt: Int64
     public var role: String? = nil
+    /// The paired Mac running the child. Nil for a session on this Mac.
+    public var peer: String? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case sessionId = "session_id"
-        case relationship, role
+        case relationship, role, peer
         case agentId = "agent_id"
         case worktreeId = "worktree_id"
         case state
@@ -258,7 +260,8 @@ public struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
         case createdAt = "created_at"
     }
 
-    public init(sessionId: String, relationship: String?, agentId: String, worktreeId: String, state: String, failure: String?, createdAt: Int64, role: String? = nil) {
+    public init(sessionId: String, relationship: String?, agentId: String, worktreeId: String, state: String, failure: String?, createdAt: Int64, role: String? = nil, peer: String? = nil) {
+        self.peer = peer
         self.sessionId = sessionId
         self.relationship = relationship
         self.agentId = agentId
@@ -282,14 +285,21 @@ public struct ACPOrchestrationNewResponse: Codable, Equatable, Sendable {
     public let sessionId: String
     public let state: String
     public let worktreeId: String?
+    /// The paired Mac running the child. Nil for a session on this Mac.
+    public var peer: String? = nil
+    /// What the caller should know about a state it cannot act on yet.
+    public var note: String? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case sessionId = "session_id"
         case state
         case worktreeId = "worktree_id"
+        case peer, note
     }
 
-    public init(sessionId: String, state: String, worktreeId: String?) {
+    public init(sessionId: String, state: String, worktreeId: String?, peer: String? = nil, note: String? = nil) {
+        self.peer = peer
+        self.note = note
         self.sessionId = sessionId
         self.state = state
         self.worktreeId = worktreeId
@@ -616,6 +626,9 @@ public struct ACPOrchestrationWaitResponse: Codable, Equatable, Sendable {
         /// The `state` of an id a paired Mac asked about that holds no child of
         /// its own here: it never existed, was removed, or is another's.
         public static let goneState = "gone"
+        /// The `state` of a child on a paired Mac that cannot be reached now. It
+        /// reads as settled so a parent is not stuck; the child may still run.
+        public static let peerUnreachableState = "peer_unreachable"
 
         public let sessionId: String
         public let state: String

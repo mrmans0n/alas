@@ -647,7 +647,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peerWorktreeBase: Result<String, ACPSessionOrchestrationCoordinator.WorktreeCreationError> = .success("origin/main"),
         onPeerWorktree: @escaping (_ base: String) -> Void = { _ in },
         peers: (any ACPDelegationPeers)? = nil,
-        originRemote: String? = "github.com/o/r"
+        originRemote: String? = "github.com/o/r",
+        nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+        pause: @escaping (Duration) async -> Void = { _ in await Task.yield() },
+        makeID: @escaping () -> String = { "child" }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -677,8 +680,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         let claude = ACPOrchestrationAgent(id: "claude", isEnabled: true, isACPCapable: true)
         let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
-            persistence: persistence, instanceId: "instance", now: { 100 },
-            waitForChildResultBatch: waitForChildResultBatch, makeID: { "child" },
+            persistence: persistence, instanceId: "instance", now: { 100 }, nowMillis: nowMillis,
+            waitForChildResultBatch: waitForChildResultBatch, makeID: makeID,
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, selector in
                 // Resolved as the host resolves it.
@@ -698,6 +701,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             newWorktreeDestination: { _, branch in root.appendingPathComponent(branch) },
             createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
             autoRunDefault: { autoRunDefault }, notifyChanged: notifyChanged,
+            pause: pause,
             admitChild: admitChild,
             project: { $0 == project?.id ? project : nil },
             createPeerWorktree: { _, _, base, _ in
@@ -2257,12 +2261,35 @@ struct ACPSessionOrchestrationCoordinatorTests {
         var peers: [ACPDelegationPeerInfo]
         var discovery: Result<ACPPeerDiscovery, ACPPeerError>
         private(set) var discoverCalls: [(serverId: String, repository: String?)] = []
+        /// Answers `start` in order; once used up, the child started.
+        var startResults: [Result<ACPPeerStartReply, ACPPeerError>] = []
+        var onStart: ((ACPPeerChildStartRequest) async -> Void)?
+        private(set) var startCalls: [ACPPeerChildStartRequest] = []
+        var sendResult: Result<Void, ACPPeerError> = .success(())
+        private(set) var sendCalls: [(sessionID: String, prompt: String)] = []
+        var readResult: Result<Data, ACPPeerError> = .success(Data("{\"from\":\"peer\"}".utf8))
+        private(set) var readCalls: [(sessionID: String, offset: Int?, limit: Int?, maxChars: Int?)] = []
+        var interruptResult: Result<Bool, ACPPeerError> = .success(true)
+        private(set) var interruptCalls: [String] = []
+        /// Answers `status`. Suspended on `statusGate` first while one is set.
+        var statusAnswer: (_ serverId: String, _ ids: [String]) -> Result<Data, ACPPeerError> = { _, ids in
+            FakePeers.status(ids, state: "idle", settled: true)
+        }
+        var statusGate: AsyncStream<Void>?
+        private(set) var statusCalls: [(serverId: String, ids: [String])] = []
         var onOutboxChanged: (@MainActor (String) -> Void)?
         var onAvailabilityChanged: (@MainActor (String) -> Void)?
 
         init(peers: [ACPDelegationPeerInfo], discovery: Result<ACPPeerDiscovery, ACPPeerError> = .success(FakePeers.offer())) {
             self.peers = peers
             self.discovery = discovery
+        }
+
+        static func status(_ ids: [String], state: String, settled: Bool) -> Result<Data, ACPPeerError> {
+            .success(try! JSONEncoder().encode(ACPOrchestrationWaitResponse(
+                sessions: ids.map { .init(sessionId: $0, state: state, settled: settled, lastAgentText: "text", failure: nil) },
+                timedOut: !settled
+            )))
         }
 
         static func offer(projects: [String] = ["alas"], access: String = "autoRun") -> ACPPeerDiscovery {
@@ -2286,12 +2313,51 @@ struct ACPSessionOrchestrationCoordinatorTests {
             discoverCalls.append((serverId, repository))
             return discovery
         }
-        func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError> { .failure(.notFound) }
-        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> { .failure(.notFound) }
-        func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
-        func status(serverId: String, sessionIDs: [String]) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
-        func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> { .failure(.notFound) }
+        func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError> {
+            startCalls.append(start)
+            await onStart?(start)
+            guard !startResults.isEmpty else { return .success(.init(sessionID: start.childID, state: "starting")) }
+            return startResults.removeFirst()
+        }
+        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> {
+            sendCalls.append((sessionID, prompt))
+            return sendResult
+        }
+        func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> {
+            readCalls.append((sessionID, offset, limit, maxChars))
+            return readResult
+        }
+        func status(serverId: String, sessionIDs: [String]) async -> Result<Data, ACPPeerError> {
+            statusCalls.append((serverId, sessionIDs))
+            if let statusGate { for await _ in statusGate { break } }
+            return statusAnswer(serverId, sessionIDs)
+        }
+        func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> {
+            interruptCalls.append(sessionID)
+            return interruptResult
+        }
         func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> { .failure(.notFound) }
+    }
+
+    /// Moves on every pause, so a wait that never settles still ends.
+    private final class TestClock {
+        var millis: Int64 = 1_000
+        var step: Int64 = 250
+    }
+
+    private func insertRemoteChild(
+        _ persistence: ACPOrchestrationPersistence, id: String = "child", parent: String = "parent",
+        server: String = "srv-1", phase: ACPDelegationPhase = .ready
+    ) async throws {
+        try await persistence.insert(ACPDelegationRecord(
+            childSessionId: id, parentSessionId: parent, projectId: "project", parentWorktreeId: "worktree",
+            agentId: "codex", worktreeRequest: .current(worktreeId: "worktree"), phase: phase,
+            createdAt: 1, updatedAt: 1, peerServerId: server
+        ))
+    }
+
+    private func phase(_ persistence: ACPOrchestrationPersistence, _ id: String = "child") async throws -> ACPDelegationPhase? {
+        try await persistence.delegation(childSessionId: id)?.phase
     }
 
     private static func peer(
@@ -2304,7 +2370,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     private func peerCreate(
         _ fixture: (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager),
-        peer: String = "mini", project: String? = nil, worktree: ACPDelegatedSessionWorktreeTarget = .new(branch: "fix", base: nil)
+        peer: String = "mini", project: String? = nil, worktree: ACPDelegatedSessionWorktreeTarget = .new(branch: "fix", base: "main")
     ) async -> AlasCLIResponse {
         await fixture.coordinator.create(
             origin: Self.peerOrigin,
@@ -2409,13 +2475,15 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let peers = FakePeers(
             peers: [Self.peer("mini", id: "srv-1")], discovery: .success(FakePeers.offer(projects: ["alas", "alas-fork"]))
         )
-        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers, makeID: { UUID().uuidString })
 
         let message = errorMessage(await peerCreate(fixture))
         #expect(message.contains("alas") && message.contains("alas-fork") && message.contains("--project"))
 
-        #expect(errorMessage(await peerCreate(fixture, project: "id-alas-fork")).contains("not available yet"))
-        #expect(errorMessage(await peerCreate(fixture, project: "alas")).contains("not available yet"))
+        _ = await peerCreate(fixture, project: "id-alas-fork")
+        #expect(peers.startCalls.last?.target == .newWorktree(projectID: "id-alas-fork", branch: "fix", base: "main", expectedBaseSHA: nil))
+        _ = await peerCreate(fixture, project: "alas")
+        #expect(peers.startCalls.last?.target == .newWorktree(projectID: "id-alas", branch: "fix", base: "main", expectedBaseSHA: nil))
         #expect(errorMessage(await peerCreate(fixture, project: "other")).contains("alas-fork"))
     }
 
@@ -2425,7 +2493,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers, originRemote: nil)
 
         #expect(errorMessage(await peerCreate(fixture)).contains("--project"))
-        #expect(errorMessage(await peerCreate(fixture, project: "alas")).contains("not available yet"))
+        _ = await peerCreate(fixture, project: "alas")
+        #expect(peers.startCalls.count == 1)
         #expect(peers.discoverCalls.map(\.repository) == [nil, nil])
     }
 
@@ -2434,7 +2503,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
 
-        #expect(errorMessage(await peerCreate(fixture, worktree: .existing(worktreeId: "main"))).contains("not available yet"))
+        _ = await peerCreate(fixture, worktree: .existing(worktreeId: "main"))
+        #expect(peers.startCalls.last?.target == .worktree(projectID: "id-alas", path: "/Users/m/alas"))
         let missing = errorMessage(await peerCreate(fixture, worktree: .existing(worktreeId: "old")))
         #expect(missing.contains("old") && missing.contains("main"))
 
@@ -2463,6 +2533,412 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(listedForPeer.contains("cannot create child sessions"))
         #expect(!listed.canDelegate && listed.peers == nil)
         #expect(peers.discoverCalls.isEmpty)
+    }
+
+    // MARK: Acting on a child on a peer
+
+    /// A fixture whose parent cannot take a delivery, so a wake stays readable
+    /// in its inbox.
+    private func remoteFixture(
+        peers: FakePeers, clock: TestClock = TestClock(), onPause: @escaping () -> Void = {}
+    ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
+        try makeModelSelectionFixture(
+            client: makeSelectionClient(), setupEvaluator: { _ in .missing(reason: "Stays local") },
+            peers: peers, nowMillis: { clock.millis }, pause: { _ in
+                clock.millis += clock.step
+                onPause()
+                await Task.yield()
+            }
+        )
+    }
+
+    private func wait(
+        _ fixture: (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager),
+        _ ids: [String] = ["child"], timeoutMillis: Int = 1_000
+    ) async throws -> ACPOrchestrationWaitResponse {
+        try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.wait(
+            origin: Self.peerOrigin, request: .init(targetSessionIds: ids, timeoutMillis: timeoutMillis)
+        ))
+    }
+
+    /// The prompt goes as the user wrote it, since the peer adds the role
+    /// itself; auto-run is the parent's, and everything else is the peer's to
+    /// check.
+    @Test func createWritesRecordBeforeSending() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        fixture.manager.liveSession(for: "parent")?.autoRunEnabled = true
+        let persistence = fixture.persistence
+        final class Seen { var record: ACPDelegationRecord? }
+        let seen = Seen()
+        peers.onStart = { start in seen.record = try? await persistence.delegation(childSessionId: start.childID) }
+
+        let response = try decoded(ACPOrchestrationNewResponse.self, await fixture.coordinator.create(
+            origin: Self.peerOrigin,
+            request: .init(
+                prompt: "Do it", agentId: "codex", worktree: .new(branch: "fix", base: "main"),
+                modelSelection: .init(model: "m", reasoning: "high"), role: "reviewer", peer: "mini"
+            )
+        ))
+
+        #expect(peers.startCalls == [ACPPeerChildStartRequest(
+            childID: "child", target: .newWorktree(projectID: "id-alas", branch: "fix", base: "main", expectedBaseSHA: nil),
+            agentID: "codex", modelID: "m", reasoning: "high", role: "reviewer", autoRun: true, prompt: "Do it"
+        )])
+        let written = try #require(seen.record)
+        #expect(written.phase == .starting && written.peerServerId == "srv-1" && written.childWorktreeId == nil)
+        #expect(written.parentSessionId == "parent" && written.projectId == "project")
+        #expect(written.worktreeRequest == .current(worktreeId: "worktree"))
+        #expect(try await phase(persistence) == .ready)
+        #expect(response.state == "starting" && response.peer == "mini" && response.worktreeId == nil)
+    }
+
+    @Test func newWorktreeWithoutABaseAsksForOne() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+
+        let message = errorMessage(await peerCreate(fixture, worktree: .new(branch: "fix", base: nil)))
+
+        #expect(message.contains("--base"))
+        #expect(peers.startCalls.isEmpty)
+        #expect(try await phase(fixture.persistence) == nil)
+    }
+
+    /// The caller hears the reason in the tool's answer, so nothing wakes it.
+    @Test(arguments: [
+        ACPPeerError.refused("Agent access is off."), .outdated(peer: "mini"), .notFound, .revoked(peer: "mini"),
+    ])
+    func refusedStartFailsRecordAndReturnsReason(error: ACPPeerError) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(error)]
+        let fixture = try remoteFixture(peers: peers)
+
+        let message = errorMessage(await peerCreate(fixture))
+
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed && record.failureMessage == message)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+        #expect(peers.startCalls.count == 1)
+    }
+
+    @Test func lostStartAnswerIsRetriedOnceWithSameID() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini"))]
+        let fixture = try remoteFixture(peers: peers)
+
+        let response = try decoded(ACPOrchestrationNewResponse.self, await peerCreate(fixture))
+
+        #expect(response.state == "starting" && response.peer == "mini" && response.note?.contains("retr") == true)
+        #expect(try await phase(fixture.persistence) == .starting)
+
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        #expect(peers.startCalls.count == 2 && peers.startCalls[0] == peers.startCalls[1])
+        #expect(try await phase(fixture.persistence) == .ready)
+    }
+
+    @Test(arguments: [
+        ACPPeerError.unreachable(peer: "mini"), .refused("Agent access is off."),
+    ])
+    func secondFailedStartFailsChildWithAWake(second: ACPPeerError) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini")), .failure(second)]
+        let fixture = try remoteFixture(peers: peers)
+        _ = await peerCreate(fixture)
+
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        #expect(try await phase(fixture.persistence) == .failed)
+        let wake = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(wake.map(\.id) == ["outcome-child-failed"])
+        #expect(wake.first?.prompt.contains("on mini") == true)
+    }
+
+    /// An availability signal also fires as a peer goes away.
+    @Test func retryDoesNotSpendTheAttemptWhileThePeerIsDown() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini"))]
+        let fixture = try remoteFixture(peers: peers)
+        _ = await peerCreate(fixture)
+        peers.peers = [Self.peer("mini", id: "srv-1", state: .offline)]
+
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        #expect(peers.startCalls.count == 1)
+        #expect(try await phase(fixture.persistence) == .starting)
+    }
+
+    /// A signal arriving during the first attempt must not spend the retry,
+    /// or send a second copy of a start still in flight.
+    @Test func retryLeavesAStartStillInFlightAlone() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let coordinator = fixture.coordinator
+        peers.onStart = { _ in await coordinator.retryPeerStarts(serverId: "srv-1") }
+
+        _ = await peerCreate(fixture)
+
+        #expect(peers.startCalls.count == 1)
+        #expect(try await phase(fixture.persistence) == .ready)
+    }
+
+    /// A restart forgets where the child was to run, so it cannot be sent
+    /// again. The peer says whether the start ever arrived.
+    @Test(arguments: [
+        (state: "running", expected: ACPDelegationPhase.ready, wakes: false),
+        (state: ACPOrchestrationWaitResponse.Session.goneState, expected: .failed, wakes: true),
+    ])
+    func startCutOffByARestartAsksThePeer(state: String, expected: ACPDelegationPhase, wakes: Bool) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: state, settled: state != "running") }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, phase: .starting)
+
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+
+        #expect(peers.startCalls.isEmpty)
+        #expect(try await phase(fixture.persistence) == expected)
+        #expect(try await !fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty == wakes)
+    }
+
+    @Test func sendReadInterruptGoToThePeer() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+
+        let sent = try decoded(ACPOrchestrationSendResponse.self, await fixture.coordinator.send(
+            origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")
+        ))
+        let read = await fixture.coordinator.read(
+            origin: Self.peerOrigin, request: .init(targetSessionId: "child", offset: 2, limit: 3, maxChars: 4)
+        )
+        let interrupted = try decoded(ACPOrchestrationInterruptResponse.self, await fixture.coordinator.interrupt(
+            origin: Self.peerOrigin, targetSessionId: "child"
+        ))
+
+        #expect(sent.state == "queued")
+        #expect(peers.sendCalls.map(\.prompt) == ["More"])
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
+        guard case .text(let lines) = read else { throw TestFailure("expected text, got \(read)") }
+        #expect(lines == ["{\"from\":\"peer\"}"])
+        let readCall = try #require(peers.readCalls.first)
+        #expect(readCall.offset == 2 && readCall.limit == 3 && readCall.maxChars == 4)
+        #expect(interrupted.cancelRequested && peers.interruptCalls == ["child"])
+    }
+
+    @Test func actionsOnAPeerThatCannotBeReachedNameIt() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.sendResult = .failure(.unreachable(peer: "mini"))
+        peers.readResult = .failure(.unreachable(peer: "mini"))
+        peers.interruptResult = .failure(.unreachable(peer: "mini"))
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+
+        for response in [
+            await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")),
+            await fixture.coordinator.read(origin: Self.peerOrigin, request: .init(targetSessionId: "child")),
+            await fixture.coordinator.interrupt(origin: Self.peerOrigin, targetSessionId: "child"),
+        ] {
+            #expect(errorMessage(response).contains("mini"))
+        }
+        #expect(try await phase(fixture.persistence) == .ready)
+    }
+
+    /// A start that has not reached the peer yet has nothing there to find,
+    /// which proves nothing about the child.
+    @Test func actionsBeforeTheChildReachedThePeerSaySo() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.sendResult = .failure(.notFound)
+        peers.interruptResult = .failure(.notFound)
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, phase: .starting)
+
+        let sent = errorMessage(await fixture.coordinator.send(
+            origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")
+        ))
+        let interrupted = try decoded(ACPOrchestrationInterruptResponse.self, await fixture.coordinator.interrupt(
+            origin: Self.peerOrigin, targetSessionId: "child"
+        ))
+
+        #expect(sent.contains("not started"))
+        #expect(!interrupted.cancelRequested)
+        #expect(try await phase(fixture.persistence) == .starting)
+    }
+
+    @Test func failedChildTakesNoMessage() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, phase: .failed)
+
+        let message = errorMessage(await fixture.coordinator.send(
+            origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")
+        ))
+
+        #expect(message.contains("not available"))
+        #expect(peers.sendCalls.isEmpty)
+    }
+
+    /// Asks no peer: a row's stored phase is all `session_list` reports.
+    @Test func listShowsPeerName() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        try await insertRemoteChild(fixture.persistence, id: "forgotten", server: "srv-9", phase: .starting)
+
+        let listed = try decoded(ACPOrchestrationListResponse.self, await fixture.coordinator.list(origin: Self.peerOrigin))
+
+        let child = try #require(listed.sessions.first { $0.sessionId == "child" })
+        #expect(child.peer == "mini" && child.state == "idle" && child.worktreeId.isEmpty && child.relationship == "child")
+        let forgotten = try #require(listed.sessions.first { $0.sessionId == "forgotten" })
+        #expect(forgotten.peer == "srv-9" && forgotten.state == "starting")
+        #expect(listed.sessions.first { $0.sessionId == "parent" }?.peer == nil)
+        #expect(peers.statusCalls.isEmpty)
+    }
+
+    @Test func waitReportsChildStateFromStatus() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "running", settled: false) }
+        let clock = TestClock()
+        // Too slow to reach the polling interval: only the signal can cause a
+        // new question.
+        clock.step = 1
+        let fixture = try remoteFixture(peers: peers, clock: clock, onPause: {
+            peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
+            peers.onOutboxChanged?("srv-1")
+        })
+        try await insertRemoteChild(fixture.persistence)
+
+        let answer = try await wait(fixture)
+
+        #expect(peers.statusCalls.map(\.ids) == [["child"], ["child"]])
+        let session = try #require(answer.sessions.first)
+        #expect(session.state == "idle" && session.settled && session.lastAgentText == "text" && !answer.timedOut)
+    }
+
+    @Test func waitStopsAtItsDeadline() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "running", settled: false) }
+        let clock = TestClock()
+        let fixture = try remoteFixture(peers: peers, clock: clock)
+        try await insertRemoteChild(fixture.persistence)
+
+        let answer = try await wait(fixture, timeoutMillis: 5_000)
+
+        #expect(answer.timedOut && answer.sessions.first?.state == "running" && answer.sessions.first?.settled == false)
+        #expect(clock.millis == 6_000)
+        // Asked on the interval, not on every look at the clock.
+        #expect((2...3).contains(peers.statusCalls.count))
+    }
+
+    /// A peer's answer can take a minute to fail, far past any wait's timeout
+    /// and past the CLI's read timeout, and the next slice of the same wait
+    /// shares the question rather than stacking up another.
+    @Test(.timeLimit(.minutes(1))) func waitDoesNotBlockOnAPeerThatDoesNotAnswer() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        peers.statusGate = gate
+        let clock = TestClock()
+        let fixture = try remoteFixture(peers: peers, clock: clock)
+        try await insertRemoteChild(fixture.persistence)
+
+        let first = try await wait(fixture)
+        let second = try await wait(fixture)
+
+        #expect(first.timedOut && second.timedOut && first.sessions.first?.settled == false)
+        #expect(peers.statusCalls.count == 1)
+        release.finish()
+    }
+
+    @Test(arguments: [
+        (error: ACPPeerError.unreachable(peer: "mini"), state: "peer_unreachable", settled: true),
+        (error: .outdated(peer: "mini"), state: "peer_unreachable", settled: true),
+        (error: .revoked(peer: "mini"), state: "peer_unreachable", settled: true),
+        // A refusal says nothing about the child: it is not gone.
+        (error: .refused("Busy."), state: "idle", settled: false),
+        (error: .notFound, state: "idle", settled: false),
+    ])
+    func waitOnAFailedStatus(error: ACPPeerError, state: String, settled: Bool) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, _ in .failure(error) }
+        let clock = TestClock()
+        let fixture = try remoteFixture(peers: peers, clock: clock)
+        try await insertRemoteChild(fixture.persistence)
+
+        let answer = try await wait(fixture)
+
+        #expect(answer.sessions.first?.state == state && answer.sessions.first?.settled == settled)
+        #expect(answer.timedOut != settled)
+        #expect(settled ? clock.millis < 2_000 : clock.millis == 2_000)
+        #expect(try await phase(fixture.persistence) == .ready)
+    }
+
+    /// `gone` is reported and nothing else happens: failing the child is the
+    /// outage logic's call. A child still starting has not reached the peer,
+    /// so there it means nothing yet.
+    @Test func goneIsSettledOnlyForAChildThatStarted() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "gone", settled: true) }
+        let clock = TestClock()
+        let fixture = try remoteFixture(peers: peers, clock: clock)
+        try await insertRemoteChild(fixture.persistence)
+        try await insertRemoteChild(fixture.persistence, id: "young", phase: .starting)
+
+        let gone = try await wait(fixture, ["child"])
+        let young = try await wait(fixture, ["young"])
+
+        #expect(gone.sessions.first?.state == "gone" && gone.sessions.first?.settled == true && !gone.timedOut)
+        #expect(try await phase(fixture.persistence) == .ready)
+        #expect(young.sessions.first?.state == "starting" && young.sessions.first?.settled == false && young.timedOut)
+    }
+
+    /// One answer in the caller's order, each peer asked for its own children
+    /// in batches it accepts; a child already failed here costs no question.
+    @Test func waitAnswersForLocalAndPeerChildrenTogether() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1"), Self.peer("studio", id: "srv-2")])
+        peers.statusAnswer = { serverId, ids in
+            serverId == "srv-1" ? FakePeers.status(ids, state: "idle", settled: true) : .failure(.unreachable(peer: "studio"))
+        }
+        let fixture = try remoteFixture(peers: peers)
+        let many = (0..<(ACPDelegatedSessionWaitRequest.maxSessions + 1)).map { "many-\($0)" }
+        for id in many { try await insertRemoteChild(fixture.persistence, id: id) }
+        try await insertRemoteChild(fixture.persistence, id: "away", server: "srv-2")
+        try await insertRemoteChild(fixture.persistence, id: "failed", server: "srv-2", phase: .failed)
+        try await fixture.persistence.insert(.init(
+            childSessionId: "local", parentSessionId: "parent", projectId: "project", parentWorktreeId: "worktree",
+            childWorktreeId: "worktree", agentId: "codex", worktreeRequest: .current(worktreeId: "worktree"),
+            phase: .failed, failureMessage: "Local trouble", createdAt: 1, updatedAt: 1
+        ))
+        let ids = ["local", "away"] + many + ["failed"]
+
+        let answer = try await wait(fixture, ids)
+
+        #expect(answer.sessions.map(\.sessionId) == ids && !answer.timedOut)
+        #expect(answer.sessions.first?.failure == "Local trouble")
+        #expect(answer.sessions[1].state == "peer_unreachable")
+        #expect(answer.sessions[2].state == "idle")
+        #expect(answer.sessions.last?.state == "failed")
+        let toMini = peers.statusCalls.filter { $0.serverId == "srv-1" }.map(\.ids.count).sorted()
+        #expect(toMini == [1, ACPDelegatedSessionWaitRequest.maxSessions])
+        #expect(peers.statusCalls.filter { $0.serverId == "srv-2" }.map(\.ids) == [["away"]])
+    }
+
+    @Test func siblingAndGrandchildRulesStillApply() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, id: "someone-elses", parent: "other")
+        try await insertRemoteChild(fixture.persistence, id: "other-project")
+        let elsewhere = ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "elsewhere", worktreeId: "worktree")
+
+        for (origin, target) in [(Self.peerOrigin, "someone-elses"), (elsewhere, "other-project")] {
+            let coordinator = fixture.coordinator
+            #expect(errorMessage(await coordinator.send(origin: origin, request: .init(targetSessionId: target, prompt: "More"))).contains("direct"))
+            #expect(errorMessage(await coordinator.read(origin: origin, request: .init(targetSessionId: target))).contains("direct"))
+            #expect(errorMessage(await coordinator.wait(origin: origin, request: .init(targetSessionIds: [target]))).contains("direct"))
+            #expect(errorMessage(await coordinator.interrupt(origin: origin, targetSessionId: target)).contains("direct"))
+        }
+        #expect(peers.sendCalls.isEmpty && peers.readCalls.isEmpty && peers.statusCalls.isEmpty && peers.interruptCalls.isEmpty)
     }
 
     private func decodeAgentList(_ response: AlasCLIResponse) throws -> ACPDelegationAgentListResponse {

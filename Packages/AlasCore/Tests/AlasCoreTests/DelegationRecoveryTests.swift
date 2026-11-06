@@ -102,6 +102,28 @@ struct DelegationRecoveryTests {
         #expect(manager.liveSession(for: "local-ready") == nil)
     }
 
+    /// A child running on another Mac has nothing here to restart. Its parent
+    /// is a real session, so the scope that looks for sentinel parents never
+    /// matched it; the scope that takes everything would fail it.
+    @Test(arguments: [DelegationRecoveryScope.all, .peerChildren])
+    func recoverySkipsPeerRows(scope: DelegationRecoveryScope) async throws {
+        let fixture = try PeerHostFixture()
+        defer { fixture.tearDown() }
+        for (id, phase) in [("starting", ACPDelegationPhase.starting), ("ready", .ready)] {
+            try await fixture.persistence.insert(ACPDelegationRecord(
+                childSessionId: id, parentSessionId: "local-parent", projectId: "p",
+                parentWorktreeId: fixture.worktree.id, agentId: "gemini",
+                worktreeRequest: .current(worktreeId: fixture.worktree.id), phase: phase,
+                createdAt: 1, updatedAt: 1, peerServerId: "s1"
+            ))
+        }
+
+        await fixture.core.recoverDelegations(scope)
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "starting")?.phase == .starting)
+        #expect(try await fixture.persistence.delegation(childSessionId: "ready")?.phase == .ready)
+    }
+
     /// Wired as headless boot wires it, a child blocked with no app around
     /// reaches the peer.
     @Test(.timeLimit(.minutes(1))) func blockedChildOfAHeadlessBuiltManagerReachesTheOutbox() async throws {

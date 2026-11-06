@@ -14,7 +14,9 @@ import AlasSessions
     case peerChildren
 
     func covers(_ record: ACPDelegationRecord?) -> Bool {
-        switch self {
+        // A child running on a paired Mac has nothing here to recover.
+        guard record?.peerServerId == nil else { return false }
+        return switch self {
         case .all: true
         case .peerChildren: record.flatMap { ACPPeerParent.serverId(from: $0.parentSessionId) } != nil
         }

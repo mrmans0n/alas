@@ -222,6 +222,13 @@ public final class ACPSessionOrchestrationCoordinator {
     private let environment: Environment
     private var deliveringSessions: Set<String> = []
     private var deliveryRequested: Set<String> = []
+    /// What a peer child's start asked for, until the peer took it. Held in
+    /// memory only: the record has nowhere to keep the target.
+    private var pendingPeerStarts: [String: ACPPeerChildStartRequest] = [:]
+    private var peerStartsInFlight: Set<String> = []
+    private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
+    private var peerOutboxSignals: [String: Int] = [:]
+    private weak var observedPeers: ACPDelegationPeers?
 
     public init(environment: Environment) {
         self.environment = environment
@@ -264,6 +271,16 @@ public final class ACPSessionOrchestrationCoordinator {
                     continue
                 }
                 guard let record = children.first(where: { $0.childSessionId == visible.sessionId }) else { continue }
+                if let serverId = record.peerServerId {
+                    // From the stored phase: a list does not wait on another Mac.
+                    summaries.append(.init(
+                        sessionId: record.childSessionId, relationship: "child", agentId: record.agentId, worktreeId: "",
+                        state: ACPSessionOrchestrationPolicy.publicState(phase: record.phase, runtime: nil, archived: false).rawValue,
+                        failure: record.failureMessage, createdAt: record.createdAt, role: record.role,
+                        peer: peerName(serverId)
+                    ))
+                    continue
+                }
                 summaries.append(await sessionSummary(
                     sessionId: record.childSessionId,
                     relationship: "child",
@@ -479,28 +496,36 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// Checks everything a delegation to a peer needs, then stops: sending
-    /// is not wired up yet.
+    /// Checks everything a delegation to a peer needs, records the child, then
+    /// asks the peer to start it. `task` goes without its role framing, which
+    /// the peer adds. Model and reasoning are the peer's to check.
     private func createOnPeer(
-        _ selector: String, project: String?, worktree target: ACPDelegatedSessionWorktreeTarget,
-        origin: ACPOrchestrationSessionOrigin
+        _ selector: String, request: ACPDelegatedSessionNewRequest, task: String, role: String?,
+        parent: ACPSession, origin: ACPOrchestrationSessionOrigin
     ) async -> AlasCLIResponse {
-        if case .current = target {
+        if case .current = request.worktree {
             return .error("A peer cannot use this worktree. Pass --worktree or --new-worktree to say where the child runs there.")
         }
         guard let current = environment.worktree(origin.worktreeId) else {
             return .error("The current worktree is no longer available.")
         }
+        guard let peers = environment.delegationPeers() else {
+            return .error("No paired Macs. Pair another Mac in Settings to delegate to it.")
+        }
+        let peerInfo: ACPDelegationPeerInfo
+        let target: ACPPeerChildStartRequest.Target
         do {
             let found = try await discoverOnPeer(selector, near: current)
-            let chosen = try chooseProject(project, in: found)
-            switch target {
+            let chosen = try chooseProject(request.project, in: found)
+            peerInfo = found.peer
+            switch request.worktree {
             case .current:
-                break
+                return .error("A peer cannot use this worktree.")
             case .existing(let selector):
                 let worktrees = Self.peerWorktrees(of: chosen, in: found.discovery)
                 switch environment.resolvePeerWorktree(selector, worktrees) {
-                case .matched: break
+                case .matched(let worktree):
+                    target = .worktree(projectID: chosen.id, path: worktree.path.path)
                 case .missing:
                     throw PeerRequestError(
                         message: "\(found.peer.name) has no worktree \"\(selector)\" in \(chosen.name). Its worktrees: \(worktrees.map(\.branch).joined(separator: ", "))."
@@ -508,17 +533,340 @@ public final class ACPSessionOrchestrationCoordinator {
                 case .ambiguous(let labels):
                     throw PeerRequestError(message: "\"\(selector)\" matches several of \(chosen.name)'s worktrees: \(labels.joined(separator: ", ")).")
                 }
-            case .new(let branch, _):
+            case .new(let branch, let base):
                 if case .invalid(let message) = GitNameValidator.validateBranchName(branch) {
                     throw PeerRequestError(message: "invalid branch name: \(message)")
                 }
+                // `discover` does not say what a project's default branch is.
+                guard let base else {
+                    throw PeerRequestError(message: "Pass --base to say what the new worktree on \(found.peer.name) branches from.")
+                }
+                target = .newWorktree(projectID: chosen.id, branch: branch, base: base, expectedBaseSHA: nil)
             }
         } catch let failure as PeerRequestError {
             return .error(failure.message)
         } catch {
             return .error("Could not ask the peer.")
         }
-        return .error("Delegating to another machine is not available yet.")
+
+        let childID = environment.makeID()
+        let requestedAgent = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let start = ACPPeerChildStartRequest(
+            childID: childID, target: target,
+            agentID: requestedAgent?.isEmpty == false ? requestedAgent! : parent.agentId,
+            modelID: request.modelSelection?.model, reasoning: request.modelSelection?.reasoning,
+            role: role, autoRun: parent.autoRunEnabled, prompt: task
+        )
+        let now = environment.now()
+        // Marked before the row exists: an availability signal during the
+        // insert or the request must not spend this child's retry.
+        peerStartsInFlight.insert(childID)
+        defer { peerStartsInFlight.remove(childID) }
+        do {
+            try await environment.persistence.insert(ACPDelegationRecord(
+                childSessionId: childID, parentSessionId: origin.sessionId, projectId: origin.projectId,
+                parentWorktreeId: origin.worktreeId, childWorktreeId: nil, agentId: start.agentID,
+                worktreeRequest: .current(worktreeId: origin.worktreeId), phase: .starting, failureMessage: nil,
+                createdAt: now, updatedAt: now, modelSelection: request.modelSelection, role: role,
+                peerServerId: peerInfo.serverId
+            ))
+        } catch {
+            return .error("Could not persist delegated session.")
+        }
+        environment.notifyChanged()
+
+        switch await peers.start(serverId: peerInfo.serverId, start) {
+        case .success(let reply):
+            await markPeerChildReady(childID, keepingForRetry: start)
+            return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
+        case .failure(.unreachable(let name)):
+            pendingPeerStarts[childID] = start
+            return json(ACPOrchestrationNewResponse(
+                sessionId: childID, state: ACPOrchestrationPublicState.starting.rawValue, worktreeId: nil, peer: peerInfo.name,
+                note: "\(name) did not answer. Alas will retry once when it is back, and tell you if that fails."
+            ))
+        case .failure(let error):
+            // The caller hears this in the answer, so nothing wakes it.
+            let message = Self.message(for: error)
+            try? await environment.persistence.updatePhase(
+                childSessionId: childID, phase: .failed, failureMessage: message, updatedAt: environment.now()
+            )
+            environment.notifyChanged()
+            return .error(message)
+        }
+    }
+
+    /// Moves a child the peer confirmed to `.ready`. If that cannot be stored
+    /// it stays `.starting`, and `start` is kept for a retry, which the peer
+    /// answers with the same child.
+    private func markPeerChildReady(_ childID: String, keepingForRetry start: ACPPeerChildStartRequest?) async {
+        do {
+            try await environment.persistence.updatePhase(
+                childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
+            )
+            pendingPeerStarts[childID] = nil
+        } catch {
+            pendingPeerStarts[childID] = start
+        }
+        environment.notifyChanged()
+    }
+
+    /// Gives each child still starting on the peer `serverId` its one further
+    /// attempt. Failing now wakes the parent, which has moved on since the
+    /// tool call. A peer that is not online gets no request and uses up
+    /// nothing, since availability signals also fire as a peer goes away.
+    public func retryPeerStarts(serverId: String) async {
+        guard let peers = environment.delegationPeers(),
+              peers.peers.first(where: { $0.serverId == serverId })?.state == .online,
+              let children = try? await environment.persistence.peerChildren(peerServerId: serverId)
+        else { return }
+        for child in children where child.phase != .starting { pendingPeerStarts[child.childSessionId] = nil }
+        for child in children where child.phase == .starting {
+            let childID = child.childSessionId
+            guard peerStartsInFlight.insert(childID).inserted else { continue }
+            defer { peerStartsInFlight.remove(childID) }
+            if let start = pendingPeerStarts[childID] {
+                switch await peers.start(serverId: serverId, start) {
+                case .success:
+                    await markPeerChildReady(childID, keepingForRetry: start)
+                case .failure(let error):
+                    pendingPeerStarts[childID] = nil
+                    await markChildFailed(childSessionId: childID, message: Self.message(for: error))
+                }
+            } else {
+                await settleInterruptedPeerStart(childID, serverId: serverId, peers: peers)
+            }
+        }
+    }
+
+    /// A restart lost where the child was to run, so its start cannot be sent
+    /// again. If it reached the peer the child exists there; if the peer has
+    /// no such child, it never will. No clear answer leaves it for next time.
+    private func settleInterruptedPeerStart(_ childID: String, serverId: String, peers: ACPDelegationPeers) async {
+        guard case .success(let data) = await peers.status(serverId: serverId, sessionIDs: [childID]),
+              let reply = try? JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data),
+              let session = reply.sessions.first(where: { $0.sessionId == childID })
+        else { return }
+        if session.state == ACPOrchestrationWaitResponse.Session.goneState {
+            await markChildFailed(
+                childSessionId: childID,
+                message: "Alas restarted before \(peerName(serverId)) started the delegated session."
+            )
+        } else {
+            await markPeerChildReady(childID, keepingForRetry: nil)
+        }
+    }
+
+    private func peerName(_ serverId: String) -> String {
+        environment.delegationPeers()?.peers.first { $0.serverId == serverId }?.name ?? serverId
+    }
+
+    /// The child `sessionId` when it runs on a paired Mac.
+    private func peerChild(_ sessionId: String) async -> ACPDelegationRecord? {
+        guard let record = try? await environment.persistence.delegation(childSessionId: sessionId),
+              record.peerServerId != nil
+        else { return nil }
+        return record
+    }
+
+    /// Why a request about a peer's child failed. A child still starting may
+    /// not have reached the peer, so "no such session" says nothing about it.
+    private func peerFailureMessage(_ error: ACPPeerError, child: ACPDelegationRecord) -> String {
+        let name = peerName(child.peerServerId ?? "")
+        guard case .notFound = error else { return Self.message(for: error) }
+        return child.phase == .starting
+            ? "\(name) has not started session \(child.childSessionId) yet. Try again once it has."
+            : "\(name) has no session \(child.childSessionId)."
+    }
+
+    private func sendToPeer(
+        _ child: ACPDelegationRecord, prompt: String, origin: ACPOrchestrationSessionOrigin
+    ) async -> AlasCLIResponse {
+        guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+            callerSessionId: origin.sessionId, callerProjectId: origin.projectId, target: child
+        ) else {
+            return .error("Messages may only be sent to a direct parent or child session.")
+        }
+        guard ACPSessionOrchestrationPolicy.acceptsMessages(target: child) else {
+            return .error("The target delegated session is not available.")
+        }
+        let serverId = child.peerServerId ?? ""
+        guard let peers = environment.delegationPeers() else {
+            return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
+        }
+        switch await peers.send(serverId: serverId, sessionID: child.childSessionId, prompt: prompt) {
+        case .success:
+            // A status question asked before this could report the child
+            // settled, with this turn still to run.
+            peerStatusRounds[serverId] = nil
+            return json(ACPOrchestrationSendResponse(messageId: environment.makeID(), state: "queued"))
+        case .failure(let error):
+            return .error(peerFailureMessage(error, child: child))
+        }
+    }
+
+    private func readOnPeer(
+        _ child: ACPDelegationRecord, request: ACPDelegatedSessionReadRequest, origin: ACPOrchestrationSessionOrigin
+    ) async -> AlasCLIResponse {
+        guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+            callerSessionId: origin.sessionId, callerProjectId: origin.projectId, target: child
+        ) else {
+            return .error(Self.cannotReadMessage)
+        }
+        let serverId = child.peerServerId ?? ""
+        guard let peers = environment.delegationPeers() else {
+            return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
+        }
+        switch await peers.read(
+            serverId: serverId, sessionID: child.childSessionId,
+            offset: request.offset, limit: request.limit, maxChars: request.maxChars
+        ) {
+        case .success(let data): return .text([String(decoding: data, as: UTF8.self)])
+        case .failure(let error): return .error(peerFailureMessage(error, child: child))
+        }
+    }
+
+    /// Past its authorization, which the caller shares with a local child.
+    private func interruptOnPeer(_ child: ACPDelegationRecord) async -> AlasCLIResponse {
+        let serverId = child.peerServerId ?? ""
+        guard let peers = environment.delegationPeers() else {
+            return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
+        }
+        switch await peers.interrupt(serverId: serverId, sessionID: child.childSessionId) {
+        case .success(let cancelRequested):
+            return json(ACPOrchestrationInterruptResponse(sessionId: child.childSessionId, cancelRequested: cancelRequested))
+        case .failure(.notFound) where child.phase != .ready:
+            return json(ACPOrchestrationInterruptResponse(sessionId: child.childSessionId, cancelRequested: false))
+        case .failure(let error):
+            return .error(peerFailureMessage(error, child: child))
+        }
+    }
+
+    // MARK: Waiting on a paired Mac
+
+    /// How often a wait asks a peer again without being told to.
+    private static let peerStatusPollMillis: Int64 = 2_000
+
+    /// One status question to a peer. It runs apart from the waits reading it:
+    /// a peer that does not answer takes a minute to fail, which would hold a
+    /// wait past its timeout and the CLI's read timeout.
+    private final class PeerStatusRound {
+        var answer: Result<Data, ACPPeerError>?
+    }
+
+    /// What one `session_wait` has heard about its peer children.
+    private final class PeerWaitState {
+        var heard: [String: ACPOrchestrationWaitResponse.Session] = [:]
+        var rounds: [(serverId: String, ids: [String], round: PeerStatusRound)] = []
+        var nextAskAt: [String: Int64] = [:]
+        var seenSignals: [String: Int] = [:]
+    }
+
+    /// Tells waits that `serverId` has news, so they ask it again now.
+    public func peerOutboxDidChange(serverId: String) {
+        peerOutboxSignals[serverId, default: 0] += 1
+    }
+
+    /// Hears the peers' outbox signal, keeping any handler already there.
+    private func observeOutboxSignals(of peers: ACPDelegationPeers) {
+        guard observedPeers !== peers else { return }
+        observedPeers = peers
+        let previous = peers.onOutboxChanged
+        peers.onOutboxChanged = { [weak self] serverId in
+            previous?(serverId)
+            self?.peerOutboxDidChange(serverId: serverId)
+        }
+    }
+
+    /// The question already out for exactly these children, or a new one, so
+    /// a wait's next slice shares it instead of stacking up another.
+    private func statusRound(serverId: String, ids: [String], peers: ACPDelegationPeers) -> PeerStatusRound {
+        if let round = peerStatusRounds[serverId]?[ids] { return round }
+        let round = PeerStatusRound()
+        peerStatusRounds[serverId, default: [:]][ids] = round
+        Task { @MainActor [weak self] in
+            round.answer = await peers.status(serverId: serverId, sessionIDs: ids)
+            if self?.peerStatusRounds[serverId]?[ids] === round {
+                self?.peerStatusRounds[serverId]?[ids] = nil
+            }
+        }
+        return round
+    }
+
+    private func collectPeerAnswers(into state: PeerWaitState) {
+        state.rounds.removeAll { pending in
+            guard let answer = pending.round.answer else { return false }
+            switch answer {
+            case .success(let data):
+                // A reply that cannot be read says nothing: keep asking.
+                let reply = try? JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data)
+                for session in reply?.sessions ?? [] where pending.ids.contains(session.sessionId) {
+                    state.heard[session.sessionId] = session
+                }
+            case .failure(.refused), .failure(.notFound):
+                // Not proof of anything about the children: keep asking.
+                for id in pending.ids
+                where state.heard[id]?.state == ACPOrchestrationWaitResponse.Session.peerUnreachableState {
+                    state.heard[id] = nil
+                }
+            case .failure(.unreachable), .failure(.outdated), .failure(.revoked):
+                for id in pending.ids { state.heard[id] = Self.peerUnreachable(id) }
+            }
+            return true
+        }
+    }
+
+    private static func peerUnreachable(_ id: String) -> ACPOrchestrationWaitResponse.Session {
+        .init(
+            sessionId: id, state: ACPOrchestrationWaitResponse.Session.peerUnreachableState, settled: true,
+            lastAgentText: nil, failure: nil
+        )
+    }
+
+    /// Asks each peer about its children whose answer can still change, once
+    /// its interval passed or it signalled, one question at a time per peer.
+    private func askPeers(about children: [ACPDelegationRecord], state: PeerWaitState) {
+        let open = children.filter { child in
+            guard child.phase == .starting || child.phase == .ready else { return false }
+            guard let heard = state.heard[child.childSessionId] else { return true }
+            return !heard.settled || heard.state == ACPOrchestrationWaitResponse.Session.peerUnreachableState
+        }
+        let now = environment.nowMillis()
+        for (serverId, children) in Dictionary(grouping: open, by: { $0.peerServerId ?? "" }) {
+            let signal = peerOutboxSignals[serverId, default: 0]
+            guard !state.rounds.contains(where: { $0.serverId == serverId }),
+                  now >= state.nextAskAt[serverId, default: .min] || signal != state.seenSignals[serverId, default: 0]
+            else { continue }
+            state.nextAskAt[serverId] = now + Self.peerStatusPollMillis
+            state.seenSignals[serverId] = signal
+            let ids = children.map(\.childSessionId)
+            guard let peers = environment.delegationPeers() else {
+                for id in ids { state.heard[id] = Self.peerUnreachable(id) }
+                continue
+            }
+            for start in stride(from: 0, to: ids.count, by: ACPDelegatedSessionWaitRequest.maxSessions) {
+                let batch = Array(ids[start..<min(start + ACPDelegatedSessionWaitRequest.maxSessions, ids.count)])
+                state.rounds.append((serverId, batch, statusRound(serverId: serverId, ids: batch, peers: peers)))
+            }
+        }
+    }
+
+    /// A peer's child as a wait reports it now. A child ended here needs no
+    /// peer. One still starting may not have reached the peer, so "gone" means
+    /// nothing for it yet; for one that started it is reported as it stands.
+    private func peerWaitSession(
+        _ child: ACPDelegationRecord, state: PeerWaitState
+    ) -> ACPOrchestrationWaitResponse.Session {
+        let local = ACPSessionOrchestrationPolicy.publicState(phase: child.phase, runtime: nil, archived: false).rawValue
+        let id = child.childSessionId
+        if child.phase == .failed || child.phase == .closed {
+            return .init(sessionId: id, state: local, settled: true, lastAgentText: nil, failure: child.failureMessage)
+        }
+        if let heard = state.heard[id],
+           child.phase != .starting || heard.state != ACPOrchestrationWaitResponse.Session.goneState {
+            return heard
+        }
+        return .init(sessionId: id, state: local, settled: false, lastAgentText: nil, failure: nil)
     }
 
     public func create(
@@ -543,11 +891,12 @@ public final class ACPSessionOrchestrationCoordinator {
             return .error("--project only applies with --peer.")
         }
 
+        let task: String
         let prompt: String
         let role = request.role?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let role, role.isEmpty { return .error("role must not be blank") }
         do {
-            let task = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
+            task = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
             prompt = Self.framedPrompt(task, role: role)
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")
@@ -556,7 +905,7 @@ public final class ACPSessionOrchestrationCoordinator {
         }
 
         if let peer = request.peer {
-            return await createOnPeer(peer, project: request.project, worktree: request.worktree, origin: origin)
+            return await createOnPeer(peer, request: request, task: task, role: role, parent: parentSession, origin: origin)
         }
 
         let childID = environment.makeID()
@@ -900,6 +1249,9 @@ public final class ACPSessionOrchestrationCoordinator {
                 )
             }
             targetParent = try await environment.persistence.parent(childSessionId: request.targetSessionId)
+            if let targetParent, targetParent.peerServerId != nil {
+                return await sendToPeer(targetParent, prompt: prompt, origin: origin)
+            }
             let target = environment.sessionLocation(request.targetSessionId)
             guard let targetProjectId = target?.origin.projectId ?? targetParent?.projectId ?? callerParent?.projectId else {
                 return .error("The target ACP session is not available.")
@@ -1000,6 +1352,9 @@ public final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
     ) async -> AlasCLIResponse {
+        if let child = await peerChild(request.targetSessionId) {
+            return await readOnPeer(child, request: request, origin: origin)
+        }
         let readable: ReadableSession
         switch await readableSession(origin: origin, targetSessionId: request.targetSessionId) {
         case .success(let found): readable = found
@@ -1076,24 +1431,45 @@ public final class ACPSessionOrchestrationCoordinator {
         for id in request.targetSessionIds where !sessionIds.contains(id) {
             sessionIds.append(id)
         }
+        var peerChildren: [String: ACPDelegationRecord] = [:]
         do {
             for id in sessionIds {
+                let target = try await environment.persistence.delegation(childSessionId: id)
                 guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
                     callerSessionId: origin.sessionId,
                     callerProjectId: origin.projectId,
-                    target: try await environment.persistence.delegation(childSessionId: id)
+                    target: target
                 ) else {
                     return .error("Only direct child sessions can be waited on: \(id)")
                 }
+                if let target, target.peerServerId != nil { peerChildren[id] = target }
             }
         } catch {
             return .error("Could not verify session delegation.")
         }
+        if !peerChildren.isEmpty, let peers = environment.delegationPeers() { observeOutboxSignals(of: peers) }
+        let peerState = PeerWaitState()
         let deadline = environment.nowMillis() + Int64(request.timeoutMillis)
         while true {
+            if !peerChildren.isEmpty {
+                // A retry can move a child on during the wait.
+                for id in peerChildren.keys {
+                    if let current = await peerChild(id) { peerChildren[id] = current }
+                }
+                collectPeerAnswers(into: peerState)
+                askPeers(about: Array(peerChildren.values), state: peerState)
+                // An answer that is ready, such as a link known to be down,
+                // need not wait for the next poll.
+                await Task.yield()
+                collectPeerAnswers(into: peerState)
+            }
             var sessions: [ACPOrchestrationWaitResponse.Session] = []
             for id in sessionIds {
-                sessions.append(await waitSnapshot(sessionId: id))
+                if let child = peerChildren[id] {
+                    sessions.append(peerWaitSession(child, state: peerState))
+                } else {
+                    sessions.append(await waitSnapshot(sessionId: id))
+                }
             }
             let settled = sessions.allSatisfy(\.settled)
             if settled || environment.nowMillis() >= deadline || Task.isCancelled {
@@ -1137,13 +1513,15 @@ public final class ACPSessionOrchestrationCoordinator {
         targetSessionId: String
     ) async -> AlasCLIResponse {
         do {
+            let target = try await environment.persistence.delegation(childSessionId: targetSessionId)
             guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
                 callerSessionId: origin.sessionId,
                 callerProjectId: origin.projectId,
-                target: try await environment.persistence.delegation(childSessionId: targetSessionId)
+                target: target
             ) else {
                 return .error("Only a direct child session can be interrupted.")
             }
+            if let target, target.peerServerId != nil { return await interruptOnPeer(target) }
         } catch {
             return .error("Could not verify session delegation.")
         }
@@ -1158,6 +1536,8 @@ public final class ACPSessionOrchestrationCoordinator {
         let cancelRequested = await location.manager.interrupt(for: targetSessionId)
         return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: cancelRequested))
     }
+
+    private static let cannotReadMessage = "Only a direct parent, child, or this session's fork transcript can be read."
 
     private struct ObservationError: Error {
         let message: String
@@ -1176,6 +1556,11 @@ public final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
     ) async -> Result<ReadableSession, ObservationError> {
+        // No transcript here, whoever asks: `read` goes to the peer first, and
+        // a user attaching the id to a prompt gives no way to reach it.
+        if await peerChild(targetSessionId) != nil {
+            return .failure(.init(message: "The target ACP session has no transcript available."))
+        }
         if let fork = await readableFork(origin: origin, targetSessionId: targetSessionId) {
             return .success(ReadableSession(session: fork, release: {}))
         }
@@ -1201,7 +1586,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 targetParent: targetParent
             )
         else {
-            return .failure(.init(message: "Only a direct parent, child, or this session's fork transcript can be read."))
+            return .failure(.init(message: Self.cannotReadMessage))
         }
         guard let location = await resolveDeliveryTarget(
             sessionID: targetSessionId,
@@ -1611,7 +1996,8 @@ public final class ACPSessionOrchestrationCoordinator {
             agentId: record.agentId,
             worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name },
             role: record.role,
-            machine: ACPPeerParent.serverId(from: record.parentSessionId) == nil ? nil : peerMachineName()
+            machine: record.peerServerId.map(peerName)
+                ?? (ACPPeerParent.serverId(from: record.parentSessionId) == nil ? nil : peerMachineName())
         )
     }
 
