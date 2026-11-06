@@ -60,7 +60,14 @@ extension AlasCoreContext {
             await manager.hydrateIfNeeded(id: sessionID)
         }
         if let session = manager.liveSession(for: sessionID), session.hydrationState == .ready {
-            return Self.shepherdSessionIsBusy(session, now: Date()) ? .busy : .idle
+            let records = [reviewShepherd.record(forSession: sessionID)].compactMap { $0 }
+                + (stackShepherd.record(forSession: sessionID)?.openEntries.map(\.shepherd) ?? [])
+            let dispatchedAt = records.filter { $0.lastDispatchedFingerprint != nil }.map { record in
+                if let dispatched = record.lastFixDispatchedAt { return dispatched }
+                if case .fixing(let dispatched) = record.phase { return dispatched }
+                return record.createdAt
+            }.min()
+            return Self.shepherdSessionIsBusy(session, now: Date(), fixDispatchedAt: dispatchedAt) ? .busy : .idle
         }
         // Hydration did not finish: judge by the stored turn marker and queue.
         if row.directTurnInFlight { return .busy }
@@ -69,16 +76,20 @@ extension AlasCoreContext {
     }
 
     /// Busy while a turn runs or waits on the user, while the agent starts,
+    /// while its live children or background work from this fix run,
     /// or while a ready agent has a queued prompt (a shepherd prompt
     /// included) that has not started. A prompt held behind an agent that
     /// failed, disconnected or never attached is not busy, so a stuck fix
-    /// ends in a no-progress escalation instead of waiting forever.
-    private static func shepherdSessionIsBusy(_ session: ACPSession, now: Date) -> Bool {
+    /// can be retried within its allowance instead of waiting forever.
+    static func shepherdSessionIsBusy(_ session: ACPSession, now: Date, fixDispatchedAt: Date? = nil) -> Bool {
         if session.transcript.streamingState != .idle { return true }
         switch session.agentState {
         case .spawning:
             return true
         case .ready:
+            if session.activity.backgroundWorking || session.liveSubagentCount > 0 { return true }
+            if let fixDispatchedAt,
+               session.activeBackgroundTasks.contains(where: { $0.startedAt >= fixDispatchedAt }) { return true }
             return session.queue.contains { shepherdQueueItemIsDue($0, now: now) }
         case .idle, .disconnected, .failed:
             return false

@@ -65,7 +65,7 @@ public enum ShepherdPhase: Codable, Equatable, Sendable {
         }
     }
 
-    /// Escalated and paused records wait for the user to press Resume.
+    /// Records that offer a manual Resume. Recoverable reasons can also resume automatically.
     public var isResumable: Bool {
         switch self {
         case .escalated, .paused: true
@@ -112,7 +112,16 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// before this field existed.
     public var handledThreadRevisions: [String]?
     public var fixAttempts: Int
-    /// Fix prompts allowed before escalating. Nil in records saved before
+    /// Attempts per unresolved problem, independent of commit SHA or CI run ID.
+    /// Nil in older records, whose aggregate count is migrated conservatively.
+    public var problemAttempts: [String: Int]?
+    /// The original dispatch time, retained while awaiting a push so background
+    /// work started by that fix can be distinguished from an existing dev server.
+    public var lastFixDispatchedAt: Date?
+    /// Definite delivery failures are retried without spending a fix attempt.
+    public var deliveryFailures: Int?
+    public var deliveryRetryAt: Date?
+    /// Fix prompts per unresolved problem before escalating. Nil in records saved before
     /// this field existed; read it through `fixAttemptBudget`.
     public var maxFixAttempts: Int?
     public var lastSeenHeadSHA: String?
@@ -170,6 +179,64 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
 
     public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
+
+    /// Explicit Resume or a new owner grants a fresh allowance.
+    public mutating func resetFixTracking() {
+        fixAttempts = 0
+        problemAttempts = nil
+        lastDispatchedFingerprint = nil
+        viewerCommentIDsAtDispatch = nil
+        lastFixDispatchedAt = nil
+        deliveryFailures = nil
+        deliveryRetryAt = nil
+    }
+
+    /// Only called after delivery definitively failed. The queue did not accept
+    /// the prompt, so another attempt is safe after the capped backoff.
+    public mutating func retryDelivery(after now: Date, preservingPhase: Bool = false) {
+        let failures = min((deliveryFailures ?? 0) + 1, 6)
+        deliveryFailures = failures
+        deliveryRetryAt = now.addingTimeInterval(ShepherdSchedule.backoff(afterFailures: failures))
+        if !preservingPhase { phase = .watching }
+        updatedAt = now
+    }
+
+    public mutating func retryFixDelivery(restoring previous: ShepherdRecord, now: Date) {
+        fixAttempts = previous.fixAttempts
+        problemAttempts = previous.problemAttempts
+        lastDispatchedFingerprint = previous.lastDispatchedFingerprint
+        viewerCommentIDsAtDispatch = previous.viewerCommentIDsAtDispatch
+        lastFixDispatchedAt = previous.lastFixDispatchedAt
+        retryDelivery(after: now)
+    }
+
+    /// A rebind or toggle can supersede delivery while retaining its optimistic
+    /// dispatch fields. Undo only that unsent fix, preserving newer settings,
+    /// ownership changes, explicit resumes, and independently dispatched work.
+    @discardableResult
+    public mutating func discardUndeliveredFix(
+        _ dispatched: ShepherdRecord,
+        restoring previous: ShepherdRecord,
+        now: Date
+    ) -> Bool {
+        guard sessionID == dispatched.sessionID,
+              lastDispatchedFingerprint == dispatched.lastDispatchedFingerprint,
+              lastFixDispatchedAt == dispatched.lastFixDispatchedAt,
+              fixAttempts == dispatched.fixAttempts,
+              problemAttempts == dispatched.problemAttempts
+        else { return false }
+        fixAttempts = previous.fixAttempts
+        problemAttempts = previous.problemAttempts
+        lastDispatchedFingerprint = previous.lastDispatchedFingerprint
+        viewerCommentIDsAtDispatch = previous.viewerCommentIDsAtDispatch
+        lastFixDispatchedAt = previous.lastFixDispatchedAt
+        switch phase {
+        case .fixing, .awaitingPush: phase = .watching
+        default: break
+        }
+        updatedAt = now
+        return true
+    }
 
     /// Sets the budget, clamped to `ShepherdDefaults.fixAttemptRange`. A record
     /// that escalated for running out of attempts goes back to watching when

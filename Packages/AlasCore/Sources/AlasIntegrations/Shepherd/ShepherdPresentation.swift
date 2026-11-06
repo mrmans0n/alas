@@ -74,10 +74,15 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .escalated(let reason): return (.attention, "needs attention: \(text(for: reason))")
         case .paused: return (.attention, "paused: provider sign-in failed")
         case .fixing: return (.fixing, fixingLine(record: record, request: request))
-        case .awaitingPush: return (.waiting, "waiting for a push")
+        case .awaitingPush(let ended, _):
+            if let line = checkWaitLine(request) { return (.waiting, line) }
+            return (.waiting, "waiting for a push; automatic follow-up at \(retryTime(ended.addingTimeInterval(ShepherdPolicy.idleGracePeriod)))")
         case .merging: return (.merging, "merging")
         case .queued: return (.queued, "in merge queue")
         case .watching: break
+        }
+        if let retryAt = record.deliveryRetryAt {
+            return (.waiting, "retrying chat delivery at \(retryTime(retryAt))")
         }
         if mergeGatePasses { return (.ready, "ready to merge") }
         guard let request else { return (.waiting, "watching") }
@@ -103,6 +108,16 @@ public struct ShepherdPresentation: Equatable, Sendable {
             threadCount: fingerprint.threadIDs.count
         )
         return what.isEmpty ? "fixing" : "fixing \(what)"
+    }
+
+    private static func retryTime(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private static func checkWaitLine(_ request: ReviewRequest?) -> String? {
+        if request?.checks.contains(where: { $0.bucket == .pending }) == true { return "checks running" }
+        if request?.checks.contains(where: { $0.bucket == .unknown }) == true { return "waiting for check status" }
+        return nil
     }
 
     private static func summary(hasConflict: Bool, checkNames: [String], threadCount: Int) -> String {
@@ -156,8 +171,15 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .escalated(let reason): return (.attention, "needs attention: \(text(for: reason))")
         case .paused: return (.attention, "paused: provider sign-in failed")
         case .fixing: return (.fixing, "fixing \(entryList(record.openEntries.filter { if case .fixing = $0.shepherd.phase { true } else { false } }))")
-        case .awaitingPush: return (.waiting, "waiting for stack_ship")
+        case .awaitingPush(let ended, _):
+            for entry in record.openEntries {
+                if let line = checkWaitLine(requests[entry.requestNumber]) { return (.waiting, line) }
+            }
+            return (.waiting, "waiting for stack_ship; automatic follow-up at \(retryTime(ended.addingTimeInterval(ShepherdPolicy.idleGracePeriod)))")
         case .merging, .queued, .watching: break
+        }
+        if let retryAt = record.openEntries.compactMap(\.shepherd.deliveryRetryAt).min() {
+            return (.waiting, "retrying chat delivery at \(retryTime(retryAt))")
         }
         if let landedIDs = record.landedEntryIDs {
             let landed = entryList(record.entries.filter { landedIDs.contains($0.entryID) })

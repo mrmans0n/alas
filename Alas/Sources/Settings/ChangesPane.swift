@@ -67,8 +67,8 @@ struct ChangesPane: View {
                             .labelsHidden()
                     }
                     SettingsRow(
-                        name: "Fix attempts per PR",
-                        desc: "Fix prompts sent before the shepherd stops and asks for you. The count resets once the PR is clean. Each PR can change this from its toolbar button."
+                        name: "Fix attempts per problem",
+                        desc: "Automatic fix prompts for the same unresolved check, review finding or conflict before the shepherd asks for you. New findings get their own allowance. Each PR can change this from its toolbar button."
                     ) {
                         Stepper(
                             "\(state.config.changes.shepherd.maxFixAttempts)",

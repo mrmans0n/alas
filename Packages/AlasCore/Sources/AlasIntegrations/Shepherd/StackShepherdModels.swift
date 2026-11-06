@@ -45,7 +45,7 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     public var remote: CodeHostRemote
     public var base: String
     public var autoFix: Bool
-    /// Fix prompts each entry is allowed before escalating. Nil in records
+    /// Fix prompts per unresolved problem in each entry before escalating. Nil in records
     /// saved before this field existed; read it through `fixAttemptBudget`.
     public var maxFixAttempts: Int?
     /// Bottom-up by position.

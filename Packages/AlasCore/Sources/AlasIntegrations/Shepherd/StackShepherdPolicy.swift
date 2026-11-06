@@ -253,9 +253,7 @@ public enum StackShepherdPolicy {
             if entry.shepherd.phase == .closed, !isAbsent, observation.requests[entry.requestNumber]?.state == .open {
                 entry.shepherd.phase = .watching
                 entry.shepherd.finishedAt = nil
-                entry.shepherd.fixAttempts = 0
-                entry.shepherd.lastDispatchedFingerprint = nil
-                entry.shepherd.viewerCommentIDsAtDispatch = nil
+                entry.shepherd.resetFixTracking()
             }
             guard !entry.shepherd.phase.isTerminal,
                   let request = observation.requests[entry.requestNumber]
@@ -314,7 +312,8 @@ public enum StackShepherdPolicy {
             next.landedEntryIDs = landed.isEmpty ? nil : landed.map(\.entryID)
         }
         if let landed = next.landedEntryIDs {
-            if next.autoFix, session == .idle, !next.phase.isResumable, next.restackRequestedFor != landed {
+            let deliveryPending = open.contains { ($0.shepherd.deliveryRetryAt ?? .distantPast) > observation.now }
+            if next.autoFix, session == .idle, !deliveryPending, !next.phase.isResumable, next.restackRequestedFor != landed {
                 next.restackRequestedFor = landed
                 decision.restack = next.entries.filter { landed.contains($0.entryID) }
             }
