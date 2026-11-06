@@ -57,8 +57,10 @@ extension AlasCoreContext {
     }
 
     /// Starts waking parents with the outcomes paired Macs' children leave
-    /// behind. Call it once stored sessions are loaded and `recoverDelegations`
-    /// ran, so a parent can be attached. The collector takes over the peers'
+    /// behind. Call it once the projects and worktrees are loaded: finding a
+    /// parent that has no live session, and telling a deleted parent from one
+    /// whose worktree is not loaded yet, both go through them. Recovery's own
+    /// order does not matter to it. The collector takes over the peers'
     /// outbox and availability signals and hands them to the coordinator's
     /// waits, so it must be the only one installing them.
     @_spi(AppHost) public func startCollectingPeerOutcomes() {
@@ -67,7 +69,9 @@ extension AlasCoreContext {
         let collector = ACPPeerOutboxCollector(
             peers: peers,
             persistence: orchestrationPersistence,
-            deliver: { await orchestration.deliverPendingMessages(to: $0) },
+            // The record lets delivery find a parent that has no live session.
+            deliver: { await orchestration.deliverPendingMessages(to: $0.parentSessionId, callerParent: $0) },
+            parentIsGone: { await orchestration.parentIsGone(of: $0) },
             outboxChanged: { orchestration.peerOutboxDidChange(serverId: $0) }
         )
         peerOutboxCollector = collector

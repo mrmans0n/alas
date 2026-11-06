@@ -2334,6 +2334,17 @@ public final class ACPSessionOrchestrationCoordinator {
         return "Could not start delegated ACP session."
     }
 
+    /// True only when `child`'s parent is known not to exist: its worktree is
+    /// loaded and its manager has no row for the session. An unknown or
+    /// unloaded worktree is not proof, since real outcomes would be dropped.
+    public func parentIsGone(of child: ACPDelegationRecord) async -> Bool {
+        guard environment.sessionLocation(child.parentSessionId) == nil,
+              let worktree = environment.worktree(child.parentWorktreeId),
+              let manager = environment.manager(worktree)
+        else { return false }
+        return await manager.persistedSessionRow(id: child.parentSessionId) == nil
+    }
+
     public func deliverPendingMessages(
         to sessionID: String,
         callerParent: ACPDelegationRecord? = nil,
