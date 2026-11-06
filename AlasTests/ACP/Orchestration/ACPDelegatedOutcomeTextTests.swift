@@ -4,6 +4,12 @@ import Testing
 
 @Suite("ACP delegated outcome text")
 struct ACPDelegatedOutcomeTextTests {
+    @Test(arguments: ["Lost it", "Lost it."])
+    func aFailureEndsWithOnePeriod(message: String) {
+        let context = ACPDelegatedOutcomeText.Context(childSessionId: "child", agentId: "codex", worktreeName: nil)
+        #expect(ACPDelegatedOutcomeText.failure(context, message: message).hasSuffix("failed: Lost it."))
+    }
+
     private let context = ACPDelegatedOutcomeText.Context(
         childSessionId: "child-1", agentId: "codex", worktreeName: "feature-x"
     )

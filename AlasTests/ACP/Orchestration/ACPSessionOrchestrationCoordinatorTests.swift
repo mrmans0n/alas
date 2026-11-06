@@ -3836,6 +3836,41 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(scheduled.delays.isEmpty)
     }
 
+    /// Stopping a Mac ends the turn it is running with nothing to report it, so
+    /// only an awaited child that stays idle, with no result, wakes its parent.
+    @Test(arguments: [("idle", true, true), ("running", false, false), ("awaiting_input", true, false)] as [(String, Bool, Bool)])
+    func aQuietAwaitedChildWakesItsParentOnce(state: String, settled: Bool, wakes: Bool) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: state, settled: settled) }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == true)
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == !wakes)
+        let messages = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(messages.count == (wakes ? 1 : 0))
+        #expect(messages.first?.prompt.contains("mini") != false)
+    }
+
+    /// A prompt sent after the first idle answer starts the count again.
+    @Test func aPromptSentBetweenIdleAnswersKeepsTheChildAwaited() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+        _ = await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More"))
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == true)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
     /// Availability brings a peer that is down back; no timer has to.
     @Test func peerThatIsDownGetsNoRetryTimer() async throws {
         let scheduled = ScheduledWork()

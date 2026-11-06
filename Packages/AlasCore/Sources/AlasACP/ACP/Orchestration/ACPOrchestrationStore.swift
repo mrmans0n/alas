@@ -377,6 +377,11 @@ public final class ACPOrchestrationStore {
         """, bindings: [since, childSessionId, since])
     }
 
+    /// The parent no longer expects a result from `childSessionId`.
+    public func endPeerWait(childSessionId: String) throws {
+        try db.exec("UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ?", bindings: [childSessionId])
+    }
+
     private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
         // The ids the target gives outcomes; anything else leaves the child running.
         guard entry.messageId.hasPrefix("outcome-") else { return }

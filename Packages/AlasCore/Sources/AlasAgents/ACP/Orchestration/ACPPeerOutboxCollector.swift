@@ -29,6 +29,7 @@ public final class ACPPeerOutboxCollector {
     private let outboxChanged: @MainActor (_ serverId: String) -> Void
     private let availabilityChanged: @MainActor (_ serverId: String) -> Void
     private let childBlocked: @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void
+    private let settleQuietChildren: @MainActor (_ serverId: String) async -> Void
     private let retryStarts: @MainActor (_ serverId: String) async -> Void
     private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
 
@@ -62,6 +63,7 @@ public final class ACPPeerOutboxCollector {
         availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         childBlocked: @escaping @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
+        settleQuietChildren: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) {
         self.peers = peers
@@ -72,6 +74,7 @@ public final class ACPPeerOutboxCollector {
         self.availabilityChanged = availabilityChanged
         self.childBlocked = childBlocked
         self.retryStarts = retryStarts
+        self.settleQuietChildren = settleQuietChildren
         self.schedule = schedule
     }
 
@@ -144,6 +147,7 @@ public final class ACPPeerOutboxCollector {
         // Pull first: asking about starts can hold a row for a minute each.
         await collect(serverId: serverId)
         await retryStarts(serverId)
+        await settleQuietChildren(serverId)
         // Held until here, so a slow retry does not get a second one beside it.
         retryArmed.remove(serverId)
         await retryWhileNeeded(serverId: serverId)

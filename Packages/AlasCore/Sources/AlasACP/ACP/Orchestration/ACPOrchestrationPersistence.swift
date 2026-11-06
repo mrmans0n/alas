@@ -164,6 +164,10 @@ public actor ACPOrchestrationPersistence {
         try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, settling: entry)
     }
 
+    public func endPeerWait(childSessionId: String) throws {
+        try openedStore().endPeerWait(childSessionId: childSessionId)
+    }
+
     public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
         try openedStore().markPeerAwaiting(childSessionId: childSessionId, since: since)
     }
