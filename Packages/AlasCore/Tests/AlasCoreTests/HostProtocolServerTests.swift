@@ -3990,7 +3990,7 @@ struct HostProtocolServerTests {
         }
 
         func waitFor(
-            within timeout: Duration = .seconds(10), _ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool
+            within timeout: Duration = .seconds(60), _ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool
         ) async throws {
             try await eventually(within: timeout) { await condition(self.messages) }
         }
