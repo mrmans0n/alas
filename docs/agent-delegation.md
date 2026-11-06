@@ -528,7 +528,9 @@ alas session new --peer mini --worktree fix/parser --prompt "Continue the parser
 
 The answer is the usual `session_new` JSON plus `"peer": "<name>"`. If the Mac
 does not answer, the answer says so in a `note`, and Alas retries once when it
-is back. `session_list` shows a `peer` field on children running elsewhere.
+is back. `session_list` shows a `peer` field on children running elsewhere. It
+does not ask the other Mac, so a started child's `state` is `on_peer`, which says
+nothing about whether a turn is running. `session_wait` asks.
 
 The model and reasoning checks work as for a local child, on that Mac: a value
 it cannot apply fails the child instead of falling back to the default. The

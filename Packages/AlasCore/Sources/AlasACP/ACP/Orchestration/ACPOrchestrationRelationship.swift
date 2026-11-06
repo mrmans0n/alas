@@ -16,6 +16,8 @@ public enum ACPOrchestrationPublicState: String, Equatable, Sendable {
     case idle
     case running
     case awaitingInput = "awaiting_input"
+    /// Started on a paired Mac. A list does not ask it whether a turn is running.
+    case onPeer = "on_peer"
     case failed
     case closed
 }

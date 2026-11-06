@@ -295,7 +295,9 @@ public final class ACPSessionOrchestrationCoordinator {
                     // From the stored phase: a list does not wait on another Mac.
                     summaries.append(.init(
                         sessionId: record.childSessionId, relationship: "child", agentId: record.agentId, worktreeId: "",
-                        state: ACPSessionOrchestrationPolicy.publicState(phase: record.phase, runtime: nil, archived: false).rawValue,
+                        state: record.phase == .ready
+                            ? ACPOrchestrationPublicState.onPeer.rawValue
+                            : ACPSessionOrchestrationPolicy.publicState(phase: record.phase, runtime: nil, archived: false).rawValue,
                         failure: record.failureMessage, createdAt: record.createdAt, role: record.role,
                         peer: peerName(serverId)
                     ))

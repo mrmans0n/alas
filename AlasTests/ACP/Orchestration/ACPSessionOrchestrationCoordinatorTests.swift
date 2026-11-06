@@ -3229,7 +3229,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let listed = try decoded(ACPOrchestrationListResponse.self, await fixture.coordinator.list(origin: Self.peerOrigin))
 
         let child = try #require(listed.sessions.first { $0.sessionId == "child" })
-        #expect(child.peer == "mini" && child.state == "idle" && child.worktreeId.isEmpty && child.relationship == "child")
+        // From the stored phase, so nothing says whether a turn is running there.
+        #expect(child.peer == "mini" && child.state == "on_peer" && child.worktreeId.isEmpty && child.relationship == "child")
         let forgotten = try #require(listed.sessions.first { $0.sessionId == "forgotten" })
         #expect(forgotten.peer == "srv-9" && forgotten.state == "starting")
         #expect(listed.sessions.first { $0.sessionId == "parent" }?.peer == nil)
