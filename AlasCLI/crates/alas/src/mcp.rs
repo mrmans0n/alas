@@ -202,7 +202,7 @@ fn handle_line_with_parent(
         "initialize" => Ok(initialize_result(parent_session_id, scope)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({
-            "tools": tool_definitions_for_session(scope, parent_session_id.is_some())
+            "tools": tool_definitions_for_session(scope, parent_session_id)
         })),
         "tools/call" => {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -223,6 +223,9 @@ fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value
         }
         _ if scope == ToolScope::Visual => {
             "Shows visuals to the user in Alas with visual_show. Reach for it when an explanation has shape: how parts connect (architecture, data or control flow, state machines, sequences), options compared on several dimensions, before/after layouts or UI sketches, or numbers that read better as a chart. Keep it to one visual per reply, usually none: skip it for short answers, single facts, code edits, status updates, and anything a list or code block already shows clearly. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
+        }
+        Some(_) if is_peer_child(parent_session_id) => {
+            "Tools that drive the user's Alas host. This session was delegated from another machine: it cannot create descendants. Your final message is your report to the parent. It cannot be messaged in any other way. Do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
         }
         Some(_) if scope == ToolScope::Headless => {
             "Tools that drive the user's Alas host. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
@@ -272,20 +275,41 @@ fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
 /// Tools that only act on a session's own children.
 const CHILD_ONLY_TOOLS: [&str; 3] = ["session_new", "session_wait", "session_interrupt"];
 
+/// What a child delegated from another Mac never gets: the machine and the
+/// workspace belong to the person at the delegating Mac. Mirrors
+/// `AlasCLICommandRouter.peerChildRemovedTools`, which refuses direct calls.
+const PEER_CHILD_REMOVED_TOOLS: [&str; 4] = ["open", "worktree_new", "worktree_delete", "worktree_switch"];
+const PEER_CHILD_REMOVED_PREFIXES: [&str; 5] = ["computer_", "vm_", "device_", "preview_", "workspace_"];
+
+/// The parent value Alas gives a child started for a paired Mac: `peer:` and
+/// that Mac's server id.
+fn is_peer_child(parent: Option<&str>) -> bool {
+    parent
+        .and_then(|parent| parent.strip_prefix("peer:"))
+        .is_some_and(|server_id| !server_id.is_empty())
+}
+
 /// Delegated children are leaves: tools that act on children are left out
-/// of their discovery. Direct or forged calls still reach Alas, whose
-/// orchestration policy rejects them.
-fn tool_definitions_for_session(scope: ToolScope, is_delegated: bool) -> Vec<Value> {
+/// of their discovery, and a child of another Mac also loses the machine and
+/// workspace tools. Direct or forged calls still reach Alas, whose
+/// orchestration policy and router reject them.
+fn tool_definitions_for_session(scope: ToolScope, parent_session_id: Option<&str>) -> Vec<Value> {
     let tools = tool_definitions_for_mode(scope);
-    if !is_delegated {
+    if parent_session_id.is_none() {
         return tools;
     }
+    let peer = is_peer_child(parent_session_id);
     tools
         .into_iter()
         .filter(|tool| {
-            tool.get("name")
-                .and_then(Value::as_str)
-                .is_none_or(|name| !CHILD_ONLY_TOOLS.contains(&name))
+            tool.get("name").and_then(Value::as_str).is_none_or(|name| {
+                !CHILD_ONLY_TOOLS.contains(&name)
+                    && !(peer
+                        && (PEER_CHILD_REMOVED_TOOLS.contains(&name)
+                            || PEER_CHILD_REMOVED_PREFIXES
+                                .iter()
+                                .any(|prefix| name.starts_with(prefix))))
+            })
         })
         .collect()
 }
@@ -3542,7 +3566,7 @@ mod tests {
     use super::{
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, RelayScope, ToolScope,
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
-        env_from, handle_line, handle_line_with_parent, http_response, initialize_result,
+        env_from, handle_line, handle_line_with_parent, http_response, initialize_result, is_peer_child,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
         tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
     };
@@ -3653,7 +3677,7 @@ mod tests {
         .unwrap();
         let scope = env.tool_scope();
         assert_eq!(scope, ToolScope::Headless);
-        let listed = tool_definitions_for_session(scope, false);
+        let listed = tool_definitions_for_session(scope, None);
         let names: Vec<&str> = listed.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for hidden in [
             "open",
@@ -3699,7 +3723,7 @@ mod tests {
         };
         assert_eq!(
             review_tools(listed.clone()),
-            review_tools(tool_definitions_for_session(ToolScope::All, false))
+            review_tools(tool_definitions_for_session(ToolScope::All, None))
         );
         for parent in [None, Some("p")] {
             let text = initialize_result(parent, scope)["instructions"].as_str().unwrap().to_string();
@@ -3708,11 +3732,72 @@ mod tests {
             }
         }
         // A delegated child keeps both filters.
-        let child: Vec<String> = tool_definitions_for_session(scope, true)
+        let child: Vec<String> = tool_definitions_for_session(scope, Some("p"))
             .iter()
             .map(|t| t["name"].as_str().unwrap().into())
             .collect();
         assert!(!child.contains(&"session_new".into()) && !child.contains(&"open".into()));
+    }
+
+    #[test]
+    fn peer_child_discovery_omits_machine_and_workspace_tools() {
+        let names = |parent: Option<&str>| -> Vec<String> {
+            tool_definitions_for_session(ToolScope::All, parent)
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let peer = names(Some("peer:mac-1"));
+        let removed = |name: &str| {
+            [
+                "session_new",
+                "session_wait",
+                "session_interrupt",
+                "open",
+                "worktree_new",
+                "worktree_delete",
+                "worktree_switch",
+            ]
+            .contains(&name)
+                || ["computer_", "vm_", "device_", "preview_", "workspace_"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+        };
+        assert_eq!(
+            peer,
+            names(None)
+                .into_iter()
+                .filter(|name| !removed(name))
+                .collect::<Vec<_>>()
+        );
+        for kept in ["notify", "pr_create", "pr_status", "review", "worktree_list"] {
+            assert!(peer.contains(&kept.to_string()), "{kept}");
+        }
+        // A local child keeps what a peer child loses.
+        assert!(names(Some("parent")).contains(&"computer_click".to_string()));
+    }
+
+    #[test]
+    fn peer_child_is_recognized_by_the_sentinel_parent() {
+        assert!(is_peer_child(Some("peer:mac-1")));
+        for other in [None, Some("peer:"), Some("parent-session"), Some("xpeer:a")] {
+            assert!(!is_peer_child(other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn peer_child_initialize_instructions_name_the_final_message_as_the_report() {
+        for scope in [ToolScope::All, ToolScope::Headless] {
+            let text = initialize_result(Some("peer:mac-1"), scope)["instructions"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(
+                text.contains("Your final message is your report to the parent."),
+                "{scope:?}"
+            );
+            assert!(!text.contains("session_send"), "{scope:?}");
+        }
     }
 
     #[test]

@@ -27,6 +27,13 @@ public struct CallersAPI {
         core.acpSessionLocation(id)?.origin
     }
 
+    /// Whether session `id` is a child delegated from another Mac, whose
+    /// parent is a `peer:` sentinel.
+    public func isPeerChild(_ id: String) async -> Bool {
+        guard let record = try? await core.orchestrationPersistence.parent(childSessionId: id) else { return false }
+        return ACPPeerParent.serverId(from: record.parentSessionId) != nil
+    }
+
     /// Whether ACP session `id` is a read-only side session, such as a /btw question.
     public func isReadOnlySideSession(_ id: String) -> Bool {
         core.acpSessionLocation(id)?.manager.liveSession(for: id)?.readOnlyRestricted == true

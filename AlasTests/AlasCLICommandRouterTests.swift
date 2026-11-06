@@ -1351,6 +1351,56 @@ struct AlasCLICommandRouterTests {
         #expect(discovery == .error("session commands require an originating ACP session"))
     }
 
+    /// The tool name an agent sees, with a command the CLI would send for it.
+    private nonisolated static let peerChildRemovedCommands: [(tool: String, command: AlasCLIRequest.Command)] = [
+        ("session_new", .sessionNew(prompt: "x", agentID: nil, worktree: .current)),
+        ("session_wait", .sessionAction(.wait(.init(targetSessionIds: ["s"])))),
+        ("session_interrupt", .sessionAction(.interrupt(targetSessionId: "s"))),
+        ("computer_click", .computer(.init(action: .click, windowID: 1, ref: "e1"))),
+        ("vm_status", .vmStatus(vm: nil)),
+        ("preview_list", .preview(.init(action: .list))),
+        ("open", .open(paths: ["a.txt"])),
+        ("worktree_new", .worktree(.new(branch: "b", base: nil))),
+        ("worktree_delete", .worktree(.delete(target: "b", force: false, keepBranch: false))),
+        ("worktree_switch", .worktree(.switch(target: "b"))),
+        ("workspace_list", .workspace(.list)),
+    ]
+
+    @Test(arguments: peerChildRemovedCommands.map(\.tool))
+    func routerRefusesRemovedToolsFromPeerChild(tool: String) async throws {
+        let command = try #require(Self.peerChildRemovedCommands.first { $0.tool == tool }).command
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let persistence = ACPOrchestrationPersistence(
+            path: FileManager.default.temporaryDirectory.appendingPathComponent("router-peer-\(UUID().uuidString).sqlite").path
+        )
+        for (child, parent) in [("peer-child", ACPPeerParent.sentinel(serverId: "mac-1")), ("local-child", "parent")] {
+            try await persistence.insert(.init(
+                childSessionId: child, parentSessionId: parent, projectId: "p1",
+                parentWorktreeId: worktree.id, childWorktreeId: worktree.id, agentId: "codex",
+                worktreeRequest: .current(worktreeId: worktree.id), pendingInitialPrompt: nil,
+                phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1
+            ))
+        }
+        var workspaceCalls = 0
+        let router = AlasCLICommandRouter(
+            host: AlasHost.routerFixture(
+                [worktree], sessionWorktree: { _ in worktree.id }, orchestrationPersistence: persistence
+            ),
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            workspaceCommand: { _, _ in workspaceCalls += 1; return .ok },
+            activateApp: {}
+        )
+
+        let refused = await router.handle(.init(version: 1, sessionId: "peer-child", cwd: worktree.path.path, command: command))
+
+        #expect(refused == .error("\(tool) is not available to a session delegated from another machine."))
+        // Another delegated child is not subject to the table.
+        let local = await router.handle(.init(version: 1, sessionId: "local-child", cwd: worktree.path.path, command: .workspace(.list)))
+        #expect(local == .ok)
+        #expect(workspaceCalls == 1)
+    }
+
     @Test func workspaceCommandsRouteWithoutImplicitRepositoryFocus() async throws {
         let checkoutID = UUID()
         let memberID = UUID()
@@ -1446,7 +1496,8 @@ extension AlasHost {
         harness: HarnessService = HarnessService(),
         reviews: RouterReviews = RouterReviews(),
         sessionManagers: [SessionOwnerID: ACPSessionManager] = [:],
-        checkouts: [WorkspaceCheckout] = []
+        checkouts: [WorkspaceCheckout] = [],
+        orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence()
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
             ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
@@ -1458,6 +1509,7 @@ extension AlasHost {
         let terminals = RouterTerminals(reviews: reviews, checkouts: checkouts) { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
         let core = AlasCoreContext(
             projects: projects, runHistoryStore: nil, environment: terminals, harness: harness,
+            orchestrationPersistence: orchestrationPersistence,
             reviewDrafts: reviews.drafts, reviewSessions: reviews.sessions
         )
         core.reviewGitStatus = reviews.gitStatus

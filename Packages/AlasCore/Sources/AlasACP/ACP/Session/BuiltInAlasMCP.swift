@@ -110,12 +110,18 @@ public enum BuiltInAlasMCP: Sendable {
         public let server: ACPMCPServer
         public let status: MCPAttachmentServerStatus
         public let isDelegated: Bool
+        /// The child was delegated from another Mac: its parent is a `peer:` sentinel.
+        public let isPeerChild: Bool
         public let toolScope: BuiltInMCPToolScope
 
-        public init(server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, toolScope: BuiltInMCPToolScope = .full) {
+        public init(
+            server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, isPeerChild: Bool = false,
+            toolScope: BuiltInMCPToolScope = .full
+        ) {
             self.server = server
             self.status = status
             self.isDelegated = isDelegated
+            self.isPeerChild = isPeerChild
             self.toolScope = toolScope
         }
     }
@@ -303,7 +309,8 @@ public enum BuiltInAlasMCP: Sendable {
                 transport: transport,
                 disposition: .requested
             ),
-            isDelegated: parentSessionId != nil
+            isDelegated: parentSessionId != nil,
+            isPeerChild: parentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil
         )
     }
 }

@@ -8433,7 +8433,10 @@ extension ACPSessionManager {
                     issue: issuePreambleProvider?(worktreeId),
                     nativeSubagentsDisabled: nativeSubagentsDisabled,
                     nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
-                    computerUseAvailable: computerUseAvailable
+                    computerUseAvailable: computerUseAvailable,
+                    isPeerChild: preambleMode == .mcp
+                        ? (builtInMCP?.isPeerChild == true)
+                        : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil)
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

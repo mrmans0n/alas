@@ -1226,7 +1226,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {},
-            pause: pause
+            pause: pause,
+            machineName: { "Studio" }
         ))
         return .init(coordinator: coordinator, persistence: persistence, manager: manager, sessionPath: sessionPath)
     }
@@ -1601,9 +1602,37 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let entries = try await outbox(fixture.persistence)
         #expect(entries.map(\.messageId) == ["outcome-child-500"])
         #expect(entries.first?.kind == .prompt)
-        #expect(entries.first?.prompt.contains("Parser fixed.") == true)
+        #expect(entries.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) on Studio finished. Its final message:\nParser fixed.")
         #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
         #expect(!lookups.contains("peer:s1"))
+    }
+
+    @Test func otherPeerOutcomesNameTheMachine() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertPeerChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion(result: .failed("boom")))
+
+        let entries = try await outbox(fixture.persistence)
+        #expect(entries.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x, on Studio) failed: boom.")
+    }
+
+    @Test func sessionSendFromPeerChildExplainsThatTheFinalMessageIsTheReport() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertPeerChild(fixture.persistence)
+
+        let response = await fixture.coordinator.send(
+            origin: .init(sessionId: "child", projectId: "project", worktreeId: "worktree"),
+            request: .init(targetSessionId: ACPPeerParent.sentinel(serverId: "s1"), prompt: "Done")
+        )
+
+        guard case .error(let message) = response else {
+            Issue.record("Expected an error, got \(response)")
+            return
+        }
+        #expect(message.contains("final message is your report"))
+        #expect(try await outbox(fixture.persistence).isEmpty)
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
     }
 
     @Test func blockedPeerChildEscalatesThroughOutbox() async throws {

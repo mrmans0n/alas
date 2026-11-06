@@ -604,7 +604,7 @@ public final class ACPSessionOrchestrationCoordinator {
                     id: "notice-\(record.childSessionId)-repo-hook-skipped",
                     sourceSessionId: record.childSessionId,
                     targetSessionId: record.parentSessionId,
-                    prompt: ACPDelegatedOutcomeText.peerRepoHookSkipped(context, machine: environment.machineName()),
+                    prompt: ACPDelegatedOutcomeText.peerRepoHookSkipped(context, machine: peerMachineName()),
                     createdAt: environment.now(),
                     kind: .notice
                 ), child: record)
@@ -662,6 +662,12 @@ public final class ACPSessionOrchestrationCoordinator {
         let targetParent: ACPDelegationRecord?
         do {
             callerParent = try await environment.persistence.parent(childSessionId: origin.sessionId)
+            if let callerParent, ACPPeerParent.serverId(from: callerParent.parentSessionId) != nil {
+                return .error(
+                    "This session was delegated from another machine and cannot message its parent. "
+                        + "Your final message is your report to the parent."
+                )
+            }
             targetParent = try await environment.persistence.parent(childSessionId: request.targetSessionId)
             let target = environment.sessionLocation(request.targetSessionId)
             guard let targetProjectId = target?.origin.projectId ?? targetParent?.projectId ?? callerParent?.projectId else {
@@ -1224,6 +1230,9 @@ public final class ACPSessionOrchestrationCoordinator {
             prompt = ACPDelegatedOutcomeText.failure(context, message: message)
         case (.wake, .stopped(let reason)):
             prompt = ACPDelegatedOutcomeText.stopped(context, reason: reason.summary)
+        case (.wake, _) where context.machine != nil:
+            // The child's final message is its report to a parent on another Mac.
+            prompt = ACPDelegatedOutcomeText.peerFinished(context, lastAgentText: completion.lastAgentText)
         case (.wake, _):
             prompt = ACPDelegatedOutcomeText.unreported(context, lastAgentText: completion.lastAgentText)
         }
@@ -1370,8 +1379,16 @@ public final class ACPSessionOrchestrationCoordinator {
             childSessionId: record.childSessionId,
             agentId: record.agentId,
             worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name },
-            role: record.role
+            role: record.role,
+            machine: ACPPeerParent.serverId(from: record.parentSessionId) == nil ? nil : peerMachineName()
         )
+    }
+
+    /// This Mac's name as the delegating Mac shows it: the Remote display name,
+    /// which defaults to the computer name.
+    private func peerMachineName() -> String {
+        let name = environment.machineName().trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "another Mac" : name
     }
 
     private func enqueueOutcome(_ message: ACPDelegatedMessage, child: ACPDelegationRecord) async {

@@ -188,6 +188,27 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("do not use SendMessage, ListAgents, or any other messaging or agent tool"))
     }
 
+    @Test(
+        "a child delegated from another machine reports with its final message and is not offered removed tools",
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+    )
+    func peerChildPreambleSaysFinalMessageIsTheReport(mode: ACPMCPPreambleMode) throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: true, userServerNames: [], mode: mode, isPeerChild: true))
+        #expect(text.contains(
+            "This session was delegated from another machine. Your final message is your report to the parent. "
+                + "It cannot be messaged in any other way."))
+        #expect(!text.contains("session_send"))
+        #expect(!text.contains("alas session send"))
+        #expect(!text.contains("delegated by a parent session"))
+        for removed in ["session_new", "computer", "vm_", "device_", "preview", "worktree_new", "worktree_delete",
+                        "worktree_switch", "workspace_", "alas wt", "alas open", "open (reveal"] {
+            #expect(!text.contains(removed), "\(removed)")
+        }
+        #expect(text.contains("notify"))
+        #expect(text.contains("review"))
+    }
+
     @Test("user servers are listed by name")
     func userServers() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
