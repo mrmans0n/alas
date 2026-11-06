@@ -41,8 +41,14 @@ public struct ACPDelegatedSessionNewRequest: Equatable, Sendable {
     public let worktree: ACPDelegatedSessionWorktreeTarget
     public var modelSelection: ACPDelegatedModelSelection? = nil
     public var role: String? = nil
+    /// A paired Mac (name or server id) to run the child on.
+    public var peer: String? = nil
+    /// The peer's project (id or name) when its origin match is not unique.
+    public var project: String? = nil
 
-    public init(prompt: String, agentId: String?, worktree: ACPDelegatedSessionWorktreeTarget, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil) {
+    public init(prompt: String, agentId: String?, worktree: ACPDelegatedSessionWorktreeTarget, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peer: String? = nil, project: String? = nil) {
+        self.peer = peer
+        self.project = project
         self.prompt = prompt
         self.agentId = agentId
         self.worktree = worktree
@@ -303,6 +309,10 @@ public struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
     /// The worktree whose install state `available` reflects.
     public let worktreeId: String
     public let agents: [ACPDelegationAgentSummary]
+    /// Every paired Mac, when the caller may delegate and asked about no peer.
+    public let peers: [ACPOrchestrationPeer]?
+    /// What the asked-about peer offers, when the caller named one.
+    public let peer: ACPOrchestrationPeerOffer?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case version
@@ -310,14 +320,92 @@ public struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
         case canDelegate = "can_delegate"
         case worktreeId = "worktree_id"
         case agents
+        case peers
+        case peer
     }
 
-    public init(version: Int, callerAgentId: String?, canDelegate: Bool, worktreeId: String, agents: [ACPDelegationAgentSummary]) {
+    public init(
+        version: Int, callerAgentId: String?, canDelegate: Bool, worktreeId: String, agents: [ACPDelegationAgentSummary],
+        peers: [ACPOrchestrationPeer]? = nil, peer: ACPOrchestrationPeerOffer? = nil
+    ) {
+        self.peers = peers
+        self.peer = peer
         self.version = version
         self.callerAgentId = callerAgentId
         self.canDelegate = canDelegate
         self.worktreeId = worktreeId
         self.agents = agents
+    }
+}
+
+/// A paired Mac, as `agent_list` shows it. No request is sent to learn this.
+public struct ACPOrchestrationPeer: Codable, Equatable, Sendable {
+    public let serverId: String
+    public let name: String
+    /// `online`, `offline`, `unverified` or `incompatible`.
+    public let state: String
+    public let supportsDelegation: Bool
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case serverId = "server_id"
+        case name
+        case state
+        case supportsDelegation = "supports_delegation"
+    }
+
+    public init(serverId: String, name: String, state: String, supportsDelegation: Bool) {
+        self.serverId = serverId
+        self.name = name
+        self.state = state
+        self.supportsDelegation = supportsDelegation
+    }
+}
+
+/// What one peer offers this Mac's agents: the projects matching the caller's
+/// repository and their worktrees. Its agents are the response's `agents`.
+public struct ACPOrchestrationPeerOffer: Codable, Equatable, Sendable {
+    public struct Project: Codable, Equatable, Sendable {
+        public struct Worktree: Codable, Equatable, Sendable {
+            public let name: String
+            public let branch: String
+            public let path: String
+
+            public init(name: String, branch: String, path: String) {
+                self.name = name
+                self.branch = branch
+                self.path = path
+            }
+        }
+
+        public let id: String
+        public let name: String
+        public let worktrees: [Worktree]
+
+        public init(id: String, name: String, worktrees: [Worktree]) {
+            self.id = id
+            self.name = name
+            self.worktrees = worktrees
+        }
+    }
+
+    public let serverId: String
+    public let name: String
+    /// `off`, `ask` or `autoRun`: what the peer lets this Mac's agents do.
+    public let access: String
+    public let projects: [Project]
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case serverId = "server_id"
+        case name
+        case access
+        case projects
+    }
+
+    public init(serverId: String, name: String, access: String, projects: [Project]) {
+        self.serverId = serverId
+        self.name = name
+        self.access = access
+        self.projects = projects
     }
 }
 

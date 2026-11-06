@@ -131,7 +131,19 @@ extension AlasCoreContext {
                 machineName: { [weak self] in
                     self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
                 },
-                delegationPeers: { [weak self] in self?.delegationPeers }
+                delegationPeers: { [weak self] in self?.delegationPeers },
+                originRemote: { worktree in
+                    let remotes = try? await GitService().remotes(worktreePath: worktree.path)
+                    return remotes?.first { $0.name == "origin" && $0.direction == .fetch }
+                        .flatMap { GitRemoteIdentity.normalized($0.url) }
+                },
+                resolvePeerWorktree: { selector, worktrees in
+                    switch AlasCLIWorktreeResolver.resolve(target: selector, worktrees: worktrees) {
+                    case .matched(let worktree): .matched(worktree)
+                    case .missing: .missing
+                    case .ambiguous(let labels): .ambiguous(labels)
+                    }
+                }
             )
         )
     }

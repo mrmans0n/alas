@@ -645,7 +645,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
         autoRunDefault: Bool = false,
         skipsRepoHook: Bool = false,
         peerWorktreeBase: Result<String, ACPSessionOrchestrationCoordinator.WorktreeCreationError> = .success("origin/main"),
-        onPeerWorktree: @escaping (_ base: String) -> Void = { _ in }
+        onPeerWorktree: @escaping (_ base: String) -> Void = { _ in },
+        peers: (any ACPDelegationPeers)? = nil,
+        originRemote: String? = "github.com/o/r"
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -703,7 +705,16 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 return .success(.init(worktree: worktree, skippedRepoHook: skipsRepoHook))
             },
             resolvePeerWorktreeBase: { _, _, _, _ in peerWorktreeBase },
-            machineName: { "Mini" }
+            machineName: { "Mini" },
+            delegationPeers: { peers },
+            originRemote: { _ in originRemote },
+            resolvePeerWorktree: { selector, worktrees in
+                switch AlasCLIWorktreeResolver.resolve(target: selector, worktrees: worktrees) {
+                case .matched(let match): .matched(match)
+                case .missing: .missing
+                case .ambiguous(let labels): .ambiguous(labels)
+                }
+            }
         ))
         return (coordinator, persistence, manager)
     }
@@ -2238,4 +2249,222 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await disabledFixture.coordinator.childBlocked(testBlocker())
         #expect(recorder.calls == [30])
     }
+
+    // MARK: Delegating to a peer
+
+    @MainActor
+    private final class FakePeers: ACPDelegationPeers {
+        var peers: [ACPDelegationPeerInfo]
+        var discovery: Result<ACPPeerDiscovery, ACPPeerError>
+        private(set) var discoverCalls: [(serverId: String, repository: String?)] = []
+        var onOutboxChanged: (@MainActor (String) -> Void)?
+        var onAvailabilityChanged: (@MainActor (String) -> Void)?
+
+        init(peers: [ACPDelegationPeerInfo], discovery: Result<ACPPeerDiscovery, ACPPeerError> = .success(FakePeers.offer())) {
+            self.peers = peers
+            self.discovery = discovery
+        }
+
+        static func offer(projects: [String] = ["alas"], access: String = "autoRun") -> ACPPeerDiscovery {
+            ACPPeerDiscovery(
+                access: access,
+                projects: projects.map { .init(id: "id-\($0)", name: $0) },
+                worktrees: projects.flatMap { name in
+                    [
+                        ACPPeerDiscovery.Worktree(projectID: "id-\(name)", path: "/Users/m/\(name)", branch: "main", isArchived: false),
+                        ACPPeerDiscovery.Worktree(projectID: "id-\(name)", path: "/Users/m/\(name)-old", branch: "old", isArchived: true),
+                    ]
+                },
+                agents: [
+                    .init(id: "codex", name: "Codex", isDefault: true, unavailableProjectIDs: []),
+                    .init(id: "claude", name: "Claude", isDefault: false, unavailableProjectIDs: projects.map { "id-\($0)" }),
+                ]
+            )
+        }
+
+        func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError> {
+            discoverCalls.append((serverId, repository))
+            return discovery
+        }
+        func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError> { .failure(.notFound) }
+        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> { .failure(.notFound) }
+        func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
+        func status(serverId: String, sessionIDs: [String]) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
+        func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> { .failure(.notFound) }
+        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> { .failure(.notFound) }
+    }
+
+    private static func peer(
+        _ name: String, id: String, state: ACPDelegationPeerState = .online, supportsDelegation: Bool = true
+    ) -> ACPDelegationPeerInfo {
+        .init(name: name, serverId: id, state: state, supportsDelegation: supportsDelegation)
+    }
+
+    private static let peerOrigin = ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "project", worktreeId: "worktree")
+
+    private func peerCreate(
+        _ fixture: (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager),
+        peer: String = "mini", project: String? = nil, worktree: ACPDelegatedSessionWorktreeTarget = .new(branch: "fix", base: nil)
+    ) async -> AlasCLIResponse {
+        await fixture.coordinator.create(
+            origin: Self.peerOrigin,
+            request: .init(prompt: "Do it", agentId: nil, worktree: worktree, peer: peer, project: project)
+        )
+    }
+
+    private func errorMessage(_ response: AlasCLIResponse) -> String {
+        guard case .error(let message) = response else { return "not an error: \(response)" }
+        return message
+    }
+
+    @Test("a peer with the implicit current worktree is refused before the peer is contacted")
+    func peerWithImplicitWorktreeIsAnError() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let message = errorMessage(await peerCreate(fixture, worktree: .current))
+
+        #expect(message.contains("--worktree") && message.contains("--new-worktree"))
+        #expect(peers.discoverCalls.isEmpty)
+    }
+
+    @Test("two peers sharing a name are listed with their server ids")
+    func ambiguousPeerNameListsServerIds() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1"), Self.peer("mini", id: "srv-2")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let message = errorMessage(await peerCreate(fixture))
+
+        #expect(message.contains("srv-1") && message.contains("srv-2"))
+        #expect(peers.discoverCalls.isEmpty)
+    }
+
+    @Test("a server id wins over a name, and an unknown peer lists the paired ones")
+    func unknownPeerListsPeers() async throws {
+        let peers = FakePeers(peers: [Self.peer("srv-2", id: "srv-1"), Self.peer("studio", id: "srv-2")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let unknown = errorMessage(await peerCreate(fixture, peer: "nope"))
+        #expect(unknown.contains("srv-2") && unknown.contains("studio") && unknown.contains("srv-1"))
+
+        _ = await peerCreate(fixture, peer: "srv-2")
+        #expect(peers.discoverCalls.map(\.serverId) == ["srv-2"])
+
+        let none = try makeModelSelectionFixture(client: makeSelectionClient(), peers: nil)
+        #expect(errorMessage(await peerCreate(none)).contains("No paired Macs"))
+    }
+
+    @Test("agent_list shows the paired Macs without calling any of them")
+    func agentListAddsPeersWithoutCallingThem() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1", state: .offline, supportsDelegation: false)])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let response = await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: nil)
+
+        let decoded = try decodeAgentList(response)
+        #expect(decoded.peers == [.init(serverId: "srv-1", name: "mini", state: "offline", supportsDelegation: false)])
+        #expect(decoded.peer == nil)
+        #expect(peers.discoverCalls.isEmpty)
+    }
+
+    @Test("agent_list for a peer sends the parent's origin and reports the matching projects")
+    func agentListForPeerSendsParentOriginAsRepository() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let decoded = try decodeAgentList(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: "mini"))
+
+        #expect(peers.discoverCalls.map(\.repository) == ["github.com/o/r"])
+        #expect(decoded.peers == nil)
+        #expect(decoded.peer == .init(serverId: "srv-1", name: "mini", access: "autoRun", projects: [
+            .init(id: "id-alas", name: "alas", worktrees: [.init(name: "alas", branch: "main", path: "/Users/m/alas")]),
+        ]))
+        #expect(decoded.agents.map(\.id) == ["codex", "claude"])
+        #expect(decoded.agents.map(\.available) == [true, false])
+    }
+
+    @Test("a peer that cannot be used is named with its state and gets no request")
+    func unusablePeerIsReportedWithoutARequest() async throws {
+        let peers = FakePeers(peers: [
+            Self.peer("mini", id: "srv-1", state: .offline), Self.peer("old", id: "srv-2", supportsDelegation: false),
+        ])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let offline = errorMessage(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: "mini"))
+        let outdated = errorMessage(await peerCreate(fixture, peer: "old"))
+
+        #expect(offline.contains("mini") && offline.contains("offline"))
+        #expect(outdated.contains("old"))
+        #expect(peers.discoverCalls.isEmpty)
+    }
+
+    @Test("several matching projects need --project, which picks by id or name")
+    func multipleMatchingProjectsRequireProject() async throws {
+        let peers = FakePeers(
+            peers: [Self.peer("mini", id: "srv-1")], discovery: .success(FakePeers.offer(projects: ["alas", "alas-fork"]))
+        )
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        let message = errorMessage(await peerCreate(fixture))
+        #expect(message.contains("alas") && message.contains("alas-fork") && message.contains("--project"))
+
+        #expect(errorMessage(await peerCreate(fixture, project: "id-alas-fork")).contains("not available yet"))
+        #expect(errorMessage(await peerCreate(fixture, project: "alas")).contains("not available yet"))
+        #expect(errorMessage(await peerCreate(fixture, project: "other")).contains("alas-fork"))
+    }
+
+    @Test("a parent without an origin remote needs --project")
+    func parentWithoutOriginNeedsProject() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers, originRemote: nil)
+
+        #expect(errorMessage(await peerCreate(fixture)).contains("--project"))
+        #expect(errorMessage(await peerCreate(fixture, project: "alas")).contains("not available yet"))
+        #expect(peers.discoverCalls.map(\.repository) == [nil, nil])
+    }
+
+    @Test("--worktree is resolved against the peer's worktrees, and --project needs --peer")
+    func peerWorktreeAndProjectRules() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+
+        #expect(errorMessage(await peerCreate(fixture, worktree: .existing(worktreeId: "main"))).contains("not available yet"))
+        let missing = errorMessage(await peerCreate(fixture, worktree: .existing(worktreeId: "old")))
+        #expect(missing.contains("old") && missing.contains("main"))
+
+        let stray = await fixture.coordinator.create(
+            origin: Self.peerOrigin,
+            request: .init(prompt: "Do it", agentId: nil, worktree: .current, project: "alas")
+        )
+        #expect(errorMessage(stray).contains("--peer"))
+    }
+
+    @Test("a delegated child cannot name a peer, and the peer is not contacted")
+    func delegatedChildCannotUsePeer() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
+        try await fixture.persistence.insert(.init(
+            childSessionId: "parent", parentSessionId: "root", projectId: "project",
+            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "claude",
+            worktreeRequest: .current(worktreeId: "worktree"), phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1
+        ))
+
+        let created = errorMessage(await peerCreate(fixture))
+        let listed = try decodeAgentList(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: nil))
+        let listedForPeer = errorMessage(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: "mini"))
+
+        #expect(created.contains("cannot create child sessions"))
+        #expect(listedForPeer.contains("cannot create child sessions"))
+        #expect(!listed.canDelegate && listed.peers == nil)
+        #expect(peers.discoverCalls.isEmpty)
+    }
+
+    private func decodeAgentList(_ response: AlasCLIResponse) throws -> ACPDelegationAgentListResponse {
+        guard case .text(let lines) = response, let line = lines.first else {
+            throw TestFailure("expected text, got \(response)")
+        }
+        return try JSONDecoder().decode(ACPDelegationAgentListResponse.self, from: Data(line.utf8))
+    }
+
+    private struct TestFailure: Error { let message: String; init(_ message: String) { self.message = message } }
 }

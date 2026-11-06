@@ -197,11 +197,11 @@ public struct AlasCLICommandRouter {
                 .map { request.virtualizingPaths(like: $0.path.path) } ?? request
 
             switch request.command {
-            case .agentList(let worktree):
-                return await host.delegation.agents(worktree: worktree, caller: caller)
+            case .agentList(let worktree, let peer):
+                return await host.delegation.agents(worktree: worktree, peer: peer, caller: caller)
             case .sessionList:
                 return await host.delegation.list(caller: caller)
-            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role):
+            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role, let peer, let project):
                 let target: ACPDelegatedSessionWorktreeTarget
                 switch worktree {
                 case .current:
@@ -217,7 +217,9 @@ public struct AlasCLICommandRouter {
                         agentId: agentID,
                         worktree: target,
                         modelSelection: ACPDelegatedModelSelection(model: model, reasoning: reasoning),
-                        role: role
+                        role: role,
+                        peer: peer,
+                        project: project
                     ),
                     caller: caller
                 )

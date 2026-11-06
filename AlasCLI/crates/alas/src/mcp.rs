@@ -393,7 +393,8 @@ fn all_tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "worktree": { "type": "string", "description": "Optional existing project worktree name or branch you plan to pass to session_new. Defaults to this session's worktree." }
+                    "worktree": { "type": "string", "description": "Optional existing project worktree name or branch you plan to pass to session_new. Defaults to this session's worktree." },
+                    "peer": { "type": "string", "description": "Optional paired Mac (name or server id) to ask instead: returns its matching projects, worktrees and agents. Without it, the answer also lists the paired Macs. Cannot be combined with worktree." }
                 }
             }
         }),
@@ -413,6 +414,8 @@ fn all_tool_definitions() -> Vec<Value> {
                     "model": { "type": "string", "description": "Optional model id for the child, taken from that agent's agent_list model_catalog. Alas sets it and waits for the agent to acknowledge it before sending the prompt. An id the agent does not offer fails the child instead of falling back to its default model. Omit to keep the agent's default." },
                     "role": { "type": "string", "description": "Optional child role, such as planner, implementer, or reviewer. Shown in Alas and included in the child context." },
                     "reasoning": { "type": "string", "description": "Optional reasoning level (for example low, medium, high) for agents that expose a reasoning config option. Applied before the prompt. Agents without one reject it instead of ignoring it." },
+                    "peer": { "type": "string", "description": "Optional paired Mac (name or server id from agent_list) to run the child on. Requires worktree or new_worktree." },
+                    "project": { "type": "string", "description": "The peer's project id or name, when peer is set and the repository does not match exactly one of its projects." },
                     "worktree": { "type": "string", "description": "Existing project worktree name or branch. Mutually exclusive with new_worktree." },
                     "new_worktree": {
                         "type": "object",
@@ -1347,6 +1350,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }
         "agent_list" => Ok(Command::AgentList {
             worktree: optional_non_blank_string(args, "worktree")?,
+            peer: optional_non_blank_string(args, "peer")?,
         }),
         "session_list" => Ok(Command::SessionList),
         "session_new" => {
@@ -1355,6 +1359,8 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             let model = optional_non_blank_string(args, "model")?;
             let reasoning = optional_non_blank_string(args, "reasoning")?;
             let role = optional_non_blank_string(args, "role")?;
+            let peer = optional_non_blank_string(args, "peer")?;
+            let project = optional_non_blank_string(args, "project")?;
             let new_worktree = match args.get("new_worktree") {
                 None => None,
                 Some(Value::Object(new_worktree)) => {
@@ -1384,6 +1390,8 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 model,
                 reasoning,
                 role,
+                peer,
+                project,
             })
         }
         "visual_show" => visual_show_command(args),
@@ -5629,12 +5637,21 @@ mod tests {
     fn session_tools_validate_and_map_arguments() {
         assert_eq!(
             command_for_tool("agent_list", &json!({}), "/wt").unwrap(),
-            alas_client::Command::AgentList { worktree: None }
+            alas_client::Command::AgentList {
+                worktree: None,
+                peer: None
+            }
         );
         assert_eq!(
-            command_for_tool("agent_list", &json!({ "worktree": "feature" }), "/wt").unwrap(),
+            command_for_tool(
+                "agent_list",
+                &json!({ "worktree": "feature", "peer": "mini" }),
+                "/wt"
+            )
+            .unwrap(),
             alas_client::Command::AgentList {
-                worktree: Some("feature".into())
+                worktree: Some("feature".into()),
+                peer: Some("mini".into())
             }
         );
         assert!(command_for_tool("agent_list", &json!({ "worktree": 3 }), "/wt").is_err());
@@ -5650,6 +5667,8 @@ mod tests {
                     "agent": "codex",
                     "model": "gpt-5.2",
                     "reasoning": "high",
+                    "peer": "mini",
+                    "project": "alas",
                     "new_worktree": { "branch": "child", "base": "origin/main" }
                 }),
                 "/wt"
@@ -5665,9 +5684,24 @@ mod tests {
                 model: Some("gpt-5.2".into()),
                 reasoning: Some("high".into()),
                 role: None,
+                peer: Some("mini".into()),
+                project: Some("alas".into()),
             }
         );
+        let tools = tool_definitions();
+        let schema = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap()["inputSchema"]["properties"]
+                .clone()
+        };
+        assert!(schema("session_new")["peer"].is_object());
+        assert!(schema("session_new")["project"].is_object());
+        assert!(schema("agent_list")["peer"].is_object());
         for invalid in [
+            json!({ "prompt": "Task", "peer": " " }),
+            json!({ "prompt": "Task", "project": 5 }),
             json!({ "prompt": "Task", "model": " " }),
             json!({ "prompt": "Task", "model": 5 }),
             json!({ "prompt": "Task", "reasoning": ["high"] }),

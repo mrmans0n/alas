@@ -54,6 +54,12 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
+    public enum PeerWorktreeResolution: Equatable, Sendable {
+        case matched(Worktree)
+        case missing
+        case ambiguous([String])
+    }
+
     public struct Environment {
         public let persistence: ACPOrchestrationPersistence
         public let instanceId: String
@@ -129,6 +135,11 @@ public final class ACPSessionOrchestrationCoordinator {
         public let machineName: () -> String
         /// How to reach paired Macs' hosts; nil when this build has no peer links.
         public let delegationPeers: () -> ACPDelegationPeers?
+        /// The normalized `origin` remote (`host/owner/repo`) of a worktree on
+        /// this Mac, wherever it runs; nil when it has none.
+        public let originRemote: (Worktree) async -> String?
+        /// Which of a peer's worktrees a `--worktree` selector names.
+        public let resolvePeerWorktree: (String, [Worktree]) -> PeerWorktreeResolution
 
         public init(
             persistence: ACPOrchestrationPersistence,
@@ -165,9 +176,16 @@ public final class ACPSessionOrchestrationCoordinator {
             },
             resolvePeerWorktreeBase: @escaping (String, String, String?, URL) async -> Result<String, WorktreeCreationError> = { _, base, _, _ in .success(base) },
             machineName: @escaping () -> String = { "this Mac" },
-            delegationPeers: @escaping () -> ACPDelegationPeers? = { nil }
+            delegationPeers: @escaping () -> ACPDelegationPeers? = { nil },
+            originRemote: @escaping (Worktree) async -> String? = { _ in nil },
+            resolvePeerWorktree: @escaping (String, [Worktree]) -> PeerWorktreeResolution = { selector, worktrees in
+                let matches = worktrees.filter { $0.branch == selector || $0.name == selector || $0.path.path == selector }
+                return matches.count == 1 ? .matched(matches[0]) : matches.isEmpty ? .missing : .ambiguous(matches.map(\.branch))
+            }
         ) {
             self.delegationPeers = delegationPeers
+            self.originRemote = originRemote
+            self.resolvePeerWorktree = resolvePeerWorktree
             self.admitChild = admitChild
             self.project = project
             self.createPeerWorktree = createPeerWorktree
@@ -267,7 +285,12 @@ public final class ACPSessionOrchestrationCoordinator {
     /// `worktreeSelector` mirrors `session_new`'s existing-worktree target:
     /// install state can differ per worktree, so a caller planning to spawn
     /// elsewhere in the project asks about that worktree.
-    public func discoverAgents(origin: ACPOrchestrationSessionOrigin, worktree worktreeSelector: String?) async -> AlasCLIResponse {
+    public func discoverAgents(
+        origin: ACPOrchestrationSessionOrigin, worktree worktreeSelector: String?, peer peerSelector: String? = nil
+    ) async -> AlasCLIResponse {
+        if peerSelector != nil, worktreeSelector != nil {
+            return .error("Pass either worktree or peer, not both: a peer's worktrees are in its answer.")
+        }
         let worktree: Worktree
         if let worktreeSelector {
             guard let resolved = environment.existingWorktree(origin.projectId, worktreeSelector) else {
@@ -291,14 +314,209 @@ public final class ACPSessionOrchestrationCoordinator {
         case .success: canDelegate = true
         case .failure: canDelegate = false
         }
+        let callerAgentId = environment.sessionLocation(origin.sessionId)?.manager
+            .liveSession(for: origin.sessionId)?.agentId
+        if let peerSelector {
+            guard canDelegate else { return .error(Self.delegatedChildCannotCreate) }
+            do {
+                let found = try await discoverOnPeer(peerSelector, near: worktree)
+                let matchedIDs = Set(found.discovery.projects.map(\.id))
+                return json(ACPDelegationAgentListResponse(
+                    version: ACPDelegationAgentListResponse.currentVersion,
+                    callerAgentId: callerAgentId,
+                    canDelegate: true,
+                    worktreeId: worktree.id,
+                    agents: found.discovery.agents.map { agent in
+                        let usable = matchedIDs.isEmpty || !matchedIDs.isSubset(of: agent.unavailableProjectIDs)
+                        return ACPDelegationAgentSummary(
+                            id: agent.id, displayName: agent.name, available: usable,
+                            availability: usable ? .available : .notInstalled,
+                            modelSelection: .unknown,
+                            modelCatalog: .init(state: usable ? .notLoaded : .unavailable, models: [])
+                        )
+                    },
+                    peer: ACPOrchestrationPeerOffer(
+                        serverId: found.peer.serverId, name: found.peer.name, access: found.discovery.access,
+                        projects: found.discovery.projects.map { project in
+                            .init(id: project.id, name: project.name, worktrees: Self.peerWorktrees(of: project, in: found.discovery).map {
+                                .init(name: $0.name, branch: $0.branch, path: $0.path.path)
+                            })
+                        }
+                    )
+                ))
+            } catch let failure as PeerRequestError {
+                return .error(failure.message)
+            } catch {
+                return .error("Could not ask the peer.")
+            }
+        }
         return json(ACPDelegationAgentListResponse(
             version: ACPDelegationAgentListResponse.currentVersion,
-            callerAgentId: environment.sessionLocation(origin.sessionId)?.manager
-                .liveSession(for: origin.sessionId)?.agentId,
+            callerAgentId: callerAgentId,
             canDelegate: canDelegate,
             worktreeId: worktree.id,
-            agents: await environment.delegationAgents(origin, worktree)
+            agents: await environment.delegationAgents(origin, worktree),
+            peers: canDelegate ? environment.delegationPeers().map { peers in
+                peers.peers.map {
+                    ACPOrchestrationPeer(
+                        serverId: $0.serverId, name: $0.name, state: $0.state.rawValue,
+                        supportsDelegation: $0.supportsDelegation
+                    )
+                }
+            } : nil
         ))
+    }
+
+    // MARK: Delegating to a paired Mac
+
+    private static let delegatedChildCannotCreate = "Delegated sessions cannot create child sessions."
+
+    private struct PeerRequestError: Error {
+        let message: String
+    }
+
+    private static func message(for error: ACPPeerError) -> String {
+        switch error {
+        case .unreachable(let peer): "\(peer) cannot be reached right now. Check that it is online and paired."
+        case .outdated(let peer): "\(peer) runs a version of Alas that cannot take delegated work. Update Alas on it."
+        case .revoked(let peer): "This Mac's pairing with \(peer) was revoked."
+        case .refused(let reason): reason
+        case .notFound: "The peer has no such session."
+        }
+    }
+
+    /// The paired Mac `selector` names: a server id first, then an exact name.
+    private func resolvePeer(_ selector: String) throws -> (peers: ACPDelegationPeers, info: ACPDelegationPeerInfo) {
+        guard let peers = environment.delegationPeers(), !peers.peers.isEmpty else {
+            throw PeerRequestError(message: "No paired Macs. Pair another Mac in Settings to delegate to it.")
+        }
+        func described(_ infos: [ACPDelegationPeerInfo]) -> String {
+            infos.map { "\($0.name) (\($0.serverId))" }.joined(separator: ", ")
+        }
+        let info: ACPDelegationPeerInfo
+        if let byID = peers.peers.first(where: { $0.serverId == selector }) {
+            info = byID
+        } else {
+            let named = peers.peers.filter { $0.name == selector }
+            switch named.count {
+            case 1: info = named[0]
+            case 0:
+                throw PeerRequestError(message: "No paired Mac is named \"\(selector)\". Paired Macs: \(described(peers.peers)).")
+            default:
+                throw PeerRequestError(
+                    message: "Several paired Macs are named \"\(selector)\": \(described(named)). Pass the server id instead."
+                )
+            }
+        }
+        guard info.supportsDelegation else {
+            throw PeerRequestError(message: Self.message(for: .outdated(peer: info.name)))
+        }
+        guard info.state == .online else {
+            let reason = info.state == .incompatible ? Self.message(for: .outdated(peer: info.name)) : Self.message(for: .unreachable(peer: info.name))
+            throw PeerRequestError(message: "\(info.name) is \(info.state.rawValue). \(reason)")
+        }
+        return (peers, info)
+    }
+
+    /// Asks the peer `selector` names about the projects whose origin is
+    /// that of `worktree`, or all of them when `worktree` has none.
+    private func discoverOnPeer(
+        _ selector: String, near worktree: Worktree
+    ) async throws -> (peer: ACPDelegationPeerInfo, discovery: ACPPeerDiscovery, repository: String?) {
+        let (peers, info) = try resolvePeer(selector)
+        let repository = await environment.originRemote(worktree)
+        switch await peers.discover(serverId: info.serverId, repository: repository) {
+        case .success(let discovery): return (info, discovery, repository)
+        case .failure(let error): throw PeerRequestError(message: Self.message(for: error))
+        }
+    }
+
+    private static func peerWorktrees(of project: ACPPeerDiscovery.Project, in discovery: ACPPeerDiscovery) -> [Worktree] {
+        discovery.worktrees.filter { $0.projectID == project.id && !$0.isArchived }.map {
+            Worktree(
+                id: $0.path, projectId: $0.projectID, name: URL(fileURLWithPath: $0.path).lastPathComponent,
+                branch: $0.branch, path: URL(fileURLWithPath: $0.path), status: .clean, lastActivity: .distantPast
+            )
+        }
+    }
+
+    /// The one project of the peer the child belongs to.
+    private func chooseProject(
+        _ project: String?, in found: (peer: ACPDelegationPeerInfo, discovery: ACPPeerDiscovery, repository: String?)
+    ) throws -> ACPPeerDiscovery.Project {
+        let projects = found.discovery.projects
+        let name = found.peer.name
+        func described(_ projects: [ACPPeerDiscovery.Project]) -> String {
+            projects.map { "\($0.name) (\($0.id))" }.joined(separator: ", ")
+        }
+        guard let project else {
+            guard found.repository != nil else {
+                throw PeerRequestError(
+                    message: "This worktree has no origin remote, so pass --project. \(name)'s projects: \(described(projects))."
+                )
+            }
+            switch projects.count {
+            case 1: return projects[0]
+            case 0: throw PeerRequestError(message: "None of \(name)'s projects has this repository as its origin. Pass --project to name one that does.")
+            default:
+                throw PeerRequestError(
+                    message: "Several of \(name)'s projects match this repository: \(described(projects)). Pass --project."
+                )
+            }
+        }
+        var matches = projects.filter { $0.id == project }
+        if matches.isEmpty { matches = projects.filter { $0.name == project } }
+        switch matches.count {
+        case 1: return matches[0]
+        case 0:
+            throw PeerRequestError(
+                message: "\(name) has no matching project \"\(project)\". Its projects: \(projects.isEmpty ? "none" : described(projects))."
+            )
+        default:
+            throw PeerRequestError(message: "Several of \(name)'s projects are named \"\(project)\": \(described(matches)). Pass the id.")
+        }
+    }
+
+    /// Checks everything a delegation to a peer needs, then stops: sending
+    /// is not wired up yet.
+    private func createOnPeer(
+        _ selector: String, project: String?, worktree target: ACPDelegatedSessionWorktreeTarget,
+        origin: ACPOrchestrationSessionOrigin
+    ) async -> AlasCLIResponse {
+        if case .current = target {
+            return .error("A peer cannot use this worktree. Pass --worktree or --new-worktree to say where the child runs there.")
+        }
+        guard let current = environment.worktree(origin.worktreeId) else {
+            return .error("The current worktree is no longer available.")
+        }
+        do {
+            let found = try await discoverOnPeer(selector, near: current)
+            let chosen = try chooseProject(project, in: found)
+            switch target {
+            case .current:
+                break
+            case .existing(let selector):
+                let worktrees = Self.peerWorktrees(of: chosen, in: found.discovery)
+                switch environment.resolvePeerWorktree(selector, worktrees) {
+                case .matched: break
+                case .missing:
+                    throw PeerRequestError(
+                        message: "\(found.peer.name) has no worktree \"\(selector)\" in \(chosen.name). Its worktrees: \(worktrees.map(\.branch).joined(separator: ", "))."
+                    )
+                case .ambiguous(let labels):
+                    throw PeerRequestError(message: "\"\(selector)\" matches several of \(chosen.name)'s worktrees: \(labels.joined(separator: ", ")).")
+                }
+            case .new(let branch, _):
+                if case .invalid(let message) = GitNameValidator.validateBranchName(branch) {
+                    throw PeerRequestError(message: "invalid branch name: \(message)")
+                }
+            }
+        } catch let failure as PeerRequestError {
+            return .error(failure.message)
+        } catch {
+            return .error("Could not ask the peer.")
+        }
+        return .error("Delegating to another machine is not available yet.")
     }
 
     public func create(
@@ -317,7 +535,10 @@ public final class ACPSessionOrchestrationCoordinator {
             return .error("Could not verify session delegation.")
         }
         guard case .success = ACPSessionOrchestrationPolicy.authorizeCreate(parent: parent) else {
-            return .error("Delegated sessions cannot create child sessions.")
+            return .error(Self.delegatedChildCannotCreate)
+        }
+        if request.peer == nil, request.project != nil {
+            return .error("--project only applies with --peer.")
         }
 
         let prompt: String
@@ -330,6 +551,10 @@ public final class ACPSessionOrchestrationCoordinator {
             return .error("prompt must not be blank")
         } catch {
             return .error("Could not validate delegated session request.")
+        }
+
+        if let peer = request.peer {
+            return await createOnPeer(peer, project: request.project, worktree: request.worktree, origin: origin)
         }
 
         let childID = environment.makeID()
