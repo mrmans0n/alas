@@ -3491,6 +3491,18 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(try await phase(after.persistence, "old") == .ready)
     }
 
+    /// A forgotten peer's name comes from its record, not through the client.
+    @Test func aRevokedPeersNameIsSanitizedInWhatItTellsTheParent() async throws {
+        let peers = FakePeers(peers: [])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, phase: .starting)
+
+        await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "Mi\u{202E}ni\n`x`", forgotten: true)
+
+        let record = try await fixture.persistence.delegation(childSessionId: "child")
+        #expect(record?.failureMessage == "Mini x was forgotten on this Mac")
+    }
+
     @Test func peerBackBeforeTheDelaySendsNothingAndEachOutageGetsItsOwnNotice() async throws {
         let scheduled = ScheduledWork()
         let seconds = Seconds()

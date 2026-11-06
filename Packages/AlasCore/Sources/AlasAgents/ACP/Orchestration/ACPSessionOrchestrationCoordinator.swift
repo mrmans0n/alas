@@ -797,6 +797,7 @@ public final class ACPSessionOrchestrationCoordinator {
     /// forgotten here. Its unfinished children fail with one wake each.
     /// `name` is passed because a forgotten peer is no longer listed.
     public func peerRevoked(serverId: String, name: String, forgotten: Bool) async {
+        let name = ACPPeerName.sanitized(name) ?? serverId
         revokedPeerNames[serverId] = name
         peerOutages[serverId] = nil
         if forgotten {
@@ -820,6 +821,7 @@ public final class ACPSessionOrchestrationCoordinator {
     /// next and has no business attaching agents. The wake waits in the inbox,
     /// written with the phase, for the next launch's recovery to deliver.
     public func peerForgottenWithoutHost(serverId: String, name: String) async {
+        let name = ACPPeerName.sanitized(name) ?? serverId
         revokedPeerNames[serverId] = name
         await deleteOutbox(forPeer: serverId)
         guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }

@@ -47,6 +47,23 @@ struct PeerDelegationClientTests {
         #expect(peer.requests.isEmpty)
     }
 
+    /// A peer's name is set by a person and reaches agents' prompts, in the
+    /// list and in what a failed request says.
+    @Test func peerNamesLeaveSanitized() async {
+        let hostile = "Mi\u{202E}ni\n`x`"
+        links.hello = [
+            RemoteHelloPeer(serverId: "mini", name: hostile, state: "online"),
+            RemoteHelloPeer(serverId: "blank", name: "\u{202E}", state: "offline"),
+        ]
+        links.sessionCarryingPeers = [FederatedPeerInfo(serverId: "mini", name: hostile)]
+        links.capabilities = []
+        let client = client()
+
+        #expect(client.peers.map(\.name) == ["Mini x", "blank"])
+        #expect(await client.send(serverId: "mini", sessionID: "c1", prompt: "go").failureValue == .outdated(peer: "Mini x"))
+        #expect(await client.send(serverId: "blank", sessionID: "c1", prompt: "go").failureValue == .unreachable(peer: "blank"))
+    }
+
     @Test func unverifiedOrOfflinePeerIsUnreachable() async {
         links.sessionCarryingPeers = []
         let result = await client().interrupt(serverId: "mini", sessionID: "c1")

@@ -88,36 +88,9 @@ public enum ACPMCPPromptPreamble: Sendable {
     static let peerChildReportSentence = "This session was delegated from another machine. "
         + "Your final message is your report to the parent. It cannot be messaged in any other way."
 
-    static let maxPeerNameLength = 64
-
-    /// Peer names are set by people and go into a prompt: control characters
-    /// keep only letters, digits, marks, spaces and `-._'()`. Everything else
-    /// (format, bidi, zero-width and tag characters, quotes, backticks,
-    /// brackets) is dropped, whitespace is collapsed, each is capped, and
-    /// empty ones are removed.
+    /// See `ACPPeerName`. Names with nothing left are removed.
     public static func sanitizedPeerNames(_ names: [String]) -> [String] {
-        names.compactMap { name in
-            var cleaned = ""
-            for scalar in name.unicodeScalars {
-                switch scalar.properties.generalCategory {
-                case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
-                     .decimalNumber, .nonspacingMark, .spacingMark, .enclosingMark:
-                    cleaned.unicodeScalars.append(scalar)
-                default:
-                    if "-._'()".unicodeScalars.contains(scalar) {
-                        cleaned.unicodeScalars.append(scalar)
-                    } else if scalar == "\t" || scalar == "\n" || scalar == "\r"
-                                || scalar.properties.generalCategory == .spaceSeparator
-                                || scalar.properties.generalCategory == .lineSeparator
-                                || scalar.properties.generalCategory == .paragraphSeparator {
-                        cleaned.unicodeScalars.append(" ")
-                    }
-                }
-            }
-            let collapsed = cleaned.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
-            let capped = String(collapsed.prefix(maxPeerNameLength))
-            return capped.isEmpty ? nil : capped
-        }
+        names.compactMap(ACPPeerName.sanitized)
     }
 
     /// Tells a root agent which paired Macs it may try. Whether a Mac has

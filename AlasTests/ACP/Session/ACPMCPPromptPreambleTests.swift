@@ -252,6 +252,8 @@ struct ACPMCPPromptPreambleTests {
             ("  \n ", nil),
             ("\u{202E}\u{200D}", nil),
             (String(repeating: "x", count: 200), String(repeating: "x", count: 64)),
+            // Stacked marks are one character, so they are capped as scalars.
+            ("a" + String(repeating: "\u{0301}", count: 200), "a" + String(repeating: "\u{0301}", count: 63)),
         ]
         for (input, expected) in cases {
             #expect(ACPMCPPromptPreamble.sanitizedPeerNames([input]) == (expected.map { [$0] } ?? []), "\(input.debugDescription)")

@@ -1,5 +1,6 @@
 import Foundation
 import AlasModel
+import AlasACP
 import AlasAgents
 
 /// Sends a paired Mac's host the delegation requests the orchestration
@@ -29,7 +30,7 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     public var peers: [ACPDelegationPeerInfo] {
         links.helloPeers.map { peer in
             ACPDelegationPeerInfo(
-                name: peer.name, serverId: peer.serverId, state: Self.state(of: peer.state),
+                name: Self.label(peer.name, serverId: peer.serverId), serverId: peer.serverId, state: Self.state(of: peer.state),
                 supportsDelegation: links.peerSupports(HostProtocolCapability.delegationV1, serverId: peer.serverId)
             )
         }
@@ -143,17 +144,23 @@ public final class PeerDelegationClient: ACPDelegationPeers {
                 ? .revoked(peer: name(of: serverId))
                 : .unreachable(peer: name(of: serverId)))
         }
+        let name = Self.label(carrying.name, serverId: serverId)
         guard links.peerSupports(HostProtocolCapability.delegationV1, serverId: serverId) else {
-            return .failure(.outdated(peer: carrying.name))
+            return .failure(.outdated(peer: name))
         }
-        guard let channel = channel(serverId) else { return .failure(.unreachable(peer: carrying.name)) }
+        guard let channel = channel(serverId) else { return .failure(.unreachable(peer: name)) }
         let response = await channel.request(request, timeout: timeout)
         guard case .failure(let error) = response else { return .success(response) }
-        return .failure(Self.map(error, peer: carrying.name))
+        return .failure(Self.map(error, peer: name))
     }
 
     private func name(of serverId: String) -> String {
-        links.helloPeers.first { $0.serverId == serverId }?.name ?? serverId
+        links.helloPeers.first { $0.serverId == serverId }.map { Self.label($0.name, serverId: serverId) } ?? serverId
+    }
+
+    /// What agents here call a peer, in the list and in what a request says.
+    private static func label(_ name: String, serverId: String) -> String {
+        ACPPeerName.sanitized(name) ?? serverId
     }
 
     /// Only a typed `SessionRefusal.notFound` is `notFound`. The two messages
