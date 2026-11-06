@@ -189,8 +189,9 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
-    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence) throws -> Bool {
-        try openedStore().bindV2FreshBroker(state: state, fence: fence)
+    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence,
+        authorize: @Sendable () -> Bool = { true }) throws -> Bool {
+        try openedStore().bindV2FreshBroker(state: state, fence: fence, authorize: authorize)
     }
 
     public func bindV2FreshSession(upstreamSessionId: String, source: ACPV2InboundLedgerSource,
@@ -463,8 +464,10 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
     public func updateACPBrokerAcknowledgedCursor(
         sessionId: String,
         state: ACPBrokerDurableState,
-        fence: ACPSessionLeaseFence?
+        fence: ACPSessionLeaseFence?,
+        authorize: @escaping @Sendable () -> Bool = { true }
     ) throws -> Bool {
+        guard authorize(), !Task.isCancelled else { return false }
         let store = try openedStore()
         let generation = try sqliteBrokerInt64(state.generation.rawValue, field: "generation")
         let acknowledgedCursor = try sqliteBrokerInt64(
@@ -472,16 +475,29 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
             field: "acknowledged cursor"
         )
         let operation = {
-            try store.updateACPBrokerAcknowledgedCursor(
+            guard authorize(), !Task.isCancelled else { return false }
+            let updated = try store.updateACPBrokerAcknowledgedCursor(
                 sessionId: sessionId,
                 brokerId: state.brokerId.rawValue,
                 generation: generation,
                 cursor: acknowledgedCursor,
                 wireContext: state.wireContext
             )
+            guard authorize(), !Task.isCancelled else { throw ACPV2BrokerStateWriteError.invalidated }
+            return updated
         }
-        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
-        return try operation()
+        do {
+            if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+            try store.db.exec("BEGIN IMMEDIATE")
+            do {
+                let result = try operation()
+                try store.db.exec("COMMIT")
+                return result
+            } catch {
+                try? store.db.exec("ROLLBACK")
+                throw error
+            }
+        } catch ACPV2BrokerStateWriteError.invalidated { return false }
     }
 
     @discardableResult

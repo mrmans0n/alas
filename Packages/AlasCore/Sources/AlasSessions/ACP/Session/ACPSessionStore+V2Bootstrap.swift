@@ -12,11 +12,16 @@ public struct ACPV2FreshSessionBinding: Equatable, Sendable {
 
 public enum ACPV2FreshSessionBindingError: Error, Equatable, Sendable { case staleLease, conflict }
 
+enum ACPV2BrokerStateWriteError: Error { case invalidated }
+
 extension ACPSessionStore {
-    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence) throws -> Bool {
+    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence,
+        authorize: @Sendable () -> Bool = { true }) throws -> Bool {
         guard state.wireContext == .rawV2, state.generation.rawValue > 0,
               state.generation.rawValue <= UInt64(Int64.max), state.acknowledgedCursor.rawValue == 0 else { return false }
-        return try withLeaseFence(fence, {
+        guard authorize(), !Task.isCancelled else { return false }
+        do { return try withLeaseFence(fence, {
+            guard authorize(), !Task.isCancelled else { return false }
             guard let lease = try loadLease(sessionId: fence.sessionId),
                   lease.ownerInstance.utf8.elementsEqual(fence.ownerInstance.utf8),
                   lease.token.utf8.elementsEqual(fence.token.utf8),
@@ -32,9 +37,11 @@ extension ACPSessionStore {
                 && row.acpBrokerGeneration == Int64(state.generation.rawValue) && row.acpBrokerAcknowledgedCursor == 0
                 && recordedContext == state.wireContext
             guard empty || identical else { return false }
-            return try updateACPBrokerState(sessionId: fence.sessionId, brokerId: state.brokerId.rawValue,
+            let updated = try updateACPBrokerState(sessionId: fence.sessionId, brokerId: state.brokerId.rawValue,
                 generation: Int64(state.generation.rawValue), acknowledgedCursor: 0, wireContext: state.wireContext)
-        }) ?? false
+            guard authorize(), !Task.isCancelled else { throw ACPV2BrokerStateWriteError.invalidated }
+            return updated
+        }) ?? false } catch ACPV2BrokerStateWriteError.invalidated { return false }
     }
 
     public func bindV2FreshSession(upstreamSessionId: String, source: ACPV2InboundLedgerSource,

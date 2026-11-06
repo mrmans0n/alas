@@ -46,6 +46,22 @@ struct ACPBrokerRawClientTests {
         #expect(await service.acks.isEmpty)
     }
 
+    @Test(arguments: ["legacy", "started", "terminated", "foreign"])
+    func orderedBrokerClaimsRejectIncompatibleOwnership(phase: String) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service, context: phase == "legacy" ? .legacyV1 : .rawV2)
+        defer { Task { await client.detach() } }
+        if phase == "started" { _ = try await client.start() }
+        if phase == "terminated" { await client.detach() }
+        if phase == "foreign" {
+            let foreign = makeClient(service)
+            let own = try await client.claimV2OrderedIntake()
+            let other = try await foreign.claimV2OrderedIntake()
+            #expect(throws: (any Error).self) { try client.validateV2OrderedIntake(other) }
+            try client.validateV2OrderedIntake(own)
+        } else { await #expect(throws: (any Error).self) { try await client.claimV2OrderedIntake() } }
+    }
+
     @Test func orderedBrokerCaptureWaitsForThePendingJournalOrigin() async throws {
         let service = RawBrokerFixture()
         var pending = await service.pendingRequest()
@@ -188,7 +204,8 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
-    @Test func freshBrokerRunnerBindsBeforeSetupAndWithdrawsOnDetach() async throws {
+    @Test(arguments: [false, true])
+    func freshBrokerRunnerBindsBeforeSetupAndWithdrawsOnDetach(loseLeaseOnAck: Bool) async throws {
         let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
         let service = RawBrokerFixture(rawBytes: bytes, acceptedMessageID: "u")
         await service.setFreshBootstrap(true)
@@ -196,6 +213,13 @@ struct ACPBrokerRawClientTests {
         let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("runner-broker-\(UUID()).sqlite").path)
         try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Runner", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        if loseLeaseOnAck {
+            let path = persistence.path
+            await service.beforeNextAck {
+                let store = try ACPSessionStore(path: path)
+                try store.db.exec("UPDATE session_leases SET lease_token='replacement' WHERE session_id='s'")
+            }
+        }
         let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "Runner")
         let runner = try await ACPV2SessionRunner.makeBroker(session: session, client: client, persistence: persistence,
             fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), info: .init(name: "alas", version: "test"),
@@ -203,6 +227,14 @@ struct ACPBrokerRawClientTests {
         defer { runner.stop()
         Task { await client.detach() } }
         #expect(await service.openCount == 0)
+        if loseLeaseOnAck {
+            do { _ = try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60))) } catch {}
+            try await eventually { await MainActor.run { runner.status != .ready && runner.status != .starting && runner.status != .idle } }
+            #expect(await service.acks.first.map { $0 > 0 } == true)
+            #expect(try await persistence.loadSession(id: "s")?.acpBrokerAcknowledgedCursor == 0)
+            #expect(await service.closeCount == 0)
+            return
+        }
         let result = try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60)))
         #expect(result.sessionId == "upstream" && runner.status == .ready)
         let row = try #require(await persistence.loadSession(id: "s"))
@@ -226,9 +258,10 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
-    @Test(arguments: ["adopted", "existing-session", "stop-open"])
+    @Test(arguments: ["adopted", "existing-session", "stop-open", "wrong-session", "deadline-open"])
     func freshBrokerRunnerRejectsSetupWithoutChangingExistingBinding(reason: String) async throws {
-        let service = RawBrokerFixture(delayOpen: reason == "stop-open")
+        let service = RawBrokerFixture(delayOpen: reason == "stop-open" || reason == "deadline-open")
+        if reason == "wrong-session" { await service.setLocalSessionID("foreign") }
         await service.setFreshBootstrap(reason != "adopted")
         let client = makeClient(service)
         let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("refused-runner-\(UUID()).sqlite").path)
@@ -246,12 +279,13 @@ struct ACPBrokerRawClientTests {
         await client.detach() } }
         let finished = Mutex(false)
         let starting = Task { defer { finished.withLock { $0 = true } }
-        return try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60))) }
+        return try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(reason == "deadline-open" ? 1 : 60))) }
         if reason == "stop-open" {
             try await eventually { await service.openCount == 1 }
             runner.stop()
             try await eventually { finished.withLock { $0 } }
         }
+        if reason == "deadline-open" { try await eventually(within: .seconds(3)) { finished.withLock { $0 } } }
         await #expect(throws: (any Error).self) { try await starting.value }
         #expect(await service.sentRequests.isEmpty)
         #expect(try await persistence.loadSession(id: "s") == before)
@@ -1210,15 +1244,18 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
-    @Test(arguments: ["written", "finalizing", "cancelled", "ambiguous"])
-    func brokerIDReuseFollowsCurrentPendingOriginsBeforeResponsePersistenceCompletes(phase: String) async throws {
+    @Test(arguments: ["written", "finalizing", "cancelled", "ambiguous"], [false, true])
+    func brokerIDReuseFollowsCurrentPendingOriginsBeforeResponsePersistenceCompletes(phase: String, ordered: Bool) async throws {
         let notice = Data(#"{"jsonrpc":"2.0","method":"peer/notice"}"#.utf8)
         let service = RawBrokerFixture(rawBytes: notice)
         var firstPending = ACPBrokerPendingRequest(requestId: "p", adapterRequestId: .string("p"), kind: .permission, payload: .null)
         firstPending.rawFrame = .init(bytes: Data(#"{"jsonrpc":"2.0","id":"p","method":"session/request_permission","params":{"sessionId":"upstream","title":"Choose","options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}"#.utf8))
         firstPending.originCursor = .init(rawValue: 1)
         await service.setPendingOverride([firstPending])
+        await service.setInitialPendingEvent(firstPending)
+        await service.setFreshBootstrap(ordered)
         let client = makeClient(service)
+        let intake = ordered ? try await client.claimV2OrderedIntake() : nil
         let opened = try await client.start()
         defer { Task { await client.detach() } }
         let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("broker-reuse-\(UUID()).sqlite").path)
@@ -1232,7 +1269,7 @@ struct ACPBrokerRawClientTests {
         let journal = ResponseJournal(base: persistence, hold: "observation")
         let control = DecisionControl()
         let coordinator = ACPV2RequestDecisionCoordinator(upstreamSessionId: "upstream", support: .init(), isCurrent: { true }, onEvent: { control.events.append($0) })
-        let runtime = try ACPV2AttachmentRuntime(sessionId: "s", upstreamSessionId: "upstream", attachment: .init(brokerClient: client, opened: opened),
+        let runtime = try ACPV2AttachmentRuntime(sessionId: "s", upstreamSessionId: "upstream", attachment: .init(brokerClient: client, opened: opened, orderedIntake: intake),
             fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), journals: .init(persistence: persistence, responses: journal), isCurrent: { true }, onRequest: { _ in },
             onInbound: coordinator.receive, onLifecycleChange: coordinator.runtimeDidChange)
         defer { coordinator.stop()
@@ -1240,7 +1277,8 @@ struct ACPBrokerRawClientTests {
         Task { await journal.release()
         await service.releaseReply() } }
         try coordinator.bind(to: runtime)
-        _ = runtime.start()
+        if ordered { try await runtime.startFreshOrdered() }
+        else { _ = runtime.start() }
         try await eventually { await MainActor.run { runtime.status == .ready && control.handles.count == 1 } }
         let first = control.handles[0]
         var sending: Task<ACPV2ResponseOwner.Receipt, Error>?
@@ -1356,6 +1394,8 @@ struct ACPBrokerRawClientTests {
 }
 
 private actor RawBrokerFixture: ACPBrokerServicing {
+    private var initialPendingEvent: ACPBrokerPendingRequest?
+    func setInitialPendingEvent(_ pending: ACPBrokerPendingRequest) { initialPendingEvent = pending }
     private var scriptedPages: [ACPBrokerAttachResult] = []
     var scriptedPageCount = 0
     func setReplayPages(_ pages: [ACPBrokerAttachResult]) { scriptedPages = pages }
@@ -1364,6 +1404,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func publishTerminal(_ method: String) {
         extraEvents.append(.init(cursor: .init(rawValue: 3), kind: .adapterNotification(method: method, params: .null)))
     }
+    private var localSessionID = "s"
+    func setLocalSessionID(_ id: String) { localSessionID = id }
     private var freshBootstrap = false
     func setFreshBootstrap(_ value: Bool) { freshBootstrap = value }
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
@@ -1468,7 +1510,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     }
     func snapshot() -> ACPBrokerSnapshot {
         var metadata = ACPBrokerMetadata(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7),
-            alasSessionId: "s", adapterProgram: "fixture", adapterArgs: [], cwd: "/tmp", envKeys: [], createdAtMillis: 0)
+            alasSessionId: localSessionID, adapterProgram: "fixture", adapterArgs: [], cwd: "/tmp", envKeys: [], createdAtMillis: 0)
         metadata.wireContext = context
         var snapshot = ACPBrokerSnapshot(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
             turnState: .unknown("unknown"), acknowledgedCursor: .init(rawValue: acks.last ?? 0),
@@ -1510,6 +1552,9 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         throw ACPClientError.notRunning }
         var events = (1...2).map { ACPBrokerEvent(cursor: .init(rawValue: UInt64($0)), kind: .rawFrame(.init(bytes: rawBytes))) }
             .filter { $0.cursor > (params.replayAfterCursor ?? params.acknowledgedCursor) }
+        if let initialPendingEvent, let index = events.firstIndex(where: { $0.cursor == initialPendingEvent.originCursor }) {
+            events[index] = .init(cursor: events[index].cursor, kind: .pendingRequest(initialPendingEvent))
+        }
         if pending, let index = events.firstIndex(where: { $0.cursor.rawValue == 1 }) {
             events[index] = .init(cursor: .init(rawValue: 1), kind: .pendingRequest(pendingRequest()))
         }
@@ -1566,7 +1611,13 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func notify(_ params: ACPBrokerNotifyParams) -> ACPBrokerSimpleOK { .init(ok: true) }
     func respond(_ params: ACPBrokerRespondParams) -> ACPBrokerSimpleOK { sentResponses.append(params)
     return .init(ok: true) }
-    func ack(_ params: ACPBrokerAckParams) -> ACPBrokerSimpleOK { acks.append(params.cursor.rawValue)
+    private var ackHook: (@Sendable () async throws -> Void)?
+    func beforeNextAck(_ hook: @escaping @Sendable () async throws -> Void) { ackHook = hook }
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        acks.append(params.cursor.rawValue)
+        let hook = ackHook
+        ackHook = nil
+        try await hook?()
     return .init(ok: true) }
     func detach(_ params: ACPBrokerDetachParams) -> ACPBrokerSimpleOK { detachCount += 1
     return .init(ok: true) }

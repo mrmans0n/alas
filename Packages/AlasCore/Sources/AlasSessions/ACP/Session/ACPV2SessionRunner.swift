@@ -45,6 +45,8 @@ public final class ACPV2SessionRunner {
     private var bufferedBrokerStates: [ACPBrokerDurableState] = []
     private var brokerControlTask: Task<Void, Never>?
     private var brokerMirrorTask: Task<Void, Never>?
+    private var brokerMirrorWorkers: [UUID: Task<Void, Never>] = [:]
+    private let brokerAuthority = Cancellation()
     private let persistence: ACPSessionPersistence
     private let fence: ACPSessionLeaseFence
     private let info: ACPImplementationInfo
@@ -140,6 +142,13 @@ public final class ACPV2SessionRunner {
     public func start(params: ACPV2SessionNewParams, deadline: ContinuousClock.Instant) async throws -> ACPV2SessionNewResult {
         guard status == .idle else { throw Failure.invalidated }
         try requireCurrent()
+        guard deadline > .now else { terminate(.failed(message: "Session startup deadline expired"))
+        throw Failure.invalidated }
+        let timeout = Task { [weak self] in
+            do { try await ContinuousClock().sleep(until: deadline) } catch { return }
+            self?.terminate(.failed(message: "Session startup deadline expired"))
+        }
+        defer { timeout.cancel() }
         setStatus(.starting)
         do { return try await perform { try await self.startBody(params: params, deadline: deadline) } }
         catch { if active { terminate(.failed(message: String(describing: error))) }
@@ -154,10 +163,13 @@ public final class ACPV2SessionRunner {
                 }
                 let opened = try await brokerClient.start()
                 try requireCurrent()
+                guard opened.snapshot.metadata.alasSessionId.utf8.elementsEqual(session.id.utf8) else { throw Failure.invalidInput }
                 let attachment = try await ACPV2SessionBootstrap.Attachment(brokerClient: brokerClient, opened: opened, orderedIntake: brokerIntake)
                 let identity = ACPBrokerDurableState(brokerId: opened.snapshot.metadata.brokerId,
                     generation: opened.snapshot.metadata.generation, acknowledgedCursor: .init(rawValue: 0), wireContext: .rawV2)
-                guard try await persistence.bindV2FreshBroker(state: identity, fence: fence) else { throw Failure.invalidated }
+                let authority = brokerAuthority
+                guard try await persistence.bindV2FreshBroker(state: identity, fence: fence,
+                    authorize: { !authority.isCancelled && brokerIntake.isValid }) else { throw Failure.invalidated }
                 try requireCurrent()
                 self.attachment = attachment
                 brokerIdentity = identity
@@ -246,17 +258,25 @@ public final class ACPV2SessionRunner {
 
     private func enqueueBrokerMirror(_ state: ACPBrokerDurableState) {
         let previous = brokerMirrorTask
-        brokerMirrorTask = Task { [weak self] in
+        let id = UUID()
+        let worker = Task { [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled, self.current() else { return }
+            guard let self else { return }
+            defer { self.brokerMirrorWorkers.removeValue(forKey: id) }
+            guard !Task.isCancelled, self.current() else { return }
             do {
                 guard let identity = self.brokerIdentity,
                       state.brokerId.rawValue.utf8.elementsEqual(identity.brokerId.rawValue.utf8),
                       state.generation == identity.generation, state.wireContext == .rawV2 else { throw Failure.invalidated }
-                guard try await self.persistence.updateACPBrokerAcknowledgedCursor(sessionId: self.session.id, state: state, fence: self.fence) else { throw Failure.invalidated }
+                let authority = self.brokerAuthority
+                let intake = self.brokerIntake
+                guard try await self.persistence.updateACPBrokerAcknowledgedCursor(sessionId: self.session.id, state: state, fence: self.fence,
+                    authorize: { !authority.isCancelled && intake?.isValid == true }) else { throw Failure.invalidated }
                 try self.requireCurrent()
             } catch { self.terminate(.failed(message: String(describing: error))) }
         }
+        brokerMirrorTask = worker
+        brokerMirrorWorkers[id] = worker
     }
     private func requireCurrent() throws {
         try Task.checkCancellation()
@@ -329,8 +349,11 @@ public final class ACPV2SessionRunner {
     private func terminate(_ status: Status) {
         guard active else { return }
         active = false
+        brokerAuthority.cancel()
         brokerControlTask?.cancel()
-        brokerMirrorTask?.cancel()
+        for worker in brokerMirrorWorkers.values { worker.cancel() }
+        brokerMirrorWorkers.removeAll()
+        brokerMirrorTask = nil
         bufferedBrokerStates.removeAll()
         terminating = true
         setStatus(status)

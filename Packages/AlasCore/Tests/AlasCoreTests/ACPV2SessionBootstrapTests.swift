@@ -48,6 +48,27 @@ struct ACPV2SessionBootstrapTests {
         } else { #expect(try await persistence.loadSession(id: "local") == before) }
     }
 
+    @Test(arguments: [0, 2])
+    func withdrawnBrokerStateAuthorityCannotCommit(checks: Int) async throws {
+        let persistence = try await Self.persistence()
+        let state = ACPBrokerDurableState(brokerId: .init(rawValue: "fresh"), generation: .init(rawValue: 7), acknowledgedCursor: .init(rawValue: 0), wireContext: .rawV2)
+        let before = try await persistence.loadSession(id: "local")
+        let bindingChecks = Mutex(checks)
+        #expect(try await persistence.bindV2FreshBroker(state: state, fence: Self.fence, authorize: {
+            bindingChecks.withLock { remaining in defer { remaining -= 1 }
+            return remaining > 0 }
+        }) == false)
+        #expect(try await persistence.loadSession(id: "local") == before)
+        #expect(try await persistence.bindV2FreshBroker(state: state, fence: Self.fence))
+        let mirrorChecks = Mutex(checks)
+        let advanced = ACPBrokerDurableState(brokerId: state.brokerId, generation: state.generation, acknowledgedCursor: .init(rawValue: 5), wireContext: .rawV2)
+        #expect(try await persistence.updateACPBrokerAcknowledgedCursor(sessionId: "local", state: advanced, fence: Self.fence, authorize: {
+            mirrorChecks.withLock { remaining in defer { remaining -= 1 }
+            return remaining > 0 }
+        }) == false)
+        #expect(try await persistence.loadSession(id: "local")?.acpBrokerAcknowledgedCursor == 0)
+    }
+
     @Test func runtimeInstallationHookRunsBeforeStartupAndCanWithdrawIt() async throws {
         let persistence = try await Self.persistence()
         let transport = BootstrapTransport()
