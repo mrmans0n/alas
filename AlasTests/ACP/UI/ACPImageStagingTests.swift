@@ -114,6 +114,19 @@ struct ACPImageStagingTests {
         #expect(URL(string: staged.absoluteString)?.lastPathComponent == "my report.pdf")
     }
 
+    @Test("a dropped symlink stages the file it points at, under the link's name")
+    func stagesPDFThroughSymlink() throws {
+        let dir = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("target.pdf")
+        try Self.pdfBytes.write(to: target)
+        let link = dir.appendingPathComponent("link.pdf")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let staged = try ACPAttachmentStaging.stagePDF(fileURL: link, inDirectory: dir.appendingPathComponent("out"))
+        #expect(staged.lastPathComponent == "link.pdf")
+        #expect(try Data(contentsOf: staged) == Self.pdfBytes)
+    }
+
     @Test("sanitizes a file name", arguments: [
         ("report.pdf", "report.pdf"),
         ("Report.PDF", "Report.pdf"),
@@ -139,7 +152,8 @@ struct ACPImageStagingTests {
     }
 
     enum StagedShape: CaseIterable, Sendable {
-        case own, missing, otherWorktree, dotDotEscape, linkEscape, worktreeLinkIn, flatFile, notAFileURI
+        case own, missing, otherWorktree, otherWorktreeMissing, otherWorktreeLink
+        case dotDotEscape, encodedDotDot, encodedSlash, linkEscape, worktreeLinkIn, flatFile, notAFileURI
     }
 
     @Test("only this worktree's own staged path counts as staged", arguments: StagedShape.allCases)
@@ -163,9 +177,20 @@ struct ACPImageStagingTests {
         case .missing:
             (uri, expected) = (staged.deletingLastPathComponent().appendingPathComponent("gone.pdf").absoluteString, .missing)
         case .otherWorktree:
-            (uri, expected) = (foreign.absoluteString, .notStaged)
+            (uri, expected) = (foreign.absoluteString, .otherWorktree)
+        case .otherWorktreeMissing:
+            (uri, expected) = (foreign.deletingLastPathComponent().appendingPathComponent("gone.pdf").absoluteString, .otherWorktree)
+        case .otherWorktreeLink:
+            let link = foreign.deletingLastPathComponent().appendingPathComponent("link.pdf")
+            try fm.createSymbolicLink(at: link, withDestinationURL: root.appendingPathComponent("elsewhere.pdf"))
+            try Self.pdfBytes.write(to: root.appendingPathComponent("elsewhere.pdf"))
+            (uri, expected) = (link.absoluteString, .notStaged)
         case .dotDotEscape:
             (uri, expected) = ("file://\(own.path)/\(hash)/../../wt-b/\(hash)/b.pdf", .notStaged)
+        case .encodedDotDot:
+            (uri, expected) = ("file://\(own.path)/\(hash)/%2e%2e/%2e%2e/wt-b/\(hash)/b.pdf", .notStaged)
+        case .encodedSlash:
+            (uri, expected) = ("file://\(root.path)/wt-b%2F\(hash)/b.pdf", .notStaged)
         case .linkEscape:
             let link = staged.deletingLastPathComponent().appendingPathComponent("link.pdf")
             try fm.createSymbolicLink(at: link, withDestinationURL: foreign)

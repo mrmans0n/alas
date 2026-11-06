@@ -4709,6 +4709,7 @@ extension ACPSessionTests {
             return
         }
         #expect(tc.assets == [.resource(uri: "file:///tmp/tiny.pdf", name: "tiny.pdf", mimeType: "application/pdf")])
+        #expect(tc.appliedItemsSnapshot == [.content(.blobResource(uri: "file:///tmp/tiny.pdf", mimeType: "application/pdf", blob: ""))])
         let payload = try ACPMessageCodec.encode(session.transcript.messages[0])
         #expect(!String(decoding: payload, as: UTF8.self).contains("QkxPQkJZVEVT"))
     }

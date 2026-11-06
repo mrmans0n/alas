@@ -17,7 +17,7 @@ public enum ACPAttachmentStaging: Sendable {
         public var userMessage: String {
             switch self {
             case .notPDF: "That file isn't a PDF."
-            case .tooLarge: "That PDF is too large (max 20 MB)."
+            case .tooLarge: "That PDF is too large (max 20 MiB)."
             case .unreadable: "Couldn't read that PDF."
             case .writeFailed: "Couldn't save that PDF. Please try again."
             }
@@ -26,8 +26,10 @@ public enum ACPAttachmentStaging: Sendable {
 
     /// What a mention's URI is to this worktree's attachments.
     public enum StagedReference: Equatable, Sendable {
-        /// Any other mention, including another worktree's staged file.
+        /// Any other mention, including a path that only reaches a staged file through `..` or a symlink.
         case notStaged
+        /// Another worktree's staged path. Never read.
+        case otherWorktree
         /// This worktree's staged path, with no file behind it.
         case missing
         case file(URL)
@@ -52,9 +54,12 @@ public enum ACPAttachmentStaging: Sendable {
 
     /// Checks the size from metadata first, so an oversized file isn't loaded just to be refused.
     public static func stagePDF(fileURL: URL, inDirectory directory: URL) throws -> URL {
-        guard let size = regularFileSize(atPath: fileURL.path) else { throw StagingError.unreadable }
+        // A dropped symlink is the file it points at; `attributesOfItem` would describe the link.
+        guard let source = realPath(fileURL.path), let size = regularFileSize(atPath: source) else {
+            throw StagingError.unreadable
+        }
         guard size <= maxPDFBytesPerMessage else { throw StagingError.tooLarge }
-        guard let data = try? Data(contentsOf: fileURL) else { throw StagingError.unreadable }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: source)) else { throw StagingError.unreadable }
         return try stagePDF(data: data, fileName: fileURL.lastPathComponent, inDirectory: directory)
     }
 
@@ -93,61 +98,58 @@ public enum ACPAttachmentStaging: Sendable {
 
     // MARK: - Send time
 
-    /// Whether `uri` is exactly this worktree's `<sha256>/<name>.pdf`. Compared
-    /// against what the kernel resolves, so neither `..` nor a symlink, in either
-    /// direction, can make another file count as staged. No bytes are read.
+    /// What `uri` is to the attachments. The path is taken as spelled, so a dot
+    /// segment breaks the exact shape, and compared against what the kernel
+    /// resolves, so a symlink in either direction doesn't count. No bytes are read.
     public static func stagedReference(uri: String, attachmentsDirectory: URL) -> StagedReference {
         guard let url = URL(string: uri), url.isFileURL else { return .notStaged }
-        let directory = attachmentsDirectory.standardizedFileURL.path
-        let realDirectory = realPath(attachmentsDirectory.path) ?? directory
-        let lexical = url.standardizedFileURL.path
-        guard let relative = [directory, realDirectory].lazy
-            .compactMap({ lexical.hasPrefix($0 + "/") ? String(lexical.dropFirst($0.count + 1)) : nil })
-            .first
-        else { return .notStaged }
-        let components = relative.split(separator: "/", omittingEmptySubsequences: false)
-        guard components.count == 2, isSHA256Hex(components[0]), components[1].hasSuffix(".pdf") else {
-            return .notStaged
+        let path = url.path
+        if let relative = relativePath(path, under: attachmentsDirectory) {
+            let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+            guard parts.count == 2, isStagedShape(hash: parts[0], name: parts[1]) else { return .notStaged }
+            guard let real = realPath(path) else { return .missing }
+            return real == resolvedPath(of: attachmentsDirectory) + "/" + relative
+                ? .file(URL(fileURLWithPath: real)) : .notStaged
         }
-        guard let real = realPath(url.path) else { return .missing }
-        let expected = realDirectory + "/" + relative
-        return real == expected ? .file(URL(fileURLWithPath: real)) : .notStaged
+        let root = attachmentsDirectory.deletingLastPathComponent()
+        guard let relative = relativePath(path, under: root) else { return .notStaged }
+        let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, isStagedShape(hash: parts[1], name: parts[2]) else { return .notStaged }
+        guard let real = realPath(path) else { return .otherWorktree }
+        return real == resolvedPath(of: root) + "/" + relative ? .otherWorktree : .notStaged
     }
 
-    /// The blobs for every staged PDF in `blocks`, by block index. Everything is
-    /// checked from metadata before any file is read, and the magic bytes are
-    /// checked again because a staged file can change between attach and send.
+    /// Everything that can refuse `blocks` without reading a file's bytes: where
+    /// each staged mention points, the adapter, and the size limits. Cheap enough
+    /// to run before anything irreversible, such as cancelling a turn or recording a row.
+    public static func preflightRefusal(
+        of blocks: [ACPContentBlock],
+        agentInfo: ACPImplementationInfo?,
+        promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
+        attachmentsDirectory: URL
+    ) -> ACPPromptRefusal? {
+        do {
+            _ = try stagedPDFs(
+                in: blocks, agentInfo: agentInfo,
+                promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
+            try ACPPromptSizeGuard.check(blocks)
+            return nil
+        } catch {
+            return error as? ACPPromptRefusal
+        }
+    }
+
+    /// The blobs for every staged PDF in `blocks`, by block index. The magic bytes
+    /// are checked here because a staged file can change between attach and send.
     public static func embeddedPDFBlocks(
         in blocks: [ACPContentBlock],
         agentInfo: ACPImplementationInfo?,
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         attachmentsDirectory: URL
     ) throws -> [Int: ACPContentBlock] {
-        var staged: [(index: Int, uri: String, name: String, reference: StagedReference)] = []
-        for (index, block) in blocks.enumerated() {
-            guard case .resourceLink(let uri, let name) = block else { continue }
-            let reference = stagedReference(uri: uri, attachmentsDirectory: attachmentsDirectory)
-            if reference != .notStaged {
-                staged.append((index, uri, name ?? URL(string: uri)?.lastPathComponent ?? uri, reference))
-            }
-        }
-        guard !staged.isEmpty else { return [:] }
-        guard ACPEmbeddedPDFSupport.supports(agentInfo: agentInfo, promptCapabilities: promptCapabilities) else {
-            throw ACPPromptRefusal.pdfNotSupportedByAgent(name: staged[0].name)
-        }
-        guard staged.count <= maxPDFsPerMessage else { throw ACPPromptRefusal.tooManyPDFs(count: staged.count) }
-
-        var files: [(index: Int, uri: String, name: String, url: URL)] = []
-        var totalBytes = 0
-        for item in staged {
-            guard case .file(let url) = item.reference,
-                  let size = regularFileSize(atPath: url.path)
-            else { throw ACPPromptRefusal.pdfMissing(name: item.name) }
-            totalBytes += size
-            guard totalBytes <= maxPDFBytesPerMessage else { throw ACPPromptRefusal.pdfsTooLarge(name: item.name) }
-            files.append((item.index, item.uri, item.name, url))
-        }
-
+        let files = try stagedPDFs(
+            in: blocks, agentInfo: agentInfo,
+            promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
         var embedded: [Int: ACPContentBlock] = [:]
         var readBytes = 0
         for file in files {
@@ -159,6 +161,37 @@ public enum ACPAttachmentStaging: Sendable {
             embedded[file.index] = .blobResource(uri: file.uri, mimeType: pdfMIMEType, blob: data.base64EncodedString())
         }
         return embedded
+    }
+
+    private static func stagedPDFs(
+        in blocks: [ACPContentBlock],
+        agentInfo: ACPImplementationInfo?,
+        promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
+        attachmentsDirectory: URL
+    ) throws -> [(index: Int, uri: String, name: String, url: URL)] {
+        var staged: [(index: Int, uri: String, name: String, reference: StagedReference)] = []
+        for (index, block) in blocks.enumerated() {
+            guard case .resourceLink(let uri, let name) = block else { continue }
+            let reference = stagedReference(uri: uri, attachmentsDirectory: attachmentsDirectory)
+            let displayName = name ?? URL(string: uri)?.lastPathComponent ?? uri
+            // On any adapter: its bytes belong to another worktree, and a link would lose them silently.
+            if reference == .otherWorktree { throw ACPPromptRefusal.pdfFromAnotherWorktree(name: displayName) }
+            if reference != .notStaged { staged.append((index, uri, displayName, reference)) }
+        }
+        guard !staged.isEmpty else { return [] }
+        guard ACPEmbeddedPDFSupport.supports(agentInfo: agentInfo, promptCapabilities: promptCapabilities) else {
+            throw ACPPromptRefusal.pdfNotSupportedByAgent(name: staged[0].name)
+        }
+        guard staged.count <= maxPDFsPerMessage else { throw ACPPromptRefusal.tooManyPDFs(count: staged.count) }
+        var totalBytes = 0
+        return try staged.map { item in
+            guard case .file(let url) = item.reference, let size = regularFileSize(atPath: url.path) else {
+                throw ACPPromptRefusal.pdfMissing(name: item.name)
+            }
+            totalBytes += size
+            guard totalBytes <= maxPDFBytesPerMessage else { throw ACPPromptRefusal.pdfsTooLarge(name: item.name) }
+            return (item.index, item.uri, item.name, url)
+        }
     }
 
     // MARK: - Files
@@ -178,7 +211,20 @@ public enum ACPAttachmentStaging: Sendable {
         return String(cString: resolved)
     }
 
-    private static func isSHA256Hex(_ text: Substring) -> Bool {
-        text.utf8.count == 64 && text.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    private static func resolvedPath(of directory: URL) -> String {
+        realPath(directory.path) ?? directory.standardizedFileURL.path
+    }
+
+    /// `path` below `directory`, spelled either as given or as resolved: the
+    /// directory itself may sit behind a symlink.
+    private static func relativePath(_ path: String, under directory: URL) -> String? {
+        [directory.standardizedFileURL.path, resolvedPath(of: directory)].lazy
+            .compactMap { path.hasPrefix($0 + "/") ? String(path.dropFirst($0.count + 1)) : nil }
+            .first
+    }
+
+    private static func isStagedShape(hash: Substring, name: Substring) -> Bool {
+        hash.utf8.count == 64 && name.hasSuffix(".pdf")
+            && hash.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
     }
 }

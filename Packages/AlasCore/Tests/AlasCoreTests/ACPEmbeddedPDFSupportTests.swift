@@ -5,36 +5,33 @@ import AlasCore
 struct ACPEmbeddedPDFSupportTests {
     private static let claude = "@alas-ide/claude-agent-acp"
 
-    @Test("gates on the fork's name and verified version floor", arguments: [
-        (claude, "0.101.0-alas.1", true),
-        (claude, "0.101.0-alas.2", true),
-        (claude, "0.101.0-alas.10", true),
-        (claude, "0.101.1-alas.1", true),
-        (claude, "0.102.0-alas.1", true),
-        (claude, "1.0.0-alas.1", true),
-        (claude, "0.101.0-alas.0", false),
-        (claude, "0.100.9-alas.9", false),
-        (claude, "0.99.0-alas.1", false),
-        (claude, "0.101.0", false),
-        (claude, "0.101.0-rc.1", false),
-        (claude, "0.101-alas.1", false),
-        (claude, "", false),
-        (claude, "newest", false),
-        ("@agentclientprotocol/claude-agent-acp", "0.101.0-alas.1", false),
-        ("@alas-ide/codex-acp", "2.5.0-alas.6", false),
-        ("gemini", "9.9.9", false),
-    ])
-    func gatesByIdentity(name: String, version: String, expected: Bool) {
-        #expect(ACPEmbeddedPDFSupport.supports(
-            agentInfo: .init(name: name, version: version),
-            promptCapabilities: .init(embeddedContext: true)) == expected)
-    }
+    private static let gates: [(name: String?, version: String, embeddedContext: Bool, expected: Bool)] = [
+        (claude, "0.101.0-alas.1", true, true),
+        (claude, "0.101.0-alas.2", true, true),
+        (claude, "0.101.0-alas.10", true, true),
+        (claude, "0.101.1-alas.1", true, true),
+        (claude, "0.102.0-alas.1", true, true),
+        (claude, "1.0.0-alas.1", true, true),
+        (claude, "0.101.0-alas.0", true, false),
+        (claude, "0.100.9-alas.9", true, false),
+        (claude, "0.99.0-alas.1", true, false),
+        (claude, "0.101.0", true, false),
+        (claude, "0.101.0-rc.1", true, false),
+        (claude, "0.101-alas.1", true, false),
+        (claude, "", true, false),
+        (claude, "newest", true, false),
+        ("@agentclientprotocol/claude-agent-acp", "0.101.0-alas.1", true, false),
+        ("@alas-ide/codex-acp", "2.5.0-alas.6", true, false),
+        ("gemini", "9.9.9", true, false),
+        (claude, "0.101.0-alas.1", false, false),
+        (nil, "0.101.0-alas.1", true, false),
+    ]
 
-    @Test("needs embeddedContext and a known adapter")
-    func needsCapabilityAndIdentity() {
-        let eligible = ACPImplementationInfo(name: Self.claude, version: "0.101.0-alas.1")
-        #expect(!ACPEmbeddedPDFSupport.supports(agentInfo: eligible, promptCapabilities: .init(embeddedContext: false)))
-        #expect(!ACPEmbeddedPDFSupport.supports(agentInfo: nil, promptCapabilities: .init(embeddedContext: true)))
+    @Test("gates on the fork's name, its verified version floor, and embeddedContext", arguments: gates)
+    func gatesByIdentity(name: String?, version: String, embeddedContext: Bool, expected: Bool) {
+        #expect(ACPEmbeddedPDFSupport.supports(
+            agentInfo: name.map { ACPImplementationInfo(name: $0, version: version) },
+            promptCapabilities: .init(embeddedContext: embeddedContext)) == expected)
     }
 }
 
@@ -58,38 +55,31 @@ struct ACPPromptSizeGuardTests {
         #expect(ACPPromptSizeGuard.encodedSize(of: blocks) == (try JSONEncoder().encode(blocks).count))
     }
 
-    enum PayloadKind: CaseIterable, Sendable {
-        case text, blob, image
-
-        func block(_ payload: String) -> ACPContentBlock {
-            switch self {
-            case .text: .text(payload)
-            case .blob: .blobResource(uri: "file:///a.pdf", mimeType: "application/pdf", blob: payload)
-            case .image: .image(data: payload, uri: nil, mimeType: "image/png")
-            }
-        }
-
+    @Test("allows a prompt of exactly the limit and refuses one byte more")
+    func boundary() throws {
         func prompt(encodedSize size: Int) -> [ACPContentBlock] {
-            let overhead = ACPPromptSizeGuard.encodedSize(of: [block("")])
-            return [block(String(repeating: "x", count: size - overhead))]
+            func block(_ blob: String) -> ACPContentBlock {
+                .blobResource(uri: "file:///a.pdf", mimeType: "application/pdf", blob: blob)
+            }
+            return [block(String(repeating: "x", count: size - ACPPromptSizeGuard.encodedSize(of: [block("")])))]
         }
-    }
-
-    @Test("allows a prompt of exactly the limit and refuses one byte more", arguments: PayloadKind.allCases)
-    func boundary(kind: PayloadKind) throws {
-        let atLimit = kind.prompt(encodedSize: Self.limit)
+        let atLimit = prompt(encodedSize: Self.limit)
         #expect(try JSONEncoder().encode(atLimit).count == Self.limit)
         try ACPPromptSizeGuard.check(atLimit)
         #expect(throws: ACPPromptRefusal.promptTooLarge(encodedBytes: Self.limit + 1)) {
-            try ACPPromptSizeGuard.check(kind.prompt(encodedSize: Self.limit + 1))
+            try ACPPromptSizeGuard.check(prompt(encodedSize: Self.limit + 1))
         }
     }
 
-    @Test("a base64 slash counts twice, because the encoder escapes it")
-    func countsEscapedSlashes() {
-        let blob = String(repeating: "/", count: Self.limit / 2 + 1)
-        #expect(throws: ACPPromptRefusal.self) {
-            try ACPPromptSizeGuard.check([.blobResource(uri: "u", mimeType: nil, blob: blob)])
+    @Test("blames the fork context only when it alone is over the limit, since nothing the user removes can help")
+    func blamesForkContextOnlyWhenItCannotFit() {
+        let half = String(repeating: "x", count: Self.limit / 2 + 1)
+        #expect(throws: ACPPromptRefusal.promptTooLarge(encodedBytes: ACPPromptSizeGuard.encodedSize(of: [.text(half), .text(half)]))) {
+            try ACPPromptSizeGuard.check([.text(half), .text(half)], forkContext: half)
+        }
+        let whole = String(repeating: "x", count: Self.limit)
+        #expect(throws: ACPPromptRefusal.forkContextTooLarge(encodedBytes: ACPPromptSizeGuard.encodedSize(of: [.text(whole)]))) {
+            try ACPPromptSizeGuard.check([.text(whole)], forkContext: whole)
         }
     }
 

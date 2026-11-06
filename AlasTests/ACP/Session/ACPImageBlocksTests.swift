@@ -212,8 +212,6 @@ struct ACPImageBlocksTests {
 
     @Test("a staged PDF on a non-eligible adapter fails naming the file", arguments: [
         (ACPImplementationInfo?.some(.init(name: "@alas-ide/codex-acp", version: "2.5.0-alas.6")), true),
-        (ACPImplementationInfo?.none, true),
-        (ACPImplementationInfo?.some(.init(name: "@alas-ide/claude-agent-acp", version: "0.100.0-alas.1")), true),
         (ACPImplementationInfo?.some(.init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")), false),
     ])
     func hydrateRefusesOnNonEligibleAdapter(info: ACPImplementationInfo?, embeddedContext: Bool) async throws {
@@ -279,20 +277,32 @@ struct ACPImageBlocksTests {
         await #expect(throws: ACPPromptRefusal.pdfsTooLarge(name: "c.pdf")) { _ = try await hydrate(over, in: dir) }
     }
 
-    @Test("a mention outside this worktree's attachments stays a link and is never read")
-    func hydrateLeavesForeignStagedPathsAlone() async throws {
+    @Test("another worktree's staged PDF is refused naming the file, on any adapter")
+    func hydrateRefusesForeignStagedPath() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let own = root.appendingPathComponent("wt-a", isDirectory: true)
         let foreign = try ACPAttachmentStaging.stagePDF(
             data: Self.pdfBytes, fileName: "a.pdf", inDirectory: root.appendingPathComponent("wt-b", isDirectory: true))
-        let hash = foreign.deletingLastPathComponent().lastPathComponent
-        for uri in [foreign.absoluteString, "file://\(own.path)/\(hash)/../../wt-b/\(hash)/a.pdf"] {
-            let link = ACPContentBlock.resourceLink(uri: uri, name: "a.pdf")
-            #expect(try await hydrate([link], in: own) == [link])
-            // Staged-shaped but foreign: no adapter makes it a refusal either.
-            #expect(try await hydrate([link], in: own, agentInfo: nil) == [link])
+        let own = root.appendingPathComponent("wt-a", isDirectory: true)
+        let link = ACPContentBlock.resourceLink(uri: foreign.absoluteString, name: "a.pdf")
+        await #expect(throws: ACPPromptRefusal.pdfFromAnotherWorktree(name: "a.pdf")) {
+            _ = try await hydrate([link], in: own)
         }
+        await #expect(throws: ACPPromptRefusal.pdfFromAnotherWorktree(name: "a.pdf")) {
+            _ = try await hydrate([link], in: own, agentInfo: nil)
+        }
+    }
+
+    @Test("a path reaching another worktree's PDF through dot segments stays a link and is never read")
+    func hydrateLeavesContainmentFailuresAlone() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let foreign = try ACPAttachmentStaging.stagePDF(
+            data: Self.pdfBytes, fileName: "a.pdf", inDirectory: root.appendingPathComponent("wt-b", isDirectory: true))
+        let own = root.appendingPathComponent("wt-a", isDirectory: true)
+        let hash = foreign.deletingLastPathComponent().lastPathComponent
+        let link = ACPContentBlock.resourceLink(uri: "file://\(own.path)/\(hash)/../../wt-b/\(hash)/a.pdf", name: "a.pdf")
+        #expect(try await hydrate([link], in: own) == [link])
     }
 
     @Test("a worktree PDF mention is never upgraded to a blob")

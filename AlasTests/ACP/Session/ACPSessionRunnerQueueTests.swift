@@ -3946,11 +3946,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(users.count == 1)
     }
 
-    private func waitUntil(
-        seconds: UInt64 = 1,
-        _ condition: @escaping @MainActor () -> Bool
-    ) async throws {
-        let deadline = DispatchTime.now().uptimeNanoseconds + seconds * 1_000_000_000
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
         while !condition(), DispatchTime.now().uptimeNanoseconds < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
@@ -4618,31 +4615,32 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.lastError?.contains(refused.expectedInError) == true)
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
         #expect(runner.activePromptIDForTesting == nil)
-        try await waitUntil { session.transcript.streamingState == .idle }
+        #expect(session.transcript.messages.isEmpty, "resending must not show the prompt twice")
+        #expect(session.transcript.streamingState == .idle)
     }
 
-    @Test("a refused queued prompt stays at the head with the reason and is not resent",
-          .timeLimit(.minutes(1)), arguments: RefusedPrompt.allCases)
-    func refusedQueuedPrompt(refused: RefusedPrompt) async throws {
+    @Test("a refused queued prompt stays at the head with the reason, unrecorded and not resent", .timeLimit(.minutes(1)))
+    func refusedQueuedPrompt() async throws {
         let (runner, mock, session, _) = try mkRunner()
         defer { runner.stop() }
-        let blocks = refused.prepare(session)
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
         session.enqueue(blocks: blocks)
         session.enqueue(blocks: [.text("next")])
         runner.flushQueueIfIdle()
-        try await waitUntil(seconds: 30) { session.queue.first?.lastError != nil }
-        #expect(session.queue.first?.lastError?.contains(refused.expectedInError) == true)
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.queue.first?.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
         #expect(session.queue.first?.status == .pending)
         #expect(session.queue.first?.blocks == blocks)
         #expect(session.queue.count == 2)
-        try await waitUntil(seconds: 30) { session.transcript.streamingState == .idle }
+        #expect(session.transcript.messages.isEmpty)
         #expect(runner.activePromptIDForTesting == nil)
         runner.flushQueueIfIdle()
         await runner.flushPersistence()
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
     }
 
-    @Test("a refused steer keeps the follow-up queued with the reason and does not reach the agent",
+    // `.oversized` too: native steering has no preflight, only its own guard.
+    @Test("a refused native steer keeps the follow-up queued with the reason, unrecorded, and frees the next one",
           .timeLimit(.minutes(1)), arguments: RefusedPrompt.allCases)
     func refusedSteer(refused: RefusedPrompt) async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -4659,9 +4657,67 @@ struct ACPSessionRunnerQueueTests {
         #expect(item.blocks == blocks)
         #expect(item.status == .pending)
         #expect(item.lastError?.contains(refused.expectedInError) == true)
-        #expect(!item.deliveryUncertain, "nothing left Alas, so there is no doubt about delivery")
+        #expect(!item.deliveryUncertain, "nothing left Alas, so there is no delivery to doubt")
         #expect(!mock.sent.contains { $0.method == "_session/steering" })
-        #expect(!runner.nativeSteeringInProgressForTesting)
+        #expect(session.transcript.messages.isEmpty)
+
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.send(blocks: [.text("next")], intent: .steer)
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+    }
+
+    @Test("a refused steer on an agent without native steering leaves the running turn alive", .timeLimit(.minutes(1)))
+    func refusedSteerKeepsRunningTurn() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finish.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.sendNow(blocks: [.text("running")], queuedItemId: nil)
+        await started.wait()
+        let running = runner.activePromptIDForTesting
+        #expect(running != nil)
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: blocks, intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(!accepted, "false is what puts the draft back in the composer")
+        #expect(session.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.activePromptIDForTesting == running)
+    }
+
+    @Test("a refused force-send keeps the item and its draft", .timeLimit(.minutes(1)))
+    func refusedForceSendKeepsItem() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.transcript.streamingState = .streaming
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
+        let draft = ACPComposerDraft(segments: [.text("keep me")])
+        session.enqueue(blocks: blocks, draft: draft)
+        let id = try #require(session.queue.first?.id)
+        runner.forceSendQueuedItem(id: id)
+        await runner.flushPersistence()
+        #expect(session.queue.first?.id == id)
+        #expect(session.queue.first?.draft == draft)
+        #expect(session.queue.first?.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+        #expect(!mock.sent.contains { ["session/cancel", "session/prompt", "_session/steering"].contains($0.method) })
+    }
+
+    @Test("an oversized recovery context is refused before it claims the session")
+    func oversizedRecoveryContextIsRefused() throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let prompt = String(repeating: "x", count: ACPPromptSizeGuard.maxEncodedBytes)
+        #expect(!runner.sendRecoveryContext(prompt))
+        #expect(runner.activePromptIDForTesting == nil)
+        #expect(session.contextRecoveryStatus != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
     }
 
     @Test("a staged PDF reaches an eligible adapter as a blob while its row keeps only the link")

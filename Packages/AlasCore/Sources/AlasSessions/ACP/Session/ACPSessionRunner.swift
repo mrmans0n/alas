@@ -170,7 +170,6 @@ public final class ACPSessionRunner {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     public var onPersistenceFlushForTesting: (@MainActor () -> Void)?
     public var activePromptIDForTesting: Int? { activePromptID }
-    public var nativeSteeringInProgressForTesting: Bool { nativeSteeringInProgress }
     public func visualAidFirstWriteWaiterCountForTesting(id: UUID) -> Int { unconfirmedVisualAids[id]?.count ?? 0 }
 #endif
     private var updatesTask: Task<Void, Never>?
@@ -3317,6 +3316,14 @@ extension ACPSessionRunner {
         }
     }
 
+    /// What would refuse `blocks` at send and can be known without reading a
+    /// file's bytes. Run it before anything a refusal could not undo.
+    private func preflightRefusal(of blocks: [ACPContentBlock]) -> ACPPromptRefusal? {
+        ACPAttachmentStaging.preflightRefusal(
+            of: blocks, agentInfo: session.agentInfo, promptCapabilities: session.promptCapabilities,
+            attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId))
+    }
+
     /// Replaces attached-session links with their context, resolved now so
     /// a queued prompt carries the session as it is when it is sent.
     private func expandingSessionReferences(_ blocks: [ACPContentBlock]) async -> [ACPContentBlock] {
@@ -3914,6 +3921,12 @@ extension ACPSessionRunner {
               session.queue[idx].status == .pending
         else { return }
         guard session.agentState == .ready else { return }
+        // Below, the item leaves the queue and a running turn may be cancelled.
+        if let refusal = preflightRefusal(of: session.queue[idx].blocks) {
+            session.queue[idx].lastError = refusal.errorDescription
+            persistQueue()
+            return
+        }
         if session.queue[idx].deliveryUncertain {
             guard session.retryQueueItem(id: id) else { return }
             persistQueue()
@@ -4019,6 +4032,14 @@ extension ACPSessionRunner {
                 recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,
                 recordedUserMessageID: recordedUserMessageID, draft: draft,
                 onDispatchRegistered: onDispatchRegistered, onPromptFinished: onPromptFinished)
+            return
+        }
+        // This path cancels the running turn, so refuse while it can still finish.
+        if let refusal = preflightRefusal(of: blocks) {
+            session.lastError = "prompt failed: \(refusal.localizedDescription)"
+            onDispatchRegistered?()
+            // On a later tick: the composer records its submit after this returns.
+            Task { @MainActor in onPromptFinished?(false) }
             return
         }
         turnPublicationGeneration += 1
@@ -4268,6 +4289,10 @@ extension ACPSessionRunner {
                         worktreePath: self.worktreePath, agentInfo: self.session.agentInfo,
                         attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: self.session.worktreeId))),
                     with: symbolExpansion)
+                // Before the row. Context is measured again once it is fetched:
+                // that stays after the row, which must be saved before a slow
+                // plugin can suspend this delivery.
+                try ACPPromptSizeGuard.check(wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -4753,6 +4778,22 @@ extension ACPSessionRunner {
                 await abandonUnrecordedPrompt()
                 return
             }
+            // Before the row, the checkpoint and the title: resending a refused
+            // prompt must not show it twice. A prompt no longer current falls
+            // through to the checks below, which end it without touching state.
+            if self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent(),
+               let refusal = self.preflightRefusal(of: blocks) {
+                if queuedItemId != nil {
+                    self.session.setQueueHeadError(refusal.localizedDescription)
+                    self.persistQueue()
+                } else {
+                    self.session.lastError = "prompt failed: \(refusal.localizedDescription)"
+                }
+                await abandonUnrecordedPrompt()
+                self.onPromptWorkChanged?()
+                self.flushQueueIfIdle()
+                return
+            }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
             let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?) in
@@ -4963,7 +5004,7 @@ extension ACPSessionRunner {
                 if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 do {
-                    try ACPPromptSizeGuard.check(wireBlocks)
+                    try ACPPromptSizeGuard.check(wireBlocks, forkContext: pendingForkContext)
                 } catch {
                     onDispatchRegistered?()
                     throw error
@@ -5355,6 +5396,10 @@ extension ACPSessionRunner {
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
         guard !nativeForkBarrierActive, !session.holdsPromptsForDelegatedSelection else { return false }
+        guard (try? ACPPromptSizeGuard.check([.text(prompt)])) != nil else {
+            session.contextRecoveryStatus = .failed("The conversation is too large to send as context.")
+            return false
+        }
         turnPublicationGeneration += 1
         discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()

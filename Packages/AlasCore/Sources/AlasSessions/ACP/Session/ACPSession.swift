@@ -2254,7 +2254,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             tc.appliedIsFinal = isFinal
             tc.appliedStrippedRaw = newStrippedRaw
             tc.appliedOpeningFenceUnterminated = unterminated
-            tc.appliedItemsSnapshot = items
+            tc.appliedItemsSnapshot = Self.withoutBlobBytes(items)
             return
         }
         Self.reprocessToolCallContentFull(
@@ -2305,7 +2305,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // opening fence was recognized.
         let firstLine = raw.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? raw
         tc.appliedOpeningFenceStripped = Self.isOpeningFence(firstLine)
-        tc.appliedItemsSnapshot = items
+        tc.appliedItemsSnapshot = Self.withoutBlobBytes(items)
+    }
+
+    /// Comparison ignores a blob's bytes, so the snapshot need not keep them alive.
+    private static func withoutBlobBytes(_ items: [ACPToolCallContent]) -> [ACPToolCallContent] {
+        items.map { item in
+            guard case .content(.blobResource(let uri, let mime, _)) = item else { return item }
+            return .content(.blobResource(uri: uri, mimeType: mime, blob: ""))
+        }
     }
 
     /// Whether the first `count` items of `items` have the same
