@@ -10,7 +10,8 @@ import AlasSessions
 /// Which delegations a host's recovery takes on.
 @_spi(AppHost) public enum DelegationRecoveryScope: Sendable {
     case all
-    /// Children a paired Mac started, and messages waiting for them.
+    /// Children a paired Mac started and messages waiting for them, and
+    /// messages from children this host runs on a paired Mac.
     case peerChildren
 
     func covers(_ record: ACPDelegationRecord?) -> Bool {
@@ -332,7 +333,7 @@ extension AlasCoreContext {
         }
         for sessionId in targetSessionIds {
             let childRecord = try? await orchestrationPersistence.parent(childSessionId: sessionId)
-            guard scope.covers(childRecord) else { continue }
+            guard await coversMessages(for: sessionId, record: childRecord, scope: scope) else { continue }
             if let childRecord {
                 rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }
@@ -343,6 +344,22 @@ extension AlasCoreContext {
             await deliverPendingDelegatedMessages(to: sessionId, manager: manager)
             await scheduleRecoveredDelegatedMessageRetry(to: sessionId, manager: manager)
         }
+    }
+
+    /// Whether `scope` takes on what waits for `sessionId`. A root parent has
+    /// no record of its own, so for one with a child on a paired Mac only the
+    /// message's source can tell.
+    private func coversMessages(for sessionId: String, record: ACPDelegationRecord?, scope: DelegationRecoveryScope) async -> Bool {
+        if scope.covers(record) { return true }
+        guard case .peerChildren = scope,
+              let messages = try? await orchestrationPersistence.pendingMessages(targetSessionId: sessionId)
+        else { return false }
+        for message in messages {
+            if (try? await orchestrationPersistence.delegation(childSessionId: message.sourceSessionId))?.peerServerId != nil {
+                return true
+            }
+        }
+        return false
     }
 
     private func scheduleRecoveredDelegatedMessageRetry(to sessionId: String, manager: ACPSessionManager) async {

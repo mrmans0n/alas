@@ -162,6 +162,27 @@ struct DelegationRecoveryTests {
         #expect(try await fixture.persistence.delegation(childSessionId: "ready")?.phase == .ready)
     }
 
+    /// A host stopped between committing an outcome and delivering it, or
+    /// `alas-host peers remove` with no host running, leaves a root parent's
+    /// wake in the inbox. Only its source row says it is the host's to deliver;
+    /// `scopedRecoveryReattachesPeerChildAndLeavesLocalRows` pins the opposite.
+    @Test(.timeLimit(.minutes(1))) func scopedRecoveryDeliversAPeerChildsOutcomeToItsRootParent() async throws {
+        let fixture = try PeerHostFixture()
+        defer { fixture.tearDown() }
+        try await fixture.seedQueuedTurn(sessionIDs: [], otherSessionIDs: ["parent"])
+        try await fixture.persistence.insert(fixture.childOnAPeer(phase: .failed))
+        try await fixture.persistence.enqueue(.init(
+            id: "outcome-on-peer-failed", sourceSessionId: "on-peer", targetSessionId: "parent", prompt: "It failed",
+            createdAt: 1, kind: .prompt
+        ))
+
+        await fixture.core.recoverDelegations(.peerChildren)
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        let agent = fixture.agent
+        try await eventually { @MainActor in Self.prompts(agent).contains { $0.contains("It failed") } }
+    }
+
     /// Remote can come on after launch, when nothing is there to collect from
     /// yet, and each time it does it brings a new client: the old one's
     /// channels are gone, and the signals go to the new one's slots.
