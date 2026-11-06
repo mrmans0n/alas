@@ -2383,18 +2383,24 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(decoded.agents.map(\.available) == [true, false])
     }
 
-    @Test("a peer that cannot be used is named with its state and gets no request")
-    func unusablePeerIsReportedWithoutARequest() async throws {
-        let peers = FakePeers(peers: [
-            Self.peer("mini", id: "srv-1", state: .offline), Self.peer("old", id: "srv-2", supportsDelegation: false),
-        ])
+    @Test("a peer that cannot be used is named with its state and gets no request", arguments: [
+        (ACPDelegationPeerState.offline, false, "cannot be reached"),
+        (.unverified, false, "cannot be reached"),
+        (.offline, true, "cannot be reached"),
+        (.incompatible, false, "Update Alas"),
+        (.online, false, "Update Alas"),
+    ])
+    func unusablePeerIsReportedWithoutARequest(state: ACPDelegationPeerState, supports: Bool, wording: String) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1", state: state, supportsDelegation: supports)])
         let fixture = try makeModelSelectionFixture(client: makeSelectionClient(), peers: peers)
 
-        let offline = errorMessage(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: "mini"))
-        let outdated = errorMessage(await peerCreate(fixture, peer: "old"))
+        let listed = errorMessage(await fixture.coordinator.discoverAgents(origin: Self.peerOrigin, worktree: nil, peer: "mini"))
+        let created = errorMessage(await peerCreate(fixture))
 
-        #expect(offline.contains("mini") && offline.contains("offline"))
-        #expect(outdated.contains("old"))
+        for message in [listed, created] {
+            #expect(message.contains("mini") && message.contains(wording))
+            if state != .online { #expect(message.contains(state.rawValue)) }
+        }
         #expect(peers.discoverCalls.isEmpty)
     }
 

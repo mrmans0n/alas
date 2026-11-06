@@ -408,12 +408,14 @@ public final class ACPSessionOrchestrationCoordinator {
                 )
             }
         }
-        guard info.supportsDelegation else {
-            throw PeerRequestError(message: Self.message(for: .outdated(peer: info.name)))
-        }
+        // State first: a peer that is down reports no capabilities, which says
+        // nothing about its build.
         guard info.state == .online else {
             let reason = info.state == .incompatible ? Self.message(for: .outdated(peer: info.name)) : Self.message(for: .unreachable(peer: info.name))
             throw PeerRequestError(message: "\(info.name) is \(info.state.rawValue). \(reason)")
+        }
+        guard info.supportsDelegation else {
+            throw PeerRequestError(message: Self.message(for: .outdated(peer: info.name)))
         }
         return (peers, info)
     }
