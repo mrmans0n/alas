@@ -7,6 +7,47 @@ import AlasCore
 
 @MainActor
 struct ACPV2SessionBootstrapTests {
+    @Test(arguments: ["empty", "identical", "id", "generation", "context", "ack", "partial", "remote", "archived", "recovery", "context-recovery", "history", "lease"])
+    func freshBrokerBindingRequiresTheCurrentLeaseAndEmptyHistory(reason: String) async throws {
+        let persistence = try await Self.persistence()
+        let state = ACPBrokerDurableState(brokerId: .init(rawValue: "fresh"), generation: .init(rawValue: 7),
+            acknowledgedCursor: .init(rawValue: 0), wireContext: .rawV2)
+        var row = try #require(await persistence.loadSession(id: "local"))
+        if ["identical", "id", "generation", "context", "ack", "partial"].contains(reason) {
+            row.acpBrokerId = reason == "id" ? "other" : "fresh"
+            row.acpBrokerGeneration = reason == "generation" ? 8 : 7
+            row.acpBrokerAcknowledgedCursor = reason == "ack" ? 1 : 0
+            row.acpBrokerWireContextJSON = try (reason == "context" ? ACPBrokerWireContext.legacyV1 : .rawV2).persistedJSON()
+            if reason == "partial" { row.acpBrokerGeneration = nil }
+        }
+        if reason == "remote" { row.remoteSessionId = "existing" }
+        if reason == "archived" { row.archived = true }
+        if reason == "recovery" { row.recoveryProcId = "process" }
+        if reason == "context-recovery" { row.contextRecoveryPending = true }
+        try await persistence.upsertSession(row)
+        // Broad upserts intentionally preserve broker and recovery authority.
+        // Seed these persisted states directly to exercise the binding guard.
+        let store = try ACPSessionStore(path: persistence.path)
+        try store.db.exec("""
+        UPDATE sessions SET acp_broker_id=?, acp_broker_generation=?, acp_broker_acknowledged_cursor=?,
+            acp_broker_wire_context=?, recovery_proc_id=?, context_recovery_pending=? WHERE id='local'
+        """, bindings: [row.acpBrokerId, row.acpBrokerGeneration, row.acpBrokerAcknowledgedCursor,
+            row.acpBrokerWireContextJSON, row.recoveryProcId, row.contextRecoveryPending ? 1 : 0])
+        if reason == "history" {
+            _ = try await persistence.registerV2InboundLedger(sessionId: "local", upstreamSessionId: "old",
+                source: .stdio(connectionID: UUID()), fence: Self.fence)
+        }
+        let fence = reason == "lease" ? ACPSessionLeaseFence(sessionId: "local", ownerInstance: "A", token: "stale") : Self.fence
+        let before = try await persistence.loadSession(id: "local")
+        let accepted = try await persistence.bindV2FreshBroker(state: state, fence: fence)
+        #expect(accepted == ["empty", "identical"].contains(reason))
+        if accepted {
+            let bound = try #require(await persistence.loadSession(id: "local"))
+            #expect(bound.acpBrokerId == "fresh" && bound.acpBrokerGeneration == 7 && bound.acpBrokerAcknowledgedCursor == 0)
+            #expect(try await persistence.bindV2FreshBroker(state: state, fence: fence))
+        } else { #expect(try await persistence.loadSession(id: "local") == before) }
+    }
+
     @Test func runtimeInstallationHookRunsBeforeStartupAndCanWithdrawIt() async throws {
         let persistence = try await Self.persistence()
         let transport = BootstrapTransport()

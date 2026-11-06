@@ -189,6 +189,10 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
+    public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence) throws -> Bool {
+        try openedStore().bindV2FreshBroker(state: state, fence: fence)
+    }
+
     public func bindV2FreshSession(upstreamSessionId: String, source: ACPV2InboundLedgerSource,
         fence: ACPSessionLeaseFence) throws -> ACPV2FreshSessionBinding {
         try openedStore().bindV2FreshSession(upstreamSessionId: upstreamSessionId, source: source, fence: fence)
