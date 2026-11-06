@@ -15,6 +15,7 @@ struct ACPToolbar: View {
     var onOpenPreview: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var previewHovered = false
+    @State private var peerChildren: [AlasCoreContext.DelegatedPeerChild] = []
 
     var body: some View {
         HStack(spacing: 10) {
@@ -116,6 +117,18 @@ struct ACPToolbar: View {
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(1)
             }
+            ForEach(peerChildren, id: \.childSessionId) { child in
+                Button {
+                    state.openPeerChild(child)
+                } label: {
+                    Text(ACPPeerChildPolicy.label(macName: child.macName))
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.toolbarControl)
+                .help("Open the \(child.agentId) session running on \(child.macName)")
+                .accessibilityLabel("Open session \(ACPPeerChildPolicy.label(macName: child.macName))")
+            }
             if showsShepherdButton {
                 ACPShepherdButton(session: session, worktree: worktree, state: state)
             }
@@ -127,6 +140,9 @@ struct ACPToolbar: View {
                 state.config.harness.acpShowMinimap.toggle()
                 state.saveConfig()
             }
+        }
+        .task(id: "\(session.id)-\(state.delegationRevision)") {
+            peerChildren = await state.delegatedPeerChildren(ofParent: session.id)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)

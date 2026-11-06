@@ -1569,6 +1569,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// owns `onEvent` and the real app-active state; the manager persists
     /// `last_seen_at` whenever a session becomes unseen.
     public let seenTracker = SessionSeenTracker(now: Date.init, appActive: true)
+    /// Names of paired Macs a new root session may be told it can delegate to.
+    public var delegationPeerNamesProvider: @MainActor () -> [String] = { [] }
     public var remoteServerIdProvider: @MainActor () -> String? = { nil }
     private var remoteCoordinator: ACPRemoteSessionCoordinator? {
         didSet { observeRemoteAuthority() }
@@ -8442,7 +8444,8 @@ extension ACPSessionManager {
                     computerUseAvailable: computerUseAvailable,
                     isPeerChild: preambleMode == .mcp
                         ? (builtInMCP?.isPeerChild == true)
-                        : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil)
+                        : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),
+                    delegationPeerNames: delegationPeerNamesProvider()
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

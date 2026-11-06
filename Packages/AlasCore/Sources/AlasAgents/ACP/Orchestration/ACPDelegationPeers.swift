@@ -62,6 +62,14 @@ public struct ACPDelegationPeerInfo: Equatable, Sendable {
     }
 }
 
+extension ACPDelegationPeerInfo {
+    /// Names of the Macs a root agent may be told about: online and able to
+    /// take delegated work. Whether one has opted in is only known when asked.
+    public static func delegationNames(_ peers: [ACPDelegationPeerInfo]) -> [String] {
+        peers.filter { $0.state == .online && $0.supportsDelegation }.map(\.name)
+    }
+}
+
 /// What a peer offers this Mac's agents.
 public struct ACPPeerDiscovery: Equatable, Sendable {
     public struct Project: Equatable, Sendable {

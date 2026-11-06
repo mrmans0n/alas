@@ -75,6 +75,7 @@ extension AlasCoreContext {
             outboxChanged: { orchestration.peerOutboxDidChange(serverId: $0) },
             availabilityChanged: { orchestration.peerAvailabilityChanged(serverId: $0) },
             collected: { orchestration.peerEntryCollected($0) },
+            childBlocked: { [weak self] in self?.peerChildBlocked?($0, $1, $2) },
             retryStarts: { await orchestration.retryPeerStarts(serverId: $0) },
             schedule: { delay, work in
                 Task { @MainActor in

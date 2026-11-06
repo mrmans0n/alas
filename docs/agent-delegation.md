@@ -6,8 +6,8 @@ choosing a child agent, call the read-only discovery command:
 
 | Surface | Command |
 |---|---|
-| MCP | `agent_list`, optional `worktree` |
-| CLI | `alas agent list [--worktree <name-or-branch>]` |
+| MCP | `agent_list`, optional `worktree` or `peer` |
+| CLI | `alas agent list [--worktree <name-or-branch> \| --peer <name-or-server-id>]` |
 
 Both return the same JSON for the same calling session. The command needs an
 originating ACP session (`ALAS_SESSION_ID`, injected into every ACP session);
@@ -411,7 +411,7 @@ Four more tools act on the same direct edges. Each returns one JSON line.
 | MCP tool | CLI | Who may call it | What it does |
 |---|---|---|---|
 | `session_read` | `alas session read <id> [--offset <n>] [--limit <n>] [--max-chars <n>]` | parent or child, on the other; any session, on a session the user attached to it | One page of the transcript |
-| `session_search` | `alas session search <query> [--limit <n>]` | any session | Case-insensitive text search across its direct parent and children |
+| `session_search` | `alas session search <query> [--limit <n>]` | any session | Case-insensitive text search across its direct parent and children on this Mac (children on another Mac are not searched) |
 | `session_wait` | `alas session wait <id>... [--timeout-ms <n>]` | parent, on its children | Blocks until every listed child settles, or the timeout passes |
 | `session_interrupt` | `alas session interrupt <id>` | parent, on its children | Cancels the child's running turn, like **Stop** |
 
@@ -459,6 +459,166 @@ running, or when another Alas instance holds its lease and this one cannot stop
 it. Cancelling a turn cancels any permission request it was blocked on.
 No session tool can approve a permission request, the caller's own or another
 session's: only the user can.
+
+## Delegating to another machine
+
+A root session can hand work to a session on another Mac you have paired with
+this one, and get the result back in the same conversation. The usual case is
+a laptop agent sending heavy or long-running work to an always-on Mac. Code
+travels through the git remote: Alas copies neither a checkout nor uncommitted
+changes.
+
+Which Mac sees what is decided on the Mac that does the work, not on the one
+that asks. See [Letting another Mac's agents in](#letting-another-macs-agents-in).
+
+### Finding a Mac
+
+`agent_list` without `peer` adds a `peers` array. Nothing is sent to the Macs
+to build it.
+
+```json
+"peers": [
+  { "server_id": "9c1e…", "name": "mini", "state": "online", "supports_delegation": true }
+]
+```
+
+`state` is `online`, `offline`, `unverified`, `incompatible` or `revoked`.
+`supports_delegation` is `false` for a Mac running a build that predates this
+feature; no request is sent to it.
+
+`agent_list` with `peer` (the Mac's name or server id; `--peer` in the CLI)
+asks that Mac what it offers this one, and adds a `peer` object. It cannot be
+combined with `worktree`.
+
+```json
+"peer": {
+  "server_id": "9c1e…",
+  "name": "mini",
+  "access": "ask",
+  "projects": [
+    {
+      "id": "p1",
+      "name": "alas",
+      "worktrees": [{ "name": "alas", "branch": "main", "path": "/Users/me/src/alas" }]
+    }
+  ]
+}
+```
+
+`access` is `off`, `ask` or `autoRun`: what that Mac lets this one's agents do.
+`projects` are the projects there whose git `origin` matches this worktree's
+(credentials are ignored). `agents` at the top level then lists the agents that
+Mac can run, with the same fields as above. Having a Mac listed does not mean it
+will accept work: with `access` set to `off` it refuses.
+
+### Starting a child there
+
+```sh
+alas agent list --peer mini
+alas session new --peer mini --agent codex --new-worktree fix/parser --prompt "Fix the parser bug"
+alas session new --peer mini --worktree fix/parser --prompt "Continue the parser fix"
+```
+
+| MCP | CLI | Meaning |
+|---|---|---|
+| `peer` | `--peer <name\|serverId>` | Run the child on that Mac. Needs `worktree` or `new_worktree`, because the current worktree means nothing on another machine. |
+| `project` | `--project <id\|name>` | Which project on that Mac. Needed when several match or this worktree has no remote. Without `--peer` it is an error. |
+| `worktree` | `--worktree <name\|branch>` | An existing worktree on that Mac, found in the `peer` answer. |
+| `new_worktree` | `--new-worktree <branch> [--base <ref>]` | Create the worktree there, in that Mac's own worktrees folder. |
+
+The answer is the usual `session_new` JSON plus `"peer": "<name>"`. If the Mac
+does not answer, the answer says so in a `note`, and Alas retries once when it
+is back. `session_list` shows a `peer` field on children running elsewhere.
+
+The model and reasoning checks work as for a local child, on that Mac: a value
+it cannot apply fails the child instead of falling back to the default. The
+child's agent must be one that Mac has available.
+
+Worktree hooks that the target has not approved are skipped, and the parent is
+told, because a worktree without its setup can look like a code problem.
+
+### Stale code fails loudly
+
+`--new-worktree` without `--base` builds the new worktree from your branch as
+it is on the remote. Alas refuses unless the worktree is clean, `HEAD` equals
+its upstream, and that upstream is on `origin`. The error says to push first, or
+to pass `--base`. It sends the branch name and its commit; the other Mac fetches
+it and fails the child with a reason if the fetch fails or the commit differs.
+An always-on Mac with an old checkout therefore gets the current code or a clear
+refusal.
+
+An explicit `--base` skips these checks. The other Mac still tries to fetch it,
+but a failed fetch does not stop the child. `--worktree` names a checkout that
+already exists there, so no check applies.
+
+### Letting another Mac's agents in
+
+Off by default, per paired Mac. On the Mac that would run the work:
+
+- **Settings > Remote > Peers**, on the paired Mac's row: *Let agents on this Mac
+  use this machine*, with Off, Ask for approval and Allow auto-run.
+- On a headless host: `alas-host peers agents <id|name|serverId> off|ask|auto`.
+
+| Value | Meaning |
+|---|---|
+| `off` | No new children and no new prompts |
+| `ask` | Children run, and their permission requests wait for a person |
+| `autoRun` | A child may auto-run if its parent was auto-running |
+
+Pairing again starts at `off`; a person has to consent again. Turning access off
+does not stop work already running: queued prompts and running turns finish, the
+child can still be read and stopped, and its result still reaches the parent.
+
+A child auto-runs only when both its parent was auto-running and *Allow auto-run*
+is set on the target. The target can lower what the parent had; it never raises
+it. Nothing that arrives from another Mac can answer a permission, question or
+plan: only a person on the target can. Tool scoping is not a sandbox. A child
+with auto-run can run anything its agent can, with that Mac's user's
+credentials, which is why the setting says so.
+
+### What a peer child can and cannot do
+
+A child on another Mac cannot message its parent, so **its final message is its
+report**. It has no `session_send` to the parent; calling it returns an error
+that says so. The parent receives the report, or an outcome notice, as an
+`[alas system]` prompt that names the Mac.
+
+It also loses `session_new`, `session_wait`, `session_interrupt`, `computer_*`,
+`vm_*`, `device_*`, `preview_*`, `open`, `worktree_new`, `worktree_delete`,
+`worktree_switch` and `workspace_*`. It keeps what it needs for its own work,
+such as `notify`, `pr_create` and the review tools.
+
+### Waiting, reading and stopping
+
+`session_wait`, `session_read`, `session_send` and `session_interrupt` work on a
+peer child the same way, within the limits above.
+
+When the other Mac cannot be reached:
+
+| Call | Result |
+|---|---|
+| `session_wait` | The child's `state` is `peer_unreachable`, and it counts as settled so the parent is not stuck. The child may still be running. |
+| `session_read`, `session_send`, `session_interrupt` | An error naming the Mac |
+
+A lost connection does not fail the child. After 15 minutes offline with a child
+that was last seen unfinished and that the parent was waiting on, the parent gets
+one notice (not a wake) that it may still be running. When the Mac is back,
+anything that finished meanwhile is delivered then, once.
+
+A child is failed, with a wake, only on proof it is gone. In `session_wait` that
+state is `gone` and also settled. It happens when the other Mac reports it has no
+such child, when it rejects this Mac's pairing, or when you forget it here.
+
+A child blocked on a permission, question or plan shows the same notices as a
+local one. On this Mac you also get a macOS notification, if *Notify when AI harness needs input*
+is on, that opens the session on the other Mac.
+
+### In the app
+
+A child running on another Mac has no session on this one. Its parent's toolbar
+shows a button "on \<Mac\>" that opens that session in the peer view. If the
+Mac is not connected, or has not listed the session yet, Alas says so and stays
+where it is. The child's own tab on the other Mac says "From \<this Mac\>".
 
 ## Across an app restart
 

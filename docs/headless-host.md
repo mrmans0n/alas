@@ -184,12 +184,23 @@ needs the host to reach it, for example over Tailscale, because the host pairs
 back to it.
 
 ```bash
-alas-host peers list                  # id, name, serverId
+alas-host peers list                  # id, name, serverId, agent access
+alas-host peers agents <id|name|serverId> off|ask|auto
 alas-host peers remove <id|name|serverId>
 ```
 
 `peers remove` revokes the peer and disconnects it. Like the other commands,
-both go through the running host when one serves the profile.
+all three go through the running host when one serves the profile.
+
+`peers agents` sets whether agents on that Mac may start sessions on this host
+(see [Delegating to another machine](agent-delegation.md#delegating-to-another-machine)).
+It is `off` by default and after any new pairing. `ask` lets their sessions run
+with permission requests waiting for a person; `auto` also lets a session
+auto-run, if the agent that started it was auto-running. Turning it off stops new
+sessions and prompts; work already running finishes and reports back.
+
+Today a host can receive delegated work but not send it: it has inbound links
+only, so its own agents cannot delegate to a paired Mac.
 
 Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the

@@ -3,6 +3,15 @@ import OSLog
 import AlasModel
 import AlasACP
 
+extension ACPPeerOutboxEntry {
+    /// The first notice that a child is blocked on a person. The collector sees
+    /// only the entry's text and kind, so this goes by the id the target gave
+    /// it. The later wake, if the block lasts, is not announced again.
+    public var isBlockedNotice: Bool {
+        kind == .notice && messageId.hasPrefix("blocker-")
+    }
+}
+
 /// Collects the outcomes paired Macs' children left in their outboxes and
 /// wakes the parents here. The cursor is durable and moves with the enqueue,
 /// so any number of collectors sharing a profile wake a parent once.
@@ -20,6 +29,7 @@ public final class ACPPeerOutboxCollector {
     private let outboxChanged: @MainActor (_ serverId: String) -> Void
     private let availabilityChanged: @MainActor (_ serverId: String) -> Void
     private let collected: @MainActor (_ entry: ACPPeerOutboxEntry) -> Void
+    private let childBlocked: @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void
     private let retryStarts: @MainActor (_ serverId: String) async -> Void
     private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
 
@@ -42,6 +52,8 @@ public final class ACPPeerOutboxCollector {
     ///     reachable or unreachable.
     ///   - collected: Told about each entry for one of the peer's children
     ///     that was settled here.
+    ///   - childBlocked: Told once per blocked child, by the collector that
+    ///     settled the notice, so two sharing a profile do not both announce it.
     ///   - retryStarts: Asks again about children still starting on a peer.
     ///   - schedule: Arranges for work to run after a number of seconds.
     public init(
@@ -52,6 +64,7 @@ public final class ACPPeerOutboxCollector {
         outboxChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         collected: @escaping @MainActor (_ entry: ACPPeerOutboxEntry) -> Void = { _ in },
+        childBlocked: @escaping @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) {
@@ -62,6 +75,7 @@ public final class ACPPeerOutboxCollector {
         self.outboxChanged = outboxChanged
         self.availabilityChanged = availabilityChanged
         self.collected = collected
+        self.childBlocked = childBlocked
         self.retryStarts = retryStarts
         self.schedule = schedule
     }
@@ -221,8 +235,9 @@ public final class ACPPeerOutboxCollector {
                 seq: entry.seq, messageId: entry.messageId, childSessionId: entry.childSessionId,
                 prompt: entry.prompt, kind: .notice, createdAt: entry.createdAt
             ) : entry
-            _ = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
+            let won = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
             collected(entry)
+            if won, kept.isBlockedNotice { childBlocked(serverId, child, kept) }
             // The parent is woken even when another collector won: delivery
             // is idempotent, and that one may have stopped before it got there.
             return .some(child)

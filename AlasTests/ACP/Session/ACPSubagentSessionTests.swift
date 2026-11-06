@@ -1644,6 +1644,24 @@ struct ACPSubagentSessionTests {
 
 @Suite("Subagent row policy")
 struct ACPSubagentRowPolicyTests {
+    @Test(
+        "a peer child row opens only when its Mac is connected and lists it",
+        arguments: [
+            (false, false, false), (false, true, false), (true, false, false), (true, true, true),
+        ] as [(Bool, Bool, Bool)]
+    )
+    func peerChildDestination(connected: Bool, listed: Bool, opens: Bool) {
+        let destination = ACPPeerChildPolicy.destination(
+            macName: "mini", serverId: "srv", childSessionId: "kid",
+            macIsConnected: connected, sessionIsListed: listed)
+        if opens {
+            #expect(destination == .open(federatedSessionID: RemoteFederatedSessionID.compose(serverId: "srv", sessionId: "kid")))
+        } else {
+            guard case .explain(let message) = destination else { Issue.record("expected an explanation"); return }
+            #expect(message.contains("mini"))
+        }
+    }
+
     @Test("cancel is offered only for a running child that advertises it")
     func cancelVisibility() {
         #expect(ACPSubagentRowPolicy.showsCancel(state: .running, capabilities: .cancellable))

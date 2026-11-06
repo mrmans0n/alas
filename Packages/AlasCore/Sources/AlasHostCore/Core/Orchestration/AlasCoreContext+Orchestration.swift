@@ -112,7 +112,7 @@ extension AlasCoreContext {
                     self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in self?.environment.configuration().harness.acpAutoRunByDefault ?? false },
-                notifyChanged: {},
+                notifyChanged: { [weak self] in self?.delegationRevision &+= 1 },
                 peerOutboxChanged: { [weak self] in self?.peerOutboxDidChange?($0) },
                 admitChild: { [weak self] worktree, agentID in
                     guard let self else { return "Alas is not available." }
@@ -201,9 +201,33 @@ extension AlasCoreContext {
     /// What a summary says about the Mac that delegated `sessionID`: its
     /// device's name, or "another Mac" once it has been forgotten.
     @_spi(AppHost) public func delegatedFromName(of sessionID: String) -> String? {
-        guard let serverId = delegatedPeerOrigins[sessionID] else { return nil }
+        delegatedPeerOrigins[sessionID].map(peerMacName(serverId:))
+    }
+
+    @_spi(AppHost) public func peerMacName(serverId: String) -> String {
         let device = delegationPairing()?.devices.first { $0.kind == .alasInstance && $0.peerServerId == serverId }
         return device?.name ?? "another Mac"
+    }
+
+    /// A child that runs on a paired Mac, as its parent's tab shows it.
+    public struct DelegatedPeerChild: Equatable, Sendable {
+        public let childSessionId: String
+        public let serverId: String
+        public let macName: String
+        public let agentId: String
+        public let phase: ACPDelegationPhase
+    }
+
+    /// The children `parentSessionID` sent to other Macs, oldest first.
+    @_spi(AppHost) public func delegatedPeerChildren(ofParent parentSessionID: String) async -> [DelegatedPeerChild] {
+        guard let records = try? await orchestrationPersistence.children(parentSessionId: parentSessionID) else { return [] }
+        return records.compactMap { record in
+            record.peerServerId.map {
+                DelegatedPeerChild(
+                    childSessionId: record.childSessionId, serverId: $0, macName: peerMacName(serverId: $0),
+                    agentId: record.agentId, phase: record.phase)
+            }
+        }
     }
 
     /// The parent that delegated `sessionID`, from memory or its persisted

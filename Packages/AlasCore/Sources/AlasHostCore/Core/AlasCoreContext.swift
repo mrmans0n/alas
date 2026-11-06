@@ -142,6 +142,12 @@ public final class AlasCoreContext {
     @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)?
     /// Collects outcomes from paired Macs once `startCollectingPeerOutcomes` ran.
     @ObservationIgnored var peerOutboxCollector: ACPPeerOutboxCollector?
+    /// Told when a child on a paired Mac is blocked on a person: the Mac's
+    /// `serverId`, the child's record, and the notice.
+    @ObservationIgnored @_spi(AppHost) public var peerChildBlocked: (@MainActor (String, ACPDelegationRecord, ACPPeerOutboxEntry) -> Void)?
+    /// Bumped whenever a delegation is written, so views of a session's
+    /// children know to look again.
+    public internal(set) var delegationRevision = 0
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// When each worktree's local-changes review was opened, by worktree id,

@@ -88,6 +88,41 @@ public enum ACPMCPPromptPreamble: Sendable {
     static let peerChildReportSentence = "This session was delegated from another machine. "
         + "Your final message is your report to the parent. It cannot be messaged in any other way."
 
+    static let maxPeerNameLength = 64
+
+    /// Peer names are set by people and go into a prompt: control characters
+    /// become spaces, angle brackets are dropped so a name cannot close the
+    /// context tag, each is capped, and empty ones are removed.
+    public static func sanitizedPeerNames(_ names: [String]) -> [String] {
+        names.compactMap { name in
+            var cleaned = ""
+            for scalar in name.unicodeScalars {
+                if scalar == "<" || scalar == ">" { continue }
+                cleaned.unicodeScalars.append(
+                    CharacterSet.controlCharacters.contains(scalar) || CharacterSet.newlines.contains(scalar)
+                        ? " " : scalar)
+            }
+            let collapsed = cleaned.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+            let capped = String(collapsed.prefix(maxPeerNameLength))
+            return capped.isEmpty ? nil : capped
+        }
+    }
+
+    /// Tells a root agent which paired Macs it may try. Whether a Mac has
+    /// opted in is only known when asked, so it says the peer may refuse.
+    static func peersLine(_ names: [String], cli: Bool) -> String? {
+        let names = sanitizedPeerNames(names)
+        guard !names.isEmpty else { return nil }
+        let how = cli
+            ? "`alas agent list --peer <name>` shows what a Mac offers, and `alas session new --peer <name>` "
+                + "with --worktree or --new-worktree starts a child there."
+            : "agent_list with peer shows what a Mac offers, and session_new with peer and worktree or "
+                + "new_worktree starts a child there."
+        return "Paired Macs online: \(names.joined(separator: ", ")). " + how
+            + " A Mac may refuse if its owner has not allowed agents from this Mac. "
+            + "Code travels through the git remote, so push first."
+    }
+
     /// The preamble text, or nil when no MCP server was attached.
     /// - Parameter builtInTools: which built-in tools reach the agent (the
     ///   attached server in `.mcp` mode, the injected CLI in `.cli` mode),
@@ -107,7 +142,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         nativeSubagentsDisabled: Bool = false,
         nativeDelegationMechanism: ACPNativeDelegationMechanism? = nil,
         computerUseAvailable: Bool = true,
-        isPeerChild: Bool = false
+        isPeerChild: Bool = false,
+        delegationPeerNames: [String] = []
     ) -> String? {
         guard builtInTools != nil || !userServerNames.isEmpty || ggStack != nil || issue != nil
                 || nativeSubagentsDisabled
@@ -127,7 +163,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                 issue: issue,
                 delegation: delegation,
                 computerUseAvailable: computerUseAvailable,
-                isPeerChild: isPeerChild)
+                isPeerChild: isPeerChild,
+                peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: false))
         case .cli(let serverAvailability):
             return cliText(
                 builtInInjected: builtInTools == .full,
@@ -138,7 +175,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                 issue: issue,
                 delegation: delegation,
                 computerUseAvailable: computerUseAvailable,
-                isPeerChild: isPeerChild)
+                isPeerChild: isPeerChild,
+                peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: true))
         }
     }
 
@@ -193,7 +231,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         issue: IssuePreambleContext?,
         delegation: String?,
         computerUseAvailable: Bool,
-        isPeerChild: Bool
+        isPeerChild: Bool,
+        peersLine: String?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -329,6 +368,9 @@ public enum ACPMCPPromptPreamble: Sendable {
         if let delegation {
             lines.append(delegation)
         }
+        if let peersLine, builtInTools == .full {
+            lines.append(peersLine)
+        }
         if let issue {
             lines.append(issueLine(issue))
         }
@@ -345,7 +387,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         issue: IssuePreambleContext?,
         delegation: String?,
         computerUseAvailable: Bool,
-        isPeerChild: Bool
+        isPeerChild: Bool,
+        peersLine: String?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -436,6 +479,9 @@ public enum ACPMCPPromptPreamble: Sendable {
         }
         if let delegation {
             lines.append(delegation)
+        }
+        if let peersLine, builtInInjected {
+            lines.append(peersLine)
         }
         if let issue {
             lines.append(issueLine(issue))

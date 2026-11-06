@@ -3824,4 +3824,17 @@ struct ACPSessionOrchestrationCoordinatorTests {
     }
 
     private struct TestFailure: Error { let message: String; init(_ message: String) { self.message = message } }
+
+    @Test(
+        "only the first blocked notice from a peer is announced",
+        arguments: [
+            ("blocker-c1-r1-notice", ACPDelegatedMessageKind.notice, true),
+            ("blocker-c1-r1", .prompt, false),
+            ("outcome-c1-finished", .notice, false),
+        ] as [(String, ACPDelegatedMessageKind, Bool)]
+    )
+    func blockedNoticeIsRecognized(id: String, kind: ACPDelegatedMessageKind, expected: Bool) {
+        let entry = ACPPeerOutboxEntry(seq: 1, messageId: id, childSessionId: "c1", prompt: "p", kind: kind, createdAt: 0)
+        #expect(entry.isBlockedNotice == expected)
+    }
 }

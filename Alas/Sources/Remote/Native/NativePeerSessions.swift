@@ -741,6 +741,16 @@ final class NativePeerSessions {
         }
     }
 
+    /// Whether `serverId` is connected and carrying sessions, and whether it
+    /// lists `sessionId` (a plain id on that Mac), as `select` needs to open it.
+    func openability(serverId: String, sessionId: String) -> (connected: Bool, listed: Bool) {
+        guard let group = snapshot.groups.first(where: { $0.serverId == serverId }),
+              group.state.carriesSessions
+        else { return (false, false) }
+        let federated = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
+        return (true, group.sessions.contains { $0.id == federated })
+    }
+
     func select(_ sessionId: String) {
         guard let downstream,
               let peer = snapshot.groups.first(where: { group in

@@ -2354,6 +2354,16 @@ final class AppState {
         Task { [weak self] in
             await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()
+            self?.core.peerChildBlocked = { [weak self] serverId, child, _ in
+                guard let self, self.config.harness.notifyOnAwaiting else { return }
+                self.harness.notifications.notifyPeerNotice(
+                    body: ACPPeerChildPolicy.blockedNotificationBody(
+                        macName: self.core.peerMacName(serverId: serverId)),
+                    title: "Delegated session needs input",
+                    agent: ACPHarnessBridge.agentKind(for: child.agentId),
+                    serverId: serverId, sessionId: child.childSessionId
+                )
+            }
             self?.core.startCollectingPeerOutcomes()
         }
         Task { @MainActor [weak self] in
@@ -12104,6 +12114,27 @@ final class AppState {
     /// The paired Mac that delegated `sessionId`, when one did.
     func delegatedFromName(of sessionId: String) -> String? { core.delegatedFromName(of: sessionId) }
 
+    /// The children `sessionId` sent to other Macs.
+    func delegatedPeerChildren(ofParent sessionId: String) async -> [AlasCoreContext.DelegatedPeerChild] {
+        await core.delegatedPeerChildren(ofParent: sessionId)
+    }
+
+    var delegationRevision: Int { core.delegationRevision }
+
+    /// Opens a child that runs on another Mac in the peer view, or says why it
+    /// cannot be opened without moving the user.
+    func openPeerChild(_ child: AlasCoreContext.DelegatedPeerChild) {
+        let reach = nativePeerSessions?.openability(serverId: child.serverId, sessionId: child.childSessionId)
+            ?? (connected: false, listed: false)
+        switch ACPPeerChildPolicy.destination(
+            macName: child.macName, serverId: child.serverId, childSessionId: child.childSessionId,
+            macIsConnected: reach.connected, sessionIsListed: reach.listed
+        ) {
+        case .open(let id): nativePeerSessions?.select(id)
+        case .explain(let message): showFileActionError(title: "Session unavailable", message: message)
+        }
+    }
+
     /// The parent that delegated `sessionId`, from memory or the persisted
     /// delegation record.
     func delegatedParentSessionID(for sessionId: String) async -> String? {
@@ -12882,6 +12913,9 @@ final class AppState {
                 )
             }
         )
+        mgr.delegationPeerNamesProvider = { [weak self] in
+            ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
+        }
         mgr.remoteServerIdProvider = { [weak self] in
             guard let self else { return nil }
             if self.config.remote.ensureServerId() { self.saveConfig() }
@@ -13246,6 +13280,9 @@ final class AppState {
                 self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             }
         )
+        manager.delegationPeerNamesProvider = { [weak self] in
+            ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
+        }
         manager.remoteServerIdProvider = { [weak self] in
             guard let self else { return nil }
             if self.config.remote.ensureServerId() { self.saveConfig() }
