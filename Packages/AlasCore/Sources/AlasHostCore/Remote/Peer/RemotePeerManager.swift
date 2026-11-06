@@ -82,6 +82,9 @@ public final class RemotePeerManager {
     /// peer's access immediately: revoking the device record alone would leave
     /// an already-open socket authorized until it happened to close.
     @ObservationIgnored public var onRevokeDevice: (@MainActor (String) -> Void)?
+    /// Called when the pairing with a peer ended: its link refused this Mac's
+    /// confirmed token, or (`forgotten`) the user forgot it here.
+    @ObservationIgnored public var onPeerRevoked: (@MainActor (_ serverId: String, _ name: String, _ forgotten: Bool) -> Void)?
     /// `FederatedPeerLinks` sink. Set by `FederatedSessionsProvider`.
     @ObservationIgnored public var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
     /// Peer console events, kept off the federation fan-out: they belong to
@@ -457,8 +460,12 @@ public final class RemotePeerManager {
                 pairing.cancelCode(counterCode)
                 endAttempt(counterCode: counterCode)
                 lastUpsertOwnerByServerId[serverId] = counterCode
+                // No device was minted here, so an inbound-only record keeps
+                // the one its peer reaches this Mac with.
+                let previous = durableStateByServerId[serverId]
                 upsert(serverId: serverId, name: name ?? origin, origins: origins,
-                       lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil)
+                       lastOrigin: origin, token: token, publicKey: publicKey,
+                       localDeviceId: previous?.isInboundOnly == true ? previous?.localDeviceId : nil)
                 durableStateByServerId[serverId] = peers.first { $0.serverId == serverId }
                 return nil
             }
@@ -497,7 +504,14 @@ public final class RemotePeerManager {
             // the device it minted for us, but sends no error our way.
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
-                if shouldPublish() { return nil }
+                if shouldPublish() {
+                    if expectedPeer == nil, previousState?.isInboundOnly == true {
+                        inheritAgentAccess(from: previousState, peerId: peer.id)
+                    } else {
+                        resetAgentAccess(serverId: serverId)
+                    }
+                    return nil
+                }
                 if lastUpsertOwnerByServerId[serverId] == counterCode {
                     let saved = outboundPredecessors[counterCode] ?? (peer: nil, owner: nil)
                     let predecessor = saved.owner == nil ? saved : validPredecessor(saved)
@@ -576,6 +590,29 @@ public final class RemotePeerManager {
             // peer row this attempt will ever create to forget it by.
             endAttempt(counterCode: counterCode)
             return .unreachable
+        }
+    }
+
+    /// An add that upgrades an inbound-only record gives the peer a new device
+    /// here, in place of the one whose access someone already chose. The
+    /// person adding the peer decided nothing about that access, so it carries
+    /// over. The old device stays until `forget`, as for any re-pair: revoking
+    /// it now could reach the peer as a refusal of the token it is only about
+    /// to replace.
+    private func inheritAgentAccess(from previous: RemotePeer?, peerId: String) {
+        guard let previous, previous.isInboundOnly,
+              let access = previous.localDeviceId.flatMap({ pairing.device(id: $0)?.agentAccess }),
+              let deviceId = peers.first(where: { $0.id == peerId })?.localDeviceId else { return }
+        _ = pairing.setAgentAccess(access, deviceId: deviceId)
+    }
+
+    /// Any other re-pair starts at off, on every device carrying the peer's
+    /// identity: the tokens it replaces stay valid until `forget`, and the
+    /// gate reads the device that authenticated, so a grant left on one of
+    /// them would outlive what Settings shows.
+    private func resetAgentAccess(serverId: String) {
+        for device in pairing.devices where device.kind == .alasInstance && device.peerServerId == serverId {
+            pairing.setAgentAccess(.off, deviceId: device.id)
         }
     }
 
@@ -807,6 +844,7 @@ public final class RemotePeerManager {
             if let confirmed = peers.first(where: { $0.serverId == request.peerServerId }) {
                 durableStateByServerId[request.peerServerId] = confirmed
             }
+            resetAgentAccess(serverId: request.peerServerId)
         } else {
             // We are the initiator: this is A's reciprocal call redeeming
             // OUR counter-code. Always buffer it, keyed by that code, rather
@@ -894,6 +932,7 @@ public final class RemotePeerManager {
                lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
         durableStateByServerId[request.peerServerId] = peers.first { $0.serverId == request.peerServerId }
+        resetAgentAccess(serverId: request.peerServerId)
         return true
     }
 
@@ -902,6 +941,39 @@ public final class RemotePeerManager {
         peers[index].sshDestination = destination
         durableStateByServerId[peers[index].serverId] = peers[index]
         savePeers()
+    }
+
+    /// The peers as `alas-host peers list` shows them.
+    public var summaries: [HostPeerSummary] {
+        peers.map { peer in
+            HostPeerSummary(
+                id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins,
+                agentAccess: peer.localDeviceId.flatMap { pairing.device(id: $0)?.agentAccess }
+            )
+        }
+    }
+
+    /// Sets the access of the inbound device `peerId` reaches this Mac with,
+    /// and of every other device carrying its identity: a re-pair leaves the
+    /// earlier ones with live tokens, and the gate reads whichever authenticated.
+    /// False when the peer has no such device (reciprocal pairing never completed).
+    public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
+        guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
+              pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
+        for other in deviceIds(of: peer) where other != deviceId {
+            pairing.setAgentAccess(access, deviceId: other)
+        }
+        return true
+    }
+
+    /// The devices carrying `peer`'s identity, and the one its record names,
+    /// for a record written before a peer's device carried a `peerServerId`.
+    private func deviceIds(of peer: RemotePeer) -> [String] {
+        var ids = pairing.devices
+            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
+            .map(\.id)
+        if let hint = peer.localDeviceId, !ids.contains(hint) { ids.append(hint) }
+        return ids
     }
 
     public func forget(peerId: String) {
@@ -927,18 +999,13 @@ public final class RemotePeerManager {
         // meantime is represented by several devices, at most one of which
         // the record remembers, and revoking the remembered id alone would
         // leave live tokens behind. Sweeping the identity is also what makes
-        // that additive redeem safe. The stored id is still revoked as a
-        // hint, for records written before the peer's device carried a
-        // `peerServerId`.
-        var deviceIds = pairing.devices
-            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
-            .map(\.id)
-        if let hint = peer.localDeviceId, !deviceIds.contains(hint) { deviceIds.append(hint) }
-        for deviceId in deviceIds {
+        // that additive redeem safe.
+        for deviceId in deviceIds(of: peer) {
             pairing.revoke(deviceId: deviceId)
             onRevokeDevice?(deviceId)
         }
         savePeers()
+        onPeerRevoked?(peer.serverId, peer.name, true)
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
@@ -1111,6 +1178,10 @@ public final class RemotePeerManager {
 
     private func connect(_ peer: RemotePeer) {
         connections[peer.id]?.disconnect()
+        connections[peer.id] = nil
+        // Every path to a link comes through here, and this record has no
+        // token to present.
+        guard !peer.isInboundOnly else { return }
         let id = peer.id
         let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }
         connections[id] = connection
@@ -1120,8 +1191,15 @@ public final class RemotePeerManager {
     private func handle(_ event: RemotePeerConnection.Event, peerId: String) {
         switch event {
         case .stateChanged(let state):
+            let wasUnauthorized = states[peerId] == .unauthorized
             states[peerId] = state
             if let peer = peers.first(where: { $0.id == peerId }) {
+                // A token still being tried out says nothing about the pairing:
+                // a failed re-pair revokes it and restores the confirmed one.
+                if state == .unauthorized, !wasUnauthorized,
+                   peer.token == durableStateByServerId[peer.serverId]?.token {
+                    onPeerRevoked?(peer.serverId, peer.name, false)
+                }
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
             }
         case .hello(_, let name, let protocolVersion, _, let advertised):
@@ -1261,11 +1339,12 @@ extension RemotePeerManager: FederatedPeerLinks {
         connections[peer.id]?.send(message)
     }
 
-    /// What `hello` says about this Mac's peers. Every record is listed, in
-    /// store order, so a client can show a peer that exists but is not
-    /// reachable; only `"online"` means its sessions come through here.
+    /// What `hello` says about this Mac's peers. Every record with a token is
+    /// listed, in store order, so a client can show a peer that exists but is
+    /// not reachable; only `"online"` means its sessions come through here.
+    /// An inbound-only record is left out: this Mac can never reach that peer.
     public var helloPeers: [RemoteHelloPeer] {
-        peers.map { peer in
+        peers.filter { !$0.isInboundOnly }.map { peer in
             RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer))
         }
     }

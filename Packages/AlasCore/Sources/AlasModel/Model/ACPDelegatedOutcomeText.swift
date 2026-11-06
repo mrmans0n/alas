@@ -11,14 +11,33 @@ public enum ACPDelegatedOutcomeText: Sendable {
         public let worktreeName: String?
         public var blockerSummary: String? = nil
         public var role: String? = nil
+        /// The machine running a child delegated from another Mac. Nil for a local child.
+        public var machine: String? = nil
 
-        public init(childSessionId: String, agentId: String, worktreeName: String?, blockerSummary: String? = nil, role: String? = nil) {
+        public init(
+            childSessionId: String, agentId: String, worktreeName: String?, blockerSummary: String? = nil,
+            role: String? = nil, machine: String? = nil
+        ) {
             self.childSessionId = childSessionId
             self.agentId = agentId
             self.worktreeName = worktreeName
             self.blockerSummary = blockerSummary
             self.role = role
+            self.machine = machine
         }
+    }
+
+    /// A turn of a child delegated from another Mac that ended with its final
+    /// message. That message is the child's report, so here it is the normal
+    /// case, not a warning. The prefix keeps the delegated-session card.
+    public static func peerFinished(_ context: Context, lastAgentText: String?) -> String {
+        var local = context
+        local.machine = nil
+        var text = "\(systemPrefix)Delegated session \(label(local)) on \(context.machine ?? "another Mac") finished."
+        if let lastAgentText, !lastAgentText.isEmpty {
+            text += " Its final message:\n\(lastAgentText)"
+        }
+        return text
     }
 
     public static func unreported(_ context: Context, lastAgentText: String?) -> String {
@@ -93,10 +112,23 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "Delegated session \(label(context)) finished its turn."
     }
 
+    /// A child whose peer has been out of reach for a while. Nothing is known
+    /// about the child, so it is not called failed.
+    public static func peerOffline(_ context: Context, peer: String, minutes: Int) -> String {
+        "Delegated session \(label(context)) may still be running: \(peer) has been out of reach for \(minutes) minutes. "
+            + "Its result arrives when \(peer) is back."
+    }
+
     /// Cancellation does not identify who initiated it. A notice only,
     /// preserving the policy that cancelled work never wakes its parent.
     public static func cancelled(_ context: Context) -> String {
         "Delegated session \(label(context)) had its turn cancelled."
+    }
+
+    /// A worktree missing its setup can otherwise look like a code problem.
+    public static func peerRepoHookSkipped(_ context: Context, machine: String) -> String {
+        "Delegated session \(label(context)) started without its repository's worktree-create hook, "
+            + "which needs approval on \(machine). Whatever that hook sets up is missing from the worktree."
     }
 
     public static func limited(_ context: Context) -> String {
@@ -147,10 +179,13 @@ public enum ACPDelegatedOutcomeText: Sendable {
     }
 
     private static func label(_ context: Context) -> String {
-        let agent = context.role.map { "\(context.agentId), role \($0)" } ?? context.agentId
+        var details = [context.role.map { "\(context.agentId), role \($0)" } ?? context.agentId]
         if let worktreeName = context.worktreeName, !worktreeName.isEmpty {
-            return "\(context.childSessionId) (\(agent), worktree \(worktreeName))"
+            details.append("worktree \(worktreeName)")
         }
-        return "\(context.childSessionId) (\(agent))"
+        if let machine = context.machine {
+            details.append("on \(machine)")
+        }
+        return "\(context.childSessionId) (\(details.joined(separator: ", ")))"
     }
 }

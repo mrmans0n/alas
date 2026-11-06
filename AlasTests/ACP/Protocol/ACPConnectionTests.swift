@@ -223,6 +223,11 @@ struct ACPConnectionTests {
     @Test("the session index needs a known version and reports only the advertised operations", arguments: [
         (#"{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe"]}}"#,
          ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true)),
+        (#"{"sessionIndex":{"version":1,"capabilities":["sessionIndex","sessionBatchGet","sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}"#,
+         ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true, worktrees: true, batchGet: true)),
+        // Codex's list leaves out "sessionIndex".
+        (#"{"sessionIndex":{"version":1,"capabilities":["sessionBatchGet","sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}"#,
+         ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true, worktrees: true, batchGet: true)),
         (#"{"sessionIndex":{"version":1}}"#, ACPSessionIndexSupport()),
         (#"{"sessionIndex":{"capabilities":["sessionArchive"]}}"#, nil),
         (#"{"sessionIndex":{"version":0,"capabilities":["sessionArchive"]}}"#, nil),

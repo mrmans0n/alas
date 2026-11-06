@@ -31,12 +31,21 @@ public struct ACPSessionIndexSupport: Equatable, Sendable {
     public let listSubscribe: Bool
     /// Rows carry `agentWorktree` for a worktree the agent made itself.
     public let worktrees: Bool
+    /// `_session/batch_get`.
+    public let batchGet: Bool
 
-    public init(archive: Bool = false, rename: Bool = false, listSubscribe: Bool = false, worktrees: Bool = false) {
+    public init(
+        archive: Bool = false,
+        rename: Bool = false,
+        listSubscribe: Bool = false,
+        worktrees: Bool = false,
+        batchGet: Bool = false
+    ) {
         self.archive = archive
         self.rename = rename
         self.listSubscribe = listSubscribe
         self.worktrees = worktrees
+        self.batchGet = batchGet
     }
 }
 
@@ -57,7 +66,8 @@ public struct ACPSessionIndexCapability: Codable, Equatable, Sendable {
             archive: names.contains("sessionArchive"),
             rename: names.contains("sessionRename"),
             listSubscribe: names.contains("sessionListSubscribe"),
-            worktrees: names.contains("sessionWorktrees")
+            worktrees: names.contains("sessionWorktrees"),
+            batchGet: names.contains("sessionBatchGet")
         )
     }
 }
@@ -176,6 +186,16 @@ public struct ACPSessionArchiveParams: Codable, Equatable, Sendable {
 
     public init(sessionId: String) {
         self.sessionId = sessionId
+    }
+}
+
+/// `_session/batch_get` params. The agent rejects the whole request for a
+/// blank or repeated id, or for any other field.
+public struct ACPSessionBatchGetParams: Codable, Equatable, Sendable {
+    public let sessionIds: [String]
+
+    public init(sessionIds: [String]) {
+        self.sessionIds = sessionIds
     }
 }
 

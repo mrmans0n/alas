@@ -794,6 +794,7 @@ final class AppState {
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)
         }
+        core.watchForRevokedPeers(of: manager)
         return manager
     }()
     /// Nearby Alas instances. Lazy like `remotePeers`; started and stopped by
@@ -1829,6 +1830,9 @@ final class AppState {
             self?.config.worktrees.defaultOrdering ?? .lastUpdateDesc
         }
         WindowAppearance.apply(darkMode: themeStore.current.darkMode)
+        // Read when a delegated session's summary is built, so the devices
+        // load only once one exists.
+        core.delegationPairing = { [weak self] in self?.remotePairing }
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
@@ -2350,6 +2354,18 @@ final class AppState {
         Task { [weak self] in
             await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()
+            self?.core.peerChildBlocked = { [weak self] serverId, child, _ in
+                guard let self, self.config.harness.notifyOnAwaiting else { return }
+                self.harness.notifications.notifyPeerNotice(
+                    body: ACPPeerChildPolicy.blockedNotificationBody(
+                        macName: self.core.peerMacName(serverId: serverId),
+                        agentId: child.agentId, childSessionId: child.childSessionId),
+                    title: "Delegated session needs input",
+                    agent: ACPHarnessBridge.agentKind(for: child.agentId),
+                    serverId: serverId, sessionId: child.childSessionId
+                )
+            }
+            self?.core.startCollectingPeerOutcomes()
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
@@ -12096,6 +12112,30 @@ final class AppState {
     /// sidebar draws delegated children under their parent from it.
     var delegatedSessionParents: [String: String] { core.delegatedSessionParents }
 
+    /// The paired Mac that delegated `sessionId`, when one did.
+    func delegatedFromName(of sessionId: String) -> String? { core.delegatedFromName(of: sessionId) }
+
+    /// The children `sessionId` sent to other Macs.
+    func delegatedPeerChildren(ofParent sessionId: String) async -> [AlasCoreContext.DelegatedPeerChild] {
+        await core.delegatedPeerChildren(ofParent: sessionId)
+    }
+
+    var delegationRevision: Int { core.delegationRevision }
+
+    /// Opens a child that runs on another Mac in the peer view, or says why it
+    /// cannot be opened without moving the user.
+    func openPeerChild(_ child: AlasCoreContext.DelegatedPeerChild) {
+        let reach = nativePeerSessions?.openability(serverId: child.serverId, sessionId: child.childSessionId)
+            ?? (connected: false, listed: false)
+        switch ACPPeerChildPolicy.destination(
+            macName: child.macName, serverId: child.serverId, childSessionId: child.childSessionId,
+            macIsConnected: reach.connected, sessionIsListed: reach.listed
+        ) {
+        case .open(let id): nativePeerSessions?.select(id)
+        case .explain(let message): showFileActionError(title: "Session unavailable", message: message)
+        }
+    }
+
     /// The parent that delegated `sessionId`, from memory or the persisted
     /// delegation record.
     func delegatedParentSessionID(for sessionId: String) async -> String? {
@@ -12335,7 +12375,12 @@ final class AppState {
             terminalTabs: terminalTabs,
             harnessActivity: harness.activityBySession,
             remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
-            delegatedParents: delegatedSessionParents
+            delegatedParents: delegatedSessionParents,
+            delegatedFromNames: Dictionary(
+                uniqueKeysWithValues: core.delegatedPeerOrigins.keys.compactMap { id in
+                    core.delegatedFromName(of: id).map { (id, $0) }
+                }
+            )
         ))
     }
 
@@ -12869,6 +12914,9 @@ final class AppState {
                 )
             }
         )
+        mgr.delegationPeerNamesProvider = { [weak self] in
+            ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
+        }
         mgr.remoteServerIdProvider = { [weak self] in
             guard let self else { return nil }
             if self.config.remote.ensureServerId() { self.saveConfig() }
@@ -13233,6 +13281,9 @@ final class AppState {
                 self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             }
         )
+        manager.delegationPeerNamesProvider = { [weak self] in
+            ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
+        }
         manager.remoteServerIdProvider = { [weak self] in
             guard let self else { return nil }
             if self.config.remote.ensureServerId() { self.saveConfig() }
@@ -13973,7 +14024,8 @@ final class AppState {
                 role: record.role
             ))
         }
-        if let parent {
+        // A paired Mac's sentinel is not a session anyone could open here.
+        if let parent, ACPPeerParent.serverId(from: parent.parentSessionId) == nil {
             summaries.append(.init(
                 sessionId: parent.parentSessionId,
                 relationship: "parent",

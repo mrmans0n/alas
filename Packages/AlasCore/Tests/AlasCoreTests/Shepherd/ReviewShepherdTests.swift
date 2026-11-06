@@ -7,6 +7,60 @@ private typealias F = ShepherdFixtures
 
 @MainActor
 struct ReviewShepherdTests {
+    @Test("a service started during a fix does not keep Ship busy", arguments: [nil, "shell", "service"] as [String?])
+    func backgroundServiceDoesNotBlockShip(taskType: String?) {
+        let session = ACPSession(id: "session-1", agentId: "claude", worktreeId: "wt-1", title: "Fix")
+        session.agentState = .ready
+        session.settlesAtResult = true
+        var service = ACPBackgroundTask(ownerSessionId: session.id, asyncTaskId: "preview", name: "Preview server")
+        service.taskType = taskType
+        service.startedAt = F.now.addingTimeInterval(1)
+        session.saveBackgroundTask(service)
+        #expect(!AlasCoreContext.shepherdSessionIsBusy(session, now: F.now))
+    }
+
+    @Test("autonomous turns and live children keep Ship busy", arguments: [
+        // Ready adapter, settles at result, work kind, state, expected busy.
+        (true, true, "turn", "running", true),
+        (true, true, "turn", "completed", false),
+        (true, true, "turn", "lost", false),
+        (false, true, "turn", "running", false),
+        (true, false, "turn", "running", false),
+        (true, false, "child", "running", true),
+        (true, false, "child", "requires_action", true),
+        (true, false, "child", "completed", false),
+    ])
+    func backgroundFixActivity(ready: Bool, settles: Bool, kind: String, state: String, expected: Bool) {
+        let session = ACPSession(id: "session-1", agentId: "claude", worktreeId: "wt-1", title: "Fix")
+        session.agentState = ready ? .ready : .disconnected
+        session.settlesAtResult = settles
+        if kind == "child" {
+            session.registerSubagent(.init(subagentSessionId: "child"))
+            if state == "completed" {
+                session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+            } else if state == "requires_action" {
+                session.applySubagentState(.init(subagentSessionId: "child", state: .requiresAction))
+            }
+        } else {
+            var task = ACPBackgroundTask(ownerSessionId: session.id, asyncTaskId: "cycle", name: "Run tests")
+            task.taskType = kind
+            task.state = state
+            session.saveBackgroundTask(task)
+        }
+        #expect(AlasCoreContext.shepherdSessionIsBusy(session, now: F.now) == expected)
+    }
+
+    @Test func backgroundWorkStartsTheIdleGraceOnlyAfterItFinishes() {
+        let snapshot = F.snapshot(F.request(threads: [F.trustedThread]))
+        var record = F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2),
+                              fixAttempts: 1, lastDispatched: F.fingerprint(
+                                ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [F.trustedThread])))
+        record = ShepherdPolicy.decide(record, F.observation(snapshot, session: .busy)).record
+        let idle = ShepherdPolicy.decide(record, F.observation(snapshot, now: F.now.addingTimeInterval(3600)))
+        #expect(idle.action == .wait)
+        #expect(idle.record.phase == .awaitingPush(turnEndedAt: F.now.addingTimeInterval(3600), pollsWithoutProgress: 0))
+    }
+
     private final class MemoryStore: PersistenceStoreProtocol {
         var files: [URL: Data] = [:]
 
@@ -58,9 +112,11 @@ struct ReviewShepherdTests {
     /// idle session.
     private func makeShepherd(
         request: ReviewRequest,
+        store: MemoryStore = MemoryStore(),
         deliverPrompt: @escaping @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery,
         rules: @escaping @MainActor () throws -> ShepherdRules = { .none },
-        servesWorktree: @escaping @MainActor (String) -> Bool = { _ in true }
+        servesWorktree: @escaping @MainActor (String) -> Bool = { _ in true },
+        now: @escaping @MainActor () -> Date = { F.now }
     ) -> ReviewShepherd {
         let local = ReviewLoopLocalState(
             branchName: "fix-login", headSHA: F.head, baseBranch: "main",
@@ -69,13 +125,13 @@ struct ReviewShepherdTests {
             needsPush: false
         )
         let shepherd = ReviewShepherd(
-            store: MemoryStore(),
+            store: store,
             fileURL: URL(fileURLWithPath: "/memory/review-shepherds.json"),
             providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeProvider(request: request)]),
             localProbe: ReviewLoopLocalProbe { _, _ in
                 (local: local, remotes: [GitRemote(name: "origin", url: "https://github.com/acme/app.git")])
             },
-            now: { F.now }
+            now: now
         )
         shepherd.effects = ReviewShepherd.Effects(
             worktreeContext: { worktreeID in
@@ -229,5 +285,152 @@ struct ReviewShepherdTests {
 
         #expect(delivered.isEmpty)
         #expect(shepherd.records[record.id]?.phase == .watching)
+    }
+
+    @Test func failedDeliveryRetriesAfterRestartWithoutSpendingFixAttempts() async {
+        let request = F.request(threads: [F.trustedThread])
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        let deliver: @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery = { _, _ in
+            deliveries += 1
+            return deliveries < 3 ? .failed : .delivered
+        }
+        var shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (89, 2), (90, 3), (91, 3)] {
+            time = F.now.addingTimeInterval(elapsed)
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            #expect(shepherd.records[record.id]?.fixAttempts == (deliveries < 3 ? 0 : 1))
+            #expect(shepherd.records[record.id]?.phase.isResumable == false)
+            // Simulate relaunch, including a reload during delivery backoff.
+            shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+        }
+    }
+
+    @Test("a clean PR retries its bind context across restart", arguments: [true, false])
+    func cleanPRRetriesBindContext(autoFix: Bool) async throws {
+        let request = F.request()
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        let deliver: @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery = { _, _ in
+            deliveries += 1
+            return deliveries < 3 ? .failed : .delivered
+        }
+        var shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: autoFix, autoMerge: false, contextRules: ShepherdRules.none)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (89, 2), (90, 3), (91, 3)] {
+            time = F.now.addingTimeInterval(elapsed)
+            shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            let current = try #require(shepherd.records[record.id])
+            #expect(current.fixAttempts == 0)
+            #expect(!current.phase.isResumable)
+            if expectedDeliveries == 3 {
+                #expect(!ShepherdPresentation.make(record: current, request: request, mergeGatePasses: false).phaseLine.contains("retrying"))
+            }
+        }
+    }
+
+    @Test("pending bind delivery cannot overlap a poll or lose a toggle", arguments: [ReviewShepherd.Delivery.superseded, .failed])
+    func bindDeliverySurvivesAToggle(unsent: ReviewShepherd.Delivery) async throws {
+        let request = F.request()
+        let (entered, signalEntered) = AsyncStream<Void>.makeStream()
+        let (released, signalReleased) = AsyncStream<Void>.makeStream()
+        var time = F.now
+        var attempts = 0
+        var accepted = 0
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, wanted in
+            attempts += 1
+            if attempts == 1 {
+                signalEntered.yield()
+                var release = released.makeAsyncIterator()
+                await release.next()
+            }
+            guard wanted() else { return unsent }
+            accepted += 1
+            return .delivered
+        }, now: { time })
+        let binding = Task {
+            await shepherd.bind(sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+                                autoFix: true, autoMerge: false, contextRules: ShepherdRules.none)
+        }
+        var entry = entered.makeAsyncIterator()
+        await entry.next()
+        let record = try #require(shepherd.record(forSession: "session-1"))
+        await shepherd.evaluateNow(record.id)
+        #expect(attempts == 1)
+        shepherd.setAutoMerge(true, for: record.id)
+        signalReleased.yield()
+        _ = await binding.value
+        #expect(accepted == 0)
+        time = F.now.addingTimeInterval(30)
+        await shepherd.evaluateNow(record.id)
+        #expect(attempts == 2 && accepted == 1)
+        #expect(shepherd.records[record.id]?.autoMerge == true)
+        #expect(shepherd.records[record.id]?.pendingBindDelivery == nil)
+        #expect(shepherd.records[record.id]?.fixAttempts == 0)
+    }
+
+    @Test func republishingKeepsTheSameOwnersFixAllowance() async {
+        let request = F.request(threads: [F.trustedThread])
+        let shepherd = makeShepherd(request: request) { _, _ in .delivered }
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        await shepherd.evaluateNow(record.id)
+        let republished = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        #expect(republished.fixAttempts == 1)
+        #expect(republished.phase == .fixing(dispatchedAt: F.now))
+        let newOwner = await shepherd.bind(
+            sessionID: "session-2", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        #expect(newOwner.fixAttempts == 0)
+        #expect(newOwner.phase == .watching)
+    }
+
+    @Test(arguments: [ReviewShepherd.Delivery.superseded, .failed])
+    func rebindDuringDeliveryDoesNotSpendAnUnsentAttempt(unsent: ReviewShepherd.Delivery) async {
+        let request = F.request(threads: [F.trustedThread])
+        let (entered, signalEntered) = AsyncStream<Void>.makeStream()
+        let (released, signalReleased) = AsyncStream<Void>.makeStream()
+        var firstDelivery = true
+        var delivered = 0
+        let shepherd = makeShepherd(request: request) { _, wanted in
+            if firstDelivery {
+                firstDelivery = false
+                signalEntered.yield()
+                var release = released.makeAsyncIterator()
+                await release.next()
+            }
+            guard wanted() else { return unsent }
+            delivered += 1
+            return .delivered
+        }
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        let evaluation = Task { await shepherd.evaluateNow(record.id) }
+        var entry = entered.makeAsyncIterator()
+        await entry.next()
+        _ = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil)
+        signalReleased.yield()
+        await evaluation.value
+        #expect(delivered == 0)
+        #expect(shepherd.records[record.id]?.fixAttempts == 0)
+        await shepherd.evaluateNow(record.id)
+        #expect(delivered == 1)
+        #expect(shepherd.records[record.id]?.fixAttempts == 1)
     }
 }

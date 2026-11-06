@@ -7,6 +7,8 @@ import AlasCode
 
 public enum ACPAuthFailure: Sendable {
     public static func message(from error: any Error) -> String? {
+        // Names a user's file, which can spell anything: never an auth signal.
+        guard !(error is ACPPromptRefusal) else { return nil }
         let message = normalizedMessage(from: error)
         let lowercased = message.lowercased()
         let markers = [

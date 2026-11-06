@@ -284,6 +284,7 @@ struct RemoteServerPane: View {
                                 }
                                 .disabled(hostActivity[peer.id] != nil)
                             }
+                            agentAccessRow(for: peer)
                         }
                         if state.config.remote.discoverable {
                             let nearby = state.remotePeerBrowser.instances
@@ -398,7 +399,9 @@ struct RemoteServerPane: View {
                 // Hashes the bundled host binary; keep it off the main thread.
                 let install = await Task.detached { setup.decision(for: probe) }.value
                 hostActivity[peer.id] = HostSSHSetupSheet.summary(install) + "…"
-                let host = try await setup.install(probe, progress: { _ in })
+                let host = try await setup.install(probe, progress: { note in
+                    Task { @MainActor in hostActivity[peer.id] = note + "…" }
+                })
                 hostActivity[peer.id] = "Restarting the host…"
                 try await setup.start(host: host)
             } catch {
@@ -521,6 +524,33 @@ struct RemoteServerPane: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(url, forType: .string)
+    }
+
+    /// What the paired Mac's agents may do here. Acts on the device the peer
+    /// reaches this Mac with, so it waits for reciprocal pairing to finish.
+    private func agentAccessRow(for peer: RemotePeer) -> some View {
+        let access = peer.localDeviceId.flatMap { state.remotePairing.device(id: $0)?.agentAccess }
+        let desc: String? = if access == nil {
+            "Pair again to allow this"
+        } else if access == .autoRun {
+            "They can run commands here as you, without asking."
+        } else {
+            nil
+        }
+        return SettingsRow(name: "Let agents on this Mac use this machine", desc: desc) {
+            Picker("Agent access for \(peer.name)", selection: Binding(
+                get: { access ?? .off },
+                set: { _ = state.remotePeers.setAgentAccess($0, peerId: peer.id) }
+            )) {
+                Text("Off").tag(RemoteDeviceAgentAccess.off)
+                Text("Ask for approval").tag(RemoteDeviceAgentAccess.ask)
+                Text("Allow auto-run").tag(RemoteDeviceAgentAccess.autoRun)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .settingsDropdownFrame()
+            .disabled(access == nil)
+        }
     }
 
     private func peerStatus(_ peer: RemotePeer) -> String {

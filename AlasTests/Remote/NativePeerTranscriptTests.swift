@@ -161,6 +161,68 @@ struct NativePeerTranscriptTests {
         #expect(transcript.requestGeneration(for: .question) != second)
     }
 
+    @Test(arguments: [ACPVisualAid.Presentation.card, .embedded])
+    func visualRowsPreserveHTMLAndPresentation(presentation: ACPVisualAid.Presentation) throws {
+        let visual = ACPVisualAid(id: UUID(), title: "Diagram", html: "<p>Hello</p>",
+                                  question: nil, presentation: presentation, createdAt: .distantPast)
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 2)
+        let cache = NativePeerRowCache()
+        guard case .visualAid(let decoded) = try #require(cache.proxies(for: [wire]).first) else {
+            Issue.record("Expected a visual instead of a title-only notice")
+            return
+        }
+        #expect(decoded.id == visual.id)
+        #expect(decoded.html == "<p>Hello</p>")
+        #expect(decoded.presentation == presentation)
+    }
+
+    @Test(arguments: ["answered", "dismissed", "pending"])
+    func visualRowsPreserveQuestionsAndAnswers(kind: String) throws {
+        let answer: ACPVisualAid.Answer? = switch kind {
+        case "answered": .answered(selectedOptionIds: ["b"], note: "Yes", at: .distantPast)
+        case "dismissed": .dismissed(at: .distantPast)
+        default: nil
+        }
+        let visual = ACPVisualAid(
+            id: UUID(), title: "Choice", html: "<p>Pick</p>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "A"), .init(id: "b", label: "B")],
+                            allowMultiple: true), answer: answer, createdAt: .distantPast)
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 0)
+        guard case .visualAid(let decoded) = try #require(NativePeerRowCache().proxies(for: [wire]).first) else {
+            Issue.record("Expected a visual question")
+            return
+        }
+        #expect(decoded.question == visual.question)
+        #expect(decoded.answer == answer)
+    }
+
+    @Test(arguments: ["{", #"{"id":"bad","title":"T","html":"<p>x</p>"}"#])
+    func malformedVisualRowsRemainNotices(json: String) {
+        let wire = RemoteWireMessage(stableId: "v", kind: "visualAid", text: "T", json: json, index: 0)
+        guard case .systemNotice = NativePeerRow(message: wire) else {
+            Issue.record("Malformed visual should have a safe fallback")
+            return
+        }
+    }
+
+    @Test(arguments: [ACPVisualAid.Presentation.card, .embedded])
+    func idleVisualRowsReleaseTheirHostingGraph(presentation: ACPVisualAid.Presentation) throws {
+        let visual = ACPVisualAid(id: UUID(), title: "Diagram", html: "<p>Hello</p>",
+                                  question: nil, presentation: presentation, createdAt: .distantPast)
+        let visualRow = RemoteSessionGateway.toWire(.visualAid(visual), index: 0)
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [visualRow, row("text", index: 1, text: "Answer")],
+                                              firstIndex: 0, totalCount: 2, epoch: 1, revision: 0))
+        let host = NativePeerTranscriptScroller(
+            transcript: transcript, contentMaxWidth: 800, typography: .default,
+            collapsesFinishedToolCalls: false, canFetchOlder: false, isFetchingOlder: false,
+            leadingRows: [], trailingRows: [], fetchOlder: {})
+        let specs = NativePeerTranscriptScroller.Coordinator().specs(host: host)
+        #expect(try #require(specs.first { $0.id == visualRow.stableId }).parksWhenReleased == false)
+        #expect(try #require(specs.first { $0.id == "text" }).parksWhenReleased == true)
+    }
+
     @Test func planDocumentRows() {
         let wire = RemoteSessionGateway.toWire(.planDocument(id: UUID(), .markdownFixture), index: 2)
         #expect(NativePeerRow(message: wire) == .planDocument(.markdownFixture))

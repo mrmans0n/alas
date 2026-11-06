@@ -38,10 +38,11 @@ destination such as `me@mini.local`. Alas connects in batch mode, so key login
 must work without a password: if it can't connect, run `ssh <destination>` once
 in Terminal to trust the host key.
 
-Alas installs the host with Homebrew when the host Mac has it (updating an
-installed `alas-host` or `alas` cask), uses the host inside an installed
-`Alas.app`, or otherwise copies its own host files into `~/.alas/host` when both
-Macs share an architecture. You then pick the reachability, the agents to
+Alas uses the host inside an installed `Alas.app` as is, updates an installed
+`alas-host` cask, or installs that cask when the host Mac has Homebrew, without
+running Homebrew's automatic cleanup. Otherwise, or when that install fails, it
+copies its own host files into `~/.alas/host` when both Macs share an
+architecture. You then pick the reachability, the agents to
 enable and the projects to add, and Alas starts the host at login, pairs with
 it, and lists anything `alas-host setup --check` warns about. The host Mac needs
 a user logged in, since launchd runs the host in that user's session.
@@ -184,12 +185,52 @@ needs the host to reach it, for example over Tailscale, because the host pairs
 back to it.
 
 ```bash
-alas-host peers list                  # id, name, serverId
+alas-host peers list                  # id, name, serverId, agent access
+alas-host peers agents <id|name|serverId> off|ask|auto
 alas-host peers remove <id|name|serverId>
+alas-host peers add <pairing-link>    # let this host's agents delegate to that Mac
 ```
 
 `peers remove` revokes the peer and disconnects it. Like the other commands,
-both go through the running host when one serves the profile.
+these go through the running host when one serves the profile. `peers add`
+works only through a running host, because it needs the host's Remote server.
+
+`peers agents` sets whether agents on that Mac may start sessions on this host
+(see [Delegating to another machine](agent-delegation.md#delegating-to-another-machine)).
+It is `off` by default and after any new pairing, except the `peers add` case in
+[Delegate from the host to a Mac](#delegate-from-the-host-to-a-mac). `ask` lets their sessions run
+with permission requests waiting for a person; `auto` also lets a session
+auto-run, if the agent that started it was auto-running. Turning it off stops new
+sessions and prompts; work already running finishes and reports back.
+
+### Delegate from the host to a Mac
+
+Pairing a Mac with the host gives the host no way to reach that Mac, so the
+host's agents can't delegate there yet. To allow it, choose **Pair a device** in
+the Mac's Remote settings, copy the pairing link, then run
+`alas-host peers add <pairing-link>` on the host. Unlike the pairing above, this
+is two-way: the host redeems the link, then the Mac pairs back to the host, so
+that Mac also gets a link to the host.
+
+- The host and the Mac must be able to reach each other. Tailscale is the
+  recommended route. The host needs an address other than loopback, so set
+  `host.reachability` to `tailscale` or `lan`. A host that only listens on
+  loopback refuses the add and says so.
+- macOS may silently deny a launch agent's connections to LAN addresses, so a
+  host running through `install-agent` may not reach a Mac over the LAN. This is
+  untested. If the add can't reach the Mac, use Tailscale.
+- The Mac must allow it: on the host's row in Settings > Remote > Peers, set
+  *Let agents on this Mac use this machine*.
+
+When Remote serves, the host keeps a link open to each peer it holds a token for.
+That includes tokens written by an app sharing the profile, not only those from
+`peers add`. Agents on the host see those peers in `agent_list`, and each peer
+still refuses them until it allows it.
+
+If the Mac had paired with the host and had no link back, its `peers agents`
+value stays as it was: access to the host is a separate decision. Running
+`peers add` again for a Mac that already has a link back is an ordinary re-pair,
+and that Mac's access starts at `off`, on its older tokens too.
 
 Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the

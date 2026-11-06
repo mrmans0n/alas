@@ -46,7 +46,7 @@ public final class FederatedDownstream {
 /// controller.
 @MainActor
 public final class FederatedSessionsProvider {
-    public static let peerUnavailableMessage = "Peer is unavailable."
+    public nonisolated static let peerUnavailableMessage = "Peer is unavailable."
 
     /// Several phones asking at once must not turn into a burst upstream.
     public static let listRequestThrottle: TimeInterval = 2

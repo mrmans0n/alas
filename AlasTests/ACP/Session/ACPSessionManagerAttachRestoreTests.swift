@@ -5968,6 +5968,36 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
     }
 
+    @Test("automatic transcript recovery too large to send keeps queued prompt blocked", .timeLimit(.minutes(1)))
+    func oversizedAutomaticTranscriptRecoveryKeepsQueuedPromptBlocked() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        // Tens of MiB; don't leave it in the temporary directory.
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: store.path + suffix) } }
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let prior = String(repeating: "x", count: ACPPromptSizeGuard.maxEncodedBytes)
+        try appendMessage(.user(id: UUID(), text: prior, attachments: []), to: store, seq: 0)
+        try store.upsertQueue(sessionId: "local", items: [QueuedPrompt(blocks: [.text("queued prompt")])])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        guard case .failed = session.contextRecoveryStatus else {
+            Issue.record("expected a failed recovery")
+            return
+        }
+        // A flush would have marked the head as sending synchronously.
+        #expect(session.queue.first?.status == .pending)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("superseded load failure does not persist transcript recovery")
     func supersededLoadFailureDoesNotPersistTranscriptRecovery() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -6375,7 +6405,8 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { session.contextRestoreWarning == nil }
         #expect(session.transcript.messages.count == messageCountBefore)
         #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"])
-        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
+        // Cleared through the persistence queue, after the warning.
+        try await waitUntil { (try? store.loadSession(id: "local")?.contextRecoveryPending) == false }
     }
 
     @Test("failed transcript context send keeps warning and transcript")

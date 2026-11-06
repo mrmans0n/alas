@@ -29,6 +29,9 @@ public final class HostProtocolServer {
     /// The pairing link for a code that `remotePairing` minted, with the
     /// addresses the server is reached at now; nil leaves the code alone.
     public var remotePairingLink: (@MainActor (String) -> String?)?
+    /// Who the paired devices are, for their `delegation` requests; without it
+    /// those are refused. Only the connections of a peer link need it.
+    public var delegationPairing: RemotePairingService?
 
     public init(
         host: AlasHost,
@@ -51,7 +54,8 @@ public final class HostProtocolServer {
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
             isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
-            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink }, send: send
+            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink },
+            delegationPairing: { [self] in delegationPairing }, send: send
         )
     }
 
@@ -71,6 +75,7 @@ public final class HostProtocolConnection {
     private let remotePairing: @MainActor () -> RemotePairingService?
     private let remotePeers: @MainActor () -> RemotePeerManager?
     private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
+    private let delegationPairing: @MainActor () -> RemotePairingService?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -87,6 +92,7 @@ public final class HostProtocolConnection {
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
         remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
+        delegationPairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -96,6 +102,7 @@ public final class HostProtocolConnection {
         self.remotePairing = remotePairing
         self.remotePeers = remotePeers
         self.remotePairingLink = remotePairingLink
+        self.delegationPairing = delegationPairing
         self.send = send
     }
 
@@ -154,6 +161,7 @@ public final class HostProtocolConnection {
     private func subscribe(after cursor: HostCursor, accepting: Set<String>, id: Int) async {
         close()
         let next = host.subscribe(after: cursor)
+        next.delegationPeerServerId = delegationDevice.flatMap { PeerDelegationGate.allows(.outbox, device: $0) ? $0.peerServerId : nil }
         subscription = next
         await enqueue(.response(id: id, result: .subscribed))
         guard subscription === next else { return }
@@ -343,11 +351,23 @@ public final class HostProtocolConnection {
                 code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL), link: remotePairingLink()?(code)
             )
         case .listPeers:
-            return .peers(peers: try localPeers().peers.map(Self.summary))
+            return .peers(peers: try localPeers().summaries)
+        case .addPeer(let link):
+            let peers = try localPeers()
+            guard remotePairing() != nil else { throw HostError.failed(message: Self.remoteOffRefusal) }
+            if let error = await peers.addPeer(link: link) { throw HostError.failed(message: Self.describe(error)) }
+            return .done
         case .forgetPeer(let peerID):
             let peers = try localPeers()
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             peers.forget(peerId: peerID)
+            return .done
+        case .setPeerAgentAccess(let peerID, let access):
+            let peers = try localPeers()
+            guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
+            guard peers.setAgentAccess(access, peerId: peerID) else {
+                throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
+            }
             return .done
         case .readWorktree(let ref, let read):
             // Needs no lease, as for a session: seeing a worktree is enough
@@ -425,11 +445,20 @@ public final class HostProtocolConnection {
             let listed = try fileWorktree(ref)
             caller.log("worktrees.files", path)
             try await host.core.createListedFolder(path, in: listed)
+        case .delegation(let request):
+            return try await host.delegation.serve(request, device: delegationDevice, caller: caller)
         }
         return .done
     }
 
     private var sessions: SessionsAPI { host.sessions }
+
+    /// The paired device this connection's transport authenticated; nil for
+    /// any other caller.
+    private var delegationDevice: RemoteDevice? {
+        guard case .remotePeer(let deviceID) = caller else { return nil }
+        return delegationPairing()?.device(id: deviceID)
+    }
 
     /// Someone at this Mac may be asked about a repository hook; a paired
     /// peer may not.
@@ -447,8 +476,22 @@ public final class HostProtocolConnection {
         return peers
     }
 
-    private static func summary(_ peer: RemotePeer) -> HostPeerSummary {
-        HostPeerSummary(id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins)
+    nonisolated static let remoteOffRefusal = "Remote is off on this host. Set host.reachability to lan or tailscale, restart the host, and try again."
+    nonisolated static let noAddressRefusal = "This host has no address the Mac could reach it at, and the Mac must pair back. Set host.reachability to lan or tailscale; with tailscale, tailscale serve must be running."
+
+    private static func describe(_ error: RemotePeerManager.AddError) -> String {
+        switch error {
+        case .invalidLink: "That is not a pairing link."
+        case .expiredCode: "That pairing code is not valid any more. Make a new one on the Mac."
+        case .originRejected: "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+        case .approvalExpired, .approvalDisabled: "That Mac refused the pairing request."
+        case .unreachable: "Couldn't reach that Mac at any of its addresses. It must be reachable from this host, for example over Tailscale."
+        case .noLocalAddress: noAddressRefusal
+        case .reciprocalPairingFailed: "That Mac couldn't pair back. Check it can reach this host at the addresses alas-host pair prints."
+        case .cancelled: "Cancelled: that peer was forgotten while pairing was in progress."
+        case .identityUnproven: "That Mac answered with a key it couldn't prove it holds. Nothing was paired."
+        case .identityRebindRefused: "This host is already paired with that Mac under a different key. If the Mac was reinstalled, run alas-host peers remove first, then pair again."
+        }
     }
 
     /// Following acts on the connection's subscription, so it needs one.

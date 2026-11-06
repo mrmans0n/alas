@@ -41,8 +41,14 @@ public struct ACPDelegatedSessionNewRequest: Equatable, Sendable {
     public let worktree: ACPDelegatedSessionWorktreeTarget
     public var modelSelection: ACPDelegatedModelSelection? = nil
     public var role: String? = nil
+    /// A paired Mac (name or server id) to run the child on.
+    public var peer: String? = nil
+    /// The peer's project (id or name) when its origin match is not unique.
+    public var project: String? = nil
 
-    public init(prompt: String, agentId: String?, worktree: ACPDelegatedSessionWorktreeTarget, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil) {
+    public init(prompt: String, agentId: String?, worktree: ACPDelegatedSessionWorktreeTarget, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peer: String? = nil, project: String? = nil) {
+        self.peer = peer
+        self.project = project
         self.prompt = prompt
         self.agentId = agentId
         self.worktree = worktree
@@ -161,8 +167,14 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// the same selection before the pending initial prompt.
     public var modelSelection: ACPDelegatedModelSelection? = nil
     public var role: String? = nil
+    /// Set on the delegating machine for a child that runs on a paired peer.
+    public var peerServerId: String? = nil
+    /// For a child on a paired peer: its parent still expects a result, from
+    /// `session_new` or a successful `session_send` until an outcome is
+    /// collected. A blocker is not an outcome: the child is still running.
+    public var peerAwaiting: Bool = false
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false) {
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -178,6 +190,8 @@ public struct ACPDelegationRecord: Equatable, Sendable {
         self.lastParentReportAt = lastParentReportAt
         self.modelSelection = modelSelection
         self.role = role
+        self.peerServerId = peerServerId
+        self.peerAwaiting = peerAwaiting
     }
 }
 
@@ -238,10 +252,12 @@ public struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
     public let failure: String?
     public let createdAt: Int64
     public var role: String? = nil
+    /// The paired Mac running the child. Nil for a session on this Mac.
+    public var peer: String? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case sessionId = "session_id"
-        case relationship, role
+        case relationship, role, peer
         case agentId = "agent_id"
         case worktreeId = "worktree_id"
         case state
@@ -249,7 +265,8 @@ public struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
         case createdAt = "created_at"
     }
 
-    public init(sessionId: String, relationship: String?, agentId: String, worktreeId: String, state: String, failure: String?, createdAt: Int64, role: String? = nil) {
+    public init(sessionId: String, relationship: String?, agentId: String, worktreeId: String, state: String, failure: String?, createdAt: Int64, role: String? = nil, peer: String? = nil) {
+        self.peer = peer
         self.sessionId = sessionId
         self.relationship = relationship
         self.agentId = agentId
@@ -273,14 +290,21 @@ public struct ACPOrchestrationNewResponse: Codable, Equatable, Sendable {
     public let sessionId: String
     public let state: String
     public let worktreeId: String?
+    /// The paired Mac running the child. Nil for a session on this Mac.
+    public var peer: String? = nil
+    /// What the caller should know about a state it cannot act on yet.
+    public var note: String? = nil
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case sessionId = "session_id"
         case state
         case worktreeId = "worktree_id"
+        case peer, note
     }
 
-    public init(sessionId: String, state: String, worktreeId: String?) {
+    public init(sessionId: String, state: String, worktreeId: String?, peer: String? = nil, note: String? = nil) {
+        self.peer = peer
+        self.note = note
         self.sessionId = sessionId
         self.state = state
         self.worktreeId = worktreeId
@@ -300,6 +324,10 @@ public struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
     /// The worktree whose install state `available` reflects.
     public let worktreeId: String
     public let agents: [ACPDelegationAgentSummary]
+    /// Every paired Mac, when the caller may delegate and asked about no peer.
+    public let peers: [ACPOrchestrationPeer]?
+    /// What the asked-about peer offers, when the caller named one.
+    public let peer: ACPOrchestrationPeerOffer?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case version
@@ -307,14 +335,92 @@ public struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
         case canDelegate = "can_delegate"
         case worktreeId = "worktree_id"
         case agents
+        case peers
+        case peer
     }
 
-    public init(version: Int, callerAgentId: String?, canDelegate: Bool, worktreeId: String, agents: [ACPDelegationAgentSummary]) {
+    public init(
+        version: Int, callerAgentId: String?, canDelegate: Bool, worktreeId: String, agents: [ACPDelegationAgentSummary],
+        peers: [ACPOrchestrationPeer]? = nil, peer: ACPOrchestrationPeerOffer? = nil
+    ) {
+        self.peers = peers
+        self.peer = peer
         self.version = version
         self.callerAgentId = callerAgentId
         self.canDelegate = canDelegate
         self.worktreeId = worktreeId
         self.agents = agents
+    }
+}
+
+/// A paired Mac, as `agent_list` shows it. No request is sent to learn this.
+public struct ACPOrchestrationPeer: Codable, Equatable, Sendable {
+    public let serverId: String
+    public let name: String
+    /// `online`, `offline`, `unverified`, `incompatible` or `revoked`.
+    public let state: String
+    public let supportsDelegation: Bool
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case serverId = "server_id"
+        case name
+        case state
+        case supportsDelegation = "supports_delegation"
+    }
+
+    public init(serverId: String, name: String, state: String, supportsDelegation: Bool) {
+        self.serverId = serverId
+        self.name = name
+        self.state = state
+        self.supportsDelegation = supportsDelegation
+    }
+}
+
+/// What one peer offers this Mac's agents: the projects matching the caller's
+/// repository and their worktrees. Its agents are the response's `agents`.
+public struct ACPOrchestrationPeerOffer: Codable, Equatable, Sendable {
+    public struct Project: Codable, Equatable, Sendable {
+        public struct Worktree: Codable, Equatable, Sendable {
+            public let name: String
+            public let branch: String
+            public let path: String
+
+            public init(name: String, branch: String, path: String) {
+                self.name = name
+                self.branch = branch
+                self.path = path
+            }
+        }
+
+        public let id: String
+        public let name: String
+        public let worktrees: [Worktree]
+
+        public init(id: String, name: String, worktrees: [Worktree]) {
+            self.id = id
+            self.name = name
+            self.worktrees = worktrees
+        }
+    }
+
+    public let serverId: String
+    public let name: String
+    /// `off`, `ask` or `autoRun`: what the peer lets this Mac's agents do.
+    public let access: String
+    public let projects: [Project]
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case serverId = "server_id"
+        case name
+        case access
+        case projects
+    }
+
+    public init(serverId: String, name: String, access: String, projects: [Project]) {
+        self.serverId = serverId
+        self.name = name
+        self.access = access
+        self.projects = projects
     }
 }
 
@@ -522,6 +628,13 @@ public struct ACPOrchestrationSearchResponse: Codable, Equatable, Sendable {
 
 public struct ACPOrchestrationWaitResponse: Codable, Equatable, Sendable {
     public struct Session: Codable, Equatable, Sendable {
+        /// The `state` of an id a paired Mac asked about that holds no child of
+        /// its own here: it never existed, was removed, or is another's.
+        public static let goneState = "gone"
+        /// The `state` of a child on a paired Mac that cannot be reached now. It
+        /// reads as settled so a parent is not stuck; the child may still run.
+        public static let peerUnreachableState = "peer_unreachable"
+
         public let sessionId: String
         public let state: String
         /// False while the session still has a turn running or queued.

@@ -1569,6 +1569,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// owns `onEvent` and the real app-active state; the manager persists
     /// `last_seen_at` whenever a session becomes unseen.
     public let seenTracker = SessionSeenTracker(now: Date.init, appActive: true)
+    /// Names of paired Macs a new root session may be told it can delegate to.
+    public var delegationPeerNamesProvider: @MainActor () -> [String] = { [] }
     public var remoteServerIdProvider: @MainActor () -> String? = { nil }
     private var remoteCoordinator: ACPRemoteSessionCoordinator? {
         didSet { observeRemoteAuthority() }
@@ -2847,17 +2849,23 @@ public final class ACPSessionManager: ChangeTracking {
     /// covers rows outside the lazy recent-session cache before a tab title is
     /// chosen.
     public func persistedSessionRow(id: ACPSession.ID) async -> ACPSessionRow? {
-        await previousManagerDisposal?.value
-        if let row = persistedRows[id] { return row }
         do {
-            guard let row = try await persistence.loadSession(id: id) else { return nil }
-            persistedRows[id] = row
-            missingPersistedSessionIds.remove(id)
-            return row
+            return try await storedSessionRow(id: id)
         } catch {
             persistenceError = error.localizedDescription
             return nil
         }
+    }
+
+    /// Like `persistedSessionRow`, but a failed read throws instead of
+    /// looking like a session that does not exist.
+    public func storedSessionRow(id: ACPSession.ID) async throws -> ACPSessionRow? {
+        await previousManagerDisposal?.value
+        if let row = persistedRows[id] { return row }
+        guard let row = try await persistence.loadSession(id: id) else { return nil }
+        persistedRows[id] = row
+        missingPersistedSessionIds.remove(id)
+        return row
     }
 
     /// Awaits any in-flight background backfill of older transcript messages
@@ -7279,6 +7287,7 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = attaching
             }
             session.promptCapabilities = initialized.promptCapabilities
+            session.agentInfo = initialized.agentInfo
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.settlesAtResult = initialized.settlesAtResult
@@ -8435,7 +8444,11 @@ extension ACPSessionManager {
                     issue: issuePreambleProvider?(worktreeId),
                     nativeSubagentsDisabled: nativeSubagentsDisabled,
                     nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
-                    computerUseAvailable: computerUseAvailable
+                    computerUseAvailable: computerUseAvailable,
+                    isPeerChild: preambleMode == .mcp
+                        ? (builtInMCP?.isPeerChild == true)
+                        : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),
+                    delegationPeerNames: delegationPeerNamesProvider()
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble
@@ -8842,7 +8855,10 @@ extension ACPSessionManager {
                 // The flush restarts now if idle, else at the next idle point.
                 runner.flushQueueIfIdle()
             } else if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
-                if !sendPendingQueueForceSend(sessionId: sessionId) {
+                // A recovery refused outright holds the queue like one that
+                // failed in flight: these prompts need the context it carries.
+                if case .failed = session.contextRecoveryStatus, shouldHoldQueueForRecovery {
+                } else if !sendPendingQueueForceSend(sessionId: sessionId) {
                     runner.flushQueueIfIdle()
                 }
             }

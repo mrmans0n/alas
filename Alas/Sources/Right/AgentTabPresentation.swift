@@ -278,6 +278,13 @@ struct AgentSidebarRowView: View {
     /// it — so only parents and orphaned children annotate themselves.
     @ViewBuilder
     private var delegationNote: some View {
+        if let name = row.delegatedFromName {
+            Text("From \(name)")
+                .font(.system(size: 9.5))
+                .foregroundStyle(theme.color("fg-faint"))
+                .lineLimit(1)
+                .padding(.top, 1)
+        }
         if let childSummary {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.triangle.branch")

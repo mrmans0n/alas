@@ -26,6 +26,8 @@ struct AgentSidebarRollupBuilder {
         /// Child session id to parent session id, spanning every delegation the
         /// app knows about. Ids outside this rollup are ignored.
         var delegatedParents: [String: String] = [:]
+        /// Session id to the name of the paired Mac that delegated it.
+        var delegatedFromNames: [String: String] = [:]
     }
 
     static func build(_ input: Input) -> AgentSidebarRollup {
@@ -44,12 +46,17 @@ struct AgentSidebarRollupBuilder {
         }
 
         let acpRows = nestDelegations(in: liveRows + persistedRows, parents: input.delegatedParents)
-        return AgentSidebarRollup(rows: acpRows + terminalRowsList)
+        let named = acpRows.map { row -> AgentSidebarRow in
+            var copy = row
+            copy.delegatedFromName = row.sessionID.flatMap { input.delegatedFromNames[$0] }
+            return copy
+        }
+        return AgentSidebarRollup(rows: named + terminalRowsList)
     }
 
     /// A peer worktree's sessions: open tabs in tab order, then history as
     /// the peer listed it.
-    static func peer(_ sessions: [RemoteSessionSummary]) -> AgentSidebarRollup {
+    static func peer(_ sessions: [RemoteSessionSummary], delegatedFromNames: [String: String] = [:]) -> AgentSidebarRollup {
         let active = sessions.filter(\.isActive).sorted { ($0.tabIndex ?? .max) < ($1.tabIndex ?? .max) }
         let rows = (active + sessions.filter { !$0.isActive }).map { session in
             AgentSidebarRow.acp(
@@ -64,6 +71,11 @@ struct AgentSidebarRollupBuilder {
                     : Date(timeIntervalSince1970: TimeInterval(session.updatedAt)),
                 isLive: session.isActive
             )
+        }
+        .map { row -> AgentSidebarRow in
+            var copy = row
+            copy.delegatedFromName = row.sessionID.flatMap { delegatedFromNames[$0] }
+            return copy
         }
         return AgentSidebarRollup(rows: rows)
     }

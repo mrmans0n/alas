@@ -641,6 +641,9 @@ struct StackShepherdTests {
         stack: GGStack,
         contextStackName: String? = "auth",
         store: MemoryStore = MemoryStore(),
+        isOperationInProgress: Bool = false,
+        now: @escaping @MainActor () -> Date = { F.now },
+        deliveryOutcome: @escaping @MainActor () -> ReviewShepherd.Delivery = { .delivered },
         deliverPrompt: @escaping @MainActor (String) -> Void = { _ in },
         archive: @escaping @MainActor () -> Void = {}
     ) -> StackShepherd {
@@ -651,8 +654,8 @@ struct StackShepherdTests {
                 .github: FakeProvider(requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })),
             ]),
             localProbe: ReviewLoopLocalProbe { _, _ in (local: Self.local, remotes: []) },
-            operationInProgress: { _ in false },
-            now: { F.now }
+            operationInProgress: { _ in isOperationInProgress },
+            now: now
         )
         shepherd.effects = StackShepherd.Effects(
             worktreeContext: { worktreeID in
@@ -664,7 +667,7 @@ struct StackShepherdTests {
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
                 deliverPrompt(prompt.text)
-                return .delivered
+                return deliveryOutcome()
             },
             rules: { _ in .none },
             notify: { _ in },
@@ -728,8 +731,8 @@ struct StackShepherdTests {
         let stack = Self.stack([41])
         var archives = 0
         let shepherd = makeShepherd(
-            requests: [Self.request(41, state: .merged)], stack: stack, contextStackName: currentStack
-        ) { _ in } archive: { archives += 1 }
+            requests: [Self.request(41, state: .merged)], stack: stack, contextStackName: currentStack,
+            archive: { archives += 1 })
         let record = await bind(shepherd, session: "session-1", stack: stack)
 
         await shepherd.evaluateNow(record.id)
@@ -747,8 +750,8 @@ struct StackShepherdTests {
                 Self.request(42),
                 Self.request(43, checks: [F.failing]),
             ],
-            stack: stack
-        ) { delivered.append($0) }
+            stack: stack,
+            deliverPrompt: { delivered.append($0) })
         let record = await bind(shepherd, session: "session-1", stack: stack)
 
         await shepherd.evaluateNow(record.id)
@@ -759,6 +762,111 @@ struct StackShepherdTests {
         let top = try #require(text.range(of: "# Entry 3 ·"))
         #expect(bottom.lowerBound < top.lowerBound)
         #expect(!text.contains("# Entry 2 ·"))
+    }
+
+    @Test func failedBatchDeliveryRetriesTogetherWithoutSpendingEntryAttempts() async throws {
+        let stack = Self.stack([41, 42])
+        let requests = [Self.request(41, threads: [F.trustedThread]), Self.request(42, checks: [F.failing])]
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        func service() -> StackShepherd {
+            makeShepherd(requests: requests, stack: stack, store: store, now: { time },
+                         deliveryOutcome: { deliveries == 1 ? .failed : .delivered },
+                         deliverPrompt: { _ in deliveries += 1 })
+        }
+        var shepherd = service()
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (31, 2)] {
+            time = F.now.addingTimeInterval(elapsed)
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            let entries = try #require(shepherd.records[record.id]?.entries)
+            #expect(entries.allSatisfy { $0.shepherd.fixAttempts == (deliveries == 1 ? 0 : 1) })
+            #expect(entries.allSatisfy { !$0.shepherd.phase.isResumable })
+            shepherd = service()
+        }
+    }
+
+    @Test func cleanStackRetriesBindContextAcrossRestart() async throws {
+        let stack = Self.stack([41, 42])
+        let requests = [Self.request(41), Self.request(42)]
+        let byNumber = Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        func service() -> StackShepherd {
+            makeShepherd(requests: requests, stack: stack, store: store, now: { time },
+                         deliveryOutcome: { deliveries < 3 ? .failed : .delivered },
+                         deliverPrompt: { _ in deliveries += 1 })
+        }
+        var shepherd = service()
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack, requests: byNumber,
+            remote: F.remote(), autoFix: false, maxFixAttempts: 3, contextRules: ShepherdRules.none)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (89, 2), (90, 3), (91, 3)] {
+            time = F.now.addingTimeInterval(elapsed)
+            shepherd = service()
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            let current = try #require(shepherd.records[record.id])
+            #expect(current.entries.allSatisfy { $0.shepherd.fixAttempts == 0 })
+            #expect(!current.phase.isResumable)
+            if expectedDeliveries == 3 {
+                #expect(!ShepherdPresentation.make(stack: current, requests: byNumber, gatePasses: false).phaseLine.contains("retrying"))
+            }
+        }
+    }
+
+    @Test("bind retry waits until the stack can receive work", arguments: [true, false])
+    func bindRetryWaitsForItsStack(wrongStack: Bool) async {
+        let stack = Self.stack([41])
+        let requests = [Self.request(41)]
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        func service(_ currentStack: GGStack, operation: Bool = false) -> StackShepherd {
+            makeShepherd(requests: requests, stack: currentStack, contextStackName: currentStack.name, store: store,
+                         isOperationInProgress: operation, now: { time },
+                         deliveryOutcome: { deliveries == 1 ? .failed : .delivered },
+                         deliverPrompt: { _ in deliveries += 1 })
+        }
+        let initial = service(stack)
+        let record = await initial.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack,
+            requests: [41: requests[0]], remote: F.remote(), autoFix: false,
+            maxFixAttempts: 3, contextRules: ShepherdRules.none)
+        time = F.now.addingTimeInterval(30)
+        let other = GGStack(name: "other", base: "main", totalCommits: 1, syncedCommits: 1,
+                            currentPosition: 1, behindBase: 0, entries: stack.entries)
+        await service(wrongStack ? other : stack, operation: !wrongStack).evaluateNow(record.id)
+        #expect(deliveries == 1)
+        await service(stack).evaluateNow(record.id)
+        #expect(deliveries == 2)
+    }
+
+    @Test func restackDeliveryFailureKeepsAnOutstandingFixWaitingForCI() async throws {
+        let stack = Self.stack([41, 42])
+        let requests = [Self.request(41, state: .merged), Self.request(42, checks: [F.pending], threads: [F.trustedThread])]
+        let store = MemoryStore()
+        let initial = makeShepherd(requests: requests, stack: stack, store: store)
+        var record = await bind(initial, session: "session-1", stack: stack)
+        record.entries[1].shepherd.phase = .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0)
+        record.entries[1].shepherd.fixAttempts = 1
+        record.entries[1].shepherd.lastDispatchedFingerprint = ShepherdFixRequest(
+            hasConflict: false, failingChecks: [], threads: [F.trustedThread]).fingerprint(headSHA: F.head)
+        try store.write(StackShepherdsFile(records: [record]), to: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        var deliveries: [String] = []
+        let shepherd = makeShepherd(requests: requests, stack: stack, store: store,
+                                    deliveryOutcome: { .failed }, deliverPrompt: { deliveries.append($0) })
+        await shepherd.evaluateNow(record.id)
+        #expect(deliveries.count == 1)
+        let entry = try #require(shepherd.records[record.id]?.entries.last)
+        guard case .awaitingPush = entry.shepherd.phase else {
+            Issue.record("A failed restack delivery discarded the outstanding review fix")
+            return
+        }
+        #expect(entry.shepherd.fixAttempts == 1)
     }
 
     /// The fix prompt tells the agent to publish with `stack_ship`, which binds

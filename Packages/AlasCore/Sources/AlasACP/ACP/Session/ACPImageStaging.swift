@@ -28,8 +28,10 @@ public enum ACPImageStaging: Sendable {
         case writeFailed
     }
 
-    /// Hard ceiling on a single original image (≈20 MB).
+    /// Hard ceiling on a single original image.
     public static let maxBytes = 20 * 1024 * 1024
+
+    public static let maxImagesPerMessage = 10
 
     /// Accepted image MIME types.
     public static let supportedMIMEs: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp"]
@@ -80,8 +82,8 @@ extension ACPImageStaging.StagingError {
     public var userMessage: String {
         switch self {
         case .unsupportedFormat: return "That image format isn't supported (use PNG, JPEG, GIF, or WebP)."
-        case .tooLarge: return "That image is too large (max 20 MB)."
-        case .tooManyImages: return "You can attach up to 10 images per message."
+        case .tooLarge: return "That image is too large (max \(ACPImageStaging.maxBytes / (1024 * 1024)) MiB)."
+        case .tooManyImages: return "You can attach up to \(ACPImageStaging.maxImagesPerMessage) images per message."
         case .writeFailed: return "Couldn't save that image. Please try again."
         }
     }

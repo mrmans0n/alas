@@ -519,6 +519,17 @@ public final class ACPConnection: @unchecked Sendable {
         return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
     }
 
+    /// The rows the agent can read of `sessionIds`, in request order and
+    /// whatever their cwd or list page. An id left out may still exist.
+    public func batchGetSessions(sessionIds: [String]) async throws -> [ACPAgentSessionInfo] {
+        let resp = try await client.send(ACPRequest(
+            method: "_session/batch_get",
+            params: ACPSessionBatchGetParams(sessionIds: sessionIds)
+        ))
+        defer { resp.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body).sessions
+    }
+
     public func renameSession(sessionId: String, title: String) async throws {
         try await sendIgnoringResult(method: "_session/rename", params: ACPSessionRenameParams(sessionId: sessionId, title: title))
     }

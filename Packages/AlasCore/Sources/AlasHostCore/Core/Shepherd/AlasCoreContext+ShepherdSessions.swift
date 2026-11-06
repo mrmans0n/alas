@@ -69,16 +69,20 @@ extension AlasCoreContext {
     }
 
     /// Busy while a turn runs or waits on the user, while the agent starts,
+    /// while its live children or autonomous follow-up cycle run,
     /// or while a ready agent has a queued prompt (a shepherd prompt
     /// included) that has not started. A prompt held behind an agent that
     /// failed, disconnected or never attached is not busy, so a stuck fix
-    /// ends in a no-progress escalation instead of waiting forever.
-    private static func shepherdSessionIsBusy(_ session: ACPSession, now: Date) -> Bool {
+    /// can be retried within its allowance instead of waiting forever.
+    static func shepherdSessionIsBusy(_ session: ACPSession, now: Date) -> Bool {
         if session.transcript.streamingState != .idle { return true }
         switch session.agentState {
         case .spawning:
             return true
         case .ready:
+            if session.activity.backgroundWorking || session.liveSubagentCount > 0 { return true }
+            // Generic background processes may be long-lived servers. Only
+            // the activity projection identifies autonomous agent work.
             return session.queue.contains { shepherdQueueItemIsDue($0, now: now) }
         case .idle, .disconnected, .failed:
             return false

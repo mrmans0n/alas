@@ -1368,6 +1368,9 @@ public enum ACPContentBlock: Codable, Equatable, Sendable {
     case resourceLink(uri: String, name: String?)
     case image(data: String?, uri: String?, mimeType: String?)
     case resource(uri: String, mimeType: String?, text: String)
+    /// Wire-only: produced by `ACPSessionRunner.hydrate` just before a send, and
+    /// by decoding what an agent sends. Never persist or render its bytes.
+    case blobResource(uri: String, mimeType: String?, blob: String)
 
     private enum Keys: String, CodingKey { case type, text, uri, name, mimeType, data, resource }
     private struct EmbeddedResource: Codable, Equatable, Sendable {
@@ -1414,6 +1417,8 @@ public enum ACPContentBlock: Codable, Equatable, Sendable {
             let resource = try c.decode(EmbeddedResource.self, forKey: .resource)
             if let text = resource.text {
                 self = .resource(uri: resource.uri, mimeType: resource.mimeType, text: text)
+            } else if let blob = resource.blob {
+                self = .blobResource(uri: resource.uri, mimeType: resource.mimeType, blob: blob)
             } else {
                 self = .resourceLink(uri: resource.uri, name: URL(string: resource.uri)?.lastPathComponent)
             }
@@ -1440,6 +1445,11 @@ public enum ACPContentBlock: Codable, Equatable, Sendable {
             try c.encode("resource", forKey: .type)
             try c.encode(
                 EmbeddedResource(uri: uri, mimeType: mime, text: text, blob: nil),
+                forKey: .resource)
+        case .blobResource(let uri, let mime, let blob):
+            try c.encode("resource", forKey: .type)
+            try c.encode(
+                EmbeddedResource(uri: uri, mimeType: mime, text: nil, blob: blob),
                 forKey: .resource)
         }
     }

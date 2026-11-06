@@ -64,7 +64,17 @@ struct NativePeerSessionView: View {
             trailingRows: queueRows(transcript, contentMaxWidth: contentMaxWidth) + pendingRequestRows(transcript),
             fetchOlder: { _ = client.fetchOlder() },
             onQuote: { composerActions.quote($0) },
-            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil
+            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil,
+            visualActions: ACPVisualAidActions(
+                answer: { [client] id, answer in
+                    await client.answerVisualAid(id, answer: answer, sessionId: transcript.sessionId)
+                },
+                popOut: { _ in },
+                canAnswer: { [client] in client.selectedSessionId == transcript.sessionId && client.canAnswerVisuals },
+                changes: client.visualChanges.eraseToAnyPublisher()
+            ),
+            visualForm: { client.visualForm(for: $0, sessionId: transcript.sessionId) },
+            visualStatus: { client.visualStatus(for: $0, sessionId: transcript.sessionId) }
         )
     }
 
@@ -337,6 +347,19 @@ private struct NativePeerUnsupportedElicitation: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
+    }
+}
+
+/// Which paired Mac delegated the session, in the secondary text style.
+private struct NativePeerFromLabel: View {
+    let name: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text("From \(name)")
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-muted"))
+            .lineLimit(1)
     }
 }
 
@@ -780,6 +803,7 @@ private struct NativePeerComposer: View {
                 shortcutHint
             }
             Spacer(minLength: 0)
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
             if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
@@ -794,6 +818,7 @@ private struct NativePeerComposer: View {
     private var compactToolbar: some View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
+            if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
             if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }

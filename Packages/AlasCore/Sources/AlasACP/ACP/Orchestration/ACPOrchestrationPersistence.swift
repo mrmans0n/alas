@@ -54,6 +54,11 @@ public actor ACPOrchestrationPersistence {
         try openedStore().delegationParents()
     }
 
+    @discardableResult
+    public func markReadyIfStarting(childSessionId: String, updatedAt: Int64) throws -> Bool {
+        try openedStore().markReadyIfStarting(childSessionId: childSessionId, updatedAt: updatedAt)
+    }
+
     public func updatePhase(
         childSessionId: String,
         phase: ACPDelegationPhase,
@@ -128,6 +133,47 @@ public actor ACPOrchestrationPersistence {
 
     public func pendingMessageTargetSessionIds() throws -> [String] {
         try openedStore().pendingMessageTargetSessionIds()
+    }
+
+    public func outbox(
+        peerServerId: String,
+        after: Int64,
+        maxBytes: Int
+    ) throws -> (entries: [ACPPeerOutboxEntry], hasMore: Bool) {
+        try openedStore().outbox(peerServerId: peerServerId, after: after, maxBytes: maxBytes)
+    }
+
+    public func acknowledgeOutbox(peerServerId: String, through: Int64) throws {
+        try openedStore().acknowledgeOutbox(peerServerId: peerServerId, through: through)
+    }
+
+    public func deleteOutbox(peerServerId: String) throws {
+        try openedStore().deleteOutbox(peerServerId: peerServerId)
+    }
+
+    public func collectPeerEntry(
+        _ entry: ACPPeerOutboxEntry,
+        peerServerId: String,
+        parentSessionId: String
+    ) throws -> Bool {
+        try openedStore().collectPeerEntry(entry, peerServerId: peerServerId, parentSessionId: parentSessionId)
+    }
+
+    @discardableResult
+    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
+        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, settling: entry)
+    }
+
+    public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
+        try openedStore().markPeerAwaiting(childSessionId: childSessionId, since: since)
+    }
+
+    public func peerCursor(peerServerId: String) throws -> Int64 {
+        try openedStore().peerCursor(peerServerId: peerServerId)
+    }
+
+    public func peerChildren(peerServerId: String) throws -> [ACPDelegationRecord] {
+        try openedStore().peerChildren(peerServerId: peerServerId)
     }
 
     public func incompleteDelegations() throws -> [ACPDelegationRecord] {

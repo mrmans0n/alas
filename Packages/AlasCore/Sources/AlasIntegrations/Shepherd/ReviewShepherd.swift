@@ -218,6 +218,7 @@ public final class ReviewShepherd {
     /// generation of the dispatch. A turn the owner ends meanwhile is not the
     /// fix's turn, so `turnCompleted` leaves these records alone.
     @ObservationIgnored private var deliveringFix: [ShepherdRecordID: Int] = [:]
+    @ObservationIgnored private var deliveringBind: [ShepherdRecordID: UUID] = [:]
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -291,9 +292,8 @@ public final class ReviewShepherd {
     // MARK: - Binding and controls
 
     /// Binds `request` to `sessionID`, creating the record or moving an
-    /// existing one. The owner starts fresh: phase `watching`, no attempts,
-    /// no dispatched fingerprint, so its current problems are dispatched to
-    /// it on the next idle poll. A session works on the branch its worktree
+    /// existing one. A new owner starts fresh; republishing from the current
+    /// owner preserves its outstanding fix and retry allowance. A session works on the branch its worktree
     /// has checked out, so it owns at most one live record: its others are
     /// deleted (their requests are untouched). No other session's record moves.
     /// With `contextRules`, the session is also sent the context prompt built
@@ -316,7 +316,9 @@ public final class ReviewShepherd {
             where other.id != id && other.sessionID == sessionID && !other.phase.isTerminal && isServedHere(other.id.worktreeID) {
             remove(other.id)
         }
-        var record = records[id].flatMap { $0.phase.isTerminal ? nil : $0 }
+        let existing = records[id].flatMap { $0.phase.isTerminal ? nil : $0 }
+        let startsFresh = existing == nil || existing?.sessionID != sessionID
+        var record = existing
             ?? ShepherdRecord(
                 id: id,
                 sessionID: sessionID,
@@ -340,31 +342,52 @@ public final class ReviewShepherd {
         record.autoFix = autoFix
         record.autoMerge = autoMerge
         record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
-        record.phase = .watching
-        record.fixAttempts = 0
-        record.lastDispatchedFingerprint = nil
-        record.viewerCommentIDsAtDispatch = nil
+        if startsFresh {
+            record.phase = .watching
+            record.resetFixTracking()
+            record.pendingBindDelivery = nil
+        }
+        if contextRules != nil { record.pendingBindDelivery = ShepherdBindDelivery(now: now) }
         record.updatedAt = now
         put(record)
         let generation = bumpGeneration(id)
         deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
-        if let contextRules, let effects {
-            let prompt = ShepherdPromptBuilder.bindPrompt(
-                request: request,
-                fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
-                rules: contextRules
-            )
-            let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
-                self?.isCurrent(id, generation, before: "the bind delivery") ?? false
-            }
-            if delivery == .failed, isCurrent(id, generation, before: "the bind delivery escalation") {
-                escalate(id, .deliveryFailed, title: request.title)
-            }
+        if let contextRules {
+            await deliverBindPrompt(id, generation: generation, request: request, rules: contextRules)
         }
         pump()
         return records[id] ?? record
+    }
+
+    private func deliverBindPrompt(
+        _ id: ShepherdRecordID, generation: Int, request: ReviewRequest, rules: ShepherdRules
+    ) async {
+        guard isCurrent(id, generation, before: "bind delivery"),
+              let effects, let record = records[id], let pending = record.pendingBindDelivery,
+              deliveringBind[id] != pending.id
+        else { return }
+        deliveringBind[id] = pending.id
+        defer { if deliveringBind[id] == pending.id { deliveringBind[id] = nil } }
+        let prompt = ShepherdPromptBuilder.bindPrompt(
+            request: request,
+            fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []), rules: rules)
+        let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
+            self?.records[id]?.pendingBindDelivery?.id == pending.id
+                && self?.isCurrent(id, generation, before: "the bind delivery") == true
+        }
+        // A toggle can supersede delivery without replacing this bind. Match
+        // its identity so a late result cannot clear a newer owner's context.
+        guard var current = records[id], current.sessionID == record.sessionID,
+              current.pendingBindDelivery?.id == pending.id else { return }
+        switch delivery {
+        case .delivered: current.pendingBindDelivery = nil
+        case .failed: current.pendingBindDelivery?.failed(at: now())
+        case .superseded: break
+        }
+        current.updatedAt = now()
+        put(current)
     }
 
     public func setAutoFix(_ on: Bool, for id: ShepherdRecordID) {
@@ -406,9 +429,7 @@ public final class ReviewShepherd {
         failureCounts[id] = nil
         update(id) {
             $0.phase = .watching
-            $0.fixAttempts = 0
-            $0.lastDispatchedFingerprint = nil
-            $0.viewerCommentIDsAtDispatch = nil
+            $0.resetFixTracking()
         }
     }
 
@@ -603,6 +624,7 @@ public final class ReviewShepherd {
         }
         // A floor, so no early exit below can make the record due again at once.
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
+        if let pending = record.pendingBindDelivery, deliveringBind[id] == pending.id { return }
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
             shepherdLogger.notice("Dropping PR shepherd record \(id.storageKey, privacy: .private): its worktree is gone or not eligible")
             remove(id)
@@ -681,6 +703,10 @@ public final class ReviewShepherd {
         }
         let generation = bumpGeneration(id)
         await execute(decision.action, for: id, generation: generation, before: current, snapshot: observed, rules: rules, context: context)
+        if let pending = records[id]?.pendingBindDelivery, pending.retryAt <= now(),
+           let request = observed.reviewRequest {
+            await deliverBindPrompt(id, generation: generation, request: request, rules: rules)
+        }
         if let latest = records[id] {
             scheduleNext(latest, checksPending: observed.reviewRequest?.checks.contains { $0.bucket == .pending } ?? false)
         }
@@ -756,23 +782,33 @@ public final class ReviewShepherd {
                 if deliveringFix[id] == generation { deliveringFix[id] = nil }
             }
             let logs = await checkLogs(for: fix, request: request, remote: record.remote, worktreePath: context.path)
-            guard isCurrent(id, generation, before: "fix delivery") else { return }
+            guard isCurrent(id, generation, before: "fix delivery") else {
+                discardUndeliveredFix(id, dispatched: record, before: before)
+                return
+            }
             let prompt = ShepherdPromptBuilder.fixPrompt(request: request, fix: fix, logs: logs, rules: rules)
             let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
                 self?.isCurrent(id, generation, before: "fix delivery") ?? false
             }
+            if delivery == .superseded {
+                discardUndeliveredFix(id, dispatched: record, before: before)
+                return
+            }
             // A superseded delivery sent nothing and its record changed; the
             // next poll decides again on the current one.
-            guard delivery == .failed, isCurrent(id, generation, before: "the delivery rollback"),
-                  var failed = records[id]
-            else { return }
-            // The prompt never reached the session, so it is not an attempt:
-            // after Resume the same problems are dispatched again.
-            failed.fixAttempts = before.fixAttempts
-            failed.lastDispatchedFingerprint = before.lastDispatchedFingerprint
-            failed.viewerCommentIDsAtDispatch = before.viewerCommentIDsAtDispatch
-            put(failed)
-            escalate(id, .deliveryFailed, title: request.title)
+            guard isCurrent(id, generation, before: "the delivery result"),
+                  var delivered = records[id]
+            else {
+                if delivery == .failed { discardUndeliveredFix(id, dispatched: record, before: before) }
+                return
+            }
+            if delivery == .failed {
+                delivered.retryFixDelivery(restoring: before, now: now())
+            } else {
+                delivered.deliveryFailures = nil
+                delivered.deliveryRetryAt = nil
+            }
+            put(delivered)
         case .merge:
             let attempt = await merge(id, generation: generation, snapshot: snapshot, worktreePath: context.path)
             let outcome: ReviewMergeOutcome?
@@ -850,6 +886,11 @@ public final class ReviewShepherd {
         case .escalate(let reason):
             effects.notify(.escalated(record, reason, title: request.title))
         }
+    }
+
+    private func discardUndeliveredFix(_ id: ShepherdRecordID, dispatched: ShepherdRecord, before: ShepherdRecord) {
+        guard var current = records[id], current.discardUndeliveredFix(dispatched, restoring: before, now: now()) else { return }
+        put(current)
     }
 
     private enum MergeAttempt {
@@ -1020,17 +1061,9 @@ public final class ReviewShepherd {
         }
     }
 
-    private func escalate(_ id: ShepherdRecordID, _ reason: ShepherdEscalation, title: String?) {
-        guard var record = records[id] else { return }
-        record.phase = .escalated(reason)
-        record.updatedAt = now()
-        put(record)
-        effects?.notify(.escalated(record, reason, title: title))
-    }
-
     /// The provider answered signed in, so a sign-in pause is over, even when
     /// this poll decides nothing (the worktree is on another branch, say).
-    /// An escalated record keeps waiting for Resume.
+    /// Other reasons are re-evaluated by the policy on the next good fetch.
     private func endAuthPause(_ id: ShepherdRecordID) {
         guard var record = records[id], record.phase == .paused else { return }
         record.phase = .watching
@@ -1039,8 +1072,7 @@ public final class ReviewShepherd {
     }
 
     /// The provider CLI is missing or signed out. Pauses once, with one
-    /// escalation; `endAuthPause` resumes the record on the next good fetch. An
-    /// escalated record keeps waiting for Resume instead.
+    /// escalation; `endAuthPause` resumes the record on the next good fetch.
     private func pauseForAuth(_ id: ShepherdRecordID) {
         guard var record = records[id] else { return }
         failureCounts[id] = nil
@@ -1116,6 +1148,7 @@ public final class ReviewShepherd {
         failureCounts[id] = nil
         generations[id] = nil
         deliveringFix[id] = nil
+        deliveringBind[id] = nil
         persist()
     }
 

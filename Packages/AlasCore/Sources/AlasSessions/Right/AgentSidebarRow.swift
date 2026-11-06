@@ -50,6 +50,8 @@ public struct AgentSidebarRow: Identifiable, Equatable, Sendable {
     public let activityAt: Date
     public let isLiveACP: Bool
     public var delegation: AgentSidebarDelegation?
+    /// The paired Mac that delegated this session, when one did.
+    public var delegatedFromName: String?
     public var subagents: [AgentSidebarSubagent] = []
 
     public static func acp(

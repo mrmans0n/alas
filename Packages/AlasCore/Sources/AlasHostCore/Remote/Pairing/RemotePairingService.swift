@@ -157,6 +157,19 @@ public final class RemotePairingService {
         return nil
     }
 
+    public func device(id: String) -> RemoteDevice? {
+        devices.first { $0.id == id }
+    }
+
+    /// Returns false when no such device exists.
+    @discardableResult
+    public func setAgentAccess(_ access: RemoteDeviceAgentAccess, deviceId: String) -> Bool {
+        guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return false }
+        devices[i].agentAccess = access
+        saveDevices()
+        return true
+    }
+
     public func touch(deviceId: String) {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         devices[i].lastSeenAt = now()

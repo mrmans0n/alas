@@ -513,6 +513,10 @@ extension Process {
             throw ProcessError.launchFailed(error.localizedDescription)
         }
 
+        // A child can reach the cap before `run()` marks it running, when the
+        // handler's termination is a no-op and nothing reads the pipe any more.
+        if truncatedFlag.value { terminateProcessWithEscalation(process) }
+
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()
 
@@ -651,6 +655,10 @@ extension Process {
         } catch {
             throw ProcessError.launchFailed(error.localizedDescription)
         }
+
+        // A child can reach the cap before `run()` marks it running, when the
+        // handler's termination is a no-op and nothing reads the pipe any more.
+        if tooLargeFlag.value { terminateProcessWithEscalation(process) }
 
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()

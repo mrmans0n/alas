@@ -33,6 +33,8 @@ private let stabilityCases: [ShepherdStabilityCase] = [
 ]
 
 /// A head clock started exactly `noChecksGracePeriod` before `F.now`.
+private let recentIdle = F.now.addingTimeInterval(-60)
+
 private let graceElapsed = F.now.addingTimeInterval(-ShepherdPolicy.noChecksGracePeriod)
 
 struct ShepherdHeadClockCase: Sendable, CustomTestStringConvertible {
@@ -113,10 +115,10 @@ private let policyCases: [ShepherdPolicyCase] = [
           record: F.record(phase: .escalated(.noProgress)),
           observation: F.observation(F.snapshot(F.request())),
           action: .wait, phase: .watching),
-    .init(testDescription: "escalation does not clear while a check is pending",
+    .init(testDescription: "old no-progress escalation recovers while checks are pending",
           record: F.record(phase: .escalated(.noProgress), fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
-          action: .wait, phase: .escalated(.noProgress)),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.now, pollsWithoutProgress: 0)),
     .init(testDescription: "owner-gone escalation holds while the owner is gone",
           record: F.record(phase: .escalated(.ownerGone)),
           observation: F.observation(F.snapshot(F.request()), session: .archived),
@@ -148,63 +150,52 @@ private let policyCases: [ShepherdPolicyCase] = [
     .init(testDescription: "fixing with an idle owner moves to awaitingPush",
           record: F.record(phase: .fixing(dispatchedAt: F.earlier), fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
-          action: .wait, phase: .awaitingPush(turnEndedAt: F.now, pollsWithoutProgress: 1)),
-    .init(testDescription: "third poll without progress escalates",
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.now, pollsWithoutProgress: 0)),
+    .init(testDescription: "an expired idle grace automatically retries",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2), fixAttempts: 1,
                            lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
-          action: .escalate(.noProgress), phase: .escalated(.noProgress)),
+          action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "a new head is progress and redispatches remaining failures",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(head: F.newHead, checks: [F.failing]), localHead: F.newHead)),
           action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "a new viewer reply on a dispatched thread is progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
           action: .wait, phase: .watching),
     .init(testDescription: "a viewer reply that existed at dispatch is not progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: ["c2"]),
           observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
-          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+          action: .wait, phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0)),
     .init(testDescription: "a viewer reply id not seen at dispatch is progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: ["c2"]),
           observation: F.observation(F.snapshot(F.request(threads: [secondReplyThread]))),
           action: .wait, phase: .watching),
     .init(testDescription: "a viewer reply followed by an untrusted comment is progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [replyThenDriveByThread]))),
           action: .wait, phase: .watching),
-    .init(testDescription: "awaitingPush with a pending check holds without counting",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1), fixAttempts: 1,
+    .init(testDescription: "awaitingPush with pending checks restarts the idle grace",
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 1), fixAttempts: 1,
                            lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
-          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
-    .init(testDescription: "an unrelated pending check does not freeze a thread-only awaitingPush",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly)),
-          observation: F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread]))),
-          action: .escalate(.noProgress), phase: .escalated(.noProgress)),
-    .init(testDescription: "awaitingPush escalates after the timeout while checks stay pending",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.now.addingTimeInterval(-ShepherdPolicy.awaitingPushTimeout),
-                                                pollsWithoutProgress: 0),
-                           fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
-          observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
-          action: .escalate(.noProgress), phase: .escalated(.noProgress)),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.now, pollsWithoutProgress: 0)),
     .init(testDescription: "an incomplete thread list with missing threads is not progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 1), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly)),
           observation: F.observation(F.snapshot(F.request(threads: [], threadsComplete: false))),
-          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+          action: .wait, phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 1)),
     .init(testDescription: "an untrusted non-viewer comment on a dispatched thread is not progress",
-          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+          record: F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                            lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [driveByThread]))),
-          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+          action: .wait, phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0)),
     // Rule 7
     .init(testDescription: "a fingerprint left from an earlier turn does not hold back a fix",
           record: F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
@@ -353,6 +344,107 @@ private let policyCases: [ShepherdPolicyCase] = [
 ]
 
 @Suite struct ShepherdPolicyTests {
+    @Test("an idle fix continues automatically after its grace and stops at its budget")
+    func idleFixContinuesWithinBudget() throws {
+        let snapshot = F.snapshot(F.request(threads: [F.trustedThread]))
+        var time = F.now
+        var decision = ShepherdPolicy.decide(F.record(), F.observation(snapshot, now: time))
+        for attempt in 1...3 {
+            #expect(decision.action == .dispatchFix(threadOnly))
+            #expect(decision.record.fixAttempts == attempt)
+            // Retry accounting and the quiet deadline must survive a restart.
+            let restored = try JSONDecoder().decode(ShepherdRecord.self, from: JSONEncoder().encode(decision.record))
+            decision = ShepherdPolicy.decide(restored, F.observation(snapshot, now: time))
+            for tick in 1...4 {
+                decision = ShepherdPolicy.decide(decision.record, F.observation(snapshot, now: time.addingTimeInterval(Double(tick) * 30)))
+                #expect(decision.action == .wait)
+                #expect(!decision.record.phase.isResumable)
+            }
+            time = time.addingTimeInterval(300)
+            decision = ShepherdPolicy.decide(decision.record, F.observation(snapshot, now: time))
+        }
+        #expect(decision.action == .escalate(.attemptsExhausted))
+    }
+
+    @Test("pending CI after a review fix keeps waiting without spending attempts", arguments: [ReviewCheckBucket.pending, .unknown])
+    func reviewFixWaitsForCI(_ bucket: ReviewCheckBucket) {
+        var record = F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 2),
+                              fixAttempts: 1, lastDispatched: F.fingerprint(threadOnly))
+        for elapsed in [0.0, 300, 10800] {
+            let decision = ShepherdPolicy.decide(record, F.observation(
+                F.snapshot(F.request(checks: [F.check("ci", bucket)], threads: [F.trustedThread])),
+                now: F.now.addingTimeInterval(elapsed)))
+            #expect(decision.action == .wait)
+            #expect(!decision.record.phase.isResumable)
+            #expect(decision.record.fixAttempts == 1)
+            record = decision.record
+        }
+    }
+
+    @Test("a late push recovers an old no-progress escalation while CI runs")
+    func latePushRecoversAutomatically() {
+        let record = F.record(phase: .escalated(.noProgress), fixAttempts: 1, lastDispatched: F.fingerprint(threadOnly))
+        let pending = ShepherdPolicy.decide(record, F.observation(
+            F.snapshot(F.request(head: F.newHead, checks: [F.pending], threads: [F.trustedThread]), localHead: F.newHead)))
+        #expect(pending.action == .wait)
+        #expect(!pending.record.phase.isResumable)
+        let finished = ShepherdPolicy.decide(pending.record, F.observation(
+            F.snapshot(F.request(head: F.newHead, threads: [F.trustedThread]), localHead: F.newHead)))
+        #expect(finished.action == .dispatchFix(threadOnly))
+        #expect(finished.record.fixAttempts == 2)
+    }
+
+    @Test("legacy CI attempts survive a restart while new checks are registering")
+    func legacyAttemptsSurviveCIRegistration() throws {
+        let legacy = F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2),
+                              fixAttempts: 2, lastDispatched: F.fingerprint(failingOnly))
+        let waiting = ShepherdPolicy.decide(legacy, F.observation(F.snapshot(F.request(head: F.newHead, checks: []))))
+        #expect(waiting.action == .wait)
+        #expect(waiting.record.fixAttempts == 2)
+        let restored = try JSONDecoder().decode(ShepherdRecord.self, from: JSONEncoder().encode(waiting.record))
+        let failed = ShepherdPolicy.decide(restored, F.observation(F.snapshot(F.request(head: F.newHead, checks: [F.failing]))))
+        #expect(failed.action == .dispatchFix(failingOnly))
+        #expect(failed.record.fixAttempts == 3)
+    }
+
+    @Test("independent review findings each get their own fix allowance")
+    func independentFeedbackKeepsMoving() throws {
+        var record = F.record()
+        for round in 1...5 {
+            let thread = F.thread("thread-\(round)")
+            let decision = ShepherdPolicy.decide(record, F.observation(F.snapshot(F.request(threads: [thread]))))
+            #expect(decision.action == .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [thread])))
+            #expect(decision.record.fixAttempts == 1)
+            record = try JSONDecoder().decode(ShepherdRecord.self, from: JSONEncoder().encode(decision.record))
+        }
+    }
+
+    @Test("new commits and CI run IDs do not reset a persistent check's allowance")
+    func persistentCheckStaysBounded() {
+        var record = F.record()
+        for round in 1...4 {
+            let check = ReviewCheck(id: "run-\(round)", name: "unit-tests", workflow: "CI", bucket: .fail,
+                                    detailURL: nil, completedAt: nil)
+            let snapshot = F.snapshot(F.request(head: "head-\(round)", checks: [check]), localHead: "head-\(round)")
+            if round > 1 {
+                // CI registration can briefly disappear after a push.
+                let registering = F.snapshot(F.request(head: "head-\(round)", checks: []), localHead: "head-\(round)")
+                let waiting = ShepherdPolicy.decide(record, F.observation(registering))
+                #expect(waiting.action == .wait)
+                #expect(waiting.record.fixAttempts == min(round - 1, 3))
+                record = waiting.record
+            }
+            let decision = ShepherdPolicy.decide(record, F.observation(snapshot))
+            if round <= 3 {
+                #expect(decision.action == .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [check], threads: [])))
+                #expect(decision.record.fixAttempts == round)
+            } else {
+                #expect(decision.action == .escalate(.attemptsExhausted))
+            }
+            record = decision.record
+        }
+    }
+
     @Test("decides the action and next phase", arguments: policyCases)
     func decide(_ c: ShepherdPolicyCase) {
         let decision = ShepherdPolicy.decide(c.record, c.observation)
@@ -390,21 +482,21 @@ private let policyCases: [ShepherdPolicyCase] = [
         #expect(resolved.action == .wait)
         #expect(resolved.record.lastDispatchedFingerprint == nil)
         #expect(resolved.record.viewerCommentIDsAtDispatch == nil)
-        #expect(resolved.record.fixAttempts == 1)
+        #expect(resolved.record.fixAttempts == 0)
 
         let reopened = ShepherdPolicy.decide(
             resolved.record,
             F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread])))
         )
         #expect(reopened.action == .dispatchFix(threadOnly))
-        #expect(reopened.record.fixAttempts == 2)
+        #expect(reopened.record.fixAttempts == 1)
     }
 
     @Test("partial clearance redispatches the survivors as the next attempt")
     func partialClearanceRedispatches() {
         let both = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing, uiFailing], threads: [])
         let decision = ShepherdPolicy.decide(
-            F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+            F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                      lastDispatched: F.fingerprint(both), viewerCommentIDs: []),
             F.observation(F.snapshot(F.request(checks: [F.check("unit-tests", .pass), uiFailing])))
         )
@@ -416,7 +508,7 @@ private let policyCases: [ShepherdPolicyCase] = [
     func replyRedispatchesUnfixedCheck() {
         let mixed = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [F.trustedThread])
         let decision = ShepherdPolicy.decide(
-            F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+            F.record(phase: .awaitingPush(turnEndedAt: recentIdle, pollsWithoutProgress: 0), fixAttempts: 1,
                      lastDispatched: F.fingerprint(mixed), viewerCommentIDs: []),
             F.observation(F.snapshot(F.request(checks: [F.failing], threads: [repliedThread])))
         )

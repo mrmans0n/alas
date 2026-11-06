@@ -49,4 +49,64 @@ struct HeadlessCLIRouterTests {
         ]))
         #expect(core.openedLocalChangesReviews[worktree.id] != nil)
     }
+
+    // MARK: Outbound peer links
+
+    private final class FakeLink: RemotePeerConnecting {
+        var state: RemotePeerConnection.State = .idle
+        let emit: @MainActor (RemotePeerConnection.Event) -> Void
+        init(emit: @escaping @MainActor (RemotePeerConnection.Event) -> Void) { self.emit = emit }
+        func connect() {}
+        func disconnect() {}
+        func send(_ message: RemoteClientMessage) {}
+    }
+
+    /// A host's links over `records`, connected, and the link each one dialled.
+    private func hostLinks(_ records: [RemotePeer]) -> (delegation: HostPeerDelegation, dialled: () -> [String: FakeLink]) {
+        var dialled: [String: FakeLink] = [:]
+        let links = RemotePeerManager(
+            store: MemoryPeerStore(peers: records), pairing: RemotePairingService(store: MemoryDeviceStore()),
+            localIdentity: { .init(serverId: "", name: "", origins: []) },
+            makeConnection: { peer, onEvent in
+                let link = FakeLink(emit: onEvent)
+                dialled[peer.id] = link
+                return link
+            }
+        )
+        let delegation = HostPeerDelegation(links: links)
+        links.connectAll()
+        return (delegation, { dialled })
+    }
+
+    /// Channels follow the link, with nothing else driving them on a host: the
+    /// app gets the same from its session list.
+    @Test func headlessAgentListIncludesOutboundPeers() throws {
+        let hello = RemotePeerConnection.Event.hello(
+            serverId: "mac", name: "Laptop", protocolVersion: RemoteProtocolVersion.current, federationEnabled: true,
+            capabilities: [HostProtocolCapability.v1, HostProtocolCapability.eventsV1, HostProtocolCapability.delegationV1]
+        )
+        let (delegation, dialled) = hostLinks([RemotePeer(
+            id: "p", serverId: "mac", name: "Laptop", origins: ["http://laptop:1"], token: "t", publicKey: "key", addedAt: .distantPast
+        )])
+        let link = try #require(dialled()["p"])
+        link.emit(hello)
+        link.emit(.stateChanged(.online))
+        #expect(delegation.client.peers == [
+            ACPDelegationPeerInfo(name: "Laptop", serverId: "mac", state: .online, supportsDelegation: true),
+        ])
+        #expect(delegation.channels.channel(for: "mac") != nil)
+
+        link.emit(.stateChanged(.offline))
+        #expect(delegation.client.peers.map(\.state) == [.offline])
+        #expect(delegation.channels.channel(for: "mac") == nil)
+    }
+
+    /// A Mac that paired with this host and was never added here has no token.
+    @Test func inboundOnlyPeerIsNotOfferedAsATarget() {
+        let (delegation, dialled) = hostLinks([RemotePeer(
+            id: "p", serverId: "mac", name: "Laptop", origins: ["http://laptop:1"], token: "", localDeviceId: "d", addedAt: .distantPast
+        )])
+        #expect(delegation.client.peers.isEmpty)
+        #expect(dialled().isEmpty)
+    }
 }

@@ -25,7 +25,7 @@ public enum RemoteQueueProjection: Sendable {
                     text += value
                 case .image:
                     imageCount += 1
-                case .resourceLink, .resource:
+                case .resourceLink, .resource, .blobResource:
                     resourceCount += 1
                 }
             }
