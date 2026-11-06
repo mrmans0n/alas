@@ -177,6 +177,7 @@ public final class StackShepherd {
     /// Records whose fix prompt is being prepared or delivered, with the
     /// generation of the dispatch.
     @ObservationIgnored private var deliveringFix: [StackShepherdRecordID: Int] = [:]
+    @ObservationIgnored private var deliveringBind: [StackShepherdRecordID: UUID] = [:]
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -332,6 +333,8 @@ public final class StackShepherd {
         )
         let newOwner = record.sessionID != sessionID
         let startsFresh = existing == nil || newOwner
+        if startsFresh { record.pendingBindDelivery = nil }
+        if contextRules != nil { record.pendingBindDelivery = ShepherdBindDelivery(now: now) }
         record.sessionID = sessionID
         record.remote = remote
         record.base = stack.base
@@ -371,20 +374,36 @@ public final class StackShepherd {
         deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
-        if let contextRules, let effects {
-            let prompt = StackShepherdPromptBuilder.bindPrompt(record: record, requests: requests, rules: contextRules)
-            let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
-                self?.isCurrent(id, generation, before: "the bind delivery") ?? false
-            }
-            if delivery == .failed, isCurrent(id, generation, before: "the bind delivery retry"), var failed = records[id] {
-                for index in failed.entries.indices where !failed.entries[index].shepherd.phase.isTerminal {
-                    failed.entries[index].shepherd.retryDelivery(after: self.now())
-                }
-                put(failed)
-            }
+        if let contextRules {
+            await deliverBindPrompt(id, generation: generation, requests: requests, rules: contextRules)
         }
         pump()
         return records[id] ?? record
+    }
+
+    private func deliverBindPrompt(
+        _ id: StackShepherdRecordID, generation: Int, requests: [Int: ReviewRequest], rules: ShepherdRules
+    ) async {
+        guard isCurrent(id, generation, before: "bind delivery"),
+              let effects, let record = records[id], let pending = record.pendingBindDelivery,
+              deliveringBind[id] != pending.id
+        else { return }
+        deliveringBind[id] = pending.id
+        defer { if deliveringBind[id] == pending.id { deliveringBind[id] = nil } }
+        let prompt = StackShepherdPromptBuilder.bindPrompt(record: record, requests: requests, rules: rules)
+        let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
+            self?.records[id]?.pendingBindDelivery?.id == pending.id
+                && self?.isCurrent(id, generation, before: "the bind delivery") == true
+        }
+        guard var current = records[id], current.sessionID == record.sessionID,
+              current.pendingBindDelivery?.id == pending.id else { return }
+        switch delivery {
+        case .delivered: current.pendingBindDelivery = nil
+        case .failed: current.pendingBindDelivery?.failed(at: now())
+        case .superseded: break
+        }
+        current.updatedAt = now()
+        put(current)
     }
 
     /// Remembers what the Ship popover chose for session `sessionID`'s next
@@ -545,7 +564,7 @@ public final class StackShepherd {
     }
 
     private func scheduleNext(_ record: StackShepherdRecord, checksPending: Bool) {
-        let deliveryPending = record.openEntries.contains { $0.shepherd.deliveryRetryAt != nil }
+        let deliveryPending = record.nextDeliveryRetryAt != nil
         dueAt[record.id] = ShepherdSchedule.interval(for: record.phase, checksPending: checksPending || deliveryPending)
             .map { now().addingTimeInterval($0) }
     }
@@ -568,6 +587,7 @@ public final class StackShepherd {
             return
         }
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
+        if let pending = record.pendingBindDelivery, deliveringBind[id] == pending.id { return }
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
             stackShepherdLogger.notice("Dropping stack shepherd record \(id.storageKey, privacy: .private): its worktree is gone or not eligible")
             remove(id)
@@ -671,6 +691,9 @@ public final class StackShepherd {
         if decision.record != current { put(decision.record) }
         let generation = bumpGeneration(id)
         await execute(decision, for: id, generation: generation, before: current, rules: rules, path: context.path)
+        if observation.canDispatch, let pending = records[id]?.pendingBindDelivery, pending.retryAt <= now() {
+            await deliverBindPrompt(id, generation: generation, requests: fetched, rules: rules)
+        }
         if let latest = records[id] {
             scheduleNext(latest, checksPending: fetched.values.contains { $0.checks.contains { $0.bucket == .pending } })
         }
@@ -926,6 +949,7 @@ public final class StackShepherd {
         failureCounts[id] = nil
         generations[id] = nil
         deliveringFix[id] = nil
+        deliveringBind[id] = nil
         persist()
     }
 

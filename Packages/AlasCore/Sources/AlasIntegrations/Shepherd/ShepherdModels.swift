@@ -44,6 +44,25 @@ public enum ShepherdOutcome: String, Codable, Equatable, Sendable {
     case merged, closed
 }
 
+/// A bind context still needs delivery. Retries rebuild the prompt from fresh
+/// provider data and rules, rather than replaying stale instructions.
+public struct ShepherdBindDelivery: Codable, Equatable, Sendable {
+    public let id: UUID
+    public var failures: Int
+    public var retryAt: Date
+
+    public init(now: Date) {
+        id = UUID()
+        failures = 0
+        retryAt = now
+    }
+
+    public mutating func failed(at now: Date) {
+        failures = min(failures + 1, 6)
+        retryAt = now.addingTimeInterval(ShepherdSchedule.backoff(afterFailures: failures))
+    }
+}
+
 public enum ShepherdPhase: Codable, Equatable, Sendable {
     case watching
     /// Prompt delivered; the turn is queued or running.
@@ -121,6 +140,8 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// Definite delivery failures are retried without spending a fix attempt.
     public var deliveryFailures: Int?
     public var deliveryRetryAt: Date?
+    /// Separate from fix delivery: a clean PR also needs its bind context.
+    public var pendingBindDelivery: ShepherdBindDelivery?
     /// Fix prompts per unresolved problem before escalating. Nil in records saved before
     /// this field existed; read it through `fixAttemptBudget`.
     public var maxFixAttempts: Int?
@@ -179,6 +200,8 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
 
     public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
+
+    public var nextDeliveryRetryAt: Date? { pendingBindDelivery?.retryAt ?? deliveryRetryAt }
 
     /// Explicit Resume or a new owner grants a fresh allowance.
     public mutating func resetFixTracking() {

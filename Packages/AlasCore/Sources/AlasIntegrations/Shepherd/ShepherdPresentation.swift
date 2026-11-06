@@ -68,6 +68,8 @@ public struct ShepherdPresentation: Equatable, Sendable {
         request: ReviewRequest?,
         mergeGatePasses: Bool
     ) -> (ShepherdBadgeState, String) {
+        if !record.phase.isTerminal, !record.phase.isResumable,
+           let line = bindDeliveryLine(record.pendingBindDelivery) { return (.waiting, line) }
         switch record.phase {
         case .merged: return (.merged, "merged")
         case .closed: return (.closed, "closed")
@@ -81,7 +83,7 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .queued: return (.queued, "in merge queue")
         case .watching: break
         }
-        if let retryAt = record.deliveryRetryAt {
+        if let retryAt = record.nextDeliveryRetryAt {
             return (.waiting, "retrying chat delivery at \(retryTime(retryAt))")
         }
         if mergeGatePasses { return (.ready, "ready to merge") }
@@ -112,6 +114,11 @@ public struct ShepherdPresentation: Equatable, Sendable {
 
     private static func retryTime(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private static func bindDeliveryLine(_ pending: ShepherdBindDelivery?) -> String? {
+        guard let pending else { return nil }
+        return pending.failures == 0 ? "delivering Ship context" : "retrying chat delivery at \(retryTime(pending.retryAt))"
     }
 
     private static func checkWaitLine(_ request: ReviewRequest?) -> String? {
@@ -165,6 +172,8 @@ public struct ShepherdPresentation: Equatable, Sendable {
         requests: [Int: ReviewRequest],
         gatePasses: Bool
     ) -> (ShepherdBadgeState, String) {
+        if !record.phase.isTerminal, !record.phase.isResumable,
+           let line = bindDeliveryLine(record.pendingBindDelivery) { return (.waiting, line) }
         switch record.phase {
         case .merged: return (.merged, "landed")
         case .closed: return (.closed, "closed")
@@ -178,7 +187,7 @@ public struct ShepherdPresentation: Equatable, Sendable {
             return (.waiting, "waiting for stack_ship; automatic follow-up at \(retryTime(ended.addingTimeInterval(ShepherdPolicy.idleGracePeriod)))")
         case .merging, .queued, .watching: break
         }
-        if let retryAt = record.openEntries.compactMap(\.shepherd.deliveryRetryAt).min() {
+        if let retryAt = record.nextDeliveryRetryAt {
             return (.waiting, "retrying chat delivery at \(retryTime(retryAt))")
         }
         if let landedIDs = record.landedEntryIDs {

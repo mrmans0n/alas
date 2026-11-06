@@ -137,7 +137,8 @@ public enum ShepherdPolicy {
     /// `requiredStablePolls` polls, and, when the head reports no checks,
     /// `noChecksGracePeriod` since it was first seen. Never bypassed.
     public static func mergeGatePasses(_ record: ShepherdRecord, _ observation: ShepherdObservation) -> Bool {
-        guard ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
+        guard record.pendingBindDelivery == nil,
+              ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
               let request = observation.snapshot.reviewRequest
         else { return false }
         return headGatePasses(
@@ -178,6 +179,7 @@ public enum ShepherdPolicy {
         var next = record
         switch outcome {
         case .merged:
+            next.pendingBindDelivery = nil
             next.phase = .merged
             next.finishedAt = now
         case .queued:
@@ -202,10 +204,12 @@ public enum ShepherdPolicy {
         // Rule 1: terminal.
         switch request.state {
         case .merged:
+            record.pendingBindDelivery = nil
             record.phase = .merged
             record.finishedAt = now
             return .finish(.merged)
         case .closed:
+            record.pendingBindDelivery = nil
             record.phase = .closed
             record.finishedAt = now
             return .finish(.closed)
@@ -307,6 +311,7 @@ public enum ShepherdPolicy {
         case .idle:
             break
         }
+        if record.pendingBindDelivery != nil { return .wait }
         if let retryAt = record.deliveryRetryAt, observation.now < retryAt { return .wait }
 
         // Rule 6: fix turn settled. Covers a normal turn end and a turn lost

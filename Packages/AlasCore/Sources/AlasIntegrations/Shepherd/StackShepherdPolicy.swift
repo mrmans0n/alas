@@ -241,7 +241,7 @@ public enum StackShepherdPolicy {
         guard !record.isFinished else { return decision }
         // A fix turn the session can't act on (another stack checked out, a
         // paused rebase) waits like one the session is too busy for.
-        let session: ShepherdSessionState = observation.session == .idle && !observation.canDispatch
+        let session: ShepherdSessionState = observation.session == .idle && (!observation.canDispatch || record.pendingBindDelivery != nil)
             ? .busy : observation.session
         var entries: [StackShepherdEntry] = []
         for var entry in record.entries {
@@ -337,6 +337,7 @@ public enum StackShepherdPolicy {
         // keeps the record, as does work that has not been published yet.
         decision.isRetired = next.entries.isEmpty && observation.hasUnpublishedEntries == false
         if next.isFinished {
+            next.pendingBindDelivery = nil
             next.finishedAt = next.finishedAt ?? observation.now
             decision.finished = next.phase == .merged ? .merged : .closed
         }
@@ -362,7 +363,7 @@ public enum StackShepherdPolicy {
         // Merged entries are landed; a closed one never will be, and gg land
         // can't get past it, so the stack is not ready however green the rest is.
         let hasClosedEntry = record.entries.contains { $0.shepherd.phase == .closed }
-        return isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
+        return record.pendingBindDelivery == nil && isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
             guard entry.shepherd.phase == .watching, let request = requests[entry.requestNumber] else { return false }
             return ReviewReadinessModel.requestIsMergeReady(request, capabilities: capabilities)
                 && ShepherdPolicy.headGatePasses(

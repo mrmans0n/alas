@@ -218,6 +218,7 @@ public final class ReviewShepherd {
     /// generation of the dispatch. A turn the owner ends meanwhile is not the
     /// fix's turn, so `turnCompleted` leaves these records alone.
     @ObservationIgnored private var deliveringFix: [ShepherdRecordID: Int] = [:]
+    @ObservationIgnored private var deliveringBind: [ShepherdRecordID: UUID] = [:]
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -344,29 +345,49 @@ public final class ReviewShepherd {
         if startsFresh {
             record.phase = .watching
             record.resetFixTracking()
+            record.pendingBindDelivery = nil
         }
+        if contextRules != nil { record.pendingBindDelivery = ShepherdBindDelivery(now: now) }
         record.updatedAt = now
         put(record)
         let generation = bumpGeneration(id)
         deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
-        if let contextRules, let effects {
-            let prompt = ShepherdPromptBuilder.bindPrompt(
-                request: request,
-                fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
-                rules: contextRules
-            )
-            let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
-                self?.isCurrent(id, generation, before: "the bind delivery") ?? false
-            }
-            if delivery == .failed, isCurrent(id, generation, before: "the bind delivery retry"), var failed = records[id] {
-                failed.retryDelivery(after: self.now())
-                put(failed)
-            }
+        if let contextRules {
+            await deliverBindPrompt(id, generation: generation, request: request, rules: contextRules)
         }
         pump()
         return records[id] ?? record
+    }
+
+    private func deliverBindPrompt(
+        _ id: ShepherdRecordID, generation: Int, request: ReviewRequest, rules: ShepherdRules
+    ) async {
+        guard isCurrent(id, generation, before: "bind delivery"),
+              let effects, let record = records[id], let pending = record.pendingBindDelivery,
+              deliveringBind[id] != pending.id
+        else { return }
+        deliveringBind[id] = pending.id
+        defer { if deliveringBind[id] == pending.id { deliveringBind[id] = nil } }
+        let prompt = ShepherdPromptBuilder.bindPrompt(
+            request: request,
+            fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []), rules: rules)
+        let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
+            self?.records[id]?.pendingBindDelivery?.id == pending.id
+                && self?.isCurrent(id, generation, before: "the bind delivery") == true
+        }
+        // A toggle can supersede delivery without replacing this bind. Match
+        // its identity so a late result cannot clear a newer owner's context.
+        guard var current = records[id], current.sessionID == record.sessionID,
+              current.pendingBindDelivery?.id == pending.id else { return }
+        switch delivery {
+        case .delivered: current.pendingBindDelivery = nil
+        case .failed: current.pendingBindDelivery?.failed(at: now())
+        case .superseded: break
+        }
+        current.updatedAt = now()
+        put(current)
     }
 
     public func setAutoFix(_ on: Bool, for id: ShepherdRecordID) {
@@ -603,6 +624,7 @@ public final class ReviewShepherd {
         }
         // A floor, so no early exit below can make the record due again at once.
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
+        if let pending = record.pendingBindDelivery, deliveringBind[id] == pending.id { return }
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
             shepherdLogger.notice("Dropping PR shepherd record \(id.storageKey, privacy: .private): its worktree is gone or not eligible")
             remove(id)
@@ -681,6 +703,10 @@ public final class ReviewShepherd {
         }
         let generation = bumpGeneration(id)
         await execute(decision.action, for: id, generation: generation, before: current, snapshot: observed, rules: rules, context: context)
+        if let pending = records[id]?.pendingBindDelivery, pending.retryAt <= now(),
+           let request = observed.reviewRequest {
+            await deliverBindPrompt(id, generation: generation, request: request, rules: rules)
+        }
         if let latest = records[id] {
             scheduleNext(latest, checksPending: observed.reviewRequest?.checks.contains { $0.bucket == .pending } ?? false)
         }
@@ -1122,6 +1148,7 @@ public final class ReviewShepherd {
         failureCounts[id] = nil
         generations[id] = nil
         deliveringFix[id] = nil
+        deliveringBind[id] = nil
         persist()
     }
 

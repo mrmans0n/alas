@@ -641,6 +641,7 @@ struct StackShepherdTests {
         stack: GGStack,
         contextStackName: String? = "auth",
         store: MemoryStore = MemoryStore(),
+        isOperationInProgress: Bool = false,
         now: @escaping @MainActor () -> Date = { F.now },
         deliveryOutcome: @escaping @MainActor () -> ReviewShepherd.Delivery = { .delivered },
         deliverPrompt: @escaping @MainActor (String) -> Void = { _ in },
@@ -653,7 +654,7 @@ struct StackShepherdTests {
                 .github: FakeProvider(requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })),
             ]),
             localProbe: ReviewLoopLocalProbe { _, _ in (local: Self.local, remotes: []) },
-            operationInProgress: { _ in false },
+            operationInProgress: { _ in isOperationInProgress },
             now: now
         )
         shepherd.effects = StackShepherd.Effects(
@@ -785,6 +786,63 @@ struct StackShepherdTests {
             #expect(entries.allSatisfy { !$0.shepherd.phase.isResumable })
             shepherd = service()
         }
+    }
+
+    @Test func cleanStackRetriesBindContextAcrossRestart() async throws {
+        let stack = Self.stack([41, 42])
+        let requests = [Self.request(41), Self.request(42)]
+        let byNumber = Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        func service() -> StackShepherd {
+            makeShepherd(requests: requests, stack: stack, store: store, now: { time },
+                         deliveryOutcome: { deliveries < 3 ? .failed : .delivered },
+                         deliverPrompt: { _ in deliveries += 1 })
+        }
+        var shepherd = service()
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack, requests: byNumber,
+            remote: F.remote(), autoFix: false, maxFixAttempts: 3, contextRules: ShepherdRules.none)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (89, 2), (90, 3), (91, 3)] {
+            time = F.now.addingTimeInterval(elapsed)
+            shepherd = service()
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            let current = try #require(shepherd.records[record.id])
+            #expect(current.entries.allSatisfy { $0.shepherd.fixAttempts == 0 })
+            #expect(!current.phase.isResumable)
+            if expectedDeliveries == 3 {
+                #expect(!ShepherdPresentation.make(stack: current, requests: byNumber, gatePasses: false).phaseLine.contains("retrying"))
+            }
+        }
+    }
+
+    @Test("bind retry waits until the stack can receive work", arguments: [true, false])
+    func bindRetryWaitsForItsStack(wrongStack: Bool) async {
+        let stack = Self.stack([41])
+        let requests = [Self.request(41)]
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        func service(_ currentStack: GGStack, operation: Bool = false) -> StackShepherd {
+            makeShepherd(requests: requests, stack: currentStack, contextStackName: currentStack.name, store: store,
+                         isOperationInProgress: operation, now: { time },
+                         deliveryOutcome: { deliveries == 1 ? .failed : .delivered },
+                         deliverPrompt: { _ in deliveries += 1 })
+        }
+        let initial = service(stack)
+        let record = await initial.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack,
+            requests: [41: requests[0]], remote: F.remote(), autoFix: false,
+            maxFixAttempts: 3, contextRules: ShepherdRules.none)
+        time = F.now.addingTimeInterval(30)
+        let other = GGStack(name: "other", base: "main", totalCommits: 1, syncedCommits: 1,
+                            currentPosition: 1, behindBase: 0, entries: stack.entries)
+        await service(wrongStack ? other : stack, operation: !wrongStack).evaluateNow(record.id)
+        #expect(deliveries == 1)
+        await service(stack).evaluateNow(record.id)
+        #expect(deliveries == 2)
     }
 
     @Test func restackDeliveryFailureKeepsAnOutstandingFixWaitingForCI() async throws {

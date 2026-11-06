@@ -311,6 +311,74 @@ struct ReviewShepherdTests {
         }
     }
 
+    @Test("a clean PR retries its bind context across restart", arguments: [true, false])
+    func cleanPRRetriesBindContext(autoFix: Bool) async throws {
+        let request = F.request()
+        let store = MemoryStore()
+        var time = F.now
+        var deliveries = 0
+        let deliver: @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery = { _, _ in
+            deliveries += 1
+            return deliveries < 3 ? .failed : .delivered
+        }
+        var shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: autoFix, autoMerge: false, contextRules: ShepherdRules.none)
+        for (elapsed, expectedDeliveries) in [(0.0, 1), (29, 1), (30, 2), (89, 2), (90, 3), (91, 3)] {
+            time = F.now.addingTimeInterval(elapsed)
+            shepherd = makeShepherd(request: request, store: store, deliverPrompt: deliver, now: { time })
+            await shepherd.evaluateNow(record.id)
+            #expect(deliveries == expectedDeliveries)
+            let current = try #require(shepherd.records[record.id])
+            #expect(current.fixAttempts == 0)
+            #expect(!current.phase.isResumable)
+            if expectedDeliveries == 3 {
+                #expect(!ShepherdPresentation.make(record: current, request: request, mergeGatePasses: false).phaseLine.contains("retrying"))
+            }
+        }
+    }
+
+    @Test("pending bind delivery cannot overlap a poll or lose a toggle", arguments: [ReviewShepherd.Delivery.superseded, .failed])
+    func bindDeliverySurvivesAToggle(unsent: ReviewShepherd.Delivery) async throws {
+        let request = F.request()
+        let (entered, signalEntered) = AsyncStream<Void>.makeStream()
+        let (released, signalReleased) = AsyncStream<Void>.makeStream()
+        var time = F.now
+        var attempts = 0
+        var accepted = 0
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, wanted in
+            attempts += 1
+            if attempts == 1 {
+                signalEntered.yield()
+                var release = released.makeAsyncIterator()
+                await release.next()
+            }
+            guard wanted() else { return unsent }
+            accepted += 1
+            return .delivered
+        }, now: { time })
+        let binding = Task {
+            await shepherd.bind(sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+                                autoFix: true, autoMerge: false, contextRules: ShepherdRules.none)
+        }
+        var entry = entered.makeAsyncIterator()
+        await entry.next()
+        let record = try #require(shepherd.record(forSession: "session-1"))
+        await shepherd.evaluateNow(record.id)
+        #expect(attempts == 1)
+        shepherd.setAutoMerge(true, for: record.id)
+        signalReleased.yield()
+        _ = await binding.value
+        #expect(accepted == 0)
+        time = F.now.addingTimeInterval(30)
+        await shepherd.evaluateNow(record.id)
+        #expect(attempts == 2 && accepted == 1)
+        #expect(shepherd.records[record.id]?.autoMerge == true)
+        #expect(shepherd.records[record.id]?.pendingBindDelivery == nil)
+        #expect(shepherd.records[record.id]?.fixAttempts == 0)
+    }
+
     @Test func republishingKeepsTheSameOwnersFixAllowance() async {
         let request = F.request(threads: [F.trustedThread])
         let shepherd = makeShepherd(request: request) { _, _ in .delivered }
