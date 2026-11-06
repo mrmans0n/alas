@@ -162,6 +162,40 @@ struct DelegationRecoveryTests {
         #expect(try await fixture.persistence.delegation(childSessionId: "ready")?.phase == .ready)
     }
 
+    /// Remote serves before recovery reads its rows, so a row may be a healthy
+    /// child this process just created. Rows stamp whole seconds, so one from
+    /// the second it started counts as its own.
+    @Test(.timeLimit(.minutes(1))) func recoveryLeavesChildrenThisProcessCreated() async throws {
+        let fixture = try PeerHostFixture()
+        defer { fixture.tearDown() }
+        fixture.core.processStartedAt = 100
+        try await fixture.seedQueuedTurn(sessionIDs: ["new-ready"], otherSessionIDs: [])
+        func setup(_ id: String, createdAt: Int64) -> ACPDelegationRecord {
+            ACPDelegationRecord(
+                childSessionId: id, parentSessionId: "parent", projectId: "p", parentWorktreeId: fixture.worktree.id,
+                agentId: "gemini",
+                worktreeRequest: .new(branch: id, base: "main", destinationPath: fixture.root.appendingPathComponent(id).path, optimisticId: id),
+                pendingInitialPrompt: "Go", phase: .creatingWorktree, createdAt: createdAt, updatedAt: createdAt
+            )
+        }
+        try await fixture.persistence.insert(setup("left-behind", createdAt: 99))
+        for (id, createdAt) in [("same-second", Int64(100)), ("later", 200)] {
+            try await fixture.persistence.insert(setup(id, createdAt: createdAt))
+        }
+        try await fixture.persistence.insert(ACPDelegationRecord(
+            childSessionId: "new-ready", parentSessionId: "parent", projectId: "p", parentWorktreeId: fixture.worktree.id,
+            childWorktreeId: fixture.worktree.id, agentId: "gemini", worktreeRequest: .existing(worktreeId: fixture.worktree.id),
+            phase: .ready, createdAt: 200, updatedAt: 200
+        ))
+
+        await fixture.core.recoverDelegations()
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "left-behind")?.phase == .failed)
+        #expect(try await fixture.persistence.delegation(childSessionId: "same-second")?.phase == .creatingWorktree)
+        #expect(try await fixture.persistence.delegation(childSessionId: "later")?.phase == .creatingWorktree)
+        #expect(fixture.core.sessionManagers.values.first?.liveSession(for: "new-ready") == nil)
+    }
+
     /// A host stopped between committing an outcome and delivering it, or
     /// `alas-host peers remove` with no host running, leaves a root parent's
     /// wake in the inbox. Only its source row says it is the host's to deliver;

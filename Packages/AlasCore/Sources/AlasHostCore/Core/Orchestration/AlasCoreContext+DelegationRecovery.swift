@@ -118,12 +118,13 @@ extension AlasCoreContext {
     /// Finishes what delegations were doing when the host last stopped:
     /// children still being set up are started or failed, children with a
     /// turn in flight are attached again, and messages waiting for a session
-    /// are delivered. Everything outside `scope` is left as it is. A host
+    /// are delivered. Everything outside `scope` is left as it is, and so is a
+    /// child this process created, since Remote serves before this runs. A host
     /// stopping meanwhile leaves the rest for its next start: what its
     /// shutdown refuses is not a failed child.
     @_spi(AppHost) public func recoverDelegations(_ scope: DelegationRecoveryScope = .all) async {
         guard let records = try? await orchestrationPersistence.incompleteDelegations() else { return }
-        for record in records where scope.covers(record) {
+        for record in records where scope.covers(record) && predatesThisProcess(record) {
             guard !isStopping else { return }
             let worktree = record.childWorktreeId.flatMap(worktree(withId:))
                 ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
@@ -243,6 +244,10 @@ extension AlasCoreContext {
         await drainRecoveredDelegatedMessageTargets(scope)
     }
 
+    private func predatesThisProcess(_ record: ACPDelegationRecord) -> Bool {
+        record.createdAt < processStartedAt
+    }
+
     /// Re-attaches ready delegated children that had a turn in flight, or
     /// waiting to go out, when Alas last quit. Their adapters run in brokers
     /// that survive the quit, so a child may still be working, or may have
@@ -255,7 +260,7 @@ extension AlasCoreContext {
     /// outcome follows.
     private func attachDelegatedChildrenWithPendingTurns(_ scope: DelegationRecoveryScope) async {
         guard let records = try? await orchestrationPersistence.readyDelegations() else { return }
-        let tasks = records.filter(scope.covers).map { record in
+        let tasks = records.filter { scope.covers($0) && predatesThisProcess($0) }.map { record in
             Task { @MainActor [weak self] in
                 await self?.attachDelegatedChildWithPendingTurn(record)
             }

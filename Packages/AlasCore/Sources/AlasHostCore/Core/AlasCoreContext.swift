@@ -144,6 +144,10 @@ public final class AlasCoreContext {
     @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)? {
         didSet { bindPeerOutboxCollector() }
     }
+    /// When this process started, in the seconds delegation rows are stamped
+    /// with. Taken before anything can serve, so a row from this time on is
+    /// this process's own and recovery leaves it alone.
+    @ObservationIgnored var processStartedAt = Int64(Date().timeIntervalSince1970)
     /// Whether `startCollectingPeerOutcomes` ran.
     @ObservationIgnored var collectsPeerOutcomes = false
     /// Collects outcomes from the current `delegationPeers` once
