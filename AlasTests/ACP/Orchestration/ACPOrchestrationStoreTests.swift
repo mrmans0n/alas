@@ -571,6 +571,7 @@ struct ACPOrchestrationStoreTests {
         #expect(sqlite3_open(path, &db) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting", nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting_since", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_settled_turn", nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
 
         let store = try ACPOrchestrationStore(path: path)
@@ -581,6 +582,23 @@ struct ACPOrchestrationStoreTests {
         try store.markPeerAwaiting(childSessionId: "child", since: 5)
 
         #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
+    }
+
+    /// An acknowledgement can arrive after the turn it started was collected,
+    /// by this instance or another on the store, and must not revive the wait.
+    @Test(arguments: [(1000, false), (1100, false), (1101, true)] as [(Int64, Bool)])
+    func aLateAcknowledgementDoesNotReviveASettledWait(acceptedAt: Int64, stillAwaited: Bool) throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        var record = newRecord()
+        record.peerServerId = "s1"
+        record.peerAwaiting = true
+        try store.insert(record)
+        let entry = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-1100", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "parent"))
+
+        try store.markPeerAwaiting(childSessionId: "child", since: acceptedAt)
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
     }
 
     @Test("an outbox page respects the byte limit and always returns one entry")

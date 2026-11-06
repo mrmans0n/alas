@@ -367,11 +367,14 @@ public final class ACPOrchestrationStore {
 
     /// The parent now expects a result from `childSessionId`, for the prompt
     /// the target accepted at `since`, epoch milliseconds by the target's clock.
+    /// A turn that started at or after `since` was already collected when the
+    /// acknowledgement arrives late, and then nothing is left to wait for.
     public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
-        try db.exec(
-            "UPDATE delegations SET peer_awaiting = 1, peer_awaiting_since = ? WHERE child_session_id = ?",
-            bindings: [since, childSessionId]
-        )
+        try db.exec("""
+        UPDATE delegations
+        SET peer_awaiting = 1, peer_awaiting_since = MAX(COALESCE(peer_awaiting_since, 0), ?)
+        WHERE child_session_id = ? AND (peer_settled_turn IS NULL OR peer_settled_turn < ?)
+        """, bindings: [since, childSessionId, since])
     }
 
     private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
@@ -387,6 +390,10 @@ public final class ACPOrchestrationStore {
             )
             return
         }
+        try db.exec("""
+        UPDATE delegations SET peer_settled_turn = MAX(COALESCE(peer_settled_turn, 0), ?)
+        WHERE child_session_id = ? AND peer_server_id = ?
+        """, bindings: [turnStartedAt, entry.childSessionId, peerServerId])
         try db.exec("""
         UPDATE delegations SET peer_awaiting = 0
         WHERE child_session_id = ? AND peer_server_id = ?
@@ -705,6 +712,10 @@ public final class ACPOrchestrationStore {
         }
         if !columns.contains("peer_awaiting_since") {
             try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting_since INTEGER")
+        }
+        let settled = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name = 'peer_settled_turn'")
+        if settled.isEmpty {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_settled_turn INTEGER")
         }
     }
 
