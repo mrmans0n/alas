@@ -362,6 +362,28 @@ public final class ACPOrchestrationStore {
         }
     }
 
+    /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
+    /// an entry nobody here can be woken for. Never moves it back.
+    @discardableResult
+    public func advancePeerCursor(peerServerId: String, to seq: Int64) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            try db.exec(
+                "INSERT OR IGNORE INTO peer_delegation_cursors (peer_server_id, seq) VALUES (?, 0)",
+                bindings: [peerServerId]
+            )
+            let advanced = try db.execChanges(
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
+                bindings: [seq, peerServerId, seq]
+            ) == 1
+            try db.exec("COMMIT")
+            return advanced
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
     public func peerCursor(peerServerId: String) throws -> Int64 {
         try db.query(
             "SELECT seq FROM peer_delegation_cursors WHERE peer_server_id = ?",

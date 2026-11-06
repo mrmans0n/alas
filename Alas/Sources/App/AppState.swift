@@ -2353,6 +2353,7 @@ final class AppState {
         Task { [weak self] in
             await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()
+            self?.core.startCollectingPeerOutcomes()
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)

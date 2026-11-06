@@ -600,6 +600,16 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.collectPeerEntry(outboxEntry(seq: 1), peerServerId: "s1", parentSessionId: "p") == false)
     }
 
+    @Test("advancing the cursor without an entry moves it forward only")
+    func advancingCursorMovesForwardOnly() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 3))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2) == false)
+        #expect(try store.peerCursor(peerServerId: "s1") == 3)
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 3), peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.pendingMessages(targetSessionId: "p").isEmpty)
+    }
+
     @Test("migrates a version 4 database keeping its rows")
     func migratesFromVersion4KeepingRows() throws {
         let path = temporaryPath()

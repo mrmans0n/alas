@@ -228,7 +228,6 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerStartsInFlight: Set<String> = []
     private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
     private var peerOutboxSignals: [String: Int] = [:]
-    private weak var observedPeers: ACPDelegationPeers?
 
     public init(environment: Environment) {
         self.environment = environment
@@ -785,20 +784,10 @@ public final class ACPSessionOrchestrationCoordinator {
         var seenSignals: [String: Int] = [:]
     }
 
-    /// Tells waits that `serverId` has news, so they ask it again now.
+    /// Tells waits that `serverId` has news, so they ask it again now. The
+    /// peer outbox collector calls this for every signal it hears.
     public func peerOutboxDidChange(serverId: String) {
         peerOutboxSignals[serverId, default: 0] += 1
-    }
-
-    /// Hears the peers' outbox signal, keeping any handler already there.
-    private func observeOutboxSignals(of peers: ACPDelegationPeers) {
-        guard observedPeers !== peers else { return }
-        observedPeers = peers
-        let previous = peers.onOutboxChanged
-        peers.onOutboxChanged = { [weak self] serverId in
-            previous?(serverId)
-            self?.peerOutboxDidChange(serverId: serverId)
-        }
     }
 
     /// The question already out for exactly these children, or a new one, so
@@ -1481,7 +1470,6 @@ public final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not verify session delegation.")
         }
-        if !peerChildren.isEmpty, let peers = environment.delegationPeers() { observeOutboxSignals(of: peers) }
         let peerState = PeerWaitState()
         let deadline = environment.nowMillis() + Int64(request.timeoutMillis)
         while true {

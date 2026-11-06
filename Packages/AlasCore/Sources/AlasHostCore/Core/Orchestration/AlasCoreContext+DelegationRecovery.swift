@@ -56,6 +56,24 @@ extension AlasCoreContext {
         Set(projects.projects.flatMap { projects.worktrees(projectId: $0.id).map(\.id) })
     }
 
+    /// Starts waking parents with the outcomes paired Macs' children leave
+    /// behind. Call it once stored sessions are loaded and `recoverDelegations`
+    /// ran, so a parent can be attached. The collector takes over the peers'
+    /// outbox and availability signals and hands them to the coordinator's
+    /// waits, so it must be the only one installing them.
+    @_spi(AppHost) public func startCollectingPeerOutcomes() {
+        guard peerOutboxCollector == nil, let peers = delegationPeers else { return }
+        let orchestration = orchestration
+        let collector = ACPPeerOutboxCollector(
+            peers: peers,
+            persistence: orchestrationPersistence,
+            deliver: { await orchestration.deliverPendingMessages(to: $0) },
+            outboxChanged: { orchestration.peerOutboxDidChange(serverId: $0) }
+        )
+        peerOutboxCollector = collector
+        collector.start()
+    }
+
     /// Finishes what delegations were doing when the host last stopped:
     /// children still being set up are started or failed, children with a
     /// turn in flight are attached again, and messages waiting for a session

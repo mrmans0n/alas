@@ -159,6 +159,11 @@ public actor ACPOrchestrationPersistence {
         try openedStore().collectPeerEntry(entry, peerServerId: peerServerId, parentSessionId: parentSessionId)
     }
 
+    @discardableResult
+    public func advancePeerCursor(peerServerId: String, to seq: Int64) throws -> Bool {
+        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq)
+    }
+
     public func peerCursor(peerServerId: String) throws -> Int64 {
         try openedStore().peerCursor(peerServerId: peerServerId)
     }

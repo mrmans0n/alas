@@ -140,6 +140,8 @@ public final class AlasCoreContext {
     /// How agents here reach paired Macs' hosts; the app installs it with its
     /// peer links, and a host without any leaves it nil.
     @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)?
+    /// Collects outcomes from paired Macs once `startCollectingPeerOutcomes` ran.
+    @ObservationIgnored var peerOutboxCollector: ACPPeerOutboxCollector?
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// When each worktree's local-changes review was opened, by worktree id,

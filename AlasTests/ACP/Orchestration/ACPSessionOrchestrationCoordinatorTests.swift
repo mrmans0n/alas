@@ -2339,13 +2339,154 @@ struct ACPSessionOrchestrationCoordinatorTests {
             interruptCalls.append(sessionID)
             return interruptResult
         }
-        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> { .failure(.notFound) }
+        /// Answers `outbox`. Suspended on `outboxGate` first while one is set.
+        var outboxAnswer: (_ after: Int64) -> Result<ACPPeerOutboxPage, ACPPeerError> = { _ in .failure(.notFound) }
+        var outboxGate: AsyncStream<Void>?
+        var onOutboxCall: ((Int64) -> Void)?
+        private(set) var outboxCalls: [Int64] = []
+        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+            outboxCalls.append(after)
+            onOutboxCall?(after)
+            if let outboxGate { for await _ in outboxGate { break } }
+            return outboxAnswer(after)
+        }
+
+        /// Serves `entries` after the asked-for `seq`, `pageSize` at a time.
+        static func paged(_ entries: [ACPPeerOutboxEntry], pageSize: Int) -> (Int64) -> Result<ACPPeerOutboxPage, ACPPeerError> {
+            { after in
+                let rest = entries.filter { $0.seq > after }
+                return .success(.init(entries: Array(rest.prefix(pageSize)), hasMore: rest.count > pageSize))
+            }
+        }
     }
 
     /// Moves on every pause, so a wait that never settles still ends.
     private final class TestClock {
         var millis: Int64 = 1_000
         var step: Int64 = 250
+    }
+
+    // MARK: Collecting outcomes from a peer
+
+    private static func outcome(
+        _ seq: Int64, child: String = "child", kind: ACPDelegatedMessageKind = .prompt
+    ) -> ACPPeerOutboxEntry {
+        .init(seq: seq, messageId: "outcome-\(seq)", childSessionId: child, prompt: "done \(seq)", kind: kind, createdAt: seq)
+    }
+
+    private func makeCollector(
+        _ fixture: (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager),
+        peers: FakePeers
+    ) -> ACPPeerOutboxCollector {
+        let coordinator = fixture.coordinator
+        return ACPPeerOutboxCollector(
+            peers: peers, persistence: fixture.persistence,
+            deliver: { await coordinator.deliverPendingMessages(to: $0) },
+            outboxChanged: { coordinator.peerOutboxDidChange(serverId: $0) }
+        )
+    }
+
+    @Test func availabilityTriggersCollectFromStoredCursor() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 5)
+        let collector = makeCollector(fixture, peers: peers)
+        let (calls, continuation) = AsyncStream<Int64>.makeStream()
+        peers.onOutboxCall = { continuation.yield($0) }
+        collector.start()
+        // An online peer is collected from at start, and again when it comes back.
+        for await after in calls { #expect(after == 5); break }
+        peers.onAvailabilityChanged?("srv-1")
+        for await after in calls { #expect(after == 5); break }
+        continuation.finish()
+    }
+
+    @Test func entriesDeliverInOrderOncePerEntry() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1), Self.outcome(2), Self.outcome(3)], pageSize: 2)
+        let collector = makeCollector(fixture, peers: peers)
+
+        await collector.collect(serverId: "srv-1")
+        await collector.collect(serverId: "srv-1")
+
+        #expect(peers.outboxCalls == [0, 2, 3])
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1", "outcome-2", "outcome-3"])
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 3)
+    }
+
+    @Test func twoCollectorsOnOneStoreWakeOnce() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        peers.outboxAnswer = { _ in .success(.init(entries: [Self.outcome(1)], hasMore: false)) }
+        let first = makeCollector(fixture, peers: peers), second = makeCollector(fixture, peers: peers)
+
+        async let a: Void = first.collect(serverId: "srv-1")
+        async let b: Void = second.collect(serverId: "srv-1")
+        _ = await (a, b)
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1"])
+    }
+
+    @Test func entryForUnknownChildIsSkippedAndAdvancesCursor() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1, child: "forgotten"), Self.outcome(2)], pageSize: 5)
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-2"])
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    @Test func noticeEntryDoesNotWakeParent() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1, kind: .notice)], pageSize: 5)
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.kind) == [.notice])
+    }
+
+    @Test func failedPageStopsWithCursorWhereItWas() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        let entries = [Self.outcome(1), Self.outcome(2), Self.outcome(3)]
+        peers.outboxAnswer = { after in after == 0 ? FakePeers.paged(entries, pageSize: 2)(0) : .failure(.unreachable(peer: "mini")) }
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        #expect(peers.outboxCalls == [0, 2])
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    @Test func signalsDuringAPullQueueOneMorePull() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        peers.outboxGate = gate
+        peers.outboxAnswer = { _ in .success(.init(entries: [], hasMore: false)) }
+        let collector = makeCollector(fixture, peers: peers)
+        let (calls, continuation) = AsyncStream<Int64>.makeStream()
+        peers.onOutboxCall = { continuation.yield($0) }
+
+        let running = Task { @MainActor in await collector.collect(serverId: "srv-1") }
+        for await _ in calls { break }
+        await collector.collect(serverId: "srv-1")
+        await collector.collect(serverId: "srv-1")
+        release.yield()
+        for await _ in calls { break }
+        release.yield()
+        await running.value
+
+        #expect(peers.outboxCalls.count == 2)
+        continuation.finish()
     }
 
     private func insertRemoteChild(
@@ -2875,6 +3016,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
             peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
             peers.onOutboxChanged?("srv-1")
         })
+        // The collector owns the peers' slot; the wait still hears the signal.
+        let collector = makeCollector(fixture, peers: peers)
+        collector.start()
+        defer { withExtendedLifetime(collector) {} }
         try await insertRemoteChild(fixture.persistence)
 
         let answer = try await wait(fixture)
