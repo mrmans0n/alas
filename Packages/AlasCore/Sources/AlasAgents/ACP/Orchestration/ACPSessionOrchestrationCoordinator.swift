@@ -243,6 +243,8 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerStartsInFlight: Set<String> = []
     private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
     private var peerOutboxSignals: [String: Int] = [:]
+    /// Counts each prompt a child's peer accepted, for waits already under way.
+    private var peerChildSends: [String: Int] = [:]
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -901,6 +903,7 @@ public final class ACPSessionOrchestrationCoordinator {
             // A status question asked before this could report the child
             // settled, with this turn still to run.
             peerStatusRounds[serverId] = nil
+            peerChildSends[child.childSessionId, default: 0] += 1
             do {
                 try await environment.persistence.markPeerAwaiting(childSessionId: child.childSessionId, since: acceptedAt)
             } catch {
@@ -974,6 +977,7 @@ public final class ACPSessionOrchestrationCoordinator {
         var rounds: [(serverId: String, ids: [String], round: PeerStatusRound)] = []
         var nextAskAt: [String: Int64] = [:]
         var seenSignals: [String: Int] = [:]
+        var seenSends: [String: Int] = [:]
     }
 
     /// Tells waits that `serverId` has news, so they ask it again now. The
@@ -1679,9 +1683,13 @@ public final class ACPSessionOrchestrationCoordinator {
                 // A retry can move a child on during the wait.
                 for (id, known) in peerChildren {
                     guard let current = await peerChild(id) else { continue }
-                    if current.phase != known.phase, let serverId = current.peerServerId {
+                    // A prompt sent meanwhile outdates what the child said before it.
+                    let sends = peerChildSends[id, default: 0]
+                    if current.phase != known.phase || sends != peerState.seenSends[id, default: 0],
+                       let serverId = current.peerServerId {
                         forgetPeerAnswers(about: id, serverId: serverId, state: peerState)
                     }
+                    peerState.seenSends[id] = sends
                     peerChildren[id] = current
                 }
                 collectPeerAnswers(into: peerState)

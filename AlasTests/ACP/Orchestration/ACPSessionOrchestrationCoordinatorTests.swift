@@ -3868,6 +3868,38 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(answer.sessions.first?.state == "running" && answer.sessions.first?.settled == false)
     }
 
+    /// A prompt sent while another call waits outdates the child's settled
+    /// answer, and any question already out, so the wait asks again.
+    @Test func aPromptSentDuringAWaitOutdatesTheChildsSettledAnswer() async throws {
+        final class Holder {
+            var coordinator: ACPSessionOrchestrationCoordinator?
+            var sent = false
+            var states = ["a": ("idle", true), "b": ("running", false)]
+        }
+        let holder = Holder()
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in
+            .success(try! JSONEncoder().encode(ACPOrchestrationWaitResponse(
+                sessions: ids.map { .init(sessionId: $0, state: holder.states[$0]!.0, settled: holder.states[$0]!.1, lastAgentText: nil, failure: nil) },
+                timedOut: false
+            )))
+        }
+        let fixture = try remoteFixture(peers: peers, onPause: {
+            guard !holder.sent else { return }
+            holder.sent = true
+            _ = await holder.coordinator?.send(origin: Self.peerOrigin, request: .init(targetSessionId: "a", prompt: "More"))
+            holder.states = ["a": ("running", false), "b": ("idle", true)]
+        })
+        holder.coordinator = fixture.coordinator
+        try await insertRemoteChild(fixture.persistence, id: "a")
+        try await insertRemoteChild(fixture.persistence, id: "b")
+
+        let answer = try await wait(fixture, ["a", "b"])
+
+        #expect(answer.sessions.first { $0.sessionId == "a" }?.settled == false)
+        #expect(answer.sessions.first { $0.sessionId == "b" }?.settled == true)
+    }
+
     /// One answer in the caller's order, each peer asked for its own children
     /// in batches it accepts; a child already failed here costs no question.
     @Test func waitAnswersForLocalAndPeerChildrenTogether() async throws {
