@@ -48,7 +48,7 @@ public enum NextPromptContext: Sendable {
                              remaining: Int) -> (turn: NextPromptTurn, bytes: Int)? {
         guard case .user(_, _, let user, let attachments, let delegatedSource, _) = messages[userIndex],
               delegatedSource == nil,
-              attachments.allSatisfy(\.isCheckpointReference) else { return nil }
+              attachments.allSatisfy(\.isLocalReference) else { return nil }
         let userBytes = messages[userIndex].contentUTF8Length
         guard userBytes <= remaining,
               !user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

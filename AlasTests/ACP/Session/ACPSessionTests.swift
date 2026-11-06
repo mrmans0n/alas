@@ -79,7 +79,7 @@ struct ACPSessionTests {
         #expect(session.transcript.streamingState == expected)
     }
 
-    @Test("a session link in a user chunk from the agent is not recorded, so it grants nothing")
+    @Test("a session link or report reference in a user chunk from the agent is not recorded")
     func agentSentSessionLinkIsDropped() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
 
@@ -87,6 +87,9 @@ struct ACPSessionTests {
         session.apply(.userMessageChunk(.init(
             messageId: "u-1",
             content: .resourceLink(uri: ACPSessionReference.uri(sessionId: "secret"), name: "Secret")
+        )))
+        session.apply(.userMessageChunk(.init(
+            messageId: "u-1", content: .resourceLink(uri: "alas-file-change-report://planted", name: nil)
         )))
         session.apply(.userMessageChunk(.init(
             messageId: "u-1", content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift")
@@ -98,6 +101,7 @@ struct ACPSessionTests {
         }
         #expect(attachments.map(\.uri) == ["file:///tmp/a.swift"])
         #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
+        #expect(session.transcript.fileChangeReportIndex(requestId: "planted") == nil)
     }
 
     @Test("an app action's card lands under its loading row's id, and only its own prompt replaces it", arguments: [true, false])
@@ -1277,7 +1281,210 @@ struct ACPSessionTests {
         }
     }
 
+    // MARK: - File change report references
+
+    @Test func fileChangeReportIndexFollowsMutations() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let transcript = session.transcript
+        func user(_ requestId: String?) -> ACPMessage {
+            .user(id: UUID(), text: "hi", attachments: requestId.map { [.fileChangeReportReference(requestId: $0)] } ?? [])
+        }
+
+        transcript.appendMessage(user("first"))
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == 0)
+
+        transcript.insertMessage(.systemNotice(id: UUID(), text: "earlier"), at: 0)
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == 1)
+
+        transcript.replaceMessage(at: 1, with: user("second"))
+        #expect(transcript.fileChangeReportIndex(requestId: "first") == nil)
+        #expect(transcript.fileChangeReportIndex(requestId: "second") == 1)
+
+        transcript.replaceMessage(at: 1, with: user(nil))
+        #expect(transcript.fileChangeReportIndex(requestId: "second") == nil)
+
+        transcript.messages = [.systemNotice(id: UUID(), text: "a"), .systemNotice(id: UUID(), text: "b"), user("rebuilt")]
+        #expect(transcript.fileChangeReportIndex(requestId: "rebuilt") == 2)
+
+        // A checkpoint's writer leaves the report alone.
+        let turn = UUID(), checkpoint = UUID()
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        transcript.appendMessage(.user(id: turn, text: "hi", attachments: [reference]))
+        #expect(session.attachCheckpoint(checkpoint, toUserMessage: turn))
+        #expect(transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 3)
+        guard case .user(_, _, _, let attachments, _, _) = transcript.messages[3] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(Set(attachments) == [reference, .checkpointReference(id: checkpoint)])
+    }
+
+    enum ReportLandingOrder: CaseIterable, Sendable {
+        case checkpointThenReport, reportThenCheckpoint, reportThenSymbolSnapshots
+    }
+
+    @Test(arguments: ReportLandingOrder.allCases)
+    func checkpointAndReportLandInEitherOrder(order: ReportLandingOrder) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.agentFileChangeReport = .init()
+        let target = ACPSymbolReference.Target(path: "A.swift", name: "run", kind: .function,
+                                               container: nil, lineRange: 0...0, includeCode: true)
+        let uri = ACPSymbolReference.uri(for: target)
+        func expansion(_ source: String) -> ACPSymbolReference.Expansion {
+            ACPSymbolReference.expansion(of: [.resourceLink(uri: uri, name: "run()")], sources: ["A.swift": source],
+                                         worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true)
+        }
+        let id = session.recordUserPrompt(
+            text: "@run() ",
+            attachments: ACPSymbolReference.attachingSnapshots(to: [.init(uri: uri, name: "run()")], from: expansion("func run() {}"))
+                + [try FileChangeReportRowCase.reference(nil)])
+        let checkpoint = UUID()
+
+        switch order {
+        case .checkpointThenReport:
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+        case .reportThenCheckpoint:
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+        case .reportThenSymbolSnapshots:
+            #expect(session.attachCheckpoint(checkpoint, toUserMessage: id))
+            #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+            #expect(session.replaceSymbolSnapshots(inUserMessage: id, from: expansion("// moved\nfunc run() {}")) == 0)
+        }
+
+        let row = session.transcript.messages[0]
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: ACPMessageCodec.encode(row))
+        let report = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        for message in [row, decoded] {
+            guard case .user(_, _, _, let attachments, _, _) = message else {
+                Issue.record("expected the user row")
+                return
+            }
+            #expect(attachments.first { $0.isCheckpointReference }?.checkpointID == checkpoint)
+            #expect(attachments.first { $0.fileChangeReportRequestId != nil } == report)
+            #expect(attachments.first { $0.symbol != nil }?.symbol?.lineRange == (order == .reportThenSymbolSnapshots ? 1...1 : 0...0))
+        }
+        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+    }
+
+    enum FileChangeReportTurnRow: String, CaseIterable, CustomTestStringConvertible {
+        case latestWhileStreaming, latestWhileIdle, olderWhileNewerStreams, latestWithLaterSteeredRow
+        /// Restored after a relaunch: the transcript stays idle until attach applies the broker's state.
+        case latestWithRestoredDirectTurn, latestWithHeldInterruption, olderWhileNewerIsRestored
+        /// A prompt still waiting its turn says nothing about the row's turn.
+        case latestWithPendingQueueItem
+        var testDescription: String { rawValue }
+    }
+
+    @Test(arguments: FileChangeReportTurnRow.allCases)
+    func fileChangeReportTurnIsActive(row: FileChangeReportTurnRow) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        func user(_ requestId: String?) -> ACPMessage {
+            .user(id: UUID(), text: "go", attachments: requestId.map { [.fileChangeReportReference(requestId: $0)] } ?? [])
+        }
+        var messages = [user("alas-turn:a")]
+        switch row {
+        case .olderWhileNewerStreams, .olderWhileNewerIsRestored: messages.append(user("alas-turn:b"))
+        case .latestWithLaterSteeredRow: messages.append(user(nil))
+        default: break
+        }
+        session.replaceTranscriptMessages(messages)
+        switch row {
+        case .latestWhileStreaming, .olderWhileNewerStreams, .latestWithLaterSteeredRow:
+            session.transcript.streamingState = .streaming
+        case .latestWithRestoredDirectTurn, .olderWhileNewerIsRestored:
+            session.directTurnInFlight = true
+        case .latestWithHeldInterruption:
+            session.queue = [QueuedPrompt(blocks: [.text("go")], awaitingInterruptionResume: true)]
+        case .latestWithPendingQueueItem:
+            session.queue = [QueuedPrompt(blocks: [.text("next")])]
+        case .latestWhileIdle:
+            break
+        }
+
+        let expected = [.latestWhileStreaming, .latestWithLaterSteeredRow, .latestWithRestoredDirectTurn, .latestWithHeldInterruption]
+            .contains(row)
+        #expect(session.isFileChangeReportTurnActive(requestId: "alas-turn:a") == expected)
+    }
+
     // MARK: - Failure incidents
+
+    @Test(arguments: FileChangeReportDecision.all)
+    func fileChangeReportDecisions(row: FileChangeReportDecision) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        if row.negotiated { session.agentFileChangeReport = .init() }
+        let rowId = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_000)
+        session.transcript.replaceMessages(
+            with: [.user(id: rowId, text: "hello", attachments: [try FileChangeReportRowCase.reference(row.seed)])],
+            createdAts: [createdAt])
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        session.turnFailure = "earlier failure"
+        session.lastError = "earlier error"
+        session.enqueue(blocks: [.text("next")])
+        let queue = session.queue
+        let usageLimit = ACPUsageLimit(detectedAt: createdAt, resetsAt: nil, resetSource: .unknown, probeAttempt: 0, resettable: true)
+        session.usageLimit = usageLimit
+
+        let dirty = session.applyFileChangeReportUpdate(row.info)
+
+        #expect(dirty == (row.writes ? [0] : []))
+        guard case .user(let id, _, let text, let attachments, _, _) = session.transcript.messages[0] else {
+            Issue.record("expected the user row")
+            return
+        }
+        #expect(id == rowId)
+        #expect(text == "hello")
+        #expect(session.transcript.createdAt(forMessageAt: 0) == createdAt)
+        #expect(attachments == [try FileChangeReportRowCase.reference(row.expected)])
+        #expect(session.transcript.fileChangeReportIndex(requestId: "alas-turn:a") == 0)
+        #expect(session.agentState == .ready)
+        #expect(session.transcript.streamingState == .streaming)
+        #expect(session.turnFailure == "earlier failure")
+        #expect(session.lastError == "earlier error")
+        #expect(session.queue == queue)
+        #expect(session.usageLimit == usageLimit)
+    }
+
+    @Test("a report landing after a successful turn keeps its next-prompt offer and recap")
+    func lateReportLeavesTheTurnsOfferEligible() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.agentFileChangeReport = .init()
+        session.agentState = .ready
+        let userID = UUID()
+        session.transcript.appendMessage(.user(id: userID, text: "Explain this", attachments: [try FileChangeReportRowCase.reference(nil)]))
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Here is the answer.")))
+        let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
+                                           promptID: session.allocatePromptID(), userMessageID: userID,
+                                           transcriptRevision: session.transcript.conversationRevision)
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isEnabled = true
+        environment.hasVerifiedModel = true
+        environment.isRuntimeAvailable = true
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+        let offer = try #require(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment))
+        let recap = SessionSummarySourceRevision.current(session: session, composer: session.composer)
+        let uiGeneration = session.transcript.messagesGeneration
+        var activity = 0
+        var published = 0
+        let observations = [
+            session.nextPromptActivity.sink { activity += 1 },
+            session.transcript.willChange.sink { published += 1 },
+        ]
+
+        #expect(session.applyFileChangeReportUpdate(fileChangeReportInfo()) == [0])
+
+        #expect(activity == 0, "activity would invalidate the offer for good")
+        #expect(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)?.id == offer.id)
+        #expect(SessionSummarySourceRevision.current(session: session, composer: session.composer) == recap)
+        #expect(session.transcript.messagesGeneration != uiGeneration, "the row still reaches the UI")
+        #expect(published > 0)
+        withExtendedLifetime(observations) {}
+    }
 
     private func negotiatedSession() -> ACPSession {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -4490,6 +4697,76 @@ extension ACPSessionTests {
                   expectedPreview: "`cmd` ran successfully"),
         ]
     }
+
+    @Test("an incoming blob on a tool call keeps its name and type, not its bytes")
+    func toolCallBlobKeepsNoBytes() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let block = ACPContentBlock.blobResource(uri: "file:///tmp/tiny.pdf", mimeType: "application/pdf", blob: "QkxPQkJZVEVT")
+        session.apply(.toolCall(.init(toolCallId: "tc", title: "read", kind: "read", status: "completed", content: [.content(block)])))
+        session.apply(.toolCallUpdate(.init(toolCallId: "tc", content: [.content(block)])))
+        guard case .toolCall(let tc) = session.transcript.messages[0] else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        #expect(tc.assets == [.resource(uri: "file:///tmp/tiny.pdf", name: "tiny.pdf", mimeType: "application/pdf")])
+        #expect(tc.appliedItemsSnapshot == [.content(.blobResource(uri: "file:///tmp/tiny.pdf", mimeType: "application/pdf", blob: ""))])
+        let payload = try ACPMessageCodec.encode(session.transcript.messages[0])
+        #expect(!String(decoding: payload, as: UTF8.self).contains("QkxPQkJZVEVT"))
+    }
+
+    @Test("a restored row keeps its PDF when suppressed replay has only the link text")
+    func restoredRowKeepsPDFAttachmentUnderSuppressedReplay() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(uri: "file:///attachments/abc/tiny.pdf", name: "tiny.pdf")
+        let rows: [ACPMessage] = [.user(id: UUID(), text: "read this", attachments: [attachment])]
+        session.transcript.replaceMessages(with: rows)
+        session.beginSuppressedReplaySideEffects()
+        // The chunks Claude replays for a PDF blob: the text, then a link, no document.
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("read this"))).isEmpty)
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("[@tiny.pdf](file:///attachments/abc/tiny.pdf)"))).isEmpty)
+        #expect(session.transcript.messages == rows)
+    }
+}
+
+/// One row of the `applyFileChangeReportUpdate` decision table.
+struct FileChangeReportDecision: Sendable, CustomTestStringConvertible {
+    let testDescription: String
+    var negotiated = true
+    /// The report already on the row.
+    var seed: String?
+    let info: ACPSessionInfoUpdate
+    /// The report on the row afterwards.
+    var expected: String?
+    var writes = false
+
+    static let all: [FileChangeReportDecision] = {
+        let reported = FileChangeReportRowCase.reported
+        let unknownReason = #","status":"unavailable","reason":"brand_new""#
+        let noPaths = #","status":"reported","paths":[]"#
+        return [
+            .init(testDescription: "absent", info: .init(title: nil, metadata: AnyCodable(["other": AnyCodable(1)]))),
+            .init(testDescription: "not negotiated", negotiated: false, info: fileChangeReportInfo()),
+            .init(testDescription: "malformed", info: .init(title: nil, metadata: AnyCodable(["agentFileChangeReport": AnyCodable("boom")]))),
+            .init(testDescription: "no matching row", info: fileChangeReportInfo(requestId: "alas-turn:stale")),
+            .init(testDescription: "first report", info: fileChangeReportInfo(), expected: reported, writes: true),
+            .init(testDescription: "unknown reason", info: fileChangeReportInfo(unknownReason), expected: unknownReason, writes: true),
+            .init(testDescription: "empty list", info: fileChangeReportInfo(noPaths), expected: noPaths, writes: true),
+            .init(testDescription: "duplicate keeps the first", seed: reported, info: fileChangeReportInfo(noPaths), expected: reported),
+        ]
+    }()
+}
+
+/// A `session_info_update` carrying one file change report. `alongside` is more
+/// raw `_meta` members, each with its leading comma.
+func fileChangeReportInfo(
+    _ fields: String = FileChangeReportRowCase.reported,
+    requestId: String = "alas-turn:a",
+    version: Int = 1,
+    title: String? = nil,
+    alongside: String = ""
+) -> ACPSessionInfoUpdate {
+    let json = #"{"agentFileChangeReport":{"version":\#(version),"requestId":"\#(requestId)"\#(fields)}\#(alongside)}"#
+    return ACPSessionInfoUpdate(title: title, metadata: try! JSONDecoder().decode(AnyCodable.self, from: Data(json.utf8)))
 }
 
 /// A `session_info_update` carrying one failure record.

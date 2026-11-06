@@ -102,9 +102,16 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// Opens a plan document's file, by its path on the session's host. Not
     /// compared, like the other callbacks.
     var onOpenPlanFile: (String) -> Void = { _ in }
+    /// The control under a user row. Compared by title: the message covers
+    /// a report that lands, and the title covers a turn ending without one.
+    var reportedChanges: ACPReportedChangesPresentation?
+    /// Not compared, like the other callbacks.
+    var reportedChangesActions: ACPReportedChangesActions?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        guard lhs.messagePhase == rhs.messagePhase, lhs.isExpanded == rhs.isExpanded else { return false }
+        guard lhs.messagePhase == rhs.messagePhase, lhs.isExpanded == rhs.isExpanded,
+              lhs.reportedChanges?.title == rhs.reportedChanges?.title
+        else { return false }
         return equalityKey(
             stableId: lhs.stableId, message: lhs.message,
             messageCreatedAt: lhs.messageCreatedAt,
@@ -265,31 +272,37 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 onRestoreCheckpoint: onRestoreCheckpoint,
                 messageMenuItems: messageMenuItems
             ) {
-                if let card = ACPPromptCard.resolved(for: delegatedSource) {
-                    PromptCardRow(
-                        card: card, text: text, contentMaxWidth: contentMaxWidth, typography: typography,
-                        instructionExpanded: isExpanded, onInstructionExpandedChange: onExpandedChange)
-                } else if let delegatedSource {
-                    DelegatedPromptRow(
-                        text: text,
-                        label: delegatedLabel
-                            ?? ACPDelegatedPromptSource.transcriptLabel(for: delegatedSource, agentDisplayName: { $0 }),
-                        isFromChild: delegatedSource.isFromChild,
-                        contentMaxWidth: contentMaxWidth,
-                        typography: typography
-                    )
-                } else {
-                    UserMessageRow(
-                        text: text,
-                        attachments: attachments,
-                        symbolSnapshots: Self.symbolSnapshots(in: message),
-                        pastedSpans: pastedSpans,
-                        contentMaxWidth: contentMaxWidth,
-                        typography: typography,
-                        session: session,
-                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false),
-                        worktreeRoot: symbolPreviewRoot
-                    )
+                VStack(alignment: .leading, spacing: ACPTranscriptCoreTextRowView.reportedChangesTopSpacing) {
+                    if let card = ACPPromptCard.resolved(for: delegatedSource) {
+                        PromptCardRow(
+                            card: card, text: text, contentMaxWidth: contentMaxWidth, typography: typography,
+                            instructionExpanded: isExpanded, onInstructionExpandedChange: onExpandedChange)
+                    } else if let delegatedSource {
+                        DelegatedPromptRow(
+                            text: text,
+                            label: delegatedLabel
+                                ?? ACPDelegatedPromptSource.transcriptLabel(for: delegatedSource, agentDisplayName: { $0 }),
+                            isFromChild: delegatedSource.isFromChild,
+                            contentMaxWidth: contentMaxWidth,
+                            typography: typography
+                        )
+                    } else {
+                        UserMessageRow(
+                            text: text,
+                            attachments: attachments,
+                            symbolSnapshots: Self.symbolSnapshots(in: message),
+                            pastedSpans: pastedSpans,
+                            contentMaxWidth: contentMaxWidth,
+                            typography: typography,
+                            session: session,
+                            chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false),
+                            worktreeRoot: symbolPreviewRoot
+                        )
+                    }
+                    if let reportedChanges, let reportedChangesActions {
+                        ACPReportedChangesButton(presentation: reportedChanges, actions: reportedChangesActions)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
             }
         case .agent(_, _, let buf):

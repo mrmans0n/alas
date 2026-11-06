@@ -879,3 +879,100 @@ Automated independent-store managers and real helper processes exercise the
 ownership, replication, and process-fencing mechanisms. They do not establish
 a visual result on two physical Macs. The checklist above remains the live
 two-Mac acceptance gate when that fixture is available.
+
+## Delegating to another machine
+
+These checks need two Macs running Alas, or one Mac and a headless host,
+paired and reachable on a LAN or tailnet. CI has no two-machine setup, so they
+stay pending until someone runs them. The UI built for this
+has not been seen by its author: check the tab, the sidebar row, the Settings
+row and the child row by eye, along with the steps below.
+
+1. On the target, open Settings > Remote > Peers. Confirm the paired Mac's row
+   shows *Let agents on this Mac use this machine*, set to Off. On a Mac with
+   no local device record for that peer, the control is disabled and says "Pair
+   again to allow this". On a headless host, `alas-host peers list` shows
+   `agents: off`.
+2. On the source, in a root agent session, run `agent_list`. Confirm `peers`
+   lists the target as online with `supports_delegation` true. Run
+   `alas agent list --peer <name>`: `access` is `off`. Then
+   `alas session new --peer <name> --worktree <name> --prompt "hi"` must fail
+   and start nothing.
+3. Set access to Ask for approval (`alas-host peers agents <name> ask` on a
+   host). Repeat step 2: `agent_list --peer` lists matching projects and
+   worktrees, and `session_new` starts a child. Confirm the child exists on the
+   target with "From <source>" on its tab, its sidebar row, and in the peer view
+   on the source.
+4. On the source, confirm the parent's toolbar shows a menu "on <target>"
+   (with a count when several children went there) listing each child by agent,
+   short id and state, running first and failed or closed last, at most ten.
+   Choose one: the child opens in the peer view. Disconnect the target (turn
+   Remote off there) and click again: Alas says the Mac is not connected and
+   stays where it is.
+5. Let the child finish. Confirm the parent wakes once with a card that names
+   the target and carries the child's final message. Confirm the child has no
+   `session_send` to the parent, and that it lacks `session_new`, `session_wait`,
+   `computer_*`, `vm_*`, `device_*`, `preview_*`, `open`, `worktree_*` and
+   `workspace_*`.
+6. With the child's permission mode asking, make it request a permission. Confirm
+   the target shows the request, only a person there can answer it, and the
+   source gets a macOS notification (when *Notify when AI harness needs input* is
+   on) that opens the child. Confirm the notice reaches the parent, and the later
+   wake does not post a second notification.
+7. Auto-run: with the parent auto-running and the target on Ask, the child must
+   not auto-run. Set the target to Allow auto-run: the child auto-runs. With the
+   target on Allow auto-run and the parent not auto-running, the child must not.
+8. `--new-worktree` freshness: with uncommitted changes, an unpushed commit, or
+   no upstream, `session_new --peer … --new-worktree x` without `--base` must
+   fail and say to push or pass `--base`. Push, and it must start from that
+   commit. Push a further commit from another clone right before the child
+   starts: the child must fail with a reason on the SHA mismatch, not run on
+   older code. With `--base origin/main` the checks are skipped.
+9. Close the laptop (or turn Remote off on the target) during a turn, wait past
+   the end of that turn, and reopen. Confirm `session_wait` reported
+   `peer_unreachable` meanwhile, `session_read`, `session_send` and
+   `session_interrupt` named the Mac in their error, and on reconnect the outcome
+   is delivered once. After 15 minutes offline, with a child that the parent was
+   waiting on, confirm one notice (and no wake) arrives.
+10. Restart the source during a turn, then the target during a turn. In both
+    cases the parent gets one wake with the result, and no child is marked failed
+    only for the restart.
+11. Same app run, no restart: with a child running and its parent waiting on it
+    with `session_wait`, revoke the pairing on the target. Confirm the child is
+    failed with one wake and `session_wait` settles. Repeat by forgetting the
+    peer on the source: the children it was waiting on or starting fail the same
+    way.
+11a. Across a restart: with a child running that its parent is still owed a
+    result from, restart the source, then revoke (or forget) the target. The
+    child fails with one wake. Repeat with the target offline when the source
+    restarts: after 15 minutes the parent gets the notice from step 9. A child
+    whose outcome already arrived fails nothing and wakes nobody.
+12. Set access to Off during a turn. The turn finishes and reports back; new
+    `session_new` and `session_send` are refused; `session_read` and
+    `session_interrupt` still work.
+13. Re-pair with a child running. The new pairing starts at Off, the running
+    child still reports back to its parent, and no new child starts until access
+    is set again.
+14. Start a turn on the target in the child's own tab, as a person. Confirm the
+    parent gets that turn's outcome like it would from a local child.
+15. With a headless host as target, repeat steps 3, 5, 9 and 10 against it, and
+    confirm a child whose agent is not installed or signed in fails the child
+    with a reason instead of sitting idle.
+16. With a headless host as source, on a tailnet: pair a Mac with the host and
+    set `alas-host peers agents <mac> ask`. Then run
+    `alas-host peers add <pairing-link>` with a link from that Mac. Confirm that
+    `alas-host peers list` still shows `ask`, and that the Mac's row now shows
+    the host's access switch. Allow it, start an agent on the host, and repeat
+    steps 3, 5 and 9 from the host. Confirm a loopback-only host refuses the add
+    with a message about its address. Run the add once with the host as a launch
+    agent over the LAN, and note whether macOS lets it through.
+17. Remote turned on without a relaunch: quit with Remote off, launch, and turn
+    Remote on in Settings. Delegate to a peer, and confirm the parent wakes when
+    the child's turn ends. Turn Remote off and on again, delegate again, and
+    confirm the same wake, plus one for a turn that ended while Remote was off.
+18. An older build on a shared store: with a peer child running, open a release
+    from before delegation on the same data (Alas Dev and the release app share
+    it). Confirm it opens the store, which stays at schema 5, and note what it
+    does with the row whose parent is `peer:<serverId>` and the row carrying
+    `peer_server_id`: neither should run or fail there. Reopen this build and
+    confirm the child's outcome still reaches its parent once.

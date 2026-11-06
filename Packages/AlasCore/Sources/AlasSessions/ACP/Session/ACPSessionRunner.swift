@@ -1456,7 +1456,7 @@ public final class ACPSessionRunner {
                 info,
                 replaying: suppressingLoadReplay,
                 promptActive: activePromptID != nil
-            ))
+            )).union(session.applyFileChangeReportUpdate(info))
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
@@ -1914,17 +1914,25 @@ public final class ACPSessionRunner {
     }
 
     /// An update that writes nothing still acknowledges behind the queue: an
-    /// earlier update's row can be unwritten, and this ack would pass it.
+    /// earlier update's row can be unwritten, and this ack would pass it. One
+    /// update can carry a failure record and a report, and writing the row of
+    /// one says nothing about the row of the other, so each is checked even
+    /// when the other wrote.
     private func persistSessionInfoRows(
         _ dirty: Set<Int>,
         of update: ACPSessionUpdate,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         var rows = dirty
-        if dirty.isEmpty, acknowledgement != nil, session.sessionFailure != nil,
-           case .sessionInfoUpdate(let info) = update,
-           case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
-            rows = unconfirmedIncidentRow(id: record.id)
+        if acknowledgement != nil, case .sessionInfoUpdate(let info) = update {
+            if session.sessionFailure != nil,
+               case .record(let record) = ACPSessionFailureSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedIncidentRow(id: record.id))
+            }
+            if session.agentFileChangeReport != nil,
+               case .report(let report) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) {
+                rows.formUnion(unconfirmedRow(at: session.transcript.fileChangeReportIndex(requestId: report.requestId)))
+            }
         }
         if rows.isEmpty {
             acknowledgeBehindQueuedPersistence(acknowledgement)
@@ -1933,14 +1941,18 @@ public final class ACPSessionRunner {
         }
     }
 
-    /// A record that changes nothing can still be the redelivery of one whose
-    /// row never reached the store, because the in-memory row makes it a no-op.
-    /// Acknowledging it would move the cursor past that row, so unless this
-    /// runner's own write confirmed the row, it is written again. A row
+    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
+        unconfirmedRow(at: session.transcript.failureIncidentIndex(id: id))
+    }
+
+    /// A record or report that changes nothing can still be the redelivery of
+    /// one whose row never reached the store, because the in-memory row makes it
+    /// a no-op. Acknowledging it would move the cursor past that row, so unless
+    /// this runner's own write confirmed the row, it is written again. A row
     /// hydrated from the store, or trimmed from `lastPersistedPayloads`, is
     /// rewritten with the same bytes.
-    private func unconfirmedIncidentRow(id: String) -> Set<Int> {
-        guard let index = session.transcript.failureIncidentIndex(id: id),
+    private func unconfirmedRow(at index: Int?) -> Set<Int> {
+        guard let index,
               let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index])),
               lastPersistedPayloads[index] != payload
         else { return [] }
@@ -3219,6 +3231,10 @@ extension ACPSessionRunner {
     /// readable text resource links inside the worktree become ACP `resource`
     /// blocks. Persisted queue state stays lightweight either way.
     ///
+    /// A mention of this worktree's staged PDF becomes a blob, or throws an
+    /// `ACPPromptRefusal` naming the file: a link would be dead over SSH, and
+    /// silently losing the document is what attaching it was meant to avoid.
+    ///
     /// `nonisolated async` so the synchronous file reads + downscale/base64
     /// encoding (up to 10 × 20 MB) run off the main actor; awaiting it from the
     /// main-actor send path hops to the cooperative pool instead of freezing
@@ -3226,9 +3242,15 @@ extension ACPSessionRunner {
     public nonisolated static func hydrate(
         _ blocks: [ACPContentBlock],
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
-        worktreePath: String
-    ) async -> [ACPContentBlock] {
-        blocks.map { block in
+        worktreePath: String,
+        agentInfo: ACPImplementationInfo?,
+        attachmentsDirectory: URL
+    ) async throws(ACPPromptRefusal) -> [ACPContentBlock] {
+        let embeddedPDFs = try ACPAttachmentStaging.embeddedPDFBlocks(
+            in: blocks, agentInfo: agentInfo,
+            promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
+        return blocks.enumerated().map { index, block in
+            if let pdf = embeddedPDFs[index] { return pdf }
             if case .image(let data, let uri, _) = block, data == nil, let uri {
                 let name = (URL(string: uri)?.lastPathComponent) ?? "image"
                 if promptCapabilities.image,
@@ -3294,6 +3316,14 @@ extension ACPSessionRunner {
         }
     }
 
+    /// What would refuse `blocks` at send and can be known without reading a
+    /// file's bytes. Run it before anything a refusal could not undo.
+    private func preflightRefusal(of blocks: [ACPContentBlock]) -> ACPPromptRefusal? {
+        ACPAttachmentStaging.preflightRefusal(
+            of: blocks, agentInfo: session.agentInfo, promptCapabilities: session.promptCapabilities,
+            attachmentsDirectory: session.attachmentsDirectory)
+    }
+
     /// Replaces attached-session links with their context, resolved now so
     /// a queued prompt carries the session as it is when it is sent.
     private func expandingSessionReferences(_ blocks: [ACPContentBlock]) async -> [ACPContentBlock] {
@@ -3304,11 +3334,6 @@ extension ACPSessionRunner {
             contexts[id] = await sessionReferenceContext?(id)
         }
         return ACPSessionReference.replacingReferences(in: blocks, contexts: contexts, selfSessionId: sessionId)
-    }
-
-    /// Backwards-compatible helper for existing image-only tests.
-    public nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
-        await hydrate(blocks, promptCapabilities: .init(image: imageInputSupported), worktreePath: "/")
     }
 
     /// Primary entry. Resolves the routing then dispatches to one of:
@@ -3896,6 +3921,17 @@ extension ACPSessionRunner {
               session.queue[idx].status == .pending
         else { return }
         guard session.agentState == .ready else { return }
+        // Below, the item leaves the queue and a running turn may be cancelled.
+        if let refusal = preflightRefusal(of: session.queue[idx].blocks) {
+            if session.queue[idx].deliveryUncertain {
+                // Its `lastError` is what delivery reconciliation matches on.
+                session.lastError = "prompt failed: \(refusal.localizedDescription)"
+            } else {
+                session.queue[idx].lastError = refusal.errorDescription
+                persistQueue()
+            }
+            return
+        }
         if session.queue[idx].deliveryUncertain {
             guard session.retryQueueItem(id: id) else { return }
             persistQueue()
@@ -4001,6 +4037,14 @@ extension ACPSessionRunner {
                 recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,
                 recordedUserMessageID: recordedUserMessageID, draft: draft,
                 onDispatchRegistered: onDispatchRegistered, onPromptFinished: onPromptFinished)
+            return
+        }
+        // This path cancels the running turn, so refuse while it can still finish.
+        if let refusal = preflightRefusal(of: blocks) {
+            session.lastError = "prompt failed: \(refusal.localizedDescription)"
+            onDispatchRegistered?()
+            // On a later tick: the composer records its submit after this returns.
+            Task { @MainActor in onPromptFinished?(false) }
             return
         }
         turnPublicationGeneration += 1
@@ -4181,6 +4225,7 @@ extension ACPSessionRunner {
             var recordedMessagePersisted = durableQueueItem.item.transcriptRecorded
             var ownedContinuationStarted = false
             var steeringAcknowledgement: ACPDurableConsumptionAcknowledgement?
+            var refusal: ACPPromptRefusal?
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
                 if let self, !self.stopped, self.isConnectionCurrent() {
                     if succeeded {
@@ -4202,8 +4247,13 @@ extension ACPSessionRunner {
                         var item = durableQueueItem.item
                         item.transcriptRecorded = recordedMessagePersisted
                         item.status = .pending
-                        item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
-                        item.markDeliveryUncertain()
+                        if let refusal {
+                            // It never left Alas, so there is no delivery to doubt.
+                            item.lastError = refusal.errorDescription
+                        } else {
+                            item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
+                            item.markDeliveryUncertain()
+                        }
                         if let index = self.session.queue.firstIndex(where: { $0.id == item.id }) {
                             self.session.queue[index] = item
                         } else {
@@ -4239,10 +4289,15 @@ extension ACPSessionRunner {
                     of: blocks, worktreeRoot: URL(fileURLWithPath: self.worktreePath),
                     embeddedContext: self.session.promptCapabilities.embeddedContext)
                 var wireBlocks = ACPSymbolReference.replacingReferences(
-                    in: await self.expandingSessionReferences(Self.hydrate(
+                    in: try await self.expandingSessionReferences(Self.hydrate(
                         blocks, promptCapabilities: self.session.promptCapabilities,
-                        worktreePath: self.worktreePath)),
+                        worktreePath: self.worktreePath, agentInfo: self.session.agentInfo,
+                        attachmentsDirectory: self.session.attachmentsDirectory)),
                     with: symbolExpansion)
+                // Before the row. Context is measured again once it is fetched:
+                // that stays after the row, which must be saved before a slow
+                // plugin can suspend this delivery.
+                try ACPPromptSizeGuard.check(wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -4357,6 +4412,7 @@ extension ACPSessionRunner {
                 if self.session.readOnlyRestricted {
                     wireBlocks.insert(.text(ACPSideQuestion.guidance), at: context.count)
                 }
+                try ACPPromptSizeGuard.check(wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -4450,6 +4506,7 @@ extension ACPSessionRunner {
                         code: -32000, message: "The agent could not inject the follow-up.", data: nil))
                 }
             } catch {
+                refusal = error as? ACPPromptRefusal
                 if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
                     if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
                         // Method-not-found proves the content was not consumed.
@@ -4651,8 +4708,7 @@ extension ACPSessionRunner {
     ) {
         discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
-        session.clearRetryStatus()
-        clearRetryablePrompt()
+        let preflight = preflightRefusal(of: blocks)
         let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
@@ -4726,14 +4782,56 @@ extension ACPSessionRunner {
                 await abandonUnrecordedPrompt()
                 return
             }
+            // Hydrated off-main, before the row, the checkpoint and the title:
+            // resending a refused prompt must not show it twice. What is only
+            // known once the row exists, like plugin context, is guarded after it.
+            var refusal = preflight
+            var hydratedBlocks: [ACPContentBlock] = []
+            if refusal == nil, self.activePromptID == promptID {
+                do throws(ACPPromptRefusal) {
+                    let hydrated = try await Self.hydrate(
+                        blocks,
+                        promptCapabilities: self.session.promptCapabilities,
+                        worktreePath: self.worktreePath,
+                        agentInfo: self.session.agentInfo,
+                        attachmentsDirectory: self.session.attachmentsDirectory
+                    )
+                    hydratedBlocks = ACPSymbolReference.replacingReferences(
+                        in: await self.expandingSessionReferences(hydrated),
+                        with: symbolExpansion)
+                    try ACPPromptSizeGuard.check(hydratedBlocks)
+                } catch {
+                    refusal = error
+                }
+                guard await self.hasConfirmedLeaseForSideEffect() else {
+                    await abandonUnrecordedPrompt()
+                    return
+                }
+            }
+            // A prompt no longer current falls through to the checks below,
+            // which end it without touching state.
+            if let refusal, self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent() {
+                // As a failed turn does, so a wait and the sidebar see it.
+                self.session.turnFailure = refusal.localizedDescription
+                if queuedItemId != nil {
+                    self.session.setQueueHeadError(refusal.localizedDescription)
+                    self.persistQueue()
+                } else {
+                    self.session.lastError = "prompt failed: \(refusal.localizedDescription)"
+                }
+                await abandonUnrecordedPrompt()
+                self.onPromptWorkChanged?()
+                self.flushQueueIfIdle()
+                return
+            }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
-            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?) in
+            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?) in
                 // Stopped, or its connection replaced, while symbol mentions
                 // resolved: this prompt is over and must not be recorded.
                 if self.activePromptID == promptID, self.stopped || !self.isConnectionCurrent() {
                     abandonUnrecordedPrompt()
-                    return (false, nil)
+                    return (false, nil, nil)
                 }
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -4748,8 +4846,12 @@ extension ACPSessionRunner {
                        !self.steerInProgress, self.activePromptID == nil {
                         onPromptFinished?(false)
                     }
-                    return (false, nil)
+                    return (false, nil, nil)
                 }
+                // Only now that nothing can refuse it before the row: a refused
+                // prompt starts no turn, so the Retry of an earlier failed one stands.
+                self.session.clearRetryStatus()
+                self.clearRetryablePrompt()
                 // A queued prompt whose turn already started (its user prompt
                 // is recorded) keeps that start: this is a resend of the same
                 // turn, e.g. after a relaunch re-attached to a broker that
@@ -4769,6 +4871,15 @@ extension ACPSessionRunner {
                 // RPC is sent below, so any agent chunk that follows is genuine
                 // new output — N+1 bubble creation is correct from here on.
                 self.session.allowsStreamingBoundaryCrossing = true
+                // A queued id was decided and saved when the head was marked.
+                // A direct send has no reused key, so a fresh id is always safe.
+                let fileChangeReportRequestId: String? = if let queuedItemId {
+                    self.session.queue.first { $0.id == queuedItemId }?.fileChangeReportRequestId
+                } else if self.session.agentFileChangeReport != nil, recordUserPrompt || recordedUserMessageID != nil {
+                    ACPAgentFileChangeReportRequest.newRequestId()
+                } else {
+                    nil
+                }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -4805,7 +4916,7 @@ extension ACPSessionRunner {
                     self.persistQueue()
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, nil)
+                    return (true, nil, fileChangeReportRequestId)
                 }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
@@ -4815,10 +4926,13 @@ extension ACPSessionRunner {
                         self.onResumeTranscriptTail?()
                     }
                     let promptText = Self.textPreview(of: blocks)
+                    // On the row from its first write: a checkpoint attaches in a
+                    // later one, too late for a report that overtakes it.
+                    let reportReference = fileChangeReportRequestId.map { [ACPMessage.Attachment.fileChangeReportReference(requestId: $0)] } ?? []
                     let messageID = self.session.recordUserPrompt(text: promptText,
                                                                   attachments: ACPSymbolReference.attachingSnapshots(
                                                                       to: Self.attachments(of: blocks, draft: draft),
-                                                                      from: symbolExpansion),
+                                                                      from: symbolExpansion) + reportReference,
                                                                   pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
@@ -4849,17 +4963,26 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, messageID)
+                    return (true, messageID, fileChangeReportRequestId)
                 }
                 let recordedID = recordedUserMessageID
                     ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
-                if let recordedID,
-                   let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
-                    self.persistIndices([index])
+                if let recordedID {
+                    var changed = Set<Int>()
+                    if let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
+                        changed.insert(index)
+                    }
+                    if let fileChangeReportRequestId,
+                       let index = self.session.bindFileChangeReportRequest(fileChangeReportRequestId, toUserMessage: recordedID) {
+                        changed.insert(index)
+                    }
+                    if !changed.isEmpty {
+                        self.persistIndices(changed)
+                    }
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                return (true, nil)
+                return (true, nil, fileChangeReportRequestId)
             }
             guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
@@ -4875,9 +4998,6 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                // Read the capability flags on the main actor (cheap), then
-                // hydrate off-main so file reads + encoding don't block UI.
-                let promptCapabilities = self.session.promptCapabilities
                 let pendingPreamble = self.session.pendingMCPPreamble
                 let pendingForkContext: String? = {
                     guard let fork = self.session.forkRecord,
@@ -4890,13 +5010,7 @@ extension ACPSessionRunner {
                         messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
                     )
                 }()
-                var wireBlocks = ACPSymbolReference.replacingReferences(
-                    in: await self.expandingSessionReferences(Self.hydrate(
-                        blocks,
-                        promptCapabilities: promptCapabilities,
-                        worktreePath: self.worktreePath
-                    )),
-                    with: symbolExpansion)
+                var wireBlocks = hydratedBlocks
                 // Wire-only context is prepended for the agent and never part
                 // of the recorded transcript — recording above used `blocks`.
                 var privateBlocks: [ACPContentBlock] = []
@@ -4905,6 +5019,12 @@ extension ACPSessionRunner {
                 for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
                 if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
+                do {
+                    try ACPPromptSizeGuard.check(wireBlocks, forkContext: pendingForkContext)
+                } catch {
+                    onDispatchRegistered?()
+                    throw error
+                }
                 // A queued turn is found at launch by its `.sending` row, saved
                 // before dispatch; a direct one needs its marker saved just as
                 // durably before the prompt can reach the agent. Set after the
@@ -4972,6 +5092,7 @@ extension ACPSessionRunner {
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
+                    fileChangeReportRequestId: promptRecording.fileChangeReportRequestId,
                     onRequestHandoff: onDispatchRegistered,
                     onTransportHandoff: { [weak self, promptHandoffs] in
                         promptHandoffs.mark(promptID)
@@ -5165,7 +5286,7 @@ extension ACPSessionRunner {
                                     incarnation: self.session.incarnation,
                                     promptID: promptID,
                                     userMessageID: userMessageID,
-                                    transcriptRevision: self.session.transcript.messagesGeneration
+                                    transcriptRevision: self.session.transcript.conversationRevision
                                 )
                             }
                         )
@@ -5291,6 +5412,10 @@ extension ACPSessionRunner {
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
         guard !nativeForkBarrierActive, !session.holdsPromptsForDelegatedSelection else { return false }
+        guard (try? ACPPromptSizeGuard.check([.text(prompt)])) != nil else {
+            session.contextRecoveryStatus = .failed("The conversation is too large to send as context.")
+            return false
+        }
         turnPublicationGeneration += 1
         discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()
@@ -5447,6 +5572,9 @@ extension ACPSessionRunner {
             if case .resource(let uri, _, _) = b {
                 return ACPMessage.Attachment(uri: uri, name: URL(string: uri)?.lastPathComponent)
             }
+            if case .blobResource(let uri, _, _) = b {
+                return ACPMessage.Attachment(uri: uri, name: URL(string: uri)?.lastPathComponent)
+            }
             if case .image(_, let uri, let mime) = b, let uri {
                 let name = URL(string: uri)?.lastPathComponent
                 let offset = offsets.isEmpty ? nil : offsets.removeFirst()
@@ -5539,7 +5667,7 @@ extension ACPSessionRunner {
                 incarnation: turn.incarnation,
                 promptID: turn.promptID,
                 userMessageID: turn.userMessageID,
-                transcriptRevision: self.session.transcript.messagesGeneration
+                transcriptRevision: self.session.transcript.conversationRevision
             ))
         }
 #if DEBUG

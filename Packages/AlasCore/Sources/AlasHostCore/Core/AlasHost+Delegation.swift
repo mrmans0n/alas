@@ -21,9 +21,9 @@ public struct DelegationAPI {
     let core: AlasCoreContext
 
     /// The agents the caller can delegate to in its worktree or `worktree`.
-    public func agents(worktree: String?, caller: HostCaller) async -> AlasCLIResponse {
+    public func agents(worktree: String?, peer: String? = nil, caller: HostCaller) async -> AlasCLIResponse {
         guard let origin = origin(of: caller) else { return Self.noOrigin }
-        return await core.orchestration.discoverAgents(origin: origin, worktree: worktree)
+        return await core.orchestration.discoverAgents(origin: origin, worktree: worktree, peer: peer)
     }
 
     /// The caller's parent and children.

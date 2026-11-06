@@ -6,7 +6,7 @@ public struct ShepherdDefaults: Codable, Equatable, Sendable {
     public var autoFix: Bool = true
     public var autoMerge: Bool = false
     public var archiveAfterMerge: Bool = false
-    /// Fix prompts a PR gets before the shepherd escalates.
+    /// Fix prompts per unresolved problem before the shepherd escalates.
     public var maxFixAttempts: Int = Self.defaultMaxFixAttempts
 
     public static let defaultMaxFixAttempts = 3

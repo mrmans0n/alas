@@ -61,7 +61,7 @@ extension ACPTranscriptCoreTextRowView {
         let (button, elements, links, labels, copies) = MainActor.assumeIsolated {
             (
                 actionsButton as NSButton?, textAccessibilityElements(), linkAccessibilityElements(),
-                codeLabelAccessibilityElements(), codeCopyAccessibilityElements()
+                codeLabelAccessibilityElements(), codeCopyAccessibilityElements() + reportedChangesAccessibilityElements()
             )
         }
         if let button, !children.contains(where: { $0 as AnyObject === button }) { children.append(button) }
@@ -82,7 +82,7 @@ extension ACPTranscriptCoreTextRowView {
                 if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) {
                     return (actionsButton, nil, nil, nil, nil)
                 }
-                if let copy = codeCopyAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
+                if let copy = (codeCopyAccessibilityElements() + reportedChangesAccessibilityElements()).first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
                     return (nil, copy, nil, nil, nil)
                 }
                 if let label = codeLabelAccessibilityElement(at: local) {
@@ -187,6 +187,21 @@ extension ACPTranscriptCoreTextRowView {
             )
         }
         return codeCopyElements
+    }
+
+    /// The drawn "Reported changes" control as a button named by its title.
+    func reportedChangesAccessibilityElements() -> [ACPTranscriptCodeCopyAccessibilityElement] {
+        guard actions.reportedChanges != nil, case .user(_, let title?) = content, bounds.width > 0 || lastMeasuredWidth != nil,
+              let rect = layout(forWidth: bounds.width > 0 ? bounds.width : lastMeasuredWidth ?? 0).reportedChangesRect
+        else { return [] }
+        let element = reportedChangesElement ?? ACPTranscriptCodeCopyAccessibilityElement(label: title) { [weak self] in
+            guard let self else { return }
+            presentReportedChanges(self)
+        }
+        element.setAccessibilityParent(self)
+        element.setAccessibilityFrameInParentSpace(rect)
+        reportedChangesElement = element
+        return [element]
     }
 
     private func textAccessibilityElements() -> [ACPTranscriptTextAccessibilityElement] {

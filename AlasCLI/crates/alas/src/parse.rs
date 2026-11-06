@@ -23,9 +23,9 @@ usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|resize|wait|cancel> ...
 usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ... [--vm macos|linux]
-usage: alas agent list [--worktree <name-or-branch>]
+usage: alas agent list [--worktree <name-or-branch>] [--peer <name-or-server-id>]
 usage: alas session list
-usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
+usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]] [--peer <name-or-server-id> [--project <id-or-name>]]
 usage: alas session send <session-id> <prompt>
 usage: alas session read <session-id> [--offset <n>] [--limit <1...100>] [--max-chars <1...100000>]
 usage: alas session search <query> [--limit <1...100>]
@@ -774,14 +774,32 @@ fn validated_uuid(value: &str) -> Result<String, String> {
 }
 
 fn parse_agent(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas agent list [--worktree <name-or-branch>]";
-    match args {
-        ["list"] => Ok(Command::AgentList { worktree: None }),
-        ["list", "--worktree", worktree] if !worktree.trim().is_empty() => Ok(Command::AgentList {
-            worktree: Some(worktree.to_string()),
-        }),
-        _ => Err(USAGE.into()),
+    const USAGE: &str =
+        "usage: alas agent list [--worktree <name-or-branch>] [--peer <name-or-server-id>]";
+    if args.first() != Some(&"list") {
+        return Err(USAGE.into());
     }
+    let mut worktree = None;
+    let mut peer = None;
+    let mut i = 1;
+    while i < args.len() {
+        let value = match args[i] {
+            "--worktree" => &mut worktree,
+            "--peer" => &mut peer,
+            _ => return Err(USAGE.into()),
+        };
+        if value.is_some() {
+            return Err(USAGE.into());
+        }
+        i += 1;
+        let Some(argument) = flag_value(args, i).filter(|argument| !argument.trim().is_empty())
+        else {
+            return Err(USAGE.into());
+        };
+        *value = Some(argument.to_string());
+        i += 1;
+    }
+    Ok(Command::AgentList { worktree, peer })
 }
 
 fn parse_session(args: &[&str]) -> Result<Command, String> {
@@ -897,7 +915,7 @@ fn parse_session_wait(args: &[&str]) -> Result<Command, String> {
 }
 
 fn parse_session_new(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
+    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]] [--peer <name-or-server-id> [--project <id-or-name>]]";
     let mut prompt = None;
     let mut agent = None;
     let mut model = None;
@@ -906,9 +924,13 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
     let mut existing_worktree = None;
     let mut new_worktree = None;
     let mut base = None;
+    let mut peer = None;
+    let mut project = None;
     let mut i = 0;
     while i < args.len() {
         let value = match args[i] {
+            "--peer" => &mut peer,
+            "--project" => &mut project,
             "--prompt" => &mut prompt,
             "--agent" => &mut agent,
             "--model" => &mut model,
@@ -937,6 +959,9 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
     if base.is_some() && new_worktree.is_none() {
         return Err(USAGE.into());
     }
+    if project.is_some() && peer.is_none() {
+        return Err(USAGE.into());
+    }
     let worktree = match (existing_worktree, new_worktree) {
         (Some(worktree), None) => alas_client::SessionWorktreeTarget::Existing { worktree },
         (None, Some(branch)) => alas_client::SessionWorktreeTarget::New { branch, base },
@@ -950,6 +975,8 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
         model,
         reasoning,
         role,
+        peer,
+        project,
     })
 }
 
@@ -2147,7 +2174,10 @@ mod tests {
     fn session_commands_parse_and_validate() {
         assert_eq!(
             parse(&s(&["agent", "list"]), Path::new("/b")).unwrap(),
-            Command::AgentList { worktree: None }
+            Command::AgentList {
+                worktree: None,
+                peer: None
+            }
         );
         assert_eq!(
             parse(
@@ -2156,7 +2186,15 @@ mod tests {
             )
             .unwrap(),
             Command::AgentList {
-                worktree: Some("feature".into())
+                worktree: Some("feature".into()),
+                peer: None
+            }
+        );
+        assert_eq!(
+            parse(&s(&["agent", "list", "--peer", "mini"]), Path::new("/b")).unwrap(),
+            Command::AgentList {
+                worktree: None,
+                peer: Some("mini".into())
             }
         );
         for invalid in [
@@ -2164,6 +2202,8 @@ mod tests {
             ["agent", "list", "--all"].as_slice(),
             ["agent", "list", "--worktree"].as_slice(),
             ["agent", "list", "--worktree", " "].as_slice(),
+            ["agent", "list", "--peer"].as_slice(),
+            ["session", "new", "--prompt", "p", "--project", "alas"].as_slice(),
         ] {
             assert!(parse(&s(invalid), Path::new("/b")).is_err());
         }
@@ -2199,6 +2239,8 @@ mod tests {
                 model: Some("gpt-5.2".into()),
                 reasoning: Some("high".into()),
                 role: None,
+                peer: None,
+                project: None,
             }
         );
         assert_eq!(
@@ -2226,6 +2268,39 @@ mod tests {
                 model: None,
                 reasoning: None,
                 role: None,
+                peer: None,
+                project: None,
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&[
+                    "session",
+                    "new",
+                    "--peer",
+                    "mini",
+                    "--project",
+                    "alas",
+                    "--new-worktree",
+                    "b",
+                    "--prompt",
+                    "p",
+                ]),
+                Path::new("/b"),
+            )
+            .unwrap(),
+            Command::SessionNew {
+                prompt: "p".into(),
+                agent: None,
+                worktree: alas_client::SessionWorktreeTarget::New {
+                    branch: "b".into(),
+                    base: None
+                },
+                model: None,
+                reasoning: None,
+                role: None,
+                peer: Some("mini".into()),
+                project: Some("alas".into()),
             }
         );
         assert_eq!(

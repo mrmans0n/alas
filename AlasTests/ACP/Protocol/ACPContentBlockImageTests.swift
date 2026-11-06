@@ -49,4 +49,28 @@ struct ACPContentBlockImageTests {
         let decoded = try JSONDecoder().decode(ACPContentBlock.self, from: data)
         #expect(decoded == block)
     }
+
+    @Test("round-trips an embedded blob resource as a resource with blob and no text")
+    func roundTripsBlobResource() throws {
+        let block = ACPContentBlock.blobResource(uri: "file:///tmp/a.pdf", mimeType: "application/pdf", blob: "QUJD")
+        let data = try JSONEncoder().encode(block)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let resource = try #require(json["resource"] as? [String: Any])
+        #expect(json["type"] as? String == "resource")
+        #expect(resource["uri"] as? String == "file:///tmp/a.pdf")
+        #expect(resource["mimeType"] as? String == "application/pdf")
+        #expect(resource["blob"] as? String == "QUJD")
+        #expect(resource["text"] == nil)
+        #expect(try JSONDecoder().decode(ACPContentBlock.self, from: data) == block)
+    }
+
+    @Test("a resource keeps its text shape, and one with neither field stays a link", arguments: [
+        (#"{"uri":"file:///a/b.txt","text":"hi"}"#, ACPContentBlock.resource(uri: "file:///a/b.txt", mimeType: nil, text: "hi")),
+        (#"{"uri":"file:///a/b.txt","text":"hi","blob":"QUJD"}"#, ACPContentBlock.resource(uri: "file:///a/b.txt", mimeType: nil, text: "hi")),
+        (#"{"uri":"file:///a/b.txt"}"#, ACPContentBlock.resourceLink(uri: "file:///a/b.txt", name: "b.txt")),
+    ])
+    func decodesExistingResourceShapes(resource: String, expected: ACPContentBlock) throws {
+        let json = Data(#"{"type":"resource","resource":\#(resource)}"#.utf8)
+        #expect(try JSONDecoder().decode(ACPContentBlock.self, from: json) == expected)
+    }
 }

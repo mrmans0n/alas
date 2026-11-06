@@ -227,6 +227,28 @@ struct ACPMessageWireTests {
         #expect(refreshed.first?.symbol?.lineRange == 10...12)
     }
 
+    @Test("a landed report rebuilds the row with its identity, and an unchanged one returns it as is")
+    func landedReportRebuildsRowKeepingIdentity() throws {
+        let id = UUID()
+        let requested: ACPMessage.Attachment = .fileChangeReportReference(requestId: "alas-turn:a")
+        let landed = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let existing: ACPMessage = .user(id: id, messageId: "m", text: "hi", attachments: [requested])
+        func wire(_ attachment: ACPMessage.Attachment) -> ACPMessageWire {
+            .user(messageId: "m", text: "hi", attachments: [attachment], delegatedSource: nil)
+        }
+
+        let rebuilt = wire(landed).toMessage(preservingIdentityFrom: existing)
+
+        #expect(rebuilt != existing)
+        guard case .user(let rebuiltID, _, _, let attachments, _, _) = rebuilt else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(rebuiltID == id)
+        #expect(attachments.first?.fileChangeReport?.paths == ["/a", "/b"])
+        #expect(wire(requested).toMessage(preservingIdentityFrom: existing) == existing)
+    }
+
     @Test func failureIncidentWireMatchesCodec() throws {
         let incident = try ACPFailureIncident.fixture(details: "Details", actions: ["retry", "future"], endedTurn: true)
         let message = ACPMessage.failureIncident(id: UUID(), incident)

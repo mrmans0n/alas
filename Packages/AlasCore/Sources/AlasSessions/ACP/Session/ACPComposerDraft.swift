@@ -267,7 +267,7 @@ extension ACPComposerDraft {
     public func matchesPersistedUserPrompt(text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         normalizedPromptBlocks == Self.contentBlocks(
             text: text,
-            attachments: attachments.filter { !$0.isCheckpointReference }
+            attachments: attachments.filter { !$0.isLocalReference }
         )
     }
 
@@ -369,7 +369,7 @@ extension ACPComposerDraft {
                 text += value
             case .resourceLink(let uri, let name):
                 links.append((name ?? Self.displayName(forURI: uri), uri))
-            case .resource(let uri, _, _):
+            case .resource(let uri, _, _), .blobResource(let uri, _, _):
                 links.append((Self.displayName(forURI: uri), uri))
             case .image(_, let uri, let mimeType):
                 if let uri {

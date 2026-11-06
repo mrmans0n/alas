@@ -12,6 +12,56 @@ final class InMemoryDeviceStore: RemoteDeviceStore {
 
 @MainActor
 struct RemotePairingServiceTests {
+    private func peerDevice(_ access: RemoteDeviceAgentAccess, kind: RemoteDeviceKind = .alasInstance) -> RemoteDevice {
+        var device = RemoteDevice(
+            id: "d1", name: "Studio", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+            kind: kind, peerServerId: "srv-b"
+        )
+        device.agentAccess = access
+        return device
+    }
+
+    @Test(arguments: [
+        (RemoteDeviceAgentAccess.off, PeerDelegationVerb.start, false),
+        (.off, .send, false), (.off, .discover, false),
+        (.off, .status, true), (.off, .read, true), (.off, .interrupt, true), (.off, .outbox, true),
+        (.ask, .start, true), (.autoRun, .send, true),
+    ])
+    func gateByAccessAndVerb(access: RemoteDeviceAgentAccess, verb: PeerDelegationVerb, allowed: Bool) {
+        #expect(PeerDelegationGate.allows(verb, device: peerDevice(access)) == allowed)
+    }
+
+    @Test func browserDeviceAndMissingDeviceAreRefused() {
+        for verb in PeerDelegationVerb.allCases {
+            #expect(!PeerDelegationGate.allows(verb, device: peerDevice(.autoRun, kind: .browser)))
+            #expect(!PeerDelegationGate.allows(verb, device: nil))
+        }
+    }
+
+    @Test(arguments: [(true, RemoteDeviceAgentAccess.autoRun, true), (true, .ask, false), (false, .autoRun, false), (true, .off, false)])
+    func effectiveAutoRunIsTheLowerOfBoth(parent: Bool, access: RemoteDeviceAgentAccess, expected: Bool) {
+        #expect(PeerDelegationGate.effectiveAutoRun(parent: parent, access: access) == expected)
+    }
+
+    @Test(arguments: [
+        #"{"id":"d","name":"n","tokenHash":"h","createdAt":0,"kind":"alasInstance"}"#,
+        #"{"id":"d","name":"n","tokenHash":"h","createdAt":0,"kind":"alasInstance","agentAccess":"someFutureValue"}"#,
+    ])
+    func deviceRecordWithoutKnownAccessDecodesAsOff(json: String) throws {
+        let device = try JSONDecoder().decode(RemoteDevice.self, from: Data(json.utf8))
+        #expect(device.agentAccess == .off)
+    }
+
+    @Test func agentAccessPersistsAndSurvivesReload() throws {
+        let store = InMemoryDeviceStore()
+        let svc = RemotePairingService(store: store)
+        let result = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
+        #expect(svc.device(id: result.deviceId)?.agentAccess == .off)
+        #expect(svc.setAgentAccess(.ask, deviceId: result.deviceId))
+        #expect(!svc.setAgentAccess(.ask, deviceId: "missing"))
+        #expect(RemotePairingService(store: store).device(id: result.deviceId)?.agentAccess == .ask)
+    }
+
     @Test func cancellingApprovedCounterCodeRevokesItsAlreadyRedeemedGrant() throws {
         let store = InMemoryDeviceStore()
         let service = RemotePairingService(store: store)

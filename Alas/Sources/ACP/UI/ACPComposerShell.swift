@@ -473,6 +473,14 @@ struct ACPComposer: View {
                     }
                 },
                 filesProvider: filesProvider,
+                pdfAttachments: pdfAttachments,
+                onAttachmentNotice: { message in
+                    composerNotice = message
+                    // Longer than a single-error notice: it lists file names.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        if composerNotice == message { composerNotice = nil }
+                    }
+                },
                 nextPromptOffer: nextPromptOffer,
                 nextPromptAction: nextPromptAction,
                 takeNextPromptOffer: takeNextPromptOffer,
@@ -776,11 +784,23 @@ struct ACPComposer: View {
         )
     }
 
+    private var pdfAttachments: ACPComposerPDFAttachments {
+        ACPComposerPDFAttachments(
+            directory: session.attachmentsDirectory,
+            eligible: ACPEmbeddedPDFSupport.attachmentEligibility(
+                agentInfo: session.agentInfo,
+                promptCapabilities: session.promptCapabilities,
+                isConnected: session.agentState == .ready
+            )
+        )
+    }
+
     private var attachButton: some View {
-        Button {
+        let offersPDFs = pdfAttachments.eligible != false
+        return Button {
             actions.presentImagePicker?()
         } label: {
-            Image(systemName: "photo")
+            Image(systemName: offersPDFs ? "paperclip" : "photo")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
@@ -788,8 +808,8 @@ struct ACPComposer: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Attach image")
-        .help("Attach an image")
+        .accessibilityLabel(offersPDFs ? "Attach image or PDF" : "Attach image")
+        .help(offersPDFs ? "Attach an image or a PDF" : "Attach an image")
     }
 
     /// Route chip selections through manager-owned optimistic persistence and

@@ -20,6 +20,7 @@ extension ACPSession {
                 for a in atts {
                     total &+= UInt64(a.uri.utf8.count)
                     total &+= UInt64(a.name?.utf8.count ?? 0)
+                    for path in a.fileChangeReport?.paths ?? [] { total &+= UInt64(path.utf8.count) }
                 }
             case .agent(_, _, let buf), .thought(_, _, let buf):
                 total &+= UInt64(buf.value.utf8.count)

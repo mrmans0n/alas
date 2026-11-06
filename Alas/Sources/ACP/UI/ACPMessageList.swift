@@ -54,6 +54,7 @@ struct ACPMessageList: View {
     var failureIncidentActions: ACPFailureIncidentActions = .readOnly
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
+    var reportedChangesActions: ACPReportedChangesActions? = nil
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
@@ -110,7 +111,8 @@ struct ACPMessageList: View {
                 promptCardContext: promptCardContext,
                 visualAidActions: visualAidActions,
                 failureIncidentActions: failureIncidentActions,
-                onOpenPlanFile: onOpenPlanFile
+                onOpenPlanFile: onOpenPlanFile,
+                reportedChangesActions: reportedChangesActions
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail

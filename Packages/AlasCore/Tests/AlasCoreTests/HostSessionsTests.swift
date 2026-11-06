@@ -791,6 +791,33 @@ struct HostSessionsTests {
         #expect(fixture.host.sessions.list().isEmpty)
     }
 
+    /// A paired Mac's child names that Mac, from the device record rather than
+    /// the wire, and says "another Mac" once the Mac is forgotten. Its summary
+    /// still has no parent, and a local session has no marker.
+    @Test func summaryNamesThePeerAndSurvivesForgetting() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let child = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let local = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let devices = FileDeviceStore(url: fixture.root.appendingPathComponent("devices.json"))
+        devices.save([RemoteDevice(
+            id: "d1", name: "Studio", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+            kind: .alasInstance, peerServerId: "s1"
+        )])
+        let pairing = RemotePairingService(store: devices)
+        fixture.core.delegationPairing = { pairing }
+        fixture.core.rememberDelegatedSessionParent(childID: child, parentID: ACPPeerParent.sentinel(serverId: "s1"))
+
+        func summary(_ id: String) -> HostSessionSummary? { sessions.list().first { $0.id == id } }
+        #expect(summary(child)?.delegatedFromName == "Studio")
+        #expect(summary(child)?.parentID == nil)
+        #expect(summary(local)?.delegatedFromName == nil)
+
+        pairing.revoke(deviceId: "d1")
+        #expect(summary(child)?.delegatedFromName == "another Mac")
+    }
+
     /// Binding a shepherd changes no session row, yet subscribers see the pill.
     @Test func bindingAShepherdRepublishesTheSessionWithItsPill() async throws {
         let fixture = try Fixture()

@@ -466,6 +466,9 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     /// The session's shepherd pill; nil without a shepherd or from a host
     /// that predates them.
     public var shepherd: HostSessionShepherd? = nil
+    /// The paired Mac that delegated this session, named from this Mac's own
+    /// device record; nil for a session no paired Mac started.
+    public var delegatedFromName: String? = nil
 }
 
 extension HostSessionSummary {
@@ -484,6 +487,7 @@ extension HostSessionSummary {
         isWriter = try c.decode(Bool.self, forKey: .isWriter)
         parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
         shepherd = (try? c.decodeIfPresent(HostSessionShepherd.self, forKey: .shepherd)) ?? nil
+        delegatedFromName = (try? c.decodeIfPresent(String.self, forKey: .delegatedFromName)) ?? nil
     }
 }
 
@@ -514,7 +518,8 @@ public struct SessionsAPI {
             streamingState: core.reportedStreamingState(of: row.id, live: manager.runners[row.id]?.session.transcript.streamingState),
             isWriter: manager.isWriter(for: row.id),
             parentID: core.delegatedSessionParents[row.id],
-            shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd)
+            shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd),
+            delegatedFromName: core.delegatedFromName(of: row.id)
         )
     }
 }

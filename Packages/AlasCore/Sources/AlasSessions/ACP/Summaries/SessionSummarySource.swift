@@ -126,10 +126,16 @@ public struct SessionSummarySource: Equatable, Sendable {
 }
 
 extension SessionSummarySource.Event {
+    /// Whether these attachments keep a turn out of a recap. A report reference
+    /// never does; a checkpoint still does, deliberately.
+    private static func excludesTurn(_ attachments: [ACPMessage.Attachment]) -> Bool {
+        attachments.contains { $0.fileChangeReportRequestId == nil }
+    }
+
     package init(wire: ACPMessageWire) {
         switch wire {
         case .user(_, let text, let attachments, let delegatedSource, _):
-            self = .user(text: text, hasAttachments: !attachments.isEmpty, isDelegated: delegatedSource != nil)
+            self = .user(text: text, hasAttachments: Self.excludesTurn(attachments), isDelegated: delegatedSource != nil)
         case .agent(_, let text, _, _):
             self = .agent(text: text)
         default:
@@ -141,7 +147,7 @@ extension SessionSummarySource.Event {
     package init(message: ACPMessage) {
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource, _):
-            self = .user(text: text, hasAttachments: !attachments.isEmpty, isDelegated: delegatedSource != nil)
+            self = .user(text: text, hasAttachments: Self.excludesTurn(attachments), isDelegated: delegatedSource != nil)
         case .agent(_, _, let text):
             self = .agent(text: text.value)
         default:

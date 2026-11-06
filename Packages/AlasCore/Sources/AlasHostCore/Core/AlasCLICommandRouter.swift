@@ -136,6 +136,15 @@ public struct AlasCLICommandRouter {
         let callers = host.callers
         // Attributed to the session only once the host knows it.
         let caller: HostCaller = request.sessionId.flatMap { id in callers.owner(ofSession: id).map { _ in .session(id: id) } } ?? .cli
+        if let sessionId = request.sessionId, let removed = Self.peerChildRemovedTool(request.command) {
+            do {
+                if try await callers.isPeerChild(sessionId) {
+                    return .error("\(removed) is not available to a session delegated from another machine.")
+                }
+            } catch {
+                return .error("\(removed) is not available: Alas could not check whether this session was delegated from another machine.")
+            }
+        }
         switch request.command {
         case .preview(let command):
             let owner: SessionOwnerID
@@ -193,11 +202,11 @@ public struct AlasCLICommandRouter {
                 .map { request.virtualizingPaths(like: $0.path.path) } ?? request
 
             switch request.command {
-            case .agentList(let worktree):
-                return await host.delegation.agents(worktree: worktree, caller: caller)
+            case .agentList(let worktree, let peer):
+                return await host.delegation.agents(worktree: worktree, peer: peer, caller: caller)
             case .sessionList:
                 return await host.delegation.list(caller: caller)
-            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role):
+            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role, let peer, let project):
                 let target: ACPDelegatedSessionWorktreeTarget
                 switch worktree {
                 case .current:
@@ -213,7 +222,9 @@ public struct AlasCLICommandRouter {
                         agentId: agentID,
                         worktree: target,
                         modelSelection: ACPDelegatedModelSelection(model: model, reasoning: reasoning),
-                        role: role
+                        role: role,
+                        peer: peer,
+                        project: project
                     ),
                     caller: caller
                 )
@@ -359,6 +370,32 @@ public struct AlasCLICommandRouter {
                 return .error("stack_ship is only available to ACP agent sessions.")
             }
             return await host.prs.shipStack(sessionID: sessionId, worktreeID: origin.id)
+        }
+    }
+
+    /// What a child delegated from another Mac never gets, by the name its MCP tool has. The machine
+    /// and the workspace belong to the person at the delegating Mac. Both MCP tools and CLI commands
+    /// reach the router as these commands, so this is the one table. The MCP server hides the same
+    /// tools from discovery (`PEER_CHILD_REMOVED_TOOLS` in `AlasCLI/crates/alas/src/mcp.rs`).
+    static func peerChildRemovedTool(_ command: AlasCLIRequest.Command) -> String? {
+        switch command {
+        case .sessionNew: "session_new"
+        case .sessionAction(.wait): "session_wait"
+        case .sessionAction(.interrupt): "session_interrupt"
+        case .computer(let command): "computer_\(command.action.rawValue)"
+        case .vmRun: "vm_run"
+        case .vmStatus: "vm_status"
+        case .device: "device_*"
+        case .preview(let command): "preview_\(command.action.rawValue)"
+        case .open, .openAt: "open"
+        case .worktree(.new): "worktree_new"
+        case .worktree(.delete): "worktree_delete"
+        case .worktree(.switch): "worktree_switch"
+        case .workspace(.list): "workspace_list"
+        case .workspace(.show): "workspace_show"
+        case .workspace(.switch): "workspace_switch"
+        case .workspace(.focus): "workspace_focus"
+        default: nil
         }
     }
 

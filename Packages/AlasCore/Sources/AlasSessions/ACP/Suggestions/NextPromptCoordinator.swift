@@ -71,7 +71,7 @@ public struct NextPromptEligibilitySnapshot: Sendable {
             return nil
         }
         return .init(id: .init(sessionID: session.id, incarnation: session.incarnation, promptID: turn.promptID,
-                              transcriptRevision: transcript.messagesGeneration,
+                              transcriptRevision: transcript.conversationRevision,
                               draftRevision: session.composerDraftRevision,
                               composerEpoch: environment.composerEpoch,
                               settingsGeneration: environment.settingsGeneration,
@@ -99,7 +99,7 @@ public struct NextPromptEligibilitySnapshot: Sendable {
         guard !environment.hasForkOrDelegationWork else { return "fork or delegation work" }
         guard session.id == turn.sessionID, session.incarnation == turn.incarnation else { return "other session" }
         guard session.nextPromptID == turn.promptID + 1 else { return "newer prompt" }
-        guard transcript.messagesGeneration == turn.transcriptRevision else { return "transcript changed" }
+        guard transcript.conversationRevision == turn.transcriptRevision else { return "transcript changed" }
         guard session.agentState == .ready else { return "agent not ready" }
         guard session.hydrationState == .ready else { return "not hydrated" }
         guard session.nextPromptWorkCount == 0 else { return "session work" }

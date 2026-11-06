@@ -86,6 +86,9 @@ public final class RemoteSessionGateway {
     /// fails never reports the write, so closing releases them.
     private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
 
+    /// Who the paired devices are, for this connection's `delegation` requests.
+    public var delegationPairing: RemotePairingService?
+
     public init(host: AlasHost?, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
@@ -460,7 +463,7 @@ public final class RemoteSessionGateway {
                 return (true, true, true)
             case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved,
                  .transcript, .pendingRequest, .pendingRequestResolved, .sessionState, .notice, .worktreeNotice,
-                 .reviewStatus, .reviewsChanged, .fileChanged:
+                 .reviewStatus, .reviewsChanged, .fileChanged, .delegationOutboxChanged:
                 break
             }
         }
@@ -634,7 +637,9 @@ public final class RemoteSessionGateway {
     /// opened on first use for the caller the transport authenticated.
     private func serveHost(_ request: HostClientMessage) {
         if hostConnection == nil, let host, let caller {
-            hostConnection = HostProtocolServer(host: host).connect(caller: caller) { [weak self] reply in
+            let server = HostProtocolServer(host: host)
+            server.delegationPairing = delegationPairing
+            hostConnection = server.connect(caller: caller) { [weak self] reply in
                 await self?.sendWritten(.host(reply))
             }
         }
@@ -1369,7 +1374,7 @@ public final class RemoteSessionGateway {
             // phone (we don't serve the image bytes to the client in v1).
             // The runner sends only `image/` attachments as images; the
             // rest are resource links (mentions).
-            let shown = attachments.filter { !$0.isCheckpointReference }
+            let shown = attachments.filter { !$0.isLocalReference }
             let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
             let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
                                       resourceNames: shown.filter { !isImage($0) }.map(\.name))

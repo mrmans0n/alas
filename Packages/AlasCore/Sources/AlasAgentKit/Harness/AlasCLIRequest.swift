@@ -15,10 +15,10 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case workspace(WorkspaceCommand)
         case preview(WebPreviewCommand)
         case computer(ComputerUseCommand)
-        /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+        /// MCP-only: drive an iOS simulator the user also sees in the Devices tab.
         case device(DeviceCommand)
         case review(ReviewCommand)
-        case agentList(worktree: String?)
+        case agentList(worktree: String?, peer: String? = nil)
         case sessionList
         case sessionNew(
             prompt: String,
@@ -26,7 +26,9 @@ public struct AlasCLIRequest: Equatable, Sendable {
             worktree: SessionWorktreeSelector,
             model: String? = nil,
             reasoning: String? = nil,
-            role: String? = nil
+            role: String? = nil,
+            peer: String? = nil,
+            project: String? = nil
         )
         case sessionSend(sessionID: String, prompt: String)
         /// MCP-only: show a visual aid in the calling ACP session.
@@ -78,13 +80,14 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 path: RemotePath.virtualizing(path, like: anchor), startLine: startLine, endLine: endLine,
                 side: side, body: body, sessionID: sessionID
             ))
-        case .agentList(let worktree):
-            mapped = .agentList(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) })
-        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning, let role):
+        case .agentList(let worktree, let peer):
+            mapped = .agentList(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }, peer: peer)
+        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning, let role, let peer, let project)
+            where peer == nil:
             mapped = .sessionNew(
                 prompt: prompt, agentID: agentID,
                 worktree: .existing(worktreeID: RemotePath.virtualizing(id, like: anchor)),
-                model: model, reasoning: reasoning, role: role
+                model: model, reasoning: reasoning, role: role, peer: peer, project: project
             )
         default:
             return self
@@ -301,9 +304,11 @@ public struct AlasCLIRequest: Equatable, Sendable {
 
     private struct AgentListParams: Decodable {
         var worktree: String?
+        var peer: String?
 
-        public init(worktree: String? = nil) {
+        public init(worktree: String? = nil, peer: String? = nil) {
             self.worktree = worktree
+            self.peer = peer
         }
     }
 
@@ -324,8 +329,12 @@ public struct AlasCLIRequest: Equatable, Sendable {
         var role: String?
         var worktree: String?
         var new_worktree: NewWorktree?
+        var peer: String?
+        var project: String?
 
-        public init(prompt: String, agent: String? = nil, model: String? = nil, reasoning: String? = nil, role: String? = nil, worktree: String? = nil, new_worktree: NewWorktree? = nil) {
+        public init(prompt: String, agent: String? = nil, model: String? = nil, reasoning: String? = nil, role: String? = nil, worktree: String? = nil, new_worktree: NewWorktree? = nil, peer: String? = nil, project: String? = nil) {
+            self.peer = peer
+            self.project = project
             self.prompt = prompt
             self.agent = agent
             self.model = model
@@ -666,7 +675,10 @@ public struct AlasCLIRequest: Equatable, Sendable {
             command = .stackShip
         case "agent_list":
             let params = try Self.decodeParams(AgentListParams.self, from: data)
-            command = .agentList(worktree: try params.worktree.map(requiredNonEmpty))
+            command = .agentList(
+                worktree: try params.worktree.map(requiredNonEmpty),
+                peer: try params.peer.map(requiredNonEmpty)
+            )
         case "session_list":
             _ = try Self.decodeParams(SessionListParams.self, from: data)
             command = .sessionList
@@ -693,7 +705,9 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 worktree: worktree,
                 model: try params.model.map(requiredNonEmpty),
                 reasoning: try params.reasoning.map(requiredNonEmpty),
-                role: try params.role.map(requiredNonEmpty)
+                role: try params.role.map(requiredNonEmpty),
+                peer: try params.peer.map(requiredNonEmpty),
+                project: try params.project.map(requiredNonEmpty)
             )
         case "session_send":
             let params = try Self.decodeParams(SessionSendParams.self, from: data)

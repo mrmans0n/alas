@@ -85,6 +85,9 @@ public final class AlasCoreContext {
     /// branches, the prepared path, and a command on the project's host.
     @_spi(Testing) @ObservationIgnored public var worktreeBranchLoader: (@MainActor (URL) async throws -> [String])?
     @_spi(Testing) @ObservationIgnored public var worktreeDestinationPreparer: (@MainActor (URL, URL) async throws -> URL)?
+    /// The session store delegation recovery reads a child's queue from, by
+    /// the worktree id the child was persisted under.
+    @_spi(Testing) @ObservationIgnored public var delegatedSessionsDB: (String) -> URL = { Paths.acpSessionsDB(forWorktreeId: $0) }
     @_spi(Testing) @ObservationIgnored public var remoteCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
     /// Test hook that replaces connecting a new session to its agent.
     @_spi(Testing) @ObservationIgnored public var sessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
@@ -132,6 +135,30 @@ public final class AlasCoreContext {
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
     /// Called with a worktree's id after its followed review status was read.
     @ObservationIgnored var reviewStatusDidRefresh: (@MainActor (String) -> Void)?
+    /// Told the server id of a paired Mac that has outcomes waiting in its outbox.
+    @ObservationIgnored var peerOutboxDidChange: (@MainActor (String) -> Void)?
+    /// How agents here reach paired Macs' hosts; the app installs it with its
+    /// peer links, and a host without any leaves it nil.
+    /// Remote can come on long after launch, and each time it does it installs
+    /// a new client, so collection follows this.
+    @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)? {
+        didSet { bindPeerOutboxCollector() }
+    }
+    /// When this process started, in the seconds delegation rows are stamped
+    /// with. Taken before anything can serve, so a row from this time on is
+    /// this process's own and recovery leaves it alone.
+    @ObservationIgnored var processStartedAt = Int64(Date().timeIntervalSince1970)
+    /// Whether `startCollectingPeerOutcomes` ran.
+    @ObservationIgnored var collectsPeerOutcomes = false
+    /// Collects outcomes from the current `delegationPeers` once
+    /// `startCollectingPeerOutcomes` ran.
+    @ObservationIgnored var peerOutboxCollector: ACPPeerOutboxCollector?
+    /// Told when a child on a paired Mac is blocked on a person: the Mac's
+    /// `serverId`, the child's record, and the notice.
+    @ObservationIgnored @_spi(AppHost) public var peerChildBlocked: (@MainActor (String, ACPDelegationRecord, ACPPeerOutboxEntry) -> Void)?
+    /// Bumped whenever a delegation is written, so views of a session's
+    /// children know to look again.
+    public internal(set) var delegationRevision = 0
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// When each worktree's local-changes review was opened, by worktree id,
@@ -157,6 +184,16 @@ public final class AlasCoreContext {
     public internal(set) var delegatedSessionParents: [String: String] = [:] {
         didSet { if delegatedSessionParents != oldValue { environment.delegatedSessionParentsChanged() } }
     }
+
+    /// The paired Mac's `serverId` that delegated each session, by child id.
+    /// Kept apart from `delegatedSessionParents`: a paired Mac is no one's
+    /// parent here, and summaries read this without touching the database.
+    public internal(set) var delegatedPeerOrigins: [String: String] = [:]
+    /// Who the paired Macs are, to name a delegated session's origin. The app
+    /// and the headless host install theirs, read on demand so a profile with
+    /// no delegated session never loads the devices; without one every origin
+    /// is "another Mac".
+    @ObservationIgnored public var delegationPairing: @MainActor () -> RemotePairingService? = { nil }
 
     /// Relayed notices waiting for their user's input, by session id. Each
     /// holds while the session runs on the transcript it was sent from.
@@ -439,12 +476,20 @@ public final class AlasCoreContext {
     /// interrupted sessions, and capturing Claude session hooks as `config`
     /// says when each is decided. With `alasTools`, agents also get the
     /// built-in `alas` MCP server and CLI env. `onTurnCompleted` hears every
-    /// turn that ends.
+    /// turn that ends, and `onChildBlocked` every request a session stops on.
+    /// `delegationPeerNames` names the paired Macs a new root session may be
+    /// told about. The last three replace where sessions are stored and how
+    /// agents are reached, for a host that does not run real ones.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
         alasTools: HeadlessAlasTools? = nil,
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
+        delegationPeerNames: (@MainActor () -> [String])? = nil,
+        sessionsDB: @escaping (SessionOwnerID) -> URL = { Paths.acpSessionsDB(for: $0) },
+        setupEvaluator: ACPSessionManager.ACPSetupEvaluator? = nil,
+        connectionFactory: ACPSessionManager.ACPConnectionFactory? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
             var projectContext: ACPSessionManager.MCPProjectContextProvider?
@@ -457,16 +502,20 @@ public final class AlasCoreContext {
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 owner: owner,
-                persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
+                persistence: ACPSessionPersistence(path: sessionsDB(owner).path),
                 experimentalACP2Enabled: { config().experimentalACP2Enabled },
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
                 onTurnCompleted: onTurnCompleted,
+                onChildBlocked: onChildBlocked,
+                setupEvaluator: setupEvaluator,
+                connectionFactory: connectionFactory,
                 mcpProjectContextProvider: projectContext,
                 builtInMCPProvider: builtInMCP,
                 onChipsObserved: onChipsObserved
             )
             manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            if let delegationPeerNames { manager.delegationPeerNamesProvider = delegationPeerNames }
             if let alasTools {
                 manager.alasCLIEnvProvider = { await alasTools.environment(worktreePath: $0, sessionId: $1) }
             }

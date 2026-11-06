@@ -38,6 +38,19 @@ public struct ShepherdFixRequest: Equatable, Sendable {
         let latest = thread.comments.last { $0.authorTrust == .trusted }?.id ?? ""
         return "\(thread.id)#\(latest)"
     }
+
+    /// Provider check IDs often contain a run URL, which changes on every
+    /// rerun. A workflow and check name identify the problem across runs.
+    static func problemID(of check: ReviewCheck) -> String {
+        let workflow = check.workflow ?? ""
+        return "check:\(workflow.utf8.count):\(workflow):\(check.name)"
+    }
+
+    var problemIDs: [String] {
+        (hasConflict ? ["conflict"] : [])
+            + failingChecks.map(Self.problemID(of:))
+            + threadRevisions.map { "thread:\($0)" }
+    }
 }
 
 public enum ShepherdAction: Equatable, Sendable {
@@ -87,11 +100,8 @@ public struct ShepherdDecision: Equatable, Sendable {
 /// Pure decision logic for one shepherd poll. Runs only after a successful
 /// provider fetch; fetch errors are the poller's business.
 public enum ShepherdPolicy {
-    public static let noProgressPollLimit = 3
+    public static let idleGracePeriod: TimeInterval = 5 * 60
     public static let requiredStablePolls = 2
-    /// An awaitingPush record with no progress escalates after this long,
-    /// even while inconclusive observations keep the poll counter still.
-    public static let awaitingPushTimeout: TimeInterval = 2 * 60 * 60
     /// A head that reports no checks at all may just not have its CI
     /// registered yet, so the empty list counts as green only this long
     /// after the policy first saw the head.
@@ -127,7 +137,8 @@ public enum ShepherdPolicy {
     /// `requiredStablePolls` polls, and, when the head reports no checks,
     /// `noChecksGracePeriod` since it was first seen. Never bypassed.
     public static func mergeGatePasses(_ record: ShepherdRecord, _ observation: ShepherdObservation) -> Bool {
-        guard ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
+        guard record.pendingBindDelivery == nil,
+              ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
               let request = observation.snapshot.reviewRequest
         else { return false }
         return headGatePasses(
@@ -168,6 +179,7 @@ public enum ShepherdPolicy {
         var next = record
         switch outcome {
         case .merged:
+            next.pendingBindDelivery = nil
             next.phase = .merged
             next.finishedAt = now
         case .queued:
@@ -192,10 +204,12 @@ public enum ShepherdPolicy {
         // Rule 1: terminal.
         switch request.state {
         case .merged:
+            record.pendingBindDelivery = nil
             record.phase = .merged
             record.finishedAt = now
             return .finish(.merged)
         case .closed:
+            record.pendingBindDelivery = nil
             record.phase = .closed
             record.finishedAt = now
             return .finish(.closed)
@@ -209,6 +223,7 @@ public enum ShepherdPolicy {
         let problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
         let conclusive = isConclusive(request, for: record.lastDispatchedFingerprint)
         let cleared = isCleared(request, problems: problems, conclusive: conclusive)
+        reconcileAttempts(&record, request: request, problems: problems, now: now)
 
         // A merge attempt interrupted by a quit, or a merge queue the
         // provider no longer reports, falls back to watching. A provider
@@ -236,10 +251,22 @@ public enum ShepherdPolicy {
         case .paused:
             record.phase = .watching
         case .escalated(let reason):
-            let ownerStillGone = reason == .ownerGone && record.autoFix
-                && (observation.session == .archived || observation.session == .missing)
-            guard cleared, !ownerStillGone else { return .wait }
-            record.phase = .watching
+            switch reason {
+            case .noProgress:
+                // Older versions stopped here after three polls. Recover the
+                // outstanding fix without granting another attempt allowance.
+                record.phase = .awaitingPush(turnEndedAt: now, pollsWithoutProgress: 0)
+            case .deliveryFailed:
+                record.retryDelivery(after: now)
+            case .ownerGone:
+                guard observation.session != .archived, observation.session != .missing else { return .wait }
+                record.phase = .watching
+            case .attemptsExhausted:
+                guard cleared || record.fixAttempts < record.fixAttemptBudget else { return .wait }
+                record.phase = .watching
+            case .authFailed:
+                record.phase = .watching
+            }
         default:
             break
         }
@@ -275,10 +302,17 @@ public enum ShepherdPolicy {
             record.phase = .escalated(.ownerGone)
             return .escalate(.ownerGone)
         case .busy:
+            if case .awaitingPush = record.phase {
+                // A foreground result can leave background work running. Start
+                // a new idle grace only after that work has actually finished.
+                record.phase = .fixing(dispatchedAt: record.lastFixDispatchedAt ?? observation.now)
+            }
             return .wait
         case .idle:
             break
         }
+        if record.pendingBindDelivery != nil { return .wait }
+        if let retryAt = record.deliveryRetryAt, observation.now < retryAt { return .wait }
 
         // Rule 6: fix turn settled. Covers a normal turn end and a turn lost
         // to an app restart.
@@ -286,7 +320,13 @@ public enum ShepherdPolicy {
             record.phase = .awaitingPush(turnEndedAt: observation.now, pollsWithoutProgress: 0)
         }
         var problems = problems
-        if case .awaitingPush(let turnEndedAt, let polls) = record.phase {
+        if case .awaitingPush(let turnEndedAt, _) = record.phase {
+            if hasIncompleteChecks(request) || awaitingFirstChecks(record, request: request, now: observation.now) {
+                // Reruns can outlive a foreground turn, including review-only
+                // fixes. Waiting is not an ineffective fix attempt.
+                record.phase = .awaitingPush(turnEndedAt: observation.now, pollsWithoutProgress: 0)
+                return .wait
+            }
             let replied = repliedRevisions(record, problems: problems)
             if !replied.isEmpty || madeProgress(record, request: request, problems: problems, cleared: cleared) {
                 // The turn is over. The agent answered the replied threads;
@@ -297,27 +337,22 @@ public enum ShepherdPolicy {
                     record.handledThreadRevisions = Set(record.handledThreadRevisions ?? []).union(replied).sorted()
                     problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
                 }
-            } else if observation.now.timeIntervalSince(turnEndedAt) >= awaitingPushTimeout {
-                record.phase = .escalated(.noProgress)
-                return .escalate(.noProgress)
             } else if !conclusive {
                 // Incomplete data about what was dispatched can hide the
                 // problems; neither progress nor a miss.
                 return .wait
-            } else {
-                let count = polls + 1
-                if count >= noProgressPollLimit {
-                    record.phase = .escalated(.noProgress)
-                    return .escalate(.noProgress)
-                }
-                record.phase = .awaitingPush(turnEndedAt: turnEndedAt, pollsWithoutProgress: count)
+            } else if observation.now.timeIntervalSince(turnEndedAt) < idleGracePeriod {
+                record.phase = .awaitingPush(turnEndedAt: turnEndedAt, pollsWithoutProgress: 0)
                 return .wait
             }
+            // A genuinely idle fix gets another bounded turn automatically.
+            // Never reset its allowance merely because a new SHA appeared.
         }
 
         // Rule 7: problems. No fix turn is outstanding here, so a fingerprint
         // left over from an earlier turn (a pause, auto-fix toggled, an older
         // record) never holds back the problems in front of us.
+        reconcileAttempts(&record, request: request, problems: problems, now: observation.now)
         record.lastDispatchedFingerprint = nil
         record.viewerCommentIDsAtDispatch = nil
         if problems.isEmpty {
@@ -332,7 +367,12 @@ public enum ShepherdPolicy {
             return .escalate(.attemptsExhausted)
         }
         record.phase = .fixing(dispatchedAt: observation.now)
-        record.fixAttempts += 1
+        var attempts = record.problemAttempts ?? [:]
+        for id in Set(problems.problemIDs) { attempts[id, default: 0] += 1 }
+        record.problemAttempts = attempts
+        record.fixAttempts = attempts.values.max() ?? 0
+        record.lastFixDispatchedAt = observation.now
+        record.deliveryRetryAt = nil
         record.lastDispatchedFingerprint = problems.fingerprint(headSHA: request.headSHA ?? "")
         record.viewerCommentIDsAtDispatch = problems.threads
             .flatMap(\.comments)
@@ -359,6 +399,59 @@ public enum ShepherdPolicy {
     }
 
     // MARK: - Helpers
+
+    /// Drop counts only when their own dimension is conclusive. In particular,
+    /// disappearing failures while a rerun is pending do not grant a new budget.
+    private static func reconcileAttempts(
+        _ record: inout ShepherdRecord,
+        request: ReviewRequest,
+        problems: ShepherdFixRequest,
+        now: Date
+    ) {
+        var attempts = record.problemAttempts ?? [:]
+        if record.problemAttempts == nil, record.fixAttempts > 0 {
+            if let previous = record.lastDispatchedFingerprint {
+                if previous.hasConflict { attempts["conflict"] = record.fixAttempts }
+                for revision in previous.threadIDs { attempts["thread:\(revision)"] = record.fixAttempts }
+                if !previous.failingCheckIDs.isEmpty {
+                    // Old records know run IDs, not stable check identities.
+                    // Attribute their count conservatively to outstanding CI.
+                    attempts["legacy-check"] = record.fixAttempts
+                }
+            } else {
+                for id in problems.problemIDs { attempts[id] = record.fixAttempts }
+                if attempts.isEmpty { attempts["legacy"] = record.fixAttempts }
+            }
+        }
+        if let count = attempts["legacy-check"] {
+            for check in request.checks where check.bucket != .pass && check.bucket != .skipping {
+                let id = ShepherdFixRequest.problemID(of: check)
+                attempts[id] = max(attempts[id] ?? 0, count)
+            }
+        }
+        if let count = attempts["legacy"] {
+            for id in problems.problemIDs { attempts[id] = max(attempts[id] ?? 0, count) }
+        }
+        let checkIDs = Set(request.checks.filter { $0.bucket != .pass && $0.bucket != .skipping }
+            .map(ShepherdFixRequest.problemID(of:)))
+        let threadIDs = Set(problems.threadRevisions.map { "thread:\($0)" })
+        attempts = attempts.filter { id, _ in
+            if id == "legacy" {
+                return !isConclusive(request, for: record.lastDispatchedFingerprint)
+                    || awaitingFirstChecks(record, request: request, now: now)
+            }
+            if id == "legacy-check" {
+                return hasIncompleteChecks(request) || awaitingFirstChecks(record, request: request, now: now)
+            }
+            if id == "conflict" { return request.mergeState == .unknown || request.mergeState == .dirty }
+            if id.hasPrefix("check:") {
+                return hasIncompleteChecks(request) || awaitingFirstChecks(record, request: request, now: now) || checkIDs.contains(id)
+            }
+            return !request.areThreadsComplete || threadIDs.contains(id)
+        }
+        record.problemAttempts = attempts
+        record.fixAttempts = attempts.values.max() ?? 0
+    }
 
     /// Pending or unclassified: the check may still turn out to fail.
     private static func hasIncompleteChecks(_ request: ReviewRequest) -> Bool {

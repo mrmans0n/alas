@@ -2325,11 +2325,13 @@ extension GitService {
     public func fetchRef(
         worktreePath: URL,
         remote: String,
-        branch: String
+        branch: String,
+        timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> Date {
         let result = try await Process.git(
             ["fetch", remote, branch],
-            cwd: worktreePath
+            cwd: worktreePath,
+            timeout: timeout
         )
         guard result.exitCode == 0 else {
             throw NSError(

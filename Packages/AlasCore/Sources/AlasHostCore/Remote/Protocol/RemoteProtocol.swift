@@ -1599,10 +1599,12 @@ public enum HostProtocolCapability: Sendable {
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
     public static let repoHooksApprovalV1 = "host.repoHooks.approval.v1"
+    /// Hosts that serve `delegation`, and send `delegationOutboxChanged`.
+    public static let delegationV1 = "host.delegation.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
-        worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1,
+        worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1, delegationV1,
     ]
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,

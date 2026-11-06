@@ -218,6 +218,9 @@ pub enum Command {
         /// Existing project worktree whose install state to report; the
         /// caller's own worktree when absent.
         worktree: Option<String>,
+        /// A paired Mac (name or server id) to list instead: its matching
+        /// projects, worktrees and agents.
+        peer: Option<String>,
     },
     SessionList,
     SessionNew {
@@ -230,6 +233,10 @@ pub enum Command {
         /// Reasoning value for an agent that exposes a reasoning config option.
         reasoning: Option<String>,
         role: Option<String>,
+        /// A paired Mac (name or server id) to run the child on.
+        peer: Option<String>,
+        /// The peer's project (id or name) when its origin match is not unique.
+        project: Option<String>,
     },
     SessionSend {
         session_id: String,
@@ -291,7 +298,7 @@ pub enum Command {
     VmStatus {
         vm: Option<VmGuest>,
     },
-    /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+    /// MCP-only: drive an iOS simulator the user also sees in the Devices tab.
     Device(DeviceCommand),
     Resolve,
 }
@@ -905,12 +912,19 @@ pub fn build_request(
             r.params = Some(serde_json::json!({}));
             r
         }
-        Command::AgentList { worktree } => {
+        Command::AgentList { worktree, peer } => {
             let mut r = Request::new("agent_list");
-            r.params = Some(match worktree {
-                Some(worktree) => serde_json::json!({ "worktree": worktree }),
-                None => serde_json::json!({}),
-            });
+            let mut params = serde_json::Map::new();
+            if let Some(worktree) = worktree {
+                params.insert(
+                    "worktree".into(),
+                    serde_json::Value::String(worktree.clone()),
+                );
+            }
+            if let Some(peer) = peer {
+                params.insert("peer".into(), serde_json::Value::String(peer.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
             r
         }
         Command::SessionList => {
@@ -925,6 +939,8 @@ pub fn build_request(
             model,
             reasoning,
             role,
+            peer,
+            project,
         } => {
             let mut r = Request::new("session_new");
             let mut params = serde_json::Map::new();
@@ -943,6 +959,12 @@ pub fn build_request(
             }
             if let Some(role) = role {
                 params.insert("role".into(), serde_json::Value::String(role.clone()));
+            }
+            if let Some(peer) = peer {
+                params.insert("peer".into(), serde_json::Value::String(peer.clone()));
+            }
+            if let Some(project) = project {
+                params.insert("project".into(), serde_json::Value::String(project.clone()));
             }
             match worktree {
                 SessionWorktreeTarget::Current => {}
@@ -2181,6 +2203,8 @@ mod tests {
             model: Some("gpt-5.2".into()),
             reasoning: Some("high".into()),
             role: Some("reviewer".into()),
+            peer: Some("mini".into()),
+            project: Some("alas".into()),
         };
         let request = build_request(&new, Some("acp-1".into()), None);
         assert_eq!(request.session_id.as_deref(), Some("acp-1"));
@@ -2192,6 +2216,8 @@ mod tests {
                 "model": "gpt-5.2",
                 "reasoning": "high",
                 "role": "reviewer",
+                "peer": "mini",
+                "project": "alas",
                 "new_worktree": { "branch": "child", "base": "origin/main" }
             }))
         );
@@ -2208,7 +2234,10 @@ mod tests {
         assert_eq!(send.session_id.as_deref(), Some("acp-1"));
 
         let agents = build_request(
-            &Command::AgentList { worktree: None },
+            &Command::AgentList {
+                worktree: None,
+                peer: None,
+            },
             Some("acp-1".into()),
             None,
         );
@@ -2218,13 +2247,14 @@ mod tests {
         let scoped = build_request(
             &Command::AgentList {
                 worktree: Some("feature".into()),
+                peer: Some("mini".into()),
             },
             Some("acp-1".into()),
             None,
         );
         assert_eq!(
             scoped.params,
-            Some(serde_json::json!({ "worktree": "feature" }))
+            Some(serde_json::json!({ "worktree": "feature", "peer": "mini" }))
         );
         assert_eq!(
             send.params,

@@ -152,6 +152,22 @@ struct ACPSessionOrchestrationPolicyTests {
         )
     }
 
+    @Test("a child delegated from another machine sees no parent entry")
+    func peerChildHasNoVisibleParent() {
+        let peerChild = ACPDelegationRecord(
+            childSessionId: "child", parentSessionId: ACPPeerParent.sentinel(serverId: "mac-1"), projectId: "p",
+            parentWorktreeId: "w", childWorktreeId: "w", agentId: "codex",
+            worktreeRequest: .current(worktreeId: "w"), pendingInitialPrompt: nil,
+            phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1
+        )
+
+        #expect(
+            ACPSessionOrchestrationPolicy.visibleSessions(
+                callerSessionId: "child", parent: peerChild, children: []
+            ).map(\.sessionId) == ["child"]
+        )
+    }
+
     @Test("agent resolution inherits parent and rejects unavailable choices")
     func resolvesAgent() throws {
         let agents = [

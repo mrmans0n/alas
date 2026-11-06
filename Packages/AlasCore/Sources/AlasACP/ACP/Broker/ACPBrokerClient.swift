@@ -103,6 +103,16 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
     public let incomingRawFrames: AsyncStream<ACPBrokerRawFrameDelivery>
 
+    public func claimV2OrderedIntake() async throws -> ACPV2OrderedIntake {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        return try await rawTransport.claimOrderedIntake()
+    }
+
+    public func validateV2OrderedIntake(_ intake: ACPV2OrderedIntake?) throws {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        try rawTransport.validateOrderedIntake(intake)
+    }
+
     /// Explicitly pulls a bounded replay page; raw frame consumption remains caller-owned.
     public func replayRawBrokerEvents() async throws { try await rawTransport?.replay() }
 

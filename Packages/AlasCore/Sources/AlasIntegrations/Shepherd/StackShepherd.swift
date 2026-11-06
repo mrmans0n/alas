@@ -177,6 +177,7 @@ public final class StackShepherd {
     /// Records whose fix prompt is being prepared or delivered, with the
     /// generation of the dispatch.
     @ObservationIgnored private var deliveringFix: [StackShepherdRecordID: Int] = [:]
+    @ObservationIgnored private var deliveringBind: [StackShepherdRecordID: UUID] = [:]
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -332,6 +333,8 @@ public final class StackShepherd {
         )
         let newOwner = record.sessionID != sessionID
         let startsFresh = existing == nil || newOwner
+        if startsFresh { record.pendingBindDelivery = nil }
+        if contextRules != nil { record.pendingBindDelivery = ShepherdBindDelivery(now: now) }
         record.sessionID = sessionID
         record.remote = remote
         record.base = stack.base
@@ -360,9 +363,7 @@ public final class StackShepherd {
             if newOwner { shepherd.handledThreadRevisions = nil }
             if startsFresh, !shepherd.phase.isTerminal {
                 shepherd.phase = .watching
-                shepherd.fixAttempts = 0
-                shepherd.lastDispatchedFingerprint = nil
-                shepherd.viewerCommentIDsAtDispatch = nil
+                shepherd.resetFixTracking()
             }
             record.entries[index].shepherd = shepherd
         }
@@ -373,17 +374,36 @@ public final class StackShepherd {
         deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
-        if let contextRules, let effects {
-            let prompt = StackShepherdPromptBuilder.bindPrompt(record: record, requests: requests, rules: contextRules)
-            let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
-                self?.isCurrent(id, generation, before: "the bind delivery") ?? false
-            }
-            if delivery == .failed, isCurrent(id, generation, before: "the bind delivery escalation") {
-                escalate(id, entries: record.openEntries, reason: .deliveryFailed)
-            }
+        if let contextRules {
+            await deliverBindPrompt(id, generation: generation, requests: requests, rules: contextRules)
         }
         pump()
         return records[id] ?? record
+    }
+
+    private func deliverBindPrompt(
+        _ id: StackShepherdRecordID, generation: Int, requests: [Int: ReviewRequest], rules: ShepherdRules
+    ) async {
+        guard isCurrent(id, generation, before: "bind delivery"),
+              let effects, let record = records[id], let pending = record.pendingBindDelivery,
+              deliveringBind[id] != pending.id
+        else { return }
+        deliveringBind[id] = pending.id
+        defer { if deliveringBind[id] == pending.id { deliveringBind[id] = nil } }
+        let prompt = StackShepherdPromptBuilder.bindPrompt(record: record, requests: requests, rules: rules)
+        let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
+            self?.records[id]?.pendingBindDelivery?.id == pending.id
+                && self?.isCurrent(id, generation, before: "the bind delivery") == true
+        }
+        guard var current = records[id], current.sessionID == record.sessionID,
+              current.pendingBindDelivery?.id == pending.id else { return }
+        switch delivery {
+        case .delivered: current.pendingBindDelivery = nil
+        case .failed: current.pendingBindDelivery?.failed(at: now())
+        case .superseded: break
+        }
+        current.updatedAt = now()
+        put(current)
     }
 
     /// Remembers what the Ship popover chose for session `sessionID`'s next
@@ -447,9 +467,7 @@ public final class StackShepherd {
                 switch record.entries[index].shepherd.phase {
                 case .escalated, .paused:
                     record.entries[index].shepherd.phase = .watching
-                    record.entries[index].shepherd.fixAttempts = 0
-                    record.entries[index].shepherd.lastDispatchedFingerprint = nil
-                    record.entries[index].shepherd.viewerCommentIDsAtDispatch = nil
+                    record.entries[index].shepherd.resetFixTracking()
                 default:
                     break
                 }
@@ -546,7 +564,8 @@ public final class StackShepherd {
     }
 
     private func scheduleNext(_ record: StackShepherdRecord, checksPending: Bool) {
-        dueAt[record.id] = ShepherdSchedule.interval(for: record.phase, checksPending: checksPending)
+        let deliveryPending = record.nextDeliveryRetryAt != nil
+        dueAt[record.id] = ShepherdSchedule.interval(for: record.phase, checksPending: checksPending || deliveryPending)
             .map { now().addingTimeInterval($0) }
     }
 
@@ -568,6 +587,7 @@ public final class StackShepherd {
             return
         }
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
+        if let pending = record.pendingBindDelivery, deliveringBind[id] == pending.id { return }
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
             stackShepherdLogger.notice("Dropping stack shepherd record \(id.storageKey, privacy: .private): its worktree is gone or not eligible")
             remove(id)
@@ -671,6 +691,9 @@ public final class StackShepherd {
         if decision.record != current { put(decision.record) }
         let generation = bumpGeneration(id)
         await execute(decision, for: id, generation: generation, before: current, rules: rules, path: context.path)
+        if observation.canDispatch, let pending = records[id]?.pendingBindDelivery, pending.retryAt <= now() {
+            await deliverBindPrompt(id, generation: generation, requests: fetched, rules: rules)
+        }
         if let latest = records[id] {
             scheduleNext(latest, checksPending: fetched.values.contains { $0.checks.contains { $0.bucket == .pending } })
         }
@@ -715,28 +738,67 @@ public final class StackShepherd {
         for fix in decision.fixes {
             logs[fix.entry.requestNumber] = await checkLogs(for: fix, path: path)
         }
-        guard isCurrent(id, generation, before: "fix delivery") else { return }
+        guard isCurrent(id, generation, before: "fix delivery") else {
+            discardUndeliveredFix(id, dispatched: record, before: before)
+            return
+        }
         let prompt = StackShepherdPromptBuilder.fixPrompt(
             record: record, fixes: decision.fixes, landed: decision.restack, logs: logs, rules: rules
         )
         let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
             self?.isCurrent(id, generation, before: "fix delivery") ?? false
         }
-        guard delivery == .failed, isCurrent(id, generation, before: "the delivery rollback"),
+        if delivery == .superseded {
+            discardUndeliveredFix(id, dispatched: record, before: before)
+            return
+        }
+        guard isCurrent(id, generation, before: "the delivery result"),
               var failed = records[id]
-        else { return }
+        else {
+            if delivery == .failed { discardUndeliveredFix(id, dispatched: record, before: before) }
+            return
+        }
+        if delivery == .delivered {
+            for index in failed.entries.indices {
+                failed.entries[index].shepherd.deliveryFailures = nil
+                failed.entries[index].shepherd.deliveryRetryAt = nil
+            }
+            put(failed)
+            return
+        }
         // The prompt never reached the session: no entry spent an attempt.
         let dispatched = Set(decision.fixes.map(\.entry.requestNumber))
         for index in failed.entries.indices where dispatched.contains(failed.entries[index].requestNumber) {
             guard let previous = before.entry(number: failed.entries[index].requestNumber)?.shepherd else { continue }
-            failed.entries[index].shepherd.fixAttempts = previous.fixAttempts
-            failed.entries[index].shepherd.lastDispatchedFingerprint = previous.lastDispatchedFingerprint
-            failed.entries[index].shepherd.viewerCommentIDsAtDispatch = previous.viewerCommentIDsAtDispatch
+            failed.entries[index].shepherd.retryFixDelivery(restoring: previous, now: now())
         }
-        // Nor was the landing announced: the next poll after Resume says it.
+        // Nor was the landing announced: retry it with the same backoff.
         failed.restackRequestedFor = before.restackRequestedFor
+        if decision.fixes.isEmpty {
+            for index in failed.entries.indices where !failed.entries[index].shepherd.phase.isTerminal {
+                failed.entries[index].shepherd.retryDelivery(after: now(), preservingPhase: true)
+            }
+        }
         put(failed)
-        escalate(id, entries: decision.fixes.isEmpty ? failed.openEntries : decision.fixes.map(\.entry), reason: .deliveryFailed)
+    }
+
+    private func discardUndeliveredFix(_ id: StackShepherdRecordID, dispatched: StackShepherdRecord, before: StackShepherdRecord) {
+        guard var current = records[id], current.sessionID == dispatched.sessionID else { return }
+        for index in current.entries.indices {
+            let number = current.entries[index].requestNumber
+            guard let sent = dispatched.entry(number: number)?.shepherd,
+                  let previous = before.entry(number: number)?.shepherd,
+                  case .fixing = sent.phase
+            else { continue }
+            current.entries[index].shepherd.discardUndeliveredFix(sent, restoring: previous, now: now())
+        }
+        if current.restackRequestedFor == dispatched.restackRequestedFor {
+            current.restackRequestedFor = before.restackRequestedFor
+        }
+        if current != records[id] {
+            current.updatedAt = now()
+            put(current)
+        }
     }
 
     /// Logs for at most `ShepherdPromptBuilder.maxCheckLogs` failing checks
@@ -797,17 +859,6 @@ public final class StackShepherd {
                 await self?.archiveAfterMerge(id)
             }
         }
-    }
-
-    private func escalate(_ id: StackShepherdRecordID, entries: [StackShepherdEntry], reason: ShepherdEscalation) {
-        guard var record = records[id] else { return }
-        let numbers = Set(entries.map(\.requestNumber))
-        for index in record.entries.indices where numbers.contains(record.entries[index].requestNumber) {
-            record.entries[index].shepherd.phase = .escalated(reason)
-        }
-        record.updatedAt = now()
-        put(record)
-        effects?.notify(.escalated(record, record.entries.filter { numbers.contains($0.requestNumber) }, reason))
     }
 
     /// The provider answered signed in: entries paused for sign-in resume.
@@ -898,6 +949,7 @@ public final class StackShepherd {
         failureCounts[id] = nil
         generations[id] = nil
         deliveringFix[id] = nil
+        deliveringBind[id] = nil
         persist()
     }
 

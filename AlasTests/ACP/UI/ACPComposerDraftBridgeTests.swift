@@ -782,11 +782,14 @@ struct ACPComposerDraftBridgeTests {
         try assertComposerBaseStyle(in: textView.attributedString(), range: NSRange(location: 0, length: 4))
     }
 
-    @Test("paste with unsupported file URL falls back to plain text")
-    func pasteWithUnsupportedFileURLFallsBackToPlainText() throws {
+    @Test("a composer without PDF attachments keeps a file it can't attach on the text path", arguments: [
+        (name: "notes.txt", contents: "not an image"),
+        (name: "report.pdf", contents: "%PDF-1.7\nhello"),
+    ])
+    func pasteWithUnsupportedFileURLFallsBackToPlainText(name: String, contents: String) throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).txt")
-        try "not an image".write(to: temp, atomically: true, encoding: .utf8)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString)-\(name)")
+        try contents.write(to: temp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: temp) }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([temp as NSURL])
@@ -795,6 +798,135 @@ struct ACPComposerDraftBridgeTests {
         textView.paste(nil)
 
         #expect(textView.string == "fallback text")
+    }
+
+    // MARK: PDF attachments
+
+    /// A composer taking PDFs for a session whose worktree id is an absolute
+    /// path, as a real one's is, rather than its directory's name.
+    @MainActor
+    private final class PDFComposer {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let coordinator: ACPInputField.Coordinator
+        let worktreeId = "/alas-pdf-composer-\(UUID().uuidString)/worktree"
+        let files = FileManager.default.temporaryDirectory.appendingPathComponent("alas-pdf-files-\(UUID().uuidString)", isDirectory: true)
+        var notices: [String] = []
+
+        var directory: URL { Paths.acpAttachmentsDir(forWorktreeId: worktreeId) }
+
+        /// Mentions and images, in the order a submit would send them.
+        var attachments: [ACPMessage.Attachment] {
+            ACPInputField.Coordinator.extract(textView.attributedString()).1
+        }
+
+        init(eligible: Bool?, coordinator: ACPInputField.Coordinator) throws {
+            self.coordinator = coordinator
+            textView.coordinator = coordinator
+            textView.pdfAttachments = ACPComposerPDFAttachments(directory: directory, eligible: eligible)
+            textView.onAttachmentNotice = { [unowned self] in notices.append($0) }
+            try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        }
+
+        func file(_ name: String, contents: Data = Data("%PDF-1.7\nhello".utf8)) throws -> URL {
+            let url = files.appendingPathComponent(name)
+            try contents.write(to: url)
+            return url
+        }
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: files)
+            try? FileManager.default.removeItem(at: directory.deletingLastPathComponent())
+        }
+    }
+
+    private func makePDFComposer(eligible: Bool?) throws -> PDFComposer {
+        try PDFComposer(eligible: eligible, coordinator: makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true })
+    }
+
+    @Test("a PDF copied in Finder attaches as a chip send time will embed, not as its icon")
+    func pastedPDFBesideItsIconBitmap() async throws {
+        let composer = try makePDFComposer(eligible: nil)
+        defer { composer.cleanUp() }
+        let icon = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 3,
+            hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        )?.tiffRepresentation)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([try composer.file("report.pdf") as NSURL])
+        NSPasteboard.general.setData(icon, forType: .tiff)
+
+        composer.textView.paste(nil)
+        try await eventually("the chip appears") { !composer.attachments.isEmpty }
+
+        let attachment = try #require(composer.attachments.first)
+        #expect(composer.attachments.count == 1)
+        #expect(attachment.name == "report.pdf")
+        #expect(attachment.mimeType == nil)
+        // Staged anywhere else, this would go out as a dead link.
+        #expect(ACPAttachmentStaging.stagedPDFUsage(ofURIs: [attachment.uri], attachmentsDirectory: composer.directory).count == 1)
+    }
+
+    @Test("a mixed drop attaches in order and names the file it refused")
+    func mixedDropOfImagePDFAndUnsupportedFile() async throws {
+        let composer = try makePDFComposer(eligible: true)
+        defer { composer.cleanUp() }
+
+        composer.textView.insertPickedImageFilesForTesting([
+            try composer.file("picture.png", contents: pngBytes),
+            try composer.file("notes.txt", contents: Data("hello".utf8)),
+            try composer.file("report.pdf"),
+        ])
+        try await eventually("the refusal is reported") { !composer.notices.isEmpty }
+
+        #expect(composer.attachments.map(\.mimeType) == ["image/png", nil])
+        #expect(composer.attachments.last?.name == "report.pdf")
+        #expect(composer.notices == ["Couldn't attach notes.txt: only images and PDFs can be attached."])
+    }
+
+    @Test("the per-message limits count the PDFs already on the draft")
+    func attachLimitsCountChipsOnTheDraft() async throws {
+        let composer = try makePDFComposer(eligible: nil)
+        defer { composer.cleanUp() }
+        let limit = ACPAttachmentStaging.maxPDFsPerMessage
+
+        composer.textView.insertPickedImageFilesForTesting(try (0..<limit).map { try composer.file("\($0).pdf") })
+        try await eventually("the draft is full") { composer.attachments.count == limit }
+        composer.textView.insertPickedImageFilesForTesting([try composer.file("extra.pdf")])
+        try await eventually("the refusal is reported") { !composer.notices.isEmpty }
+
+        #expect(composer.attachments.count == limit)
+        #expect(composer.notices.first?.contains("extra.pdf") == true)
+    }
+
+    @Test("a session known not to take PDFs refuses at attach, without pasting the path")
+    func ineligibleSessionRefusesAtAttach() async throws {
+        let composer = try makePDFComposer(eligible: false)
+        defer { composer.cleanUp() }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([try composer.file("report.pdf") as NSURL])
+        NSPasteboard.general.setString("fallback text", forType: .string)
+
+        composer.textView.paste(nil)
+        try await eventually("the refusal is reported") { !composer.notices.isEmpty }
+
+        #expect(composer.notices == ["Couldn't attach report.pdf: this agent can't read attached PDFs."])
+        #expect(composer.textView.string.isEmpty)
+    }
+
+    @Test("a PDF carrying Alas's drag payload stays a reference when it arrives through paste")
+    func alasDragOfPDFStaysOnTheTextPathThroughPaste() throws {
+        let composer = try makePDFComposer(eligible: true)
+        defer { composer.cleanUp() }
+        let item = NSPasteboardItem()
+        item.setData(Data(), forType: .alasDropPayload)
+        item.setString(try composer.file("report.pdf").absoluteString, forType: .fileURL)
+        item.setString("@report.pdf", forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([item])
+
+        composer.textView.paste(nil)
+
+        #expect(composer.textView.string == "@report.pdf")
     }
 
     @Test("paste with oversized image file URL reports image error")

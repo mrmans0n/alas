@@ -43,6 +43,7 @@ public struct ACPBrokerRawFrameDelivery: Sendable {
 /// Owns only the raw transport journal, never ACP session semantics.
 actor ACPRawBrokerTransport {
     struct Summary {
+        var intake: ACPV2OrderedIntake?
         var generation: ACPBrokerGeneration?
         var count = 0
         var adopted = false
@@ -123,6 +124,29 @@ actor ACPRawBrokerTransport {
         framesCont = f.continuation
     }
 
+    private var orderedIntake: ACPV2OrderedIntake?
+    private var stagedPending: [ACPBrokerEventCursor: ACPBrokerPendingRequest] = [:]
+    private struct DeliveredOrigin {
+        let frame: Data
+        let pendingID: String?
+    }
+    private var deliveredOrigins: [ACPBrokerEventCursor: DeliveredOrigin] = [:]
+    private var pendingReconciliationOrigins: Set<ACPBrokerEventCursor> = []
+    private var validatedSnapshotTail: ACPBrokerEventCursor?
+
+    func claimOrderedIntake() throws -> ACPV2OrderedIntake {
+        guard !started, !terminated, orderedIntake == nil else { throw ACPClientError.notRunning }
+        let intake = ACPV2OrderedIntake(connectionID: connectionID)
+        orderedIntake = intake
+        summary.withLock { $0.intake = intake }
+        return intake
+    }
+
+    nonisolated func validateOrderedIntake(_ intake: ACPV2OrderedIntake?) throws {
+        let actual = summary.withLock { $0.intake }
+        guard actual === intake, intake?.isValid != false else { throw ACPClientError.notRunning }
+    }
+
     private func validate(_ snapshot: ACPBrokerSnapshot, expected: ACPBrokerGeneration?) throws {
         guard snapshot.metadata.wireContext == .rawV2,
               snapshot.metadata.brokerId == openParams.brokerId,
@@ -142,6 +166,7 @@ actor ACPRawBrokerTransport {
     func start() async throws -> ACPBrokerOpenResult {
         guard !terminated, !started else { throw ACPClientError.notRunning }
         started = true
+        do {
         let opened = try await service.open(openParams)
         try validate(opened.snapshot, expected: openParams.expectedGeneration)
         guard !terminated else {
@@ -154,8 +179,10 @@ actor ACPRawBrokerTransport {
         generation = opened.snapshot.metadata.generation
         summary.withLock { $0.generation = generation
         $0.adopted = opened.adopted }
-        durable?(.init(brokerId: openParams.brokerId, generation: opened.snapshot.metadata.generation,
-            acknowledgedCursor: acknowledged, wireContext: .rawV2))
+        let initial = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: opened.snapshot.metadata.generation,
+            acknowledgedCursor: acknowledged, wireContext: .rawV2)
+        orderedIntake?.publishDurableState(initial)
+        durable?(initial)
         try apply(opened.snapshot)
         try await replay()
         poll = Task { [weak self, pollInterval] in
@@ -167,6 +194,10 @@ actor ACPRawBrokerTransport {
             }
         }
         return opened
+        } catch {
+            if orderedIntake != nil { loseObservation() }
+            throw error
+        }
     }
 
     private func apply(_ snapshot: ACPBrokerSnapshot) throws {
@@ -191,10 +222,42 @@ actor ACPRawBrokerTransport {
             }
         }
         for pending in snapshot.pendingRequests {
-            guard let frame = pending.rawFrame, let cursor = pending.originCursor,
-                  !seen.contains(cursor) else { continue }
-            // Snapshot receipt alone cannot consume anything. Reuse the actual journal identity.
-            publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
+            guard let frame = pending.rawFrame, let cursor = pending.originCursor else { continue }
+            if seen.contains(cursor) {
+                if orderedIntake != nil {
+                    guard let delivered = deliveredOrigins[cursor], delivered.frame == frame.bytes,
+                          delivered.pendingID?.utf8.elementsEqual(pending.requestId.utf8) == true else {
+                        throw ACPClientError.decoding("Conflicting delivered snapshot origin")
+                    }
+                }
+                continue
+            }
+            if orderedIntake != nil {
+                if let previous = stagedPending[cursor],
+                   previous.requestId != pending.requestId || previous.rawFrame?.bytes != frame.bytes {
+                    throw ACPClientError.decoding("Contradictory pending snapshot origin")
+                }
+                guard cursor > replayCursor else { throw ACPClientError.decoding("Unorderable pending snapshot origin") }
+                stagedPending[cursor] = pending
+                protected.insert(cursor)
+            } else {
+                // Standalone split mode supports historical pending snapshots.
+                publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
+            }
+        }
+        if validatedSnapshotTail.map({ snapshot.journalTail >= $0 }) ?? true {
+            validatedSnapshotTail = snapshot.journalTail
+            pendingReconciliationOrigins = Set(snapshot.pendingRequests.compactMap(\.originCursor))
+            pruneDeliveredOrigins()
+        }
+    }
+
+    private func pruneDeliveredOrigins() {
+        guard orderedIntake != nil, let tail = validatedSnapshotTail else { return }
+        // ACK closes journal redelivery, but unresolved requests can still be
+        // reconciled through snapshots after that ACK. Keep their exact bytes.
+        deliveredOrigins = deliveredOrigins.filter { cursor, _ in
+            cursor > acknowledged || cursor > tail || pendingReconciliationOrigins.contains(cursor)
         }
     }
 
@@ -220,13 +283,19 @@ actor ACPRawBrokerTransport {
             // The older poll's waiter may resume after a fresh replay starts.
             if replaySequence == sequence { replayTask = nil }
         }
-        try await task.value
+        do { try await task.value }
+        catch {
+            if orderedIntake != nil { loseObservation() }
+            throw error
+        }
     }
 
     private func performReplay() async throws {
         try await flushAcknowledgements()
         guard !terminated, let generation else { return }
+        var barrier: ACPBrokerEventCursor?
         while !terminated {
+            let previousCursor = replayCursor
             var params = ACPBrokerAttachParams(brokerId: openParams.brokerId, generation: generation,
                 acknowledgedCursor: acknowledged, replayAfterCursor: replayCursor, maxReplayBytes: 4 * 1024 * 1024,
                 snapshotOnLastPageOnly: false)
@@ -236,14 +305,40 @@ actor ACPRawBrokerTransport {
             // Require the context fence on every page before publishing any event.
             guard let snapshot = page.snapshot else { throw ACPClientError.decoding("Raw replay missing context snapshot") }
             try validate(snapshot, expected: generation)
+            if orderedIntake != nil, barrier == nil { barrier = snapshot.journalTail }
             for event in page.events.sorted(by: { $0.cursor < $1.cursor }) where event.cursor > acknowledged {
+                try validateOrderedOrigin(event)
                 if !seen.contains(event.cursor) { try dispatch(event) }
                 replayCursor = max(replayCursor, event.cursor)
             }
             try apply(snapshot)
             try await flushAcknowledgements()
+            if let barrier, replayCursor >= barrier { return }
             if page.hasMoreEvents != true { return }
-            guard !page.events.isEmpty else { throw ACPClientError.decoding("Raw replay made no progress") }
+            guard replayCursor > previousCursor else { throw ACPClientError.decoding("Raw replay made no progress") }
+        }
+    }
+
+    private func validateOrderedOrigin(_ event: ACPBrokerEvent) throws {
+        guard orderedIntake != nil else { return }
+        let expected: DeliveredOrigin?
+        if let staged = stagedPending[event.cursor], let raw = staged.rawFrame {
+            expected = .init(frame: raw.bytes, pendingID: staged.requestId)
+        } else { expected = deliveredOrigins[event.cursor] }
+        guard let expected else { return }
+        let actual: DeliveredOrigin
+        switch event.kind {
+        case .rawFrame(let frame): actual = .init(frame: frame.bytes, pendingID: nil)
+        case .pendingRequest(let pending):
+            guard let frame = pending.rawFrame, pending.originCursor == event.cursor else {
+                throw ACPClientError.decoding("Missing repeated journal origin")
+            }
+            actual = .init(frame: frame.bytes, pendingID: pending.requestId)
+        default: throw ACPClientError.decoding("Journal control replaced a method origin")
+        }
+        guard actual.frame == expected.frame,
+              actual.pendingID.map({ Data($0.utf8) }) == expected.pendingID.map({ Data($0.utf8) }) else {
+            throw ACPClientError.decoding("Conflicting repeated journal origin")
         }
     }
 
@@ -253,6 +348,11 @@ actor ACPRawBrokerTransport {
         case .pendingRequest(let request):
             guard let frame = request.rawFrame, request.originCursor == event.cursor else {
                 throw ACPClientError.decoding("Contradictory raw pending request")
+            }
+            if let staged = stagedPending.removeValue(forKey: event.cursor) {
+                guard staged.requestId == request.requestId, staged.rawFrame?.bytes == frame.bytes else {
+                    throw ACPClientError.decoding("Contradictory pending journal origin")
+                }
             }
             publish(frame, cursor: event.cursor, origin: .journal, pendingID: request.requestId)
         case .operationCompleted(let key, let outcome):
@@ -272,8 +372,11 @@ actor ACPRawBrokerTransport {
             // Factual helper status is not an adapter frame and grants no source authority.
             seen.insert(event.cursor)
             summary.withLock { $0.consumed.insert(event.cursor) }
-            if method == "adapter/stdoutClosed" || method == "adapter/writeUncertain" { updatesCont.finish()
-            framesCont.finish() }
+            if method == "adapter/stdoutClosed" || method == "adapter/writeUncertain" {
+                if orderedIntake != nil { loseObservation() }
+                else { updatesCont.finish()
+                framesCont.finish() }
+            }
         case .operationStarted, .pendingRequestResolved:
             seen.insert(event.cursor)
             summary.withLock { $0.consumed.insert(event.cursor) }
@@ -286,6 +389,7 @@ actor ACPRawBrokerTransport {
                          origin: ACPBrokerFrameProvenance.Origin, pendingID: String? = nil) {
         guard !terminated, let generation else { return }
         seen.insert(cursor)
+        if orderedIntake != nil { deliveredOrigins[cursor] = .init(frame: frame.bytes, pendingID: pendingID) }
         // A restored unresolved request may already have a durable receipt.
         // Restore its resolution identity without protecting or consuming it again.
         if cursor > acknowledged { protected.insert(cursor) }
@@ -297,11 +401,15 @@ actor ACPRawBrokerTransport {
         } else { method = (try? JSONDecoder().decode(MethodHead.self, from: frame.bytes))?.method }
         if method == "session/update" {
             summary.withLock { $0.count += 1 }
-            updatesCont.yield(.init(frame: frame.bytes, connectionID: connectionID, brokerProvenance: provenance,
-                durableConsumptionAcknowledgement: ack))
+            let delivery = ACPV2SessionUpdateDelivery(frame: frame.bytes, connectionID: connectionID, brokerProvenance: provenance,
+                durableConsumptionAcknowledgement: ack)
+            if let orderedIntake { orderedIntake.continuation.yield(.update(delivery)) }
+            else { updatesCont.yield(delivery) }
         } else {
-            framesCont.yield(.init(frame: frame.bytes, connectionID: connectionID, provenance: provenance,
-                pendingRequestID: pendingID, acknowledgement: ack))
+            let delivery = ACPBrokerRawFrameDelivery(frame: frame.bytes, connectionID: connectionID, provenance: provenance,
+                pendingRequestID: pendingID, acknowledgement: ack)
+            if let orderedIntake { orderedIntake.continuation.yield(.inbound(delivery.inboundDelivery)) }
+            else { framesCont.yield(delivery) }
         }
     }
 
@@ -337,7 +445,10 @@ actor ACPRawBrokerTransport {
         _ = try await service.ack(params)
         guard !terminated, self.generation == generation else { return }
         acknowledged = max(acknowledged, target)
-        durable?(.init(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2))
+        pruneDeliveredOrigins()
+        let state = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2)
+        orderedIntake?.publishDurableState(state)
+        durable?(state)
         }
     }
 
@@ -488,7 +599,9 @@ actor ACPRawBrokerTransport {
         catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
     }
     func stop(close: Bool) async {
-        guard !terminated else { return }
+        // Observation loss withdraws delivery authority, but the caller still
+        // owns one explicit lifecycle cleanup request for this attachment.
+        guard requestedClose == nil else { return }
         requestedClose = close
         loseObservation()
         guard let generation else { return }
@@ -507,6 +620,10 @@ actor ACPRawBrokerTransport {
     }
     private func loseObservation() {
         terminated = true
+        orderedIntake?.invalidate(message: "Broker observation lost")
+        deliveredOrigins.removeAll()
+        stagedPending.removeAll()
+        pendingReconciliationOrigins.removeAll()
         poll?.cancel()
         poll = nil
         updatesCont.finish()

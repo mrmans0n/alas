@@ -56,6 +56,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var failureIncidentActions: ACPFailureIncidentActions = .readOnly
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
+    /// Nil shows no "Reported changes" control.
+    var reportedChangesActions: ACPReportedChangesActions? = nil
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -762,6 +764,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let message = snapshot.messages[row.index]
             let expansion = Self.rowExpansion(of: message, stableId: row.stableId, store: rowExpansionStore)
             let delegationAction = revealDelegation == nil ? nil : Self.rootDelegationAction(host: host, message: message)
+            let reportedChanges = Self.reportedChanges(host: host, message: message)
             // `mayBeNative` is false for any row that stays live. A native row
             // has no room for the delegation button.
             let nativeContent = mayBeNative && delegationAction == nil ? ACPTranscriptNativeRows.content(
@@ -769,7 +772,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 isLive: snapshot.liveNarrationIndex == row.index,
                 isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
                 isExpanded: expansion?.isExpanded ?? false,
-                createdAt: host.transcript.createdAt(forStableId: row.stableId)
+                createdAt: host.transcript.createdAt(forStableId: row.stableId),
+                reportedChangesTitle: reportedChanges?.title
             ) : nil
             let rowToken = token(
                 MessageRowTokenInputs(
@@ -783,7 +787,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     canCancelSubagent: host.onCancelSubagent != nil,
                     isExpanded: expansion?.isExpanded ?? false,
                     showsActionsPermanently: snapshot.showsActionsPermanently && Self.hasActionsMenu(message),
-                    isNative: nativeContent != nil
+                    isNative: nativeContent != nil,
+                    reportedChangesTitle: reportedChanges?.title
                 ),
                 host: host
             )
@@ -801,7 +806,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             isExpanded: expansion?.isExpanded ?? false,
                             onExpandedChange: expansion?.setExpanded,
                             onRevealDelegation: revealDelegation,
-                            delegationAction: delegationAction
+                            delegationAction: delegationAction,
+                            reportedChanges: reportedChanges
                         )
                         if inToolCallGroup {
                             ACPToolCallGroupMemberRow { card }
@@ -817,12 +823,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     theme: host.theme, typography: host.typography,
                     actions: nativeActions(
                         host: host, snapshot: snapshot, row: row, message: message,
-                        toggleExpanded: expansion?.setExpanded
+                        toggleExpanded: expansion?.setExpanded,
+                        reportedChanges: reportedChanges
                     ),
                     source: Self.followedText(of: message)
                 )
             }
             return spec
+        }
+
+        /// The row's "Reported changes" control; nil for rows on a surface without its actions.
+        private static func reportedChanges(host: ACPTranscriptScroller, message: ACPMessage) -> ACPReportedChangesPresentation? {
+            guard host.reportedChangesActions != nil, case .user(_, _, _, let attachments, _, _) = message else { return nil }
+            return host.session.reportedChangesPresentation(attachments: attachments)
         }
 
         /// A tool call's, thought's or prompt card's expanded flag and its setter; nil for
@@ -866,7 +879,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
-            toggleExpanded: ((Bool) -> Void)?
+            toggleExpanded: ((Bool) -> Void)?,
+            reportedChanges: ACPReportedChangesPresentation?
         ) -> ACPTranscriptNativeRows.Actions {
             var menu: ACPMessageActionsMenu.Input?
             let kind: ACPForkMessageBoundary.Kind?
@@ -909,7 +923,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 openURL: { url in openLink(host: host, url) },
                 showsActionsPermanently: snapshot.showsActionsPermanently,
                 requestRespec: snapshot.requestRespec,
-                quote: host.onQuote
+                quote: host.onQuote,
+                reportedChanges: host.reportedChangesActions.flatMap { actions in
+                    reportedChanges.map { .init(presentation: $0, actions: actions) }
+                }
             )
         }
 
@@ -941,6 +958,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// turn ended) can switch to native with every other input equal;
             /// without this the mounted SwiftUI view would stay until remount.
             let isNative: Bool
+            /// The message covers a report that lands, but not a turn ending
+            /// without one, which turns no control into "No report received".
+            let reportedChangesTitle: String?
         }
 
         private static func hasActionsMenu(_ message: ACPMessage) -> Bool {
@@ -1189,7 +1209,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             isExpanded: Bool = false,
             onExpandedChange: ((Bool) -> Void)? = nil,
             onRevealDelegation: ((ACPDelegationNavigationTarget) -> Void)? = nil,
-            delegationAction: ACPDelegationAction? = nil
+            delegationAction: ACPDelegationAction? = nil,
+            reportedChanges: ACPReportedChangesPresentation? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -1223,7 +1244,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 failureIncidentActions: host.failureIncidentActions,
                 isExpanded: isExpanded,
                 onExpandedChange: onExpandedChange,
-                onOpenPlanFile: host.onOpenPlanFile
+                onOpenPlanFile: host.onOpenPlanFile,
+                reportedChanges: reportedChanges,
+                reportedChangesActions: host.reportedChangesActions
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —

@@ -32,13 +32,14 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
             #expect(meta["diffPatch"] as? [String: Int] == ["version": 1])
             #expect(meta["planFile"] as? [String: Int] == ["version": 1])
             #expect(meta["sessionFailure"] as? [String: Int] == ["version": 1])
+            #expect(meta["agentFileChangeReport"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -222,6 +223,11 @@ struct ACPConnectionTests {
     @Test("the session index needs a known version and reports only the advertised operations", arguments: [
         (#"{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe"]}}"#,
          ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true)),
+        (#"{"sessionIndex":{"version":1,"capabilities":["sessionIndex","sessionBatchGet","sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}"#,
+         ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true, worktrees: true, batchGet: true)),
+        // Codex's list leaves out "sessionIndex".
+        (#"{"sessionIndex":{"version":1,"capabilities":["sessionBatchGet","sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}"#,
+         ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true, worktrees: true, batchGet: true)),
         (#"{"sessionIndex":{"version":1}}"#, ACPSessionIndexSupport()),
         (#"{"sessionIndex":{"capabilities":["sessionArchive"]}}"#, nil),
         (#"{"sessionIndex":{"version":0,"capabilities":["sessionArchive"]}}"#, nil),
@@ -288,6 +294,54 @@ struct ACPConnectionTests {
         let outcome = try await connection.initialize()
         #expect((outcome.sessionFailure != nil) == expected)
         #expect(connection.negotiatedSessionFailure == expected)
+    }
+
+    @Test("agent file change reports need version 1", arguments: [
+        (#"{"agentFileChangeReport":{"version":1}}"#, true),
+        (#"{"agentFileChangeReport":{"version":2}}"#, false),
+        (#"{"agentFileChangeReport":true}"#, false),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["agentFileChangeReport"]}}}"#, false),
+        ("{}", false),
+    ] as [(String, Bool)])
+    func agentFileChangeReportNegotiation(metadata: String, expected: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        let outcome = try await ACPConnection(client: mock).initialize()
+        #expect((outcome.agentFileChangeReport != nil) == expected)
+    }
+
+    @Test("a prompt carries the file change report request beside the hook token", arguments: [
+        (nil, false),
+        ("alas-turn:abc", false),
+        ("alas-turn:abc", true),
+        (nil, true),
+    ] as [(String?, Bool)])
+    func promptRequestMeta(requestId: String?, withToken: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8)
+        }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        if withToken { connection.codexHooksReviewToken = "reviewed" }
+        _ = try await connection.prompt(sessionId: "s", blocks: [], fileChangeReportRequestId: requestId)
+        let params = try #require(mock.sent.last(where: { $0.method == "session/prompt" })?.params)
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+        let meta = json["_meta"] as? [String: Any]
+        if let requestId {
+            let request = try #require(meta?["agentFileChangeReportRequest"] as? [String: Any])
+            #expect(request["version"] as? Int == 1)
+            #expect(request["requestId"] as? String == requestId)
+        } else {
+            #expect(meta?["agentFileChangeReportRequest"] == nil)
+        }
+        #expect((meta?["codexHooks"] as? [String: String]) == (withToken ? ["reviewToken": "reviewed"] : nil))
+        #expect((meta == nil) == (requestId == nil && !withToken))
+        #expect(meta?["jetbrains"] == nil)
     }
 
     @Test("a prompt's session failure is honored only when negotiated", arguments: [

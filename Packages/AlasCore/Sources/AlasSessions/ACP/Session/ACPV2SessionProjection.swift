@@ -179,7 +179,7 @@ public final class ACPV2SessionProjection {
             let text = Self.text(value.content)
             switch messageKey.kind {
             case .user:
-                var attachments = Self.attachments(value.content)
+                var attachments = ACPSessionReference.agentSentAttachments(Self.attachments(value.content))
                 var source: ACPDelegatedPromptSource?
                 var pasted: [ACPPastedTextSpan] = []
                 if case .user(_, _, _, let localAttachments, let delegated, let localPasted)? = local {

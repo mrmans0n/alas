@@ -183,7 +183,14 @@ struct HostSSHSetupSheet: View {
         phase = .running
         Task { @MainActor in
             do {
-                let host = try await setup.install(probe, progress: { _ in })
+                // Checked again: a retry follows whatever was fixed on the host
+                // since the sheet connected.
+                let current = try await setup.probe()
+                let plan = setup.decision(for: current)
+                if plan != install { steps.append(Self.summary(plan)) }
+                let host = try await setup.install(current, progress: { note in
+                    Task { @MainActor in steps.append(note) }
+                })
                 steps.append("Configuring the host")
                 try await setup.configure(host: host, options: options)
                 steps.append("Starting the host")

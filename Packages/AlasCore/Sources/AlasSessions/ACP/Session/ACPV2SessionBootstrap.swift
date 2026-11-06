@@ -51,8 +51,8 @@ public final class ACPV2SessionBootstrap {
             localSessionId = nil
         }
         @MainActor
-        public init(brokerClient: ACPBrokerClient, opened: ACPBrokerOpenResult) async throws {
-            runtime = try .init(brokerClient: brokerClient, opened: opened)
+        public init(brokerClient: ACPBrokerClient, opened: ACPBrokerOpenResult, orderedIntake: ACPV2OrderedIntake? = nil) async throws {
+            runtime = try .init(brokerClient: brokerClient, opened: opened, orderedIntake: orderedIntake)
             claim = try await brokerClient.claimV2Bootstrap(opened: opened)
             source = .broker(id: opened.snapshot.metadata.brokerId, generation: opened.snapshot.metadata.generation)
             client = .broker(brokerClient)

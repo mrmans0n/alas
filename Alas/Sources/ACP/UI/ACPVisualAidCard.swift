@@ -8,6 +8,7 @@ struct ACPVisualAidActions {
     /// a failed send clears the answer on the transcript again.
     var answer: (UUID, ACPVisualAid.Answer) async -> Bool
     var popOut: (ACPVisualAid) -> Void
+    var popOutLabel = "Open in a tab"
     /// True while this process may answer. Read live on every render and every action, never captured
     /// as a value: the rows that show a card are not re-created when writer ownership changes.
     var canAnswer: () -> Bool
@@ -117,7 +118,7 @@ struct ACPVisualAidCard: View {
                 let visible = hovered || voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
                 HStack(spacing: 4) {
                     overlayButton("doc.on.doc", help: "Copy HTML", action: copyHTML)
-                    overlayButton("arrow.up.forward.square", help: "Open in a tab") { actions.popOut(visual) }
+                    overlayButton("arrow.up.forward.square", help: actions.popOutLabel) { actions.popOut(visual) }
                 }
                 .padding(6)
                 .opacity(visible ? 1 : 0)
@@ -206,7 +207,7 @@ struct ACPVisualAidCard: View {
             if !fillsHeight {
                 Button { actions.popOut(visual) } label: { Image(systemName: "arrow.up.forward.square") }
                     .buttonStyle(.borderless)
-                    .help("Open in a tab")
+                    .help(actions.popOutLabel)
             }
         }
         .padding(.horizontal, 12)

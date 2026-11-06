@@ -8,6 +8,7 @@ import AlasACP
 import os
 
 private let sessionFailureLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-session-failure")
+private let fileChangeReportLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-file-change-report")
 
 /// Narrow observable holder for the rapidly-mutating composer draft.
 /// Keystrokes update this object instead of `ACPSession` so the transcript
@@ -63,6 +64,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
     nonisolated public let agentId: String
     nonisolated public let worktreeId: String
+    /// Where this session's attachments are staged. Staging and send share it,
+    /// because send only embeds a PDF found directly in here.
+    nonisolated public var attachmentsDirectory: URL { Paths.acpAttachmentsDir(forWorktreeId: worktreeId) }
     /// The durable owner of this session. `worktreeId` remains the historical
     /// compatibility field used by the SQLite schema and wire protocol.
     nonisolated public let owner: SessionOwnerID
@@ -296,6 +300,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Tracked public var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// The adapter's self-report from `initialize`. Capabilities cannot tell
+    /// Claude from Codex; see `ACPEmbeddedPDFSupport`.
+    @Tracked public var agentInfo: ACPImplementationInfo?
     /// Relearned on attach; adapters must explicitly advertise this extension.
     @Tracked public var supportsSteering = false
     public var supportsCodexSteeringCompletion = false
@@ -316,6 +323,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the current connection's agent sent the `sessionFailure`
     /// advertisement. Runtime only; relearned on attach.
     @Tracked public var sessionFailure: ACPSessionFailureCapability?
+    /// Whether the current connection's agent sent the `agentFileChangeReport`
+    /// advertisement. Runtime only; relearned on attach.
+    @Tracked public var agentFileChangeReport: ACPAgentFileChangeReportCapability?
     /// The pending plan review's plan file, as read on the session's host,
     /// keyed by the request's `toolCallId`. Runtime only; cleared when the
     /// review is answered or cancelled.
@@ -1108,6 +1118,55 @@ public final class ACPSession: ChangeTracking, Identifiable {
         transcript.replaceMessage(at: index, with: .user(
             id: messageID, messageId: remoteMessageID, text: text, attachments: updated,
             delegatedSource: delegatedSource, pastedSpans: pastedSpans
+        ))
+        return index
+    }
+
+    /// True while `requestId` belongs to the latest referencing user row and its
+    /// turn may be running. A relaunch restores the turn's markers but leaves the
+    /// transcript idle until attach applies the broker's state, so they count too.
+    /// A steered row carries no reference, so it does not end the turn that is
+    /// owed the report.
+    public func isFileChangeReportTurnActive(requestId: String) -> Bool {
+        guard transcript.streamingState != .idle || directTurnInFlight
+            || queue.contains(where: \.awaitingInterruptionResume),
+              let index = transcript.fileChangeReportIndex(requestId: requestId)
+        else { return false }
+        return !transcript.messages[(index + 1)...].contains { message in
+            guard case .user(_, _, _, let attachments, _, _) = message else { return false }
+            return attachments.contains { $0.fileChangeReportRequestId != nil }
+        }
+    }
+
+    /// What this row shows for `attachments`. The turn's state is read only for
+    /// a reference still without a report.
+    public func reportedChangesPresentation(attachments: [ACPMessage.Attachment]) -> ACPReportedChangesPresentation? {
+        guard let reference = attachments.first(where: { $0.fileChangeReportRequestId != nil }),
+              let requestId = reference.fileChangeReportRequestId
+        else { return nil }
+        let isTurnActive = reference.fileChangeReport == nil && isFileChangeReportTurnActive(requestId: requestId)
+        return .make(attachments: attachments, isTurnActive: isTurnActive)
+    }
+
+    /// Points a reused user row at `requestId`, clearing any earlier report: the
+    /// row describes its latest attempt, so a late report from an older one finds
+    /// no row. Returns the row to persist. Nil when the row is gone or already
+    /// holds this id, which a same-key resend does, keeping its report.
+    func bindFileChangeReportRequest(_ requestId: String, toUserMessage id: UUID) -> Int? {
+        guard let index = transcript.messages.firstIndex(where: {
+            guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
+            return messageID == id
+        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index],
+        !attachments.contains(where: { $0.fileChangeReportRequestId == requestId })
+        else { return nil }
+        transcript.replaceMessage(at: index, with: .user(
+            id: messageID,
+            messageId: remoteMessageID,
+            text: text,
+            attachments: attachments.filter { $0.fileChangeReportRequestId == nil }
+                + [.fileChangeReportReference(requestId: requestId)],
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
         ))
         return index
     }
@@ -2198,7 +2257,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             tc.appliedIsFinal = isFinal
             tc.appliedStrippedRaw = newStrippedRaw
             tc.appliedOpeningFenceUnterminated = unterminated
-            tc.appliedItemsSnapshot = items
+            tc.appliedItemsSnapshot = Self.withoutBlobBytes(items)
             return
         }
         Self.reprocessToolCallContentFull(
@@ -2249,7 +2308,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // opening fence was recognized.
         let firstLine = raw.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? raw
         tc.appliedOpeningFenceStripped = Self.isOpeningFence(firstLine)
-        tc.appliedItemsSnapshot = items
+        tc.appliedItemsSnapshot = Self.withoutBlobBytes(items)
+    }
+
+    /// Comparison ignores a blob's bytes, so the snapshot need not keep them alive.
+    private static func withoutBlobBytes(_ items: [ACPToolCallContent]) -> [ACPToolCallContent] {
+        items.map { item in
+            guard case .content(.blobResource(let uri, let mime, _)) = item else { return item }
+            return .content(.blobResource(uri: uri, mimeType: mime, blob: ""))
+        }
     }
 
     /// Whether the first `count` items of `items` have the same
@@ -2306,6 +2373,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return u1 == u2 && n1 == n2
         case (.content(.resource(let u1, let m1, _)),
               .content(.resource(let u2, let m2, _))):
+            return u1 == u2 && m1 == m2
+        case (.content(.blobResource(let u1, let m1, _)),
+              .content(.blobResource(let u2, let m2, _))):
             return u1 == u2 && m1 == m2
         case (.unknown, .unknown):
             return true
@@ -2661,6 +2731,46 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if promptActive, !replaying { applyFailureRetryStatus(of: record.id) }
             return dirty
         }
+    }
+
+    /// Stores a `session_info_update`'s file change report on the user row that
+    /// requested it, when negotiated. The report's `requestId` is the only
+    /// correlation, so it lands the same before or after the prompt's response.
+    /// The first report wins. Returns the rows to persist. Never touches
+    /// lifecycle, `turnFailure`, `lastError`, queue or usage. The row publishes, but
+    /// a report is not output: it counts as no next-prompt activity, so one landing
+    /// after the turn leaves that turn's offer and recap in place.
+    @discardableResult
+    public func applyFileChangeReportUpdate(_ info: ACPSessionInfoUpdate) -> Set<Int> {
+        guard agentFileChangeReport != nil else { return [] }
+        let report: ACPAgentFileChangeReport
+        switch ACPAgentFileChangeReportSignal.from(metadata: info.metadata) {
+        case .absent:
+            return []
+        case .malformed:
+            fileChangeReportLogger.error("session \(self.id, privacy: .public): unreadable agentFileChangeReport on session_info_update")
+            return []
+        case .report(let value):
+            report = value
+        }
+        guard let index = transcript.fileChangeReportIndex(requestId: report.requestId),
+              case .user(let id, let messageId, let text, var attachments, let delegatedSource, let pastedSpans) = transcript.messages[index],
+              let position = attachments.firstIndex(where: { $0.fileChangeReportRequestId == report.requestId })
+        else {
+            fileChangeReportLogger.info("session \(self.id, privacy: .public): no row for file change report \(report.requestId, privacy: .public)")
+            return []
+        }
+        guard attachments[position].fileChangeReport == nil else { return [] }
+        attachments[position] = .fileChangeReportReference(requestId: report.requestId, report: report)
+        transcript.replaceMessageMetadata(at: index, with: .user(
+            id: id,
+            messageId: messageId,
+            text: text,
+            attachments: attachments,
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
+        ))
+        return [index]
     }
 
     /// An incident that is still a warning shows as a retry, read from its row
@@ -3529,6 +3639,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @discardableResult
     public func markQueueHeadSending() -> String? {
         guard !queue.isEmpty, queue[0].status == .pending else { return nil }
+        queue[0].prepareFileChangeReportRequest(
+            negotiated: agentFileChangeReport != nil,
+            rowLocatable: normalQueuedTurnUserMessageIDs[queue[0].id] != nil)
         queue[0].status = .sending
         queue[0].lastError = nil
         queue[0].dispatchedBrokerGeneration = nil
@@ -3856,7 +3969,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             switch item {
             case .content(.text(let s)):
                 out.append(s)
-            case .content(.resourceLink), .content(.image):
+            case .content(.resourceLink), .content(.image), .content(.blobResource):
                 // Asset blocks are preserved on `ToolCall.assets`; including
                 // text placeholders here corrupts wrapped prose/code output
                 // when an update contains both text and assets.
@@ -4170,7 +4283,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 return .image(data: data, uri: uri, mimeType: mime, name: Self.assetName(from: uri))
             case .resourceLink(let uri, let name):
                 return .resource(uri: uri, name: name)
-            case .resource(let uri, let mime, _):
+            case .resource(let uri, let mime, _), .blobResource(let uri, let mime, _):
+                // Name and type only: bytes must not reach a persisted asset.
                 return .resource(uri: uri, name: Self.assetName(from: uri), mimeType: mime)
             case .text:
                 return nil
@@ -4772,7 +4886,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     private func isEchoedSymbolExpansion(_ block: ACPContentBlock) -> Bool {
         expectedSymbolExpansionEchoes.contains { sent in
             switch (sent, block) {
-            case (.resource(let sentURI, _, _), .resourceLink(let echoedURI, _)):
+            case (.resource(let sentURI, _, _), .resourceLink(let echoedURI, _)),
+                 (.resource(let sentURI, _, _), .blobResource(let echoedURI, _, _)):
                 return sentURI == echoedURI
             default:
                 return sent == block

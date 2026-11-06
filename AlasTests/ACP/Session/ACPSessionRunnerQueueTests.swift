@@ -4305,7 +4305,578 @@ struct ACPSessionRunnerQueueTests {
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
     }
+
+    // MARK: - File change report requests
+
+    struct FileChangeReportIssuanceRow: Sendable {
+        enum Expected: Sendable { case keeps, none, mints }
+        var stored: String?
+        var wake = false
+        var continuation = false
+        var usageLimitResume = false
+        var negotiated = true
+        var dispatchCount = 0
+        var generation = false
+        var fresh = false
+        var recorded = false
+        var locatable = false
+        let expected: Expected
+    }
+
+    @Test(arguments: [
+        FileChangeReportIssuanceRow(stored: "x", negotiated: false, dispatchCount: 3, generation: true, recorded: true, expected: .keeps),
+        FileChangeReportIssuanceRow(wake: true, recorded: true, expected: .none),
+        FileChangeReportIssuanceRow(continuation: true, expected: .none),
+        FileChangeReportIssuanceRow(negotiated: false, expected: .none),
+        FileChangeReportIssuanceRow(dispatchCount: 1, recorded: true, locatable: true, expected: .none),
+        // Unrecorded is an exit between marking and recording: no row rule can hold this back.
+        FileChangeReportIssuanceRow(dispatchCount: 1, expected: .none),
+        FileChangeReportIssuanceRow(generation: true, expected: .none),
+        FileChangeReportIssuanceRow(expected: .mints),
+        FileChangeReportIssuanceRow(dispatchCount: 2, fresh: true, recorded: true, locatable: true, expected: .mints),
+        FileChangeReportIssuanceRow(dispatchCount: 2, fresh: true, recorded: true, expected: .none),
+        // A native steer's `.promptRequired` continuation: its row exists, but no prompt went out yet.
+        FileChangeReportIssuanceRow(recorded: true, locatable: true, expected: .mints),
+        // Unlike a wake, a usage-limit resume records a user row, so its turn gets a report.
+        FileChangeReportIssuanceRow(usageLimitResume: true, expected: .mints),
+    ])
+    func fileChangeReportIssuance(row: FileChangeReportIssuanceRow) throws {
+        var item = QueuedPrompt(
+            blocks: [.text("prompt")],
+            backgroundTaskWake: row.wake ? "job" : nil,
+            transcriptRecorded: row.recorded,
+            dispatchCount: row.dispatchCount,
+            dispatchedBrokerGeneration: row.generation ? ACPBrokerGeneration(rawValue: 7) : nil,
+            interruptedTurnContinuation: row.continuation,
+            usageLimit: row.usageLimitResume
+                ? ACPUsageLimit(detectedAt: Date(), resetSource: .unknown, probeAttempt: 0, resettable: true) : nil)
+        if row.fresh { item.advanceBrokerOperationAttempt() }
+        item.fileChangeReportRequestId = row.stored
+
+        item.prepareFileChangeReportRequest(negotiated: row.negotiated, rowLocatable: row.locatable)
+
+        switch row.expected {
+        case .keeps:
+            #expect(item.fileChangeReportRequestId == row.stored)
+        case .none:
+            #expect(item.fileChangeReportRequestId == nil)
+        case .mints:
+            let id = try #require(item.fileChangeReportRequestId)
+            #expect(id.hasPrefix("alas-turn:"))
+            #expect(ACPAgentFileChangeReport.isValidRequestId(id))
+        }
+        #expect(!item.brokerOperationAttemptIsFresh)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func queuedRequestIdIsDurableBeforeDispatch() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        // A broker dispatch saves its provenance first, behind the row's write.
+        mock.brokerGenerationForTesting = ACPBrokerGeneration(rawValue: 7)
+        let requested = QueueTestGate()
+        let respond = QueueTestGate()
+        defer { Task { await respond.open() } }
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await requested.open()
+            await respond.wait()
+            return ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8))
+        }
+        session.enqueue(blocks: [.text("prompt")])
+        runner.flushQueueIfIdle()
+        await requested.wait()
+
+        let requestId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        #expect(try store.loadQueue(sessionId: "s").first?.fileChangeReportRequestId == requestId)
+        #expect(try Self.storedUserAttachments(store).map { $0.compactMap(\.fileChangeReportRequestId) } == [[requestId]])
+    }
+
+    enum FileChangeReportAttemptAdvance: CaseIterable, Sendable {
+        case edit, uncertainRetry, brokerMismatch
+        /// Sent directly while a turn runs, so it mints without a queue attempt.
+        case forceSendRedirect
+        /// Keeps the attempt, so the resend must match the broker's fingerprint.
+        case transportRetry
+    }
+
+    @Test(arguments: FileChangeReportAttemptAdvance.allCases)
+    func reportRequestFollowsTheBrokerAttempt(advance: FileChangeReportAttemptAdvance) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let id = UUID()
+        session.enqueue(id: id, blocks: [.text("prompt")])
+        session.normalQueuedTurnIDs.insert(id)
+        mock.script(method: "session/prompt") { _ in
+            guard advance == .brokerMismatch else { throw FileChangeReportTransportFailure() }
+            throw ACPClientError.jsonrpc(.init(
+                code: -32076, message: "broker state error: OperationKeyPayloadMismatch", data: nil))
+        }
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        let dispatched = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(session.queue[0])) as? [String: Any])
+        // Only the terminal failure has advanced by now; the key is omitted while false.
+        #expect((dispatched["brokerOperationAttemptIsFresh"] != nil) == (advance == .brokerMismatch))
+        let firstId = try #require(Self.reportRequestIds(mock).first.flatMap { $0 })
+        let rowId = try #require(session.transcript.messages.first?.stableId)
+        let deliver = { (requestId: String, acknowledgement: DurableAcknowledgementRecorder) in
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "s",
+                update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId)),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }))
+        }
+        deliver(firstId, DurableAcknowledgementRecorder())
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session).first?.first?.fileChangeReport != nil)
+        if advance == .transportRetry {
+            try store.db.exec("CREATE TABLE user_row_writes (seq INTEGER)")
+            try store.db.exec("""
+            CREATE TRIGGER count_user_row_writes BEFORE INSERT ON messages WHEN NEW.kind = 'user'
+            BEGIN INSERT INTO user_row_writes VALUES (NEW.seq); END;
+            """)
+        }
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        switch advance {
+        case .edit:
+            session.editQueueItem(id: id, blocks: [.text("edited")])
+        case .uncertainRetry:
+            session.queue[0].markDeliveryUncertain()
+            #expect(session.retryQueueItem(id: id))
+        case .brokerMismatch, .transportRetry:
+            #expect(session.retryQueueItem(id: id))
+        case .forceSendRedirect:
+            session.transcript.streamingState = .streaming
+            runner.forceSendQueuedItem(id: id)
+        }
+        if advance != .forceSendRedirect {
+            runner.persistQueue()
+            await runner.flushPersistence()
+            // A relaunch before the next dispatch must still see the attempt as new.
+            let persisted = try #require(store.loadQueue(sessionId: "s").first)
+            #expect(persisted.brokerOperationAttemptIsFresh == (advance != .transportRetry))
+            #expect(persisted.fileChangeReportRequestId == (advance == .transportRetry ? firstId : nil))
+            runner.flushQueueIfIdle()
+        }
+        try await waitUntil { Self.sentPrompts(mock).count == 2 }
+        await runner.flushPersistence()
+
+        let sent = Self.sentPrompts(mock)
+        let ids = Self.reportRequestIds(mock)
+        #expect(ids[0] == firstId)
+        let secondId = try #require(ids[1])
+        #expect(session.transcript.messages.first?.stableId == rowId)
+        if advance == .transportRetry {
+            #expect(sent[0].brokerOperationKey == sent[1].brokerOperationKey)
+            // The broker fingerprints the method and every param, `_meta` included.
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            let params = try sent.map { try encoder.encode(#require($0.params as? ACPSessionPromptParams)) }
+            #expect(params[0] == params[1])
+            #expect(Self.userAttachments(session).first?.first?.fileChangeReport?.requestId == firstId, "the report landed under this id")
+            #expect(try store.db.query("SELECT seq FROM user_row_writes").isEmpty, "the resend has nothing to write")
+            return
+        }
+        #expect(sent[0].brokerOperationKey != sent[1].brokerOperationKey)
+        #expect(secondId != firstId)
+        let bound: [ACPMessage.Attachment] = [.fileChangeReportReference(requestId: secondId)]
+        #expect(Self.userAttachments(session) == [bound], "one row, on the new id, with no report")
+        #expect(try Self.storedUserAttachments(store) == [bound])
+
+        let lateAcknowledgement = DurableAcknowledgementRecorder()
+        deliver(firstId, lateAcknowledgement)
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session) == [bound], "the old attempt's report is stale")
+        #expect(lateAcknowledgement.recordedCount == 1)
+
+        deliver(secondId, DurableAcknowledgementRecorder())
+        await runner.flushPersistence()
+        #expect(Self.userAttachments(session).first?.first?.fileChangeReport?.requestId == secondId)
+        #expect(try Self.storedUserAttachments(store).first?.first?.fileChangeReport?.requestId == secondId)
+    }
+
+    enum RelaunchLocatabilityRow: CaseIterable, Sendable {
+        case storedId, storedIdWithReport, attemptAdvanced
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: RelaunchLocatabilityRow.allCases)
+    func relaunchRespectsLocatability(row: RelaunchLocatabilityRow) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.agentFileChangeReport = .init()
+        let requestId = "alas-turn:a"
+        let reported = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let reference = row == .storedId ? try FileChangeReportRowCase.reference(nil) : reported
+        let stored: [ACPMessage] = [
+            .user(id: UUID(), text: "prompt", attachments: [reference]),
+            .agent(id: UUID(), StreamingText("working")),
+        ]
+        for (seq, message) in stored.enumerated() {
+            try store.appendMessage(sessionId: "s", id: "m\(seq)", kind: message.kind, seq: Int64(seq),
+                                    payload: ACPMessageCodec.encode(message), createdAt: 1)
+        }
+        var item = QueuedPrompt(blocks: [.text("prompt")], status: .sending, transcriptRecorded: true, dispatchCount: 1,
+                                dispatchedBrokerGeneration: ACPBrokerGeneration(rawValue: 7))
+        item.fileChangeReportRequestId = requestId
+        if row == .attemptAdvanced {
+            item.advanceBrokerOperationAttempt()
+            item.status = .pending
+            item.dispatchedBrokerGeneration = nil
+        }
+        try store.upsertQueue(sessionId: "s", items: [item])
+
+        let hydrated = try await ACPSessionHydrator(path: store.path).hydrate(sessionId: "s")
+        session.transcript.messages = hydrated.wireMessages.map { $0.toMessage() }
+        session.restoreQueue(hydrated.queue, markLegacySendingUncertain: true)
+        #expect(session.transcript.fileChangeReportIndex(requestId: requestId) == 0)
+        #expect(Self.userAttachments(session) == [[reference]], "hydration restores the row intact")
+        #expect(hydrated.deliveredQueuedPromptIDs == (row == .attemptAdvanced ? [] : [item.id]))
+        if row == .attemptAdvanced {
+            #expect(item.restorableDraft.matchesPersistedUserPrompt(text: "prompt", attachments: [reference]),
+                    "the text matches, and still must not attach")
+        }
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(Self.sentPrompts(mock).map(\.brokerOperationKey) == [item.brokerOperationKey])
+        #expect(Self.reportRequestIds(mock) == [row == .attemptAdvanced ? nil : requestId])
+        #expect(Self.userAttachments(session) == [[reference]])
+
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(fileChangeReportInfo(requestId: requestId))))
+        #expect(Self.userAttachments(session) == [[reported]])
+        #expect(session.transcript.messages.count == stored.count)
+    }
+
+    private static func userAttachments(_ session: ACPSession) -> [[ACPMessage.Attachment]] {
+        session.transcript.messages.compactMap {
+            if case .user(_, _, _, let attachments, _, _) = $0 { attachments } else { nil }
+        }
+    }
+
+    private static func storedUserAttachments(_ store: ACPSessionStore) throws -> [[ACPMessage.Attachment]] {
+        try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.compactMap {
+            if case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) {
+                attachments
+            } else {
+                nil
+            }
+        }
+    }
+
+    private static func sentPrompts(_ mock: ACPMockClient) -> [ACPRequest] {
+        mock.sent.filter { $0.method == "session/prompt" }
+    }
+
+    private static func reportRequestIds(_ mock: ACPMockClient) -> [String?] {
+        sentPrompts(mock).map { ($0.params as? ACPSessionPromptParams)?.meta?.agentFileChangeReportRequest?.requestId }
+    }
+
+    // MARK: - Prompts refused before reaching the agent
+
+    /// What makes a prompt refusable, and how the refusal reads.
+    enum RefusedPrompt: CaseIterable, Sendable {
+        case pdfOnCodex, oversized
+
+        var expectedInError: String {
+            switch self {
+            case .pdfOnCodex: "refused.pdf: this agent can't read"
+            case .oversized: "too large"
+            }
+        }
+
+        @MainActor func prepare(_ session: ACPSession) -> [ACPContentBlock] {
+            switch self {
+            case .pdfOnCodex:
+                session.agentInfo = .init(name: "@alas-ide/codex-acp", version: "2.5.0-alas.6")
+                session.promptCapabilities = .init(embeddedContext: true)
+                let uri = Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId)
+                    .appendingPathComponent(String(repeating: "a", count: 64))
+                    .appendingPathComponent("refused.pdf").absoluteString
+                return [.text("keep me"), .resourceLink(uri: uri, name: "refused.pdf")]
+            case .oversized:
+                return [.text("keep me"), .text(String(repeating: "x", count: ACPPromptSizeGuard.maxEncodedBytes))]
+            }
+        }
+    }
+
+    @Test("a refused direct prompt fails visibly, restores its draft, and leaves nothing running",
+          .timeLimit(.minutes(1)), arguments: RefusedPrompt.allCases)
+    func refusedDirectPrompt(refused: RefusedPrompt) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let dispatched = DispatchRegistrationFlag()
+        let succeeded = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: refused.prepare(session), queuedItemId: nil,
+                onDispatchRegistered: { dispatched.markRegistered() },
+                onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(!succeeded, "false is what puts the draft back in the composer")
+        #expect(dispatched.isRegistered)
+        #expect(session.lastError?.contains(refused.expectedInError) == true)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(runner.activePromptIDForTesting == nil)
+        #expect(session.transcript.messages.isEmpty, "resending must not show the prompt twice")
+        #expect(session.turnFailure?.contains(refused.expectedInError) == true)
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    /// Refused by what preflight can't see: hydration reads and encodes the files.
+    enum RefusedOnceHydrated: CaseIterable, Sendable {
+        case overLimit, fileChanged
+
+        var expectedInError: String {
+            switch self {
+            case .overLimit: "too large"
+            case .fileChanged: "no longer a PDF"
+            }
+        }
+
+        /// All 0xFF encodes to base64 slashes, which `JSONEncoder` escapes: about
+        /// 32 MiB once hydrated, while preflight can only count 16 MiB.
+        @MainActor func prepare(_ session: ACPSession) throws -> (blocks: [ACPContentBlock], staged: URL) {
+            session.agentInfo = .init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")
+            session.promptCapabilities = .init(embeddedContext: true)
+            var bytes = Data("%PDF-1.7 \(UUID().uuidString)".utf8)
+            if self == .overLimit { bytes.append(Data(repeating: 0xFF, count: 12 * 1024 * 1024)) }
+            let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: session.attachmentsDirectory)
+            if self == .fileChanged { try Data("changed".utf8).write(to: staged) }
+            return ([.text("read"), .resourceLink(uri: staged.absoluteString, name: "a.pdf")], staged)
+        }
+    }
+
+    @Test("a direct prompt refused once hydrated records no row or checkpoint, and resending shows one row",
+          .timeLimit(.minutes(1)), arguments: RefusedOnceHydrated.allCases)
+    func promptRefusedOnceHydrated(refused: RefusedOnceHydrated) async throws {
+        var checkpoints = 0
+        let (runner, mock, session, _) = try mkRunner(onCheckpointCapture: { _, _ in
+            checkpoints += 1
+            return nil
+        })
+        defer { runner.stop() }
+        let (blocks, staged) = try refused.prepare(session)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        let dispatches = DispatchRegistrationCounter()
+        let delivered = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: blocks, queuedItemId: nil, onDispatchRegistered: { dispatches.increment() },
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(!delivered, "false is what puts the draft back in the composer")
+        #expect(dispatches.count == 1)
+        #expect(session.lastError?.contains(refused.expectedInError) == true)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(checkpoints == 0)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let resent = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: [.text("without it")], queuedItemId: nil,
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(resent)
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+    }
+
+    @Test("a queued retry whose row exists is refused once hydrated without another row", .timeLimit(.minutes(1)))
+    func recordedQueuedPromptRefusedOnceHydrated() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let (blocks, staged) = try RefusedOnceHydrated.fileChanged.prepare(session)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        session.enqueue(blocks: blocks)
+        session.queue[0].transcriptRecorded = true
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.queue.first?.lastError?.contains(RefusedOnceHydrated.fileChanged.expectedInError) == true)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("a refused queued prompt stays at the head with the reason, unrecorded and not resent", .timeLimit(.minutes(1)))
+    func refusedQueuedPrompt() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
+        session.enqueue(blocks: blocks)
+        session.enqueue(blocks: [.text("next")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.queue.first?.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.blocks == blocks)
+        #expect(session.queue.count == 2)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(runner.activePromptIDForTesting == nil)
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    // `.oversized` too: native steering has no preflight, only its own guard.
+    @Test("a refused native steer keeps the follow-up queued with the reason, unrecorded, and frees the next one",
+          .timeLimit(.minutes(1)), arguments: RefusedPrompt.allCases)
+    func refusedSteer(refused: RefusedPrompt) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        // `.oversized` keeps tens of MiB in the store; don't leave it in the temporary directory.
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: store.path + suffix) } }
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let blocks = refused.prepare(session)
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: blocks, intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(accepted, "the queue holds the text, so the composer must not restore it as well")
+        #expect(session.lastError?.contains(refused.expectedInError) == true)
+        let item = try #require(session.queue.first)
+        #expect(item.blocks == blocks)
+        #expect(item.status == .pending)
+        #expect(item.lastError?.contains(refused.expectedInError) == true)
+        #expect(!item.deliveryUncertain, "nothing left Alas, so there is no delivery to doubt")
+        #expect(!mock.sent.contains { $0.method == "_session/steering" })
+        #expect(session.transcript.messages.isEmpty)
+
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.send(blocks: [.text("next")], intent: .steer)
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+    }
+
+    @Test("a refused steer on an agent without native steering leaves the running turn alive", .timeLimit(.minutes(1)))
+    func refusedSteerKeepsRunningTurn() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finish.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.sendNow(blocks: [.text("running")], queuedItemId: nil)
+        await started.wait()
+        let running = runner.activePromptIDForTesting
+        #expect(running != nil)
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: blocks, intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(!accepted, "false is what puts the draft back in the composer")
+        #expect(session.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.activePromptIDForTesting == running)
+    }
+
+    @Test("a refused force-send keeps the item and its draft", .timeLimit(.minutes(1)))
+    func refusedForceSendKeepsItem() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.transcript.streamingState = .streaming
+        let blocks = RefusedPrompt.pdfOnCodex.prepare(session)
+        let draft = ACPComposerDraft(segments: [.text("keep me")])
+        session.enqueue(blocks: blocks, draft: draft)
+        let id = try #require(session.queue.first?.id)
+        runner.forceSendQueuedItem(id: id)
+        await runner.flushPersistence()
+        #expect(session.queue.first?.id == id)
+        #expect(session.queue.first?.draft == draft)
+        #expect(session.queue.first?.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+        #expect(!mock.sent.contains { ["session/cancel", "session/prompt", "_session/steering"].contains($0.method) })
+    }
+
+    @Test("a refused force-send of an uncertain item keeps what reconciliation matches on, and says why elsewhere")
+    func refusedForceSendKeepsUncertainMessage() async throws {
+        let (runner, _, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: RefusedPrompt.pdfOnCodex.prepare(session))
+        session.queue[0].markDeliveryUncertain()
+        let id = try #require(session.queue.first?.id)
+        runner.forceSendQueuedItem(id: id)
+        #expect(session.queue.first?.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        #expect(session.lastError?.contains(RefusedPrompt.pdfOnCodex.expectedInError) == true)
+    }
+
+    @Test("a refused send leaves the Retry of an earlier failed turn in place", .timeLimit(.minutes(1)),
+          arguments: [false, true])
+    func refusedSendKeepsEarlierRetry(refusedOnceHydrated: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        try await Self.negotiateSessionFailure(runner, mock)
+        let body = try Self.failedTurnResponse()
+        mock.script(method: "session/prompt") { _ in body }
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: [.text("fails")], queuedItemId: nil, onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        let retryable = try #require(session.retryableFailure)
+        let hydrationRefused = refusedOnceHydrated ? try RefusedOnceHydrated.overLimit.prepare(session) : nil
+        defer { if let staged = hydrationRefused?.staged { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) } }
+        let blocks = hydrationRefused?.blocks ?? RefusedPrompt.pdfOnCodex.prepare(session)
+        let refused = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: blocks, queuedItemId: nil,
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(!refused)
+        #expect(session.retryableFailure == retryable)
+    }
+
+    @Test("an oversized recovery context is refused before it claims the session")
+    func oversizedRecoveryContextIsRefused() throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let prompt = String(repeating: "x", count: ACPPromptSizeGuard.maxEncodedBytes)
+        #expect(!runner.sendRecoveryContext(prompt))
+        #expect(runner.activePromptIDForTesting == nil)
+        #expect(session.contextRecoveryStatus != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("a staged PDF reaches an eligible adapter as a blob while its row keeps only the link")
+    func stagedPDFIsSentAsBlobAndRecordedAsLink() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.agentInfo = .init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")
+        session.promptCapabilities = .init(embeddedContext: true)
+        let bytes = Data("%PDF-1.7 \(UUID().uuidString)".utf8)
+        let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: session.attachmentsDirectory)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let delivered = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: [.text("read"), .resourceLink(uri: staged.absoluteString, name: "a.pdf")], queuedItemId: nil,
+                onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(delivered)
+        let params = try #require(mock.sent.first { $0.method == "session/prompt" }?.params as? ACPSessionPromptParams)
+        #expect(params.prompt.last == .blobResource(
+            uri: staged.absoluteString, mimeType: "application/pdf", blob: bytes.base64EncodedString()))
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages.first else {
+            Issue.record("expected the user row")
+            return
+        }
+        #expect(attachments == [.init(uri: staged.absoluteString, name: "a.pdf")])
+    }
 }
+
+private final class DispatchRegistrationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+}
+
+private struct FileChangeReportTransportFailure: Error {}
 
 private actor QueueTestGate {
     private var isOpen = false

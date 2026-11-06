@@ -75,8 +75,18 @@ enum HostCommands {
             try await removeProject(arguments[1])
         case ("peers", "list", 1):
             for peer in try await listPeers() {
-                print("\(peer.id)  \(peer.name)  \(peer.serverId)")
+                print("\(peer.id)  \(peer.name)  \(peer.serverId)  agents: \(peer.agentAccess.map(Self.accessLabel) ?? "unavailable")")
             }
+        case ("peers", "agents", 3):
+            let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
+            guard let access = ["off": RemoteDeviceAgentAccess.off, "ask": .ask, "auto": .autoRun][arguments[2]] else {
+                throw HostError.failed(message: "Access must be off, ask or auto.")
+            }
+            try await setPeerAgentAccess(peer.id, access)
+            print("\(peer.id)  \(peer.name)  agents: \(Self.accessLabel(access))")
+        case ("peers", "add", 2):
+            try addPeer(link: arguments[1])
+            print("Paired. To let this host's agents in, allow them on that Mac's row for this host in Settings > Remote > Peers.")
         case ("peers", "remove", 2):
             let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
             try await forgetPeer(peer.id)
@@ -236,14 +246,56 @@ enum HostCommands {
         try await perform(.listPeers) {
             if case .peers(let peers) = $0 { peers } else { nil }
         } inProcess: { _ in
-            localPeerManager().peers.map { HostPeerSummary(id: $0.id, serverId: $0.serverId, name: $0.name, origins: $0.origins) }
+            localPeerManager().summaries
         }
     }
 
     static func forgetPeer(_ id: String) async throws {
-        try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { _ in
+        try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { host in
             // The pairing service's revoke persists the device revocation.
-            localPeerManager().forget(peerId: id)
+            let peers = localPeerManager()
+            let peer = peers.peers.first { $0.id == id }
+            peers.forget(peerId: id)
+            // Awaited, as this process ends next.
+            if let peer {
+                await host.coreContext.orchestration.peerForgottenWithoutHost(serverId: peer.serverId, name: peer.name)
+            }
+        }
+    }
+
+    /// Pairs the running host with a Mac. Booted in process it cannot work:
+    /// the Mac pairs back to the host's Remote server, which needs to be up.
+    static func addPeer(link: String) throws {
+        switch try writableHolder() {
+        case .host:
+            let response = try askRunningHost(.addPeer(link: link))
+            guard response == .done else {
+                if case .failure(.invalidRequest) = response {
+                    throw HostCommandError("the running host is older and cannot add peers; restart it: alas-host restart")
+                }
+                if case .failure(let error) = response { throw error }
+                throw HostCommandError("the host answered \(response)")
+            }
+        case .none:
+            throw HostCommandError("No host is running. Start it, with Remote on, and run this again: the Mac pairs back to it.")
+        case .app, .unknown:
+            fatalError("refused by writableHolder()")
+        }
+    }
+
+    static func setPeerAgentAccess(_ id: String, _ access: RemoteDeviceAgentAccess) async throws {
+        try await perform(.setPeerAgentAccess(peerID: id, access: access)) { $0 == .done ? () : nil } inProcess: { _ in
+            guard localPeerManager().setAgentAccess(access, peerId: id) else {
+                throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
+            }
+        }
+    }
+
+    private static func accessLabel(_ access: RemoteDeviceAgentAccess) -> String {
+        switch access {
+        case .off: "off"
+        case .ask: "ask"
+        case .autoRun: "auto"
         }
     }
 
@@ -262,12 +314,7 @@ enum HostCommands {
     ) async throws -> T {
         switch try writableHolder() {
         case .host:
-            let response: HostResponse
-            do {
-                response = try HostSocketServer.request(request)
-            } catch {
-                throw HostCommandError("no host serves \(HostSocketServer.defaultPath()): \(error.localizedDescription)")
-            }
+            let response = try askRunningHost(request)
             if case .failure(let error) = response { throw error }
             guard let result = decode(response) else { throw HostCommandError("the host answered \(response)") }
             return result
@@ -287,6 +334,14 @@ enum HostCommands {
             }
         case .app, .unknown:
             fatalError("refused by writableHolder()")
+        }
+    }
+
+    private static func askRunningHost(_ request: HostRequest) throws -> HostResponse {
+        do {
+            return try HostSocketServer.request(request)
+        } catch {
+            throw HostCommandError("no host serves \(HostSocketServer.defaultPath()): \(error.localizedDescription)")
         }
     }
 
