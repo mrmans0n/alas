@@ -117,17 +117,27 @@ struct ACPToolbar: View {
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(1)
             }
-            ForEach(peerChildren, id: \.childSessionId) { child in
-                Button {
-                    state.openPeerChild(child)
+            ForEach(ACPPeerChildPolicy.menus(for: peerChildren.map {
+                .init(childSessionId: $0.childSessionId, serverId: $0.serverId, macName: $0.macName,
+                      agentId: $0.agentId, phase: $0.phase)
+            }), id: \.serverId) { menu in
+                Menu {
+                    ForEach(menu.items, id: \.childSessionId) { item in
+                        Button(item.title) {
+                            if let child = peerChildren.first(where: { $0.childSessionId == item.childSessionId }) {
+                                state.openPeerChild(child)
+                            }
+                        }
+                    }
                 } label: {
-                    Text(ACPPeerChildPolicy.label(macName: child.macName))
+                    Text(menu.title)
                         .font(.system(size: 11))
                         .lineLimit(1)
                 }
-                .buttonStyle(.toolbarControl)
-                .help("Open the \(child.agentId) session running on \(child.macName)")
-                .accessibilityLabel("Open session \(ACPPeerChildPolicy.label(macName: child.macName))")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Sessions running on another Mac")
+                .accessibilityLabel("Sessions \(menu.title)")
             }
             if showsShepherdButton {
                 ACPShepherdButton(session: session, worktree: worktree, state: state)

@@ -601,13 +601,22 @@ When the other Mac cannot be reached:
 | `session_read`, `session_send`, `session_interrupt` | An error naming the Mac |
 
 A lost connection does not fail the child. After 15 minutes offline with a child
-that was last seen unfinished and that the parent was waiting on, the parent gets
-one notice (not a wake) that it may still be running. When the Mac is back,
-anything that finished meanwhile is delivered then, once.
+that the parent was waiting on, the parent gets one notice (not a wake) that it
+may still be running. When the Mac is back, anything that finished meanwhile is
+delivered then, once.
 
 A child is failed, with a wake, only on proof it is gone. In `session_wait` that
 state is `gone` and also settled. It happens when the other Mac reports it has no
-such child, when it rejects this Mac's pairing, or when you forget it here.
+such child.
+
+Revoking or forgetting a Mac has a limit. If the Mac rejects this Mac's pairing, or
+you forget it here, Alas fails the children it still knows are starting or being
+waited on, in the same run of the app. The set of children being waited on lives
+in memory only. After this Mac restarts, a running child of a revoked or
+forgotten Mac is not failed and wakes nothing; the parent finds out when it asks
+about that child (`session_wait` then reports `gone` or an error). The 15-minute
+offline notice uses the same in-memory set, so it is not sent for a child the
+parent was waiting on before a restart.
 
 A child blocked on a permission, question or plan shows the same notices as a
 local one. On this Mac you also get a macOS notification, if *Notify when AI harness needs input*
@@ -616,9 +625,12 @@ is on, that opens the session on the other Mac.
 ### In the app
 
 A child running on another Mac has no session on this one. Its parent's toolbar
-shows a button "on \<Mac\>" that opens that session in the peer view. If the
-Mac is not connected, or has not listed the session yet, Alas says so and stays
-where it is. The child's own tab on the other Mac says "From \<this Mac\>".
+shows one menu per Mac, "on \<Mac\>" (with a count when more than one child
+went there). Each entry is the agent, the first eight characters of the session
+id and its state. Running children come first, failed and closed ones last, and
+at most the ten most recent are listed. Choosing one opens that session in the
+peer view. If the Mac is not connected, or has not listed the session yet, Alas
+says so and stays where it is. The child's own tab on the other Mac says "From \<this Mac\>".
 
 ## Across an app restart
 

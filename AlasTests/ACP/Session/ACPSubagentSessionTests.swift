@@ -1644,6 +1644,24 @@ struct ACPSubagentSessionTests {
 
 @Suite("Subagent row policy")
 struct ACPSubagentRowPolicyTests {
+    @Test("peer children get one menu per Mac, newest first, ended ones last, capped")
+    func peerChildMenus() {
+        func child(_ id: String, _ phase: ACPDelegationPhase, mac: String = "srv-1") -> ACPPeerChildPolicy.Child {
+            .init(childSessionId: id, serverId: mac, macName: mac == "srv-1" ? "mini" : "studio", agentId: "codex", phase: phase)
+        }
+        let menus = ACPPeerChildPolicy.menus(for: [
+            child("aaaaaaaa-1", .failed), child("bbbbbbbb-2", .ready), child("cccccccc-3", .closed),
+            child("dddddddd-4", .starting), child("eeeeeeee-5", .ready, mac: "srv-2"),
+        ])
+        #expect(menus.map(\.title) == ["on mini (4)", "on studio"])
+        #expect(menus[0].items.map(\.childSessionId) == ["dddddddd-4", "bbbbbbbb-2", "cccccccc-3", "aaaaaaaa-1"])
+        #expect(menus[0].items[0].title == "codex dddddddd · Starting")
+        let many = ACPPeerChildPolicy.menus(for: (1...14).map { child("id\($0)xxxxxx", $0 <= 2 ? .failed : .ready) })
+        #expect(many[0].items.count == 10)
+        #expect(many[0].items.first?.childSessionId == "id14xxxxxx")
+        #expect(many[0].items.allSatisfy { !$0.title.contains("Failed") })
+    }
+
     @Test(
         "a peer child row opens only when its Mac is connected and lists it",
         arguments: [

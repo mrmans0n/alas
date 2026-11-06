@@ -904,8 +904,10 @@ row and the child row by eye, along with the steps below.
    worktrees, and `session_new` starts a child. Confirm the child exists on the
    target with "From <source>" on its tab, its sidebar row, and in the peer view
    on the source.
-4. On the source, confirm the parent's toolbar shows a button "on <target>".
-   Click it: the child opens in the peer view. Disconnect the target (turn
+4. On the source, confirm the parent's toolbar shows a menu "on <target>"
+   (with a count when several children went there) listing each child by agent,
+   short id and state, running first and failed or closed last, at most ten.
+   Choose one: the child opens in the peer view. Disconnect the target (turn
    Remote off there) and click again: Alas says the Mac is not connected and
    stays where it is.
 5. Let the child finish. Confirm the parent wakes once with a card that names
@@ -936,10 +938,17 @@ row and the child row by eye, along with the steps below.
 10. Restart the source during a turn, then the target during a turn. In both
     cases the parent gets one wake with the result, and no child is marked failed
     only for the restart.
-11. Revoke the pairing on the target during a turn. The source's children of
-    that Mac fail with one wake each and `session_wait` reports `gone` or the
-    failure. Forget the peer on the source: its unfinished children fail the same
+11. Same app run, no restart: with a child running and its parent waiting on it
+    with `session_wait`, revoke the pairing on the target. Confirm the child is
+    failed with one wake and `session_wait` settles. Repeat by forgetting the
+    peer on the source: the children it was waiting on or starting fail the same
     way.
+11a. Restart limit: with a child running that the parent is not currently
+    waiting on, restart the source, then revoke (or forget) the target. The
+    child is not failed and the parent is not woken. Only when the parent asks
+    (`session_read` or `session_wait` on it) does it learn the child is gone.
+    The 15-minute offline notice (step 9) is likewise not sent for a child the
+    parent was waiting on before a restart.
 12. Set access to Off during a turn. The turn finishes and reports back; new
     `session_new` and `session_send` are refused; `session_read` and
     `session_interrupt` still work.

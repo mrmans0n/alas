@@ -237,7 +237,9 @@ public final class ACPPeerOutboxCollector {
             ) : entry
             let won = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
             collected(entry)
-            if won, kept.isBlockedNotice { childBlocked(serverId, child, kept) }
+            // Decided from the original entry: a failed child's wake was rewritten
+            // to a notice above, and it has nothing left to be blocked on.
+            if won, child.phase != .failed, entry.isBlockedNotice { childBlocked(serverId, child, entry) }
             // The parent is woken even when another collector won: delivery
             // is idempotent, and that one may have stopped before it got there.
             return .some(child)

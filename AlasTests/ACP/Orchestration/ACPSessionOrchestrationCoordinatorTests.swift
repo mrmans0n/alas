@@ -2389,6 +2389,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         _ fixture: OrchestrationFixture, peers: FakePeers,
         deliver: (@MainActor (ACPDelegationRecord) async -> Void)? = nil,
         afterDeliver: @escaping @MainActor () -> Void = {},
+        childBlocked: @escaping @MainActor (String, ACPDelegationRecord, ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) -> ACPPeerOutboxCollector {
         let coordinator = fixture.coordinator
@@ -2402,6 +2403,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             outboxChanged: { coordinator.peerOutboxDidChange(serverId: $0) },
             availabilityChanged: { coordinator.peerAvailabilityChanged(serverId: $0) },
             collected: { coordinator.peerEntryCollected($0) },
+            childBlocked: childBlocked,
             retryStarts: { await coordinator.retryPeerStarts(serverId: $0) },
             schedule: schedule
         )
@@ -2547,6 +2549,22 @@ struct ACPSessionOrchestrationCoordinatorTests {
         // Acknowledging the cursor deletes the peer's copy, so both must be here.
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1", "outcome-2"])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    @Test(arguments: [(phase: ACPDelegationPhase.ready, announced: true), (phase: .failed, announced: false)])
+    func blockedNoticeIsAnnouncedOnlyForAChildThatCanStillBeBlocked(phase: ACPDelegationPhase, announced: Bool) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, phase: phase)
+        let blocked = ACPPeerOutboxEntry(
+            seq: 1, messageId: "blocker-child-r1-notice", childSessionId: "child", prompt: "blocked", kind: .notice, createdAt: 1)
+        peers.outboxAnswer = FakePeers.paged([blocked], pageSize: 5)
+        var announcements: [String] = []
+
+        await makeCollector(fixture, peers: peers, childBlocked: { _, child, _ in announcements.append(child.childSessionId) })
+            .collect(serverId: "srv-1")
+
+        #expect(announcements == (announced ? ["child"] : []))
     }
 
     @Test func noticeEntryDoesNotWakeParent() async throws {

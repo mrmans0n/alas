@@ -2358,7 +2358,8 @@ final class AppState {
                 guard let self, self.config.harness.notifyOnAwaiting else { return }
                 self.harness.notifications.notifyPeerNotice(
                     body: ACPPeerChildPolicy.blockedNotificationBody(
-                        macName: self.core.peerMacName(serverId: serverId)),
+                        macName: self.core.peerMacName(serverId: serverId),
+                        agentId: child.agentId, childSessionId: child.childSessionId),
                     title: "Delegated session needs input",
                     agent: ACPHarnessBridge.agentKind(for: child.agentId),
                     serverId: serverId, sessionId: child.childSessionId
