@@ -62,9 +62,23 @@ extension AlasCoreContext {
     /// whose worktree is not loaded yet, both go through them. Recovery's own
     /// order does not matter to it. The collector takes over the peers'
     /// outbox and availability signals and hands them to the coordinator's
-    /// waits, so it must be the only one installing them.
+    /// waits, so it must be the only one installing them. It need not have
+    /// any peers yet: collection starts when `delegationPeers` is set.
     @_spi(AppHost) public func startCollectingPeerOutcomes() {
-        guard peerOutboxCollector == nil, let peers = delegationPeers else { return }
+        guard !collectsPeerOutcomes else { return }
+        collectsPeerOutcomes = true
+        bindPeerOutboxCollector()
+    }
+
+    /// Replaces the collector with one over the current `delegationPeers`. A
+    /// client replaced since cannot reach its peers, and the new one's signals
+    /// would go nowhere. The cursor is stored, so nothing is collected twice.
+    func bindPeerOutboxCollector() {
+        guard collectsPeerOutcomes else { return }
+        guard let peers = delegationPeers else {
+            peerOutboxCollector = nil
+            return
+        }
         let orchestration = orchestration
         let collector = ACPPeerOutboxCollector(
             peers: peers,

@@ -162,6 +162,36 @@ struct DelegationRecoveryTests {
         #expect(try await fixture.persistence.delegation(childSessionId: "ready")?.phase == .ready)
     }
 
+    /// Remote can come on after launch, when nothing is there to collect from
+    /// yet, and each time it does it brings a new client: the old one's
+    /// channels are gone, and the signals go to the new one's slots.
+    @Test(.timeLimit(.minutes(2))) func collectionFollowsPeersSetAndReplacedAfterItWasRequested() async throws {
+        let fixture = try PeerHostFixture()
+        defer { fixture.tearDown() }
+        try await fixture.seedQueuedTurn(sessionIDs: [], otherSessionIDs: ["parent"])
+        try await fixture.persistence.insert(fixture.childOnAPeer(phase: .ready))
+        func outcome(_ seq: Int64) -> ACPPeerOutboxEntry {
+            .init(seq: seq, messageId: "outcome-\(seq)", childSessionId: "on-peer", prompt: "done \(seq)", kind: .prompt, createdAt: seq)
+        }
+        let agent = fixture.agent
+        func delivered(_ seq: Int64) async throws {
+            try await eventually { @MainActor in Self.prompts(agent).contains { $0.contains("done \(seq)") } }
+        }
+
+        fixture.core.startCollectingPeerOutcomes()
+        let first = FakePeers(entries: [outcome(1)])
+        fixture.core.delegationPeers = first
+        try await delivered(1)
+
+        let second = FakePeers(entries: [outcome(1), outcome(2)])
+        fixture.core.delegationPeers = second
+        try await delivered(2)
+
+        second.entries.append(outcome(3))
+        second.onOutboxChanged?("s1")
+        try await delivered(3)
+    }
+
     /// Wired as headless boot wires it, a child blocked with no app around
     /// reaches the peer.
     @Test(.timeLimit(.minutes(1))) func blockedChildOfAHeadlessBuiltManagerReachesTheOutbox() async throws {
@@ -186,6 +216,35 @@ struct DelegationRecoveryTests {
         let entries = try await persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries
         #expect(entries.map(\.kind) == [.notice])
         #expect(entries.first?.prompt.contains("waiting for a human decision") == true)
+    }
+
+    private static func prompts(_ agent: ACPMockClient) -> [String] {
+        agent.sent.compactMap { $0.params as? ACPSessionPromptParams }.map { params in
+            params.prompt.compactMap { block -> String? in
+                guard case .text(let text) = block else { return nil }
+                return text
+            }.joined()
+        }
+    }
+
+    /// An online Mac whose outbox holds `entries`, and which answers nothing else.
+    @MainActor private final class FakePeers: ACPDelegationPeers {
+        var entries: [ACPPeerOutboxEntry]
+        let peers = [ACPDelegationPeerInfo(name: "Studio", serverId: "s1", state: .online, supportsDelegation: true)]
+        var onOutboxChanged: (@MainActor (String) -> Void)?
+        var onAvailabilityChanged: (@MainActor (String) -> Void)?
+
+        init(entries: [ACPPeerOutboxEntry]) { self.entries = entries }
+
+        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+            .success(.init(entries: entries.filter { $0.seq > after }, hasMore: false))
+        }
+        func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError> { .failure(.notFound) }
+        func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError> { .failure(.notFound) }
+        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> { .failure(.notFound) }
+        func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
+        func status(serverId: String, sessionIDs: [String]) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
+        func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> { .failure(.notFound) }
     }
 
     /// A host whose managers come from `sessionManagerFactory`, as headless
@@ -246,6 +305,15 @@ struct DelegationRecoveryTests {
                 parentWorktreeId: worktree.id, childWorktreeId: worktree.id, agentId: "gemini",
                 worktreeRequest: .existing(worktreeId: worktree.id),
                 pendingInitialPrompt: pendingInitialPrompt, phase: phase, failureMessage: nil, createdAt: 1, updatedAt: 1
+            )
+        }
+
+        /// A child this host delegated to a paired Mac, from root session `parent`.
+        func childOnAPeer(phase: ACPDelegationPhase) -> ACPDelegationRecord {
+            ACPDelegationRecord(
+                childSessionId: "on-peer", parentSessionId: "parent", projectId: "p", parentWorktreeId: worktree.id,
+                agentId: "gemini", worktreeRequest: .current(worktreeId: worktree.id), phase: phase,
+                createdAt: 1, updatedAt: 1, peerServerId: "s1"
             )
         }
 

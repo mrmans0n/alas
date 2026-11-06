@@ -139,8 +139,15 @@ public final class AlasCoreContext {
     @ObservationIgnored var peerOutboxDidChange: (@MainActor (String) -> Void)?
     /// How agents here reach paired Macs' hosts; the app installs it with its
     /// peer links, and a host without any leaves it nil.
-    @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)?
-    /// Collects outcomes from paired Macs once `startCollectingPeerOutcomes` ran.
+    /// Remote can come on long after launch, and each time it does it installs
+    /// a new client, so collection follows this.
+    @ObservationIgnored public var delegationPeers: (any ACPDelegationPeers)? {
+        didSet { bindPeerOutboxCollector() }
+    }
+    /// Whether `startCollectingPeerOutcomes` ran.
+    @ObservationIgnored var collectsPeerOutcomes = false
+    /// Collects outcomes from the current `delegationPeers` once
+    /// `startCollectingPeerOutcomes` ran.
     @ObservationIgnored var peerOutboxCollector: ACPPeerOutboxCollector?
     /// Told when a child on a paired Mac is blocked on a person: the Mac's
     /// `serverId`, the child's record, and the notice.
