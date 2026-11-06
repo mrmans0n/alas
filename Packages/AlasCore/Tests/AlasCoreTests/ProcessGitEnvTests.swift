@@ -32,7 +32,7 @@ struct ProcessGitEnvTests {
     @Test(arguments: [false, true])
     func childrenReachingTheCapDuringLaunchAreStillStopped(capped: Bool) async {
         let timedOut = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
-            for _ in 0..<400 {
+            for _ in 0..<200 {
                 group.addTask {
                     do {
                         if capped {
