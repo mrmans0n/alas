@@ -647,6 +647,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peerWorktreeBase: Result<String, ACPSessionOrchestrationCoordinator.WorktreeCreationError> = .success("origin/main"),
         onPeerWorktree: @escaping (_ base: String) -> Void = { _ in },
         peers: (any ACPDelegationPeers)? = nil,
+        sessionPersistence: ACPSessionPersistence? = nil,
         originRemote: String? = "github.com/o/r",
         nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
         pause: @escaping (Duration) async -> Void = { _ in await Task.yield() },
@@ -662,6 +663,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             worktreeId: "worktree",
             worktreePath: root.path,
             store: try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path),
+            persistence: sessionPersistence,
             setupEvaluator: setupEvaluator,
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             delegatedSelectionHoldResolver: { id in
@@ -2509,8 +2511,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try remoteFixture(peers: peers)
         try await insertRemoteChild(fixture.persistence)
         switch stranger {
-        case "anotherPeer": try await insertRemoteChild(fixture.persistence, id: "stranger", parent: "elsewhere", server: "srv-2")
-        case "local": try await insertRemoteChild(fixture.persistence, id: "stranger", parent: "elsewhere", server: nil)
+        case "anotherPeer": try await insertRemoteChild(fixture.persistence, id: "stranger", parent: "parent", server: "srv-2")
+        case "local": try await insertRemoteChild(fixture.persistence, id: "stranger", parent: "parent", server: nil)
         default: break
         }
         peers.outboxAnswer = FakePeers.paged([Self.outcome(1, child: "stranger"), Self.outcome(2)], pageSize: 5)
@@ -2518,7 +2520,23 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
 
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-2"])
-        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "elsewhere").isEmpty)
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    @Test func unreadableSessionStoreNeverCountsAsAGoneParent() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        // A session store that cannot be read: not a database at all.
+        let unreadable = FileManager.default.temporaryDirectory.appendingPathComponent("unreadable-\(UUID().uuidString).sqlite")
+        try Data("not a database".utf8).write(to: unreadable)
+        let fixture = try remoteFixture(peers: peers, sessionPersistence: ACPSessionPersistence(path: unreadable.path))
+        fixture.manager.closeSession(id: "parent")
+        try await insertRemoteChild(fixture.persistence)
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1), Self.outcome(2)], pageSize: 5)
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        // Acknowledging the cursor deletes the peer's copy, so both must be here.
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1", "outcome-2"])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
     }
 
@@ -2820,12 +2838,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
     /// in its inbox.
     private func remoteFixture(
         peers: FakePeers, clock: TestClock = TestClock(), onPause: @escaping () async -> Void = {},
+        sessionPersistence: ACPSessionPersistence? = nil,
         now: @escaping () -> Int64 = { 100 },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         try makeModelSelectionFixture(
             client: makeSelectionClient(), setupEvaluator: { _ in .missing(reason: "Stays local") },
-            peers: peers, nowMillis: { clock.millis }, pause: { _ in
+            peers: peers, sessionPersistence: sessionPersistence, nowMillis: { clock.millis }, pause: { _ in
                 clock.millis += clock.step
                 await onPause()
                 await Task.yield()

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -2342,7 +2343,15 @@ public final class ACPSessionOrchestrationCoordinator {
               let worktree = environment.worktree(child.parentWorktreeId),
               let manager = environment.manager(worktree)
         else { return false }
-        return await manager.persistedSessionRow(id: child.parentSessionId) == nil
+        do {
+            return try await manager.storedSessionRow(id: child.parentSessionId) == nil
+        } catch {
+            // A failed read proves nothing, and the collector acts on "gone"
+            // by dropping the outcome for good.
+            Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                .error("Could not tell whether parent \(child.parentSessionId, privacy: .public) exists: \(String(describing: error), privacy: .public)")
+            return false
+        }
     }
 
     public func deliverPendingMessages(

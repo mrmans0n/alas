@@ -149,7 +149,8 @@ public final class ACPPeerOutboxCollector {
                 isGone = known
             } else {
                 isGone = await parentIsGone(child)
-                gone[child.parentSessionId] = isGone
+                // Only a definite absence is remembered.
+                if isGone { gone[child.parentSessionId] = true }
             }
             if isGone {
                 try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq)

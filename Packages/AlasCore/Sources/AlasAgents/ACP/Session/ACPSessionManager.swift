@@ -2847,17 +2847,23 @@ public final class ACPSessionManager: ChangeTracking {
     /// covers rows outside the lazy recent-session cache before a tab title is
     /// chosen.
     public func persistedSessionRow(id: ACPSession.ID) async -> ACPSessionRow? {
-        await previousManagerDisposal?.value
-        if let row = persistedRows[id] { return row }
         do {
-            guard let row = try await persistence.loadSession(id: id) else { return nil }
-            persistedRows[id] = row
-            missingPersistedSessionIds.remove(id)
-            return row
+            return try await storedSessionRow(id: id)
         } catch {
             persistenceError = error.localizedDescription
             return nil
         }
+    }
+
+    /// Like `persistedSessionRow`, but a failed read throws instead of
+    /// looking like a session that does not exist.
+    public func storedSessionRow(id: ACPSession.ID) async throws -> ACPSessionRow? {
+        await previousManagerDisposal?.value
+        if let row = persistedRows[id] { return row }
+        guard let row = try await persistence.loadSession(id: id) else { return nil }
+        persistedRows[id] = row
+        missingPersistedSessionIds.remove(id)
+        return row
     }
 
     /// Awaits any in-flight background backfill of older transcript messages
