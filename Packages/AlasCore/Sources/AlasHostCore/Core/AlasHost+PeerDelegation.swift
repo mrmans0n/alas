@@ -30,16 +30,24 @@ extension DelegationAPI {
     static let outboxPageBudget = RemoteServerMessage.sendBudget - 4_096
     /// The most an encoded character can cost, as `\u0001`.
     private static let maxEncodedBytesPerByte = 6
+    /// As many as one `session_wait` may name: each id costs a store read and
+    /// possibly loading a transcript, and needs no consent.
+    nonisolated static let maxStatusSessions = ACPDelegatedSessionWaitRequest.maxSessions
+    /// A child id is stored, and echoed in every reply about the child, so it
+    /// must stay small for an outbox entry to fit a frame. A UUID fits.
+    nonisolated static let maxChildIDLength = 128
+
+    nonisolated static let accessOffRefusal = "Agents on that Mac may not use this one. Allow them in this Mac's Remote settings."
+    nonisolated static let notAPeerRefusal = "Only a paired Mac may delegate to this host."
+    nonisolated static let unknownPeerRefusal = "This Mac does not know that Mac's identity. Pair them again to allow this."
 
     /// `device` is the one the transport identified for `caller`, if any.
     func serve(_ request: HostDelegationRequest, device: RemoteDevice?, caller: HostCaller) async throws -> HostResponse {
         guard PeerDelegationGate.allows(request.verb, device: device), let device else {
-            throw HostError.failed(message: device?.kind == .alasInstance
-                ? "Agents on that Mac may not use this one. Allow them in this Mac's Remote settings."
-                : "Only a paired Mac may delegate to this host.")
+            throw HostError.failed(message: device?.kind == .alasInstance ? Self.accessOffRefusal : Self.notAPeerRefusal)
         }
         guard let peerServerId = device.peerServerId, !peerServerId.isEmpty else {
-            throw HostError.failed(message: "This Mac does not know that Mac's identity. Pair them again to allow this.")
+            throw HostError.failed(message: Self.unknownPeerRefusal)
         }
         caller.log("delegation", "\(request.verb) from \(peerServerId)")
         switch request {
@@ -64,6 +72,9 @@ extension DelegationAPI {
                 peerServerId: peerServerId
             )))
         case .status(let sessionIDs):
+            guard sessionIDs.count <= Self.maxStatusSessions else {
+                throw HostError.invalidRequest(reason: "A status names at most \(Self.maxStatusSessions) sessions.")
+            }
             return .delegation(.status(data: try await status(sessionIDs: sessionIDs, peerServerId: peerServerId)))
         case .interrupt(let sessionID):
             let origin = try await peerOrigin(ofChild: sessionID, peerServerId: peerServerId)
@@ -123,7 +134,7 @@ extension DelegationAPI {
     private func start(
         _ start: HostDelegationStart, peerServerId: String, access: RemoteDeviceAgentAccess
     ) async throws -> HostDelegationResponse {
-        guard !start.childID.isEmpty, !start.childID.hasPrefix(ACPPeerParent.prefix) else {
+        guard Self.isValidChildID(start.childID) else {
             throw HostError.invalidRequest(reason: "That is not a child session id.")
         }
         let projectID: String
@@ -148,6 +159,19 @@ extension DelegationAPI {
         switch result {
         case .started(let sessionID, let state): return .started(sessionID: sessionID, state: state)
         case .refused(let reason): throw HostError.failed(message: reason)
+        }
+    }
+
+    /// Letters, digits, `-` and `_`, which also keeps out a sentinel's `peer:`.
+    private static func isValidChildID(_ id: String) -> Bool {
+        !id.isEmpty && id.utf8.count <= maxChildIDLength && id.utf8.allSatisfy { byte in
+            switch byte {
+            case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                 UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "-"), UInt8(ascii: "_"):
+                true
+            default:
+                false
+            }
         }
     }
 

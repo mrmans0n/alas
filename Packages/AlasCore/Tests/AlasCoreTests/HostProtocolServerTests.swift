@@ -3257,21 +3257,26 @@ struct HostProtocolServerTests {
     }
 
     @Test(arguments: [
-        HostCaller.app, .cli, .session(id: "child"), .localUser(uid: 501),
-        .remotePeer(deviceID: "browser"), .remotePeer(deviceID: "unknown"), .remotePeer(deviceID: "no-server-id"),
+        (HostCaller.app, DelegationAPI.notAPeerRefusal), (.cli, DelegationAPI.notAPeerRefusal),
+        (.session(id: "child"), DelegationAPI.notAPeerRefusal), (.localUser(uid: 501), DelegationAPI.notAPeerRefusal),
+        (.remotePeer(deviceID: "browser"), DelegationAPI.notAPeerRefusal), (.remotePeer(deviceID: "unknown"), DelegationAPI.notAPeerRefusal),
+        (.remotePeer(deviceID: "no-server-id"), DelegationAPI.unknownPeerRefusal),
     ])
-    func delegationIsRefusedForEveryCallerExceptAPeerInstance(caller: HostCaller) async throws {
+    func delegationIsRefusedForEveryCallerExceptAPeerInstance(caller: HostCaller, refusal: String) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        try fixture.seedSessions(["child"])
 
-        for request in [HostDelegationRequest.discover(repository: nil), .status(sessionIDs: ["child"]), .outbox(after: 0)] {
-            let response = await fixture.ask(request, as: caller)
-            guard case .failure(.failed) = response else {
-                Issue.record("\(request) answered \(response)")
-                continue
-            }
+        for request in [
+            HostDelegationRequest.discover(repository: nil), .start(fixture.start(child: "new")), .send(sessionID: "child", prompt: "Go"),
+            .read(sessionID: "child", offset: nil, limit: nil, maxChars: nil), .status(sessionIDs: ["child"]),
+            .interrupt(sessionID: "child"), .outbox(after: 0),
+        ] {
+            #expect(await fixture.ask(request, as: caller) == .failure(error: .failed(message: refusal)), "\(request)")
         }
+        #expect(try await fixture.persistence.delegation(childSessionId: "new") == nil)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
     }
 
     @Test func startIsRefusedWhileOffAndNoSessionIsCreated() async throws {
@@ -3280,15 +3285,29 @@ struct HostProtocolServerTests {
 
         let response = await fixture.ask(.start(fixture.start(child: "child")), as: fixture.offPeer)
 
-        guard case .failure(.failed) = response else {
-            Issue.record("\(response)")
-            return
-        }
+        #expect(response == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
         #expect(try await fixture.persistence.delegation(childSessionId: "child") == nil)
     }
 
-    /// The id comes from the peer, and a sentinel is what marks a peer's parent.
-    @Test(arguments: ["", "peer:s2"])
+    /// Status needs no consent, so its cost is bounded for any paired Mac.
+    @Test func statusRefusesMoreSessionsThanOneWaitMayName() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let ids = (0...DelegationAPI.maxStatusSessions).map { "id-\($0)" }
+
+        guard case .failure(.invalidRequest) = await fixture.ask(.status(sessionIDs: ids), as: fixture.offPeer) else {
+            Issue.record("An oversized status was not refused")
+            return
+        }
+        guard case .delegation(.status) = await fixture.ask(.status(sessionIDs: Array(ids.dropLast())), as: fixture.offPeer) else {
+            Issue.record("A status of the most sessions allowed was refused")
+            return
+        }
+    }
+
+    /// The id comes from the peer, a sentinel is what marks a peer's parent,
+    /// and a long id would stop its outbox entries fitting a frame.
+    @Test(arguments: ["", "peer:s2", "a/b", "a b", "a\n", "caf\u{E9}", String(repeating: "x", count: DelegationAPI.maxChildIDLength + 1)])
     func startRefusesAChildIDThatCouldNotBeAChild(childID: String) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
@@ -3306,8 +3325,8 @@ struct HostProtocolServerTests {
     @Test func startLooksUpTheWorktreeItsTargetNames() async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
-        func refusal(_ ref: WorktreeRef) async -> String? {
-            var start = fixture.start(child: "child")
+        func refusal(_ ref: WorktreeRef, child: String = UUID().uuidString) async -> String? {
+            var start = fixture.start(child: child)
             start.target = .worktree(ref)
             if case .failure(.failed(let message)) = await fixture.ask(.start(start), as: fixture.peer1) { return message }
             return nil
@@ -3317,6 +3336,8 @@ struct HostProtocolServerTests {
 
         #expect(await refusal(WorktreeRef(projectID: "other", path: listed)) == "The project is no longer available.")
         #expect(await refusal(WorktreeRef(projectID: "p", path: "/not/listed")) == notListed)
+        let longest = String(repeating: "x", count: DelegationAPI.maxChildIDLength)
+        #expect(await refusal(WorktreeRef(projectID: "p", path: "/not/listed"), child: longest) == notListed)
         #expect(await refusal(WorktreeRef(projectID: "p", path: listed)) != notListed)
     }
 
@@ -3391,10 +3412,7 @@ struct HostProtocolServerTests {
         #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false)))
 
         let send = HostDelegationRequest.send(sessionID: "child", prompt: "Go")
-        guard case .failure(.failed) = await fixture.ask(send, as: rePaired) else {
-            Issue.record("send was not refused while off")
-            return
-        }
+        #expect(await fixture.ask(send, as: rePaired) == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
 
         #expect(fixture.pairing.setAgentAccess(.ask, deviceId: "s1-repaired"))
@@ -3663,16 +3681,19 @@ struct HostProtocolServerTests {
             let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             self.persistence = persistence
             let database = root.appendingPathComponent("sessions.sqlite")
+            // A blocked child's escalation check must not outlive the test.
+            var configuration = AppConfig.defaults
+            configuration.harness.acpDelegatedBlockerEscalationSeconds = 0
             core = AlasCoreContext(
                 projects: projects, runHistoryStore: nil, attentionStore: .scratch(),
                 makeSessionManager: AlasCoreContext.sessionManagerFactory(
-                    config: { .defaults },
+                    config: { configuration },
                     onChildBlocked: { _ in },
                     sessionsDB: { _ in database },
                     setupEvaluator: { _ in .ready },
                     connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                 ),
-                environment: HeadlessHostEnvironment(),
+                environment: HeadlessHostEnvironment(configuration: configuration),
                 orchestrationPersistence: persistence
             )
             core.delegatedSessionsDB = { _ in database }
@@ -3731,6 +3752,8 @@ struct HostProtocolServerTests {
             defer { connection.close() }
             await connection.receive(HostClientMessage(id: 1, request: request))
             guard case .response(1, let result) = client.messages.first else {
+                // A refusal test must not take silence for a refusal.
+                Issue.record("\(request) was not answered")
                 return .failure(error: .failed(message: "No answer"))
             }
             return result

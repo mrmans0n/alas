@@ -1390,7 +1390,8 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     /// Tells the paired Mac a message waits for, when its target is one's
-    /// sentinel. Every store path that writes an outcome comes through here.
+    /// sentinel. Outcomes and failures call this; `send`, the other path that
+    /// enqueues, need not, because it cannot target a sentinel.
     private func notifyPeerOutbox(of targetSessionId: String) {
         if let peerServerId = ACPPeerParent.serverId(from: targetSessionId) {
             environment.peerOutboxChanged(peerServerId)

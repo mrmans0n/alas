@@ -387,6 +387,8 @@ what that token can do. The protection covers an agent, including a prompt-injec
 and friends. A process that extracts the token has the same reach as today. A scoped credential for agents, like T3's
 separate session kind, would close this, and is the first follow-up to consider.
 
+Child and outbox ownership rests on the server id a device claimed when it redeemed its pairing code, which redeeming does not prove. Someone holding a live pairing code and knowing another peer's server id could read that peer's children and drain its outbox, which would drop undelivered outcomes. This is accepted because a pairing code already grants a full controller credential. A signed challenge at redeem would close it, and belongs with the scoped credential above.
+
 Tool scoping is not a sandbox. A child can run anything its permissions allow, with the target user's credentials. That
 is why `autoRun` is a separate and explicit choice, and the Settings row should say so.
 
