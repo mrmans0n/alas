@@ -77,6 +77,9 @@ struct HostSSHSetupTests {
         (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas"), "brewInstall"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas-host"), "brewInstall"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew), "brewInstall"),
+        // A copy made after a stale cask's install failed still gets refreshed.
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas", hostPath: copiedHost), "brewInstall"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: brew, cask: "alas-host", hostPath: copiedHost), "brewInstall"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: appHost), "existing"),
         // The web client, zmx and CLI change without the host binary: always copied.
         (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost), "copy"),

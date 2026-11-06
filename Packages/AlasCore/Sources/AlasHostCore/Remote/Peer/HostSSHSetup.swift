@@ -98,9 +98,10 @@ public enum HostSSHInstall: Equatable, Sendable {
         if probe.os != "Darwin" {
             return .unsupported("alas-host runs on macOS only.")
         }
-        // A cask counts only with a host behind it: Homebrew keeps listing a
-        // cask whose app was deleted by hand, and upgrading that one fails.
-        if let path = probe.hostPath {
+        // A cask counts only with its own host behind it: Homebrew keeps listing
+        // a cask whose app was deleted by hand, and upgrading that one fails. A
+        // host copied here is ours, whatever cask is listed beside it.
+        if let path = probe.hostPath, !path.hasSuffix(HostSSHSetup.copiedHostSuffix) {
             if probe.cask == "alas" || path.hasPrefix(HostSSHSetup.appHostPath) {
                 return .existing(path: path)
             }
@@ -183,6 +184,8 @@ public struct HostSSHSetup: Sendable {
         }
         self.sleep = sleep ?? { try await Task.sleep(for: $0) }
     }
+
+    static let copiedHostSuffix = "/.alas/host/alas-host/alas-host"
 
     /// `uname -m` name of the architecture this app's host binary is built for.
     public static var bundleArch: String {
