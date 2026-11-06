@@ -45,7 +45,9 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     public var remote: CodeHostRemote
     public var base: String
     public var autoFix: Bool
-    /// Fix prompts each entry is allowed before escalating. Nil in records
+    /// One context delivery for the whole stack, including clean entries.
+    public var pendingBindDelivery: ShepherdBindDelivery?
+    /// Fix prompts per unresolved problem in each entry before escalating. Nil in records
     /// saved before this field existed; read it through `fixAttemptBudget`.
     public var maxFixAttempts: Int?
     /// Bottom-up by position.
@@ -127,6 +129,10 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     }
 
     public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
+
+    public var nextDeliveryRetryAt: Date? {
+        pendingBindDelivery?.retryAt ?? openEntries.compactMap(\.shepherd.deliveryRetryAt).min()
+    }
 
     /// Sets the budget on the stack and every entry that has not merged,
     /// clamped to `ShepherdDefaults.fixAttemptRange`; entries that escalated

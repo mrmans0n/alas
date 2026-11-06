@@ -34,7 +34,7 @@ private let presentationCases: [ShepherdPresentationCase] = [
     .init(testDescription: "awaiting push",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0)),
           request: F.request(checks: [F.failing]), gate: false,
-          badge: .waiting, number: "#7", tooltip: "#7 · waiting for a push"),
+          badge: .waiting, number: "#7", tooltip: "#7 · waiting for a push; automatic follow-up at \(F.earlier.addingTimeInterval(300).formatted(date: .omitted, time: .shortened))"),
     .init(testDescription: "merging",
           record: F.record(phase: .merging), request: F.request(), gate: false,
           badge: .merging, number: "#7", tooltip: "#7 · merging"),
@@ -68,6 +68,23 @@ private let presentationCases: [ShepherdPresentationCase] = [
 ]
 
 @Suite struct ShepherdPresentationTests {
+    @Test("automatic delivery recovery shows a wait and the next retry")
+    func deliveryRetryPresentation() {
+        var record = F.record()
+        record.retryDelivery(after: F.now)
+        let presentation = ShepherdPresentation.make(record: record, request: F.request(), mergeGatePasses: false)
+        #expect(presentation.badge == .waiting)
+        #expect(presentation.phaseLine.hasPrefix("retrying chat delivery at "))
+    }
+
+    @Test("awaiting a push shows CI while a rerun is active")
+    func rerunPresentation() {
+        let record = F.record(phase: .awaitingPush(turnEndedAt: F.now, pollsWithoutProgress: 0))
+        let presentation = ShepherdPresentation.make(record: record, request: F.request(checks: [F.pending]), mergeGatePasses: false)
+        #expect(presentation.badge == .waiting)
+        #expect(presentation.phaseLine == "checks running")
+    }
+
     @Test("badge state, number and tooltip follow the record and request", arguments: presentationCases)
     func presentation(_ c: ShepherdPresentationCase) {
         let presentation = ShepherdPresentation.make(record: c.record, request: c.request, mergeGatePasses: c.gate)

@@ -18,7 +18,7 @@ public enum ShepherdSchedule {
     /// watching a settled PR, 5 min when escalated or paused, nil for
     /// terminal records (not polled).
     public static func interval(for record: ShepherdRecord, checksPending: Bool) -> TimeInterval? {
-        interval(for: record.phase, checksPending: checksPending)
+        interval(for: record.phase, checksPending: checksPending || record.nextDeliveryRetryAt != nil)
     }
 
     /// The same cadence for a phase alone; a stack shepherd polls at the

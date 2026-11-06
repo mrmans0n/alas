@@ -129,7 +129,8 @@ enum ShepherdFixtures {
         _ snapshot: ReviewLoopSnapshot,
         session: ShepherdSessionState = .idle,
         rules: ShepherdRules = .none,
-        headReviewers: Set<String>? = nil
+        headReviewers: Set<String>? = nil,
+        now: Date = ShepherdFixtures.now
     ) -> ShepherdObservation {
         ShepherdObservation(snapshot: snapshot, headReviewers: headReviewers,
                             session: session, rules: rules, now: now)
