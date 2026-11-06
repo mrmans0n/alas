@@ -332,7 +332,8 @@ set, a failed fetch or a different SHA fails the child with a reason, so an alwa
 gets the current code or a clear refusal.
 
 An explicit `--base` skips the source's checks and sends no expected SHA, but still fetches on a best-effort
-basis. `--worktree` means the agent chose an existing checkout, so no check applies.
+basis. The target still refuses a branch that already exists at another commit than the base, since a worktree
+would check out that branch and ignore the base. `--worktree` means the agent chose an existing checkout, so no check applies.
 
 ### 9. Outages are not failures
 

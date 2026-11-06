@@ -17,7 +17,9 @@ public enum PeerWorktreeBase {
     /// refreshed, and returns its remote-tracking ref when there is one. With
     /// `expectedSHA` the peer is relying on this exact code, so anything but
     /// finding it is a failure. Without, the fetch is best effort and a `base`
-    /// the remote does not have (a tag, a local branch) is returned as given.
+    /// the remote does not have (a tag, a local branch) is returned as given,
+    /// unless `branch` already exists elsewhere: the child would then run on
+    /// that branch's code rather than on `base`.
     /// `machine` names this Mac in the failure, which goes to the peer.
     public static func resolve(
         branch: String,
@@ -34,7 +36,9 @@ public enum PeerWorktreeBase {
             source = ("origin", base)
         }
         guard let source else {
-            guard let expectedSHA else { return .success(base) }
+            guard let expectedSHA else {
+                return await refusingBranchElsewhere(branch, resolved: base, ref: base, repo: repo, machine: machine)
+            }
             return .failure(.init(message: "\(base) on \(machine) has no origin remote to fetch from, expected \(expectedSHA)."))
         }
         var fetchError: String?
@@ -45,7 +49,11 @@ public enum PeerWorktreeBase {
         }
         let remoteBase = "\(source.remote)/\(source.branch)"
         let tracked = await commit(of: "refs/remotes/\(remoteBase)", in: repo)
-        guard let expectedSHA else { return .success(tracked != nil ? remoteBase : base) }
+        guard let expectedSHA else {
+            return await tracked != nil
+                ? refusingBranchElsewhere(branch, resolved: remoteBase, ref: "refs/remotes/\(remoteBase)", repo: repo, machine: machine)
+                : refusingBranchElsewhere(branch, resolved: base, ref: base, repo: repo, machine: machine)
+        }
 
         // Not "push and try again": this can as well be auth or the network.
         if let fetchError {
@@ -68,6 +76,21 @@ public enum PeerWorktreeBase {
             ))
         }
         return .success(remoteBase)
+    }
+
+    /// `resolved`, unless `branch` exists at another commit than `ref`. A
+    /// `ref` that names nothing is another commit too: nothing shows the
+    /// branch to be what was asked for.
+    private static func refusingBranchElsewhere(
+        _ branch: String, resolved: String, ref: String, repo: URL, machine: String
+    ) async -> Result<String, Failure> {
+        guard let existing = await commit(of: "refs/heads/\(branch)", in: repo) else { return .success(resolved) }
+        let wanted = await commit(of: ref, in: repo)
+        if existing == wanted { return .success(resolved) }
+        let base = wanted.map { "\(resolved) is at \($0)" } ?? "\(resolved) was not found"
+        return .failure(.init(
+            message: "\(branch) already exists on \(machine) at \(existing), but \(base). Delete it or pick another name."
+        ))
     }
 
     /// Git's error goes to another machine, and a remote URL can carry a token.

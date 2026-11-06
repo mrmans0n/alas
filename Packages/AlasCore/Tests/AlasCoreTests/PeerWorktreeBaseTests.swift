@@ -134,8 +134,28 @@ struct PeerWorktreeBaseTests {
         #expect(message.hasPrefix("fix/parser already exists on Mini at \(other)"))
     }
 
-    /// Without an expected commit nothing fails: the remote's ref if it has
-    /// one, stale after a failed fetch or not, else the base as given.
+    /// An explicit base too: the child would run on the branch's old code, not
+    /// the base asked for, with nothing said.
+    @Test func withoutAnExpectedCommitALocalBranchElsewhereFails() async throws {
+        let repo = try await Repo()
+        defer { repo.tearDown() }
+        let other = try await repo.commitOnHead(in: repo.clone)
+        _ = try await Process.git(["branch", "fix/parser", other], cwd: repo.clone)
+        _ = try await Process.git(["branch", "local-only"], cwd: repo.clone)
+
+        let message = try failureMessage(await repo.resolve(expectedSHA: nil))
+        #expect(message == "fix/parser already exists on Mini at \(other), but origin/main is at \(repo.head). Delete it or pick another name.")
+        // A base the remote does not have, then a repository with no remote.
+        #expect(try failureMessage(await repo.resolve(base: "local-only", expectedSHA: nil)).hasPrefix("fix/parser already exists"))
+        _ = try await Process.git(["remote", "remove", "origin"], cwd: repo.clone)
+        #expect(try failureMessage(await repo.resolve(base: "local-only", expectedSHA: nil)).hasPrefix("fix/parser already exists"))
+        // Nothing would run on the wrong code, so nothing to refuse.
+        _ = try await Process.git(["branch", "-f", "fix/parser", repo.head], cwd: repo.clone)
+        #expect(await repo.resolve(base: "local-only", expectedSHA: nil) == .success("local-only"))
+    }
+
+    /// Without an expected commit a failed fetch fails nothing: the remote's
+    /// ref if it has one, stale or not, else the base as given.
     @Test func withoutAnExpectedCommitTheFetchIsBestEffort() async throws {
         let repo = try await Repo()
         defer { repo.tearDown() }

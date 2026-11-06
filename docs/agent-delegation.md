@@ -548,7 +548,9 @@ An always-on Mac with an old checkout therefore gets the current code or a clear
 refusal.
 
 An explicit `--base` skips these checks. The other Mac still tries to fetch it,
-but a failed fetch does not stop the child. `--worktree` names a checkout that
+but a failed fetch does not stop the child. If the branch you name already exists
+there at another commit, the child fails with a reason, because a new worktree
+would check out that branch and not your base. `--worktree` names a checkout that
 already exists there, so no check applies.
 
 ### Delegating from a headless host
