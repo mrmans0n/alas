@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SQLite3
 import Testing
 @testable import Alas
 
@@ -3480,7 +3481,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(peers.statusCalls.isEmpty)
     }
 
-    @Test func forgettingPeerDeletesItsCursorAndOutbox() async throws {
+    /// What waits for the peer to collect goes. The cursor stays: see
+    /// `outcomeDeliveredBeforeAForgetDoesNotWakeAfterPairingAgain`.
+    @Test func forgettingPeerDeletesItsOutboxAndKeepsItsCursor() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let fixture = try remoteFixture(peers: peers)
         let persistence = fixture.persistence
@@ -3496,14 +3499,161 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
 
         await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: false)
-        #expect(try await persistence.peerCursor(peerServerId: "srv-1") == 5)
         #expect(try await waiting("srv-1") == 1)
 
         await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: true)
-        #expect(try await persistence.peerCursor(peerServerId: "srv-1") == 0)
         #expect(try await waiting("srv-1") == 0)
-        #expect(try await persistence.peerCursor(peerServerId: "srv-2") == 5)
         #expect(try await waiting("srv-2") == 1)
+        #expect(try await persistence.peerCursor(peerServerId: "srv-1") == 5)
+    }
+
+    /// The peer still holds its last page, since nothing acknowledged it, and
+    /// the inbox row that would have deduplicated it was delivered and removed.
+    @Test func outcomeDeliveredBeforeAForgetDoesNotWakeAfterPairingAgain() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let (fixture, client) = try await closedParentFixture(peers: peers)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let persistence = fixture.persistence
+        try await insertRemoteChild(persistence)
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1)], pageSize: 5)
+        let collector = makeCollector(fixture, peers: peers)
+        func delivered() async -> Bool {
+            let inboxEmpty = (try? await persistence.pendingMessages(targetSessionId: "parent").isEmpty) == true
+            return inboxEmpty && self.promptTexts(client).count == 1
+        }
+        await collector.collect(serverId: "srv-1")
+        try await waitUntil { await delivered() }
+
+        peers.peers = []
+        await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: true)
+        peers.peers = [Self.peer("mini", id: "srv-1")]
+        await collector.collect(serverId: "srv-1")
+
+        #expect(peers.outboxCalls.last == 1)
+        #expect(try await persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        #expect(promptTexts(client).count == 1)
+    }
+
+    /// The parent was told this child failed. Its real result is still worth
+    /// having after pairing again, but is not worth waking anyone a second time.
+    @Test func outcomeOfAChildFailedByRevocationArrivesAsANotice() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let persistence = fixture.persistence
+        try await insertRemoteChild(persistence)
+        try await awaitResult(fixture)
+        peers.peers = [Self.peer("mini", id: "srv-1", state: .revoked)]
+        await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: false)
+        #expect(try await persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-child-failed"])
+
+        peers.peers = [Self.peer("mini", id: "srv-1")]
+        peers.outboxAnswer = FakePeers.paged([Self.outcome(1)], pageSize: 5)
+        await makeCollector(fixture, peers: peers, deliver: { _ in }).collect(serverId: "srv-1")
+
+        let pending = try await persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.filter { $0.kind == .prompt }.map(\.id) == ["outcome-child-failed"])
+        #expect(pending.filter { $0.kind == .notice }.map(\.id) == ["outcome-1"])
+        #expect(pending.first { $0.id == "outcome-1" }?.prompt == "done 1")
+        #expect(try await persistence.peerCursor(peerServerId: "srv-1") == 1)
+    }
+
+    /// Asked while the start had not reached the peer, this question can only
+    /// answer `gone`, and a later wait must not take that for the started child.
+    @Test func statusAskedBeforeAChildStartedDoesNotFailItOnceItHas() async throws {
+        final class Release { var gate: AsyncStream<Void>.Continuation? }
+        let release = Release()
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.startResults = [.failure(.unreachable(peer: "mini"))]
+        // Only the question asked first answers `gone`.
+        peers.statusAnswer = { _, ids in
+            peers.statusCalls.count == 1
+                ? FakePeers.status(ids, state: "gone", settled: true)
+                : FakePeers.status(ids, state: "running", settled: false)
+        }
+        let (gate, continuation) = AsyncStream<Void>.makeStream()
+        peers.statusGate = gate
+        let fixture = try remoteFixture(peers: peers, onPause: { release.gate?.finish() })
+        _ = await peerCreate(fixture)
+
+        let early = try await wait(fixture)
+        #expect(early.timedOut && early.sessions.first?.state == "starting")
+        #expect(peers.statusCalls.count == 1)
+        await fixture.coordinator.retryPeerStarts(serverId: "srv-1")
+        #expect(try await phase(fixture.persistence) == .ready)
+
+        peers.statusGate = nil
+        release.gate = continuation
+        let late = try await wait(fixture)
+
+        #expect(late.sessions.first?.state == "running")
+        #expect(try await phase(fixture.persistence) == .ready)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    /// A store that cannot say which children there are loses nothing: the
+    /// next signal still knows which of them owe a result.
+    @Test func revocationThatCannotReadTheStoreKeepsWhatIsAwaited() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        let persistence = fixture.persistence
+        try await insertRemoteChild(persistence)
+        try await awaitResult(fixture)
+        func rename(_ from: String, to: String) {
+            var db: OpaquePointer?
+            #expect(sqlite3_open(persistence.path, &db) == SQLITE_OK)
+            #expect(sqlite3_exec(db, "ALTER TABLE \(from) RENAME TO \(to)", nil, nil, nil) == SQLITE_OK)
+            sqlite3_close(db)
+        }
+
+        rename("delegations", to: "delegations_hidden")
+        await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: false)
+        rename("delegations_hidden", to: "delegations")
+        #expect(try await phase(persistence) == .ready)
+
+        await fixture.coordinator.peerRevoked(serverId: "srv-1", name: "mini", forgotten: false)
+        #expect(try await phase(persistence) == .failed)
+    }
+
+    /// `alas-host peers forget` with no host running: nothing would ever settle
+    /// a row still starting, but that process attaches no agents. The wake is
+    /// stored with the phase, and the next launch's recovery delivers it.
+    @Test func forgetWithoutAHostFailsStartsAndLeavesTheWakeForTheNextLaunch() async throws {
+        let peers = FakePeers(peers: [])
+        let (fixture, client) = try await closedParentFixture(peers: peers)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let persistence = fixture.persistence
+        try await insertRemoteChild(persistence, phase: .starting)
+        try await insertRemoteChild(persistence, id: "old")
+        try await persistence.enqueue(.init(
+            id: "to-peer", sourceSessionId: "local", targetSessionId: ACPPeerParent.sentinel(serverId: "srv-1"),
+            prompt: "done", createdAt: 1, kind: .prompt
+        ))
+
+        await fixture.coordinator.peerForgottenWithoutHost(serverId: "srv-1", name: "mini")
+
+        #expect(try await phase(persistence) == .failed)
+        #expect(try await phase(persistence, "old") == .ready)
+        #expect(try await persistence.outbox(peerServerId: "srv-1", after: 0, maxBytes: 1 << 20).entries.isEmpty)
+        let wake = try #require(try await persistence.pendingMessages(targetSessionId: "parent").first)
+        #expect(wake.id == "outcome-child-failed" && wake.kind == .prompt && wake.prompt.contains("on mini"))
+        #expect(fixture.manager.liveSession(for: "parent") == nil && promptTexts(client).isEmpty)
+
+        // As recovery delivers what it finds in the inbox.
+        let record = try #require(try await persistence.delegation(childSessionId: "child"))
+        await fixture.coordinator.deliverPendingMessages(to: "parent", callerParent: record)
+        try await waitUntil { self.promptTexts(client).count == 1 }
+    }
+
+    /// An old build answers no pull until it is updated, delegated to or not.
+    @Test func outdatedPeerGetsNoRetryTimer() async throws {
+        let scheduled = ScheduledWork()
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1", supportsDelegation: false)])
+        peers.outboxAnswer = { _ in .failure(.outdated(peer: "mini")) }
+        let fixture = try remoteFixture(peers: peers)
+
+        await makeCollector(fixture, peers: peers, schedule: scheduled.add).collect(serverId: "srv-1")
+
+        #expect(scheduled.delays.isEmpty)
     }
 
     /// With the link up nothing else would ever ask again, so the collector

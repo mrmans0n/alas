@@ -152,6 +152,10 @@ public final class ACPPeerOutboxCollector {
             let page: ACPPeerOutboxPage
             switch await peers.outbox(serverId: serverId, after: after) {
             case .success(let answer): page = answer
+            case .failure(.outdated):
+                // Stays that way until the peer's build changes, which is a
+                // new `hello` and so a new signal. Asking again changes nothing.
+                return true
             case .failure(let error):
                 logger.notice("Outbox of peer \(serverId, privacy: .public) not collected after \(after): \(String(describing: error), privacy: .public)")
                 return false
@@ -211,7 +215,13 @@ public final class ACPPeerOutboxCollector {
                 collected(entry)
                 return .some(nil)
             }
-            _ = try await persistence.collectPeerEntry(entry, peerServerId: serverId, parentSessionId: child.parentSessionId)
+            // The parent was already woken about a failed child. Its real
+            // result is still kept, but as something to read, not a second wake.
+            let kept = child.phase == .failed ? ACPPeerOutboxEntry(
+                seq: entry.seq, messageId: entry.messageId, childSessionId: entry.childSessionId,
+                prompt: entry.prompt, kind: .notice, createdAt: entry.createdAt
+            ) : entry
+            _ = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
             collected(entry)
             // The parent is woken even when another collector won: delivery
             // is idempotent, and that one may have stopped before it got there.

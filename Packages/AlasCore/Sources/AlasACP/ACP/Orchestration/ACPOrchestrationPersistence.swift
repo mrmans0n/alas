@@ -164,10 +164,6 @@ public actor ACPOrchestrationPersistence {
         try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq)
     }
 
-    public func deletePeerCursor(peerServerId: String) throws {
-        try openedStore().deletePeerCursor(peerServerId: peerServerId)
-    }
-
     public func peerCursor(peerServerId: String) throws -> Int64 {
         try openedStore().peerCursor(peerServerId: peerServerId)
     }

@@ -794,6 +794,7 @@ final class AppState {
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)
         }
+        core.watchForRevokedPeers(of: manager)
         return manager
     }()
     /// Nearby Alas instances. Lazy like `remotePeers`; started and stopped by

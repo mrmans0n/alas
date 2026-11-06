@@ -603,7 +603,7 @@ public final class ACPSessionOrchestrationCoordinator {
 
         switch await peers.start(serverId: peerInfo.serverId, start) {
         case .success(let reply):
-            await markPeerChildReady(childID, keepingForRetry: start)
+            await markPeerChildReady(childID, serverId: peerInfo.serverId, keepingForRetry: start)
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
         case .failure(.unreachable(let name)):
             pendingPeerStarts[childID] = start
@@ -639,7 +639,10 @@ public final class ACPSessionOrchestrationCoordinator {
     /// Moves a child the peer confirmed to `.ready`, unless it already ended.
     /// If that cannot be stored it stays `.starting`, and `start` is kept for
     /// a retry, which the peer answers with the same child.
-    private func markPeerChildReady(_ childID: String, keepingForRetry start: ACPPeerChildStartRequest?) async {
+    private func markPeerChildReady(_ childID: String, serverId: String, keepingForRetry start: ACPPeerChildStartRequest?) async {
+        // A status question already out may predate the child reaching the
+        // peer. Its `gone` would fail the child a later wait shares it for.
+        peerStatusRounds[serverId] = nil
         do {
             try await environment.persistence.markReadyIfStarting(childSessionId: childID, updatedAt: environment.now())
             pendingPeerStarts[childID] = nil
@@ -674,7 +677,7 @@ public final class ACPSessionOrchestrationCoordinator {
             if let start = pendingPeerStarts[childID] {
                 switch await peers.start(serverId: serverId, start) {
                 case .success:
-                    await markPeerChildReady(childID, keepingForRetry: start)
+                    await markPeerChildReady(childID, serverId: serverId, keepingForRetry: start)
                 case .failure(.unreachable):
                     pendingPeerStarts[childID] = nil
                 case .failure(let error):
@@ -698,7 +701,7 @@ public final class ACPSessionOrchestrationCoordinator {
               let session = reply.sessions.first(where: { $0.sessionId == childID })
         else { return }
         guard session.state == ACPOrchestrationWaitResponse.Session.goneState else {
-            await markPeerChildReady(childID, keepingForRetry: nil)
+            await markPeerChildReady(childID, serverId: serverId, keepingForRetry: nil)
             return
         }
         guard environment.now() - child.updatedAt > Self.peerStartGraceSeconds else { return }
@@ -798,18 +801,19 @@ public final class ACPSessionOrchestrationCoordinator {
     public func peerRevoked(serverId: String, name: String, forgotten: Bool) async {
         revokedPeerNames[serverId] = name
         peerOutages[serverId] = nil
-        let awaited = Set(awaitedPeerChildren.filter { $0.value == serverId }.keys)
-        for childID in awaited { awaitedPeerChildren[childID] = nil }
         if forgotten {
             lastSeenPeerOnline[serverId] = nil
-            await deletePeerRecords(serverId: serverId)
+            await deleteOutbox(forPeer: serverId)
         }
+        // Whom this owes a result is only given up once it can act on it.
         guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
+        let awaited = Set(awaitedPeerChildren.filter { $0.value == serverId }.keys)
+        for childID in awaited { awaitedPeerChildren[childID] = nil }
         let unfinished = children.filter { child in
             child.phase != .failed && child.phase != .closed
                 && (child.phase == .starting || awaited.contains(child.childSessionId))
         }
-        let message = forgotten ? "\(name) was forgotten on this Mac" : Self.message(for: .revoked(peer: name))
+        let message = forgotten ? Self.forgottenMessage(name) : Self.message(for: .revoked(peer: name))
         // Together, so one slow parent holds up no other, and one parent's
         // children join one wake.
         let failures = unfinished.map { child in
@@ -820,15 +824,40 @@ public final class ACPSessionOrchestrationCoordinator {
         for failure in failures { await failure.value }
     }
 
-    /// What this Mac keeps for a peer it no longer knows, in both roles: how
-    /// far it collected from the peer, and what waits for the peer to collect.
-    public func deletePeerRecords(serverId: String) async {
-        let logger = Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+    /// `peerRevoked` for a process only booted to forget a peer, which ends
+    /// next and has no business attaching agents. With no awaited set to go
+    /// on, it fails what would otherwise stay starting forever: nothing retries
+    /// a peer that will not come back. The wake waits in the inbox, written
+    /// with the phase, for the next launch's recovery to deliver.
+    public func peerForgottenWithoutHost(serverId: String, name: String) async {
+        revokedPeerNames[serverId] = name
+        await deleteOutbox(forPeer: serverId)
+        guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
+        let message = Self.forgottenMessage(name)
+        for child in children where child.phase == .starting {
+            _ = try? await environment.persistence.claimFailedPhase(
+                childSessionId: child.childSessionId,
+                failureMessage: message,
+                updatedAt: environment.now(),
+                outcome: failureOutcome(of: child, message: message),
+                discardingHeldMessages: child.modelSelection != nil
+            )
+        }
+    }
+
+    private static func forgottenMessage(_ name: String) -> String {
+        "\(name) was forgotten on this Mac"
+    }
+
+    /// What waits for a forgotten peer to collect, which it never will. The
+    /// cursor stays: a peer paired again still holds the last page this Mac
+    /// never acknowledged, and only the cursor stops it waking a parent twice.
+    private func deleteOutbox(forPeer serverId: String) async {
         do {
-            try await environment.persistence.deletePeerCursor(peerServerId: serverId)
             try await environment.persistence.deleteOutbox(peerServerId: serverId)
         } catch {
-            logger.error("Could not delete the records of peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
+            Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                .error("Could not delete the outbox of peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -2089,14 +2118,7 @@ public final class ACPSessionOrchestrationCoordinator {
         guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
         else { return }
         awaitedPeerChildren[childSessionId] = nil
-        let outcome = ACPDelegatedMessage(
-            id: "outcome-\(childSessionId)-failed",
-            sourceSessionId: childSessionId,
-            targetSessionId: record.parentSessionId,
-            prompt: ACPDelegatedOutcomeText.failure(outcomeContext(for: record), message: message),
-            createdAt: environment.now(),
-            kind: .prompt
-        )
+        let outcome = failureOutcome(of: record, message: message)
         // A child still waiting on its model selection must never run the
         // parent's prompt on the agent's default model: drop it from the
         // session's queue, durably, before `.failed` lifts the prompt hold
@@ -2132,6 +2154,17 @@ public final class ACPSessionOrchestrationCoordinator {
             to: outcome.targetSessionId,
             callerParent: record,
             targetParent: nil
+        )
+    }
+
+    private func failureOutcome(of record: ACPDelegationRecord, message: String) -> ACPDelegatedMessage {
+        ACPDelegatedMessage(
+            id: "outcome-\(record.childSessionId)-failed",
+            sourceSessionId: record.childSessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.failure(outcomeContext(for: record), message: message),
+            createdAt: environment.now(),
+            kind: .prompt
         )
     }
 
