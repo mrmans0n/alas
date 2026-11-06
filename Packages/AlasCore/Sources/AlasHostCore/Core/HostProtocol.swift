@@ -268,11 +268,14 @@ public struct HostDelegationDiscovery: Codable, Equatable, Sendable {
     }
 }
 
-/// The answers to `HostDelegationRequest`s; a `send` answers `done`.
+/// The answers to `HostDelegationRequest`s.
 public enum HostDelegationResponse: Codable, Equatable, Sendable {
     case discovered(HostDelegationDiscovery)
     /// `state` is an `ACPOrchestrationPublicState` raw value.
     case started(sessionID: String, state: String)
+    /// When the prompt was accepted, epoch milliseconds by this host's clock,
+    /// which is what its outcomes' turn starts are measured against.
+    case sent(acceptedAt: Int64)
     /// `ACPOrchestrationReadResponse`, encoded.
     case read(data: Data)
     /// `ACPOrchestrationWaitResponse`, encoded.

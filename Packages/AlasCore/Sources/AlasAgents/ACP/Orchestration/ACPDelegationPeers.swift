@@ -13,7 +13,8 @@ public protocol ACPDelegationPeers: AnyObject {
     func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError>
     /// Answers once the child's row exists on the peer.
     func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError>
-    func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError>
+    /// Answers when the target accepted the prompt, epoch milliseconds by its clock.
+    func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError>
     /// `ACPOrchestrationReadResponse`, encoded.
     func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError>
     /// `ACPOrchestrationWaitResponse`, encoded.

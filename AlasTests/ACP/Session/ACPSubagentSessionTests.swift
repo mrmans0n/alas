@@ -1675,7 +1675,8 @@ struct ACPSubagentRowPolicyTests {
         if opens {
             #expect(destination == .open(federatedSessionID: RemoteFederatedSessionID.compose(serverId: "srv", sessionId: "kid")))
         } else {
-            guard case .explain(let message) = destination else { Issue.record("expected an explanation"); return }
+            guard case .explain(let message) = destination else { Issue.record("expected an explanation")
+            return }
             #expect(message.contains("mini"))
         }
     }

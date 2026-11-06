@@ -57,10 +57,12 @@ extension DelegationAPI {
             return .delegation(try await self.start(start, peerServerId: peerServerId, access: device.agentAccess))
         case .send(let sessionID, let prompt):
             let origin = try await peerOrigin(ofChild: sessionID, peerServerId: peerServerId)
+            // Taken first: a turn this prompt starts begins no earlier.
+            let acceptedAt = Int64(Date().timeIntervalSince1970 * 1000)
             _ = try Self.payload(await core.orchestration.send(
                 origin: origin, request: ACPDelegatedSessionMessageRequest(targetSessionId: sessionID, prompt: prompt)
             ))
-            return .done
+            return .delegation(.sent(acceptedAt: acceptedAt))
         case .read(let sessionID, let offset, let limit, let maxChars):
             return .delegation(.read(data: try await read(
                 ACPDelegatedSessionReadRequest(

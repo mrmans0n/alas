@@ -83,11 +83,9 @@ public final class PeerDelegationClient: ACPDelegationPeers {
         }
     }
 
-    public func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> {
-        switch await perform(serverId, .delegation(.send(sessionID: sessionID, prompt: prompt))) {
-        case .failure(let error): return .failure(error)
-        case .success(.done): return .success(())
-        case .success: return .failure(Self.unexpectedReply)
+    public func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError> {
+        await ask(serverId, .send(sessionID: sessionID, prompt: prompt)) {
+            if case .sent(let acceptedAt) = $0 { acceptedAt } else { nil }
         }
     }
 

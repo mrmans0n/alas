@@ -2274,7 +2274,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         var startResults: [Result<ACPPeerStartReply, ACPPeerError>] = []
         var onStart: ((ACPPeerChildStartRequest) async -> Void)?
         private(set) var startCalls: [ACPPeerChildStartRequest] = []
-        var sendResult: Result<Void, ACPPeerError> = .success(())
+        var sendResult: Result<Int64, ACPPeerError> = .success(1000)
         private(set) var sendCalls: [(sessionID: String, prompt: String)] = []
         var readResult: Result<Data, ACPPeerError> = .success(Data("{\"from\":\"peer\"}".utf8))
         private(set) var readCalls: [(sessionID: String, offset: Int?, limit: Int?, maxChars: Int?)] = []
@@ -2328,7 +2328,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             guard !startResults.isEmpty else { return .success(.init(sessionID: start.childID, state: "starting")) }
             return startResults.removeFirst()
         }
-        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> {
+        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError> {
             sendCalls.append((sessionID, prompt))
             return sendResult
         }
@@ -2436,9 +2436,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peers.onOutboxCall = { continuation.yield($0) }
         collector.start()
         // An online peer is collected from at start, and again when it comes back.
-        for await after in calls { #expect(after == 5); break }
+        for await after in calls { #expect(after == 5)
+        break }
         peers.onAvailabilityChanged?("srv-1")
-        for await after in calls { #expect(after == 5); break }
+        for await after in calls { #expect(after == 5)
+        break }
         continuation.finish()
     }
 
@@ -2480,7 +2482,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         peers.outboxGate = gate
         peers.onOutboxCall = { callYields.yield($0) }
         let late = Task { @MainActor in await second.collect(serverId: "srv-1") }
-        for await after in calls { #expect(after == 0); break }
+        for await after in calls { #expect(after == 0)
+        break }
         peers.outboxGate = nil
 
         await first.collect(serverId: "srv-1")
@@ -2594,7 +2597,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         // The first parent never finishes, yet the pull completes both pages.
         await collector.collect(serverId: "srv-1")
-        for await parent in delivered { #expect(parent == "other"); break }
+        for await parent in delivered { #expect(parent == "other")
+        break }
 
         #expect(peers.outboxCalls == [0, 2])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 3)
@@ -3125,6 +3129,24 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(peers.startCalls.isEmpty)
         #expect(try await phase(fixture.persistence) == expected)
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == wakes)
+    }
+
+    /// A prompt the peer accepted at 1000 is still to run while an older turn's
+    /// outcome arrives, so only its own turn, or the child failing, ends the wait.
+    @Test(arguments: [
+        ("outcome-child-900", true), ("outcome-child-1000", false), ("outcome-child-1100", false),
+        ("outcome-child-failed", false), ("blocker-child-1-notice", true),
+    ] as [(String, Bool)])
+    func anOlderTurnsOutcomeDoesNotEndTheWaitForANewerPrompt(messageId: String, stillAwaited: Bool) async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        _ = await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More"))
+        let entry = ACPPeerOutboxEntry(seq: 1, messageId: messageId, childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
+
+        #expect(try await fixture.persistence.collectPeerEntry(entry, peerServerId: "srv-1", parentSessionId: Self.peerOrigin.sessionId))
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
     }
 
     @Test func sendReadInterruptGoToThePeer() async throws {
@@ -3879,7 +3901,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         return try JSONDecoder().decode(ACPDelegationAgentListResponse.self, from: Data(line.utf8))
     }
 
-    private struct TestFailure: Error { let message: String; init(_ message: String) { self.message = message } }
+    private struct TestFailure: Error { let message: String
+    init(_ message: String) { self.message = message } }
 
     @Test(
         "only the first blocked notice from a peer is announced",

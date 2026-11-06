@@ -288,7 +288,7 @@ struct DelegationRecoveryTests {
         }
         func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError> { .failure(.notFound) }
         func start(serverId: String, _ start: ACPPeerChildStartRequest) async -> Result<ACPPeerStartReply, ACPPeerError> { .failure(.notFound) }
-        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Void, ACPPeerError> { .failure(.notFound) }
+        func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError> { .failure(.notFound) }
         func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
         func status(serverId: String, sessionIDs: [String]) async -> Result<Data, ACPPeerError> { .failure(.notFound) }
         func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError> { .failure(.notFound) }

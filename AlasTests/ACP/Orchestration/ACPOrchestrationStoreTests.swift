@@ -570,12 +570,15 @@ struct ACPOrchestrationStoreTests {
         var db: OpaquePointer?
         #expect(sqlite3_open(path, &db) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting_since", nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
 
         let store = try ACPOrchestrationStore(path: path)
         var record = newRecord()
         record.peerAwaiting = true
         try store.insert(record)
+
+        try store.markPeerAwaiting(childSessionId: "child", since: 5)
 
         #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
     }

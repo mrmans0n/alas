@@ -1412,7 +1412,8 @@ struct AlasCLICommandRouterTests {
             ),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            workspaceCommand: { _, _ in workspaceCalls += 1; return .ok },
+            workspaceCommand: { _, _ in workspaceCalls += 1
+            return .ok },
             activateApp: {}
         )
 

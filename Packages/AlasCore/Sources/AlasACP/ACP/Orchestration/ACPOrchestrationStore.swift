@@ -365,21 +365,33 @@ public final class ACPOrchestrationStore {
         }
     }
 
-    /// The parent now expects a result from `childSessionId`.
-    public func markPeerAwaiting(childSessionId: String) throws {
+    /// The parent now expects a result from `childSessionId`, for the prompt
+    /// the target accepted at `since`, epoch milliseconds by the target's clock.
+    public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
         try db.exec(
-            "UPDATE delegations SET peer_awaiting = 1 WHERE child_session_id = ?",
-            bindings: [childSessionId]
+            "UPDATE delegations SET peer_awaiting = 1, peer_awaiting_since = ? WHERE child_session_id = ?",
+            bindings: [since, childSessionId]
         )
     }
 
     private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
         // The ids the target gives outcomes; anything else leaves the child running.
         guard entry.messageId.hasPrefix("outcome-") else { return }
-        try db.exec(
-            "UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ? AND peer_server_id = ?",
-            bindings: [entry.childSessionId, peerServerId]
-        )
+        // A turn that started before the awaited prompt was accepted is an
+        // older one, and that prompt's turn is still to come. An outcome with
+        // no turn is the child failing, which ends every wait.
+        guard let turnStartedAt = entry.turnStartedAt else {
+            try db.exec(
+                "UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ? AND peer_server_id = ?",
+                bindings: [entry.childSessionId, peerServerId]
+            )
+            return
+        }
+        try db.exec("""
+        UPDATE delegations SET peer_awaiting = 0
+        WHERE child_session_id = ? AND peer_server_id = ?
+          AND (peer_awaiting_since IS NULL OR peer_awaiting_since <= ?)
+        """, bindings: [entry.childSessionId, peerServerId, turnStartedAt])
     }
 
     /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
@@ -686,9 +698,14 @@ public final class ACPOrchestrationStore {
     }
 
     private func addPeerAwaitingColumnIfMissing() throws {
-        let columns = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name = 'peer_awaiting'")
-        guard columns.isEmpty else { return }
-        try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting INTEGER NOT NULL DEFAULT 0")
+        let columns = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name LIKE 'peer_awaiting%'")
+            .compactMap { $0["name"] as? String }
+        if !columns.contains("peer_awaiting") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting INTEGER NOT NULL DEFAULT 0")
+        }
+        if !columns.contains("peer_awaiting_since") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting_since INTEGER")
+        }
     }
 
     private func decodeDelegation(_ row: [String: Any?]) throws -> ACPDelegationRecord {

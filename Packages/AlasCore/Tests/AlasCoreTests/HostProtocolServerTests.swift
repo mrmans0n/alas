@@ -3454,7 +3454,10 @@ struct HostProtocolServerTests {
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
 
         #expect(fixture.pairing.setAgentAccess(.ask, deviceId: "s1-repaired"))
-        #expect(await fixture.ask(send, as: rePaired) == .done)
+        guard case .delegation(.sent) = await fixture.ask(send, as: rePaired) else {
+            Issue.record("Consent again lets the re-paired Mac send")
+            return
+        }
     }
 
     @Test(.timeLimit(.minutes(1))) func aPeerPromptReachesItsChild() async throws {
@@ -3463,7 +3466,12 @@ struct HostProtocolServerTests {
         try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
         try fixture.seedSessions(["child"])
 
-        #expect(await fixture.ask(.send(sessionID: "child", prompt: "Go on"), as: fixture.peer1) == .done)
+        let before = Int64(Date().timeIntervalSince1970 * 1000)
+        guard case .delegation(.sent(let acceptedAt)) = await fixture.ask(.send(sessionID: "child", prompt: "Go on"), as: fixture.peer1) else {
+            Issue.record("A send answers when it was accepted")
+            return
+        }
+        #expect(acceptedAt >= before)
 
         try await eventually {
             guard case .delegation(.read(let page)) = await fixture.ask(

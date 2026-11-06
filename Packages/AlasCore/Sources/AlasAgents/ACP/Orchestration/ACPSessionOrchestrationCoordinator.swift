@@ -896,12 +896,12 @@ public final class ACPSessionOrchestrationCoordinator {
             return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
         }
         switch await peers.send(serverId: serverId, sessionID: child.childSessionId, prompt: prompt) {
-        case .success:
+        case .success(let acceptedAt):
             // A status question asked before this could report the child
             // settled, with this turn still to run.
             peerStatusRounds[serverId] = nil
             do {
-                try await environment.persistence.markPeerAwaiting(childSessionId: child.childSessionId)
+                try await environment.persistence.markPeerAwaiting(childSessionId: child.childSessionId, since: acceptedAt)
             } catch {
                 // The turn is running, so the send stands. Its result still arrives.
                 Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")

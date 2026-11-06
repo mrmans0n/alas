@@ -28,6 +28,15 @@ public struct ACPPeerOutboxEntry: Codable, Equatable, Sendable {
     public let kind: ACPDelegatedMessageKind
     public let createdAt: Int64
 
+    /// When the turn this outcome ended started, epoch milliseconds by the
+    /// target's clock: `outcome-<child>-<startedAt>`. Nil for anything else,
+    /// such as `outcome-<child>-failed`.
+    public var turnStartedAt: Int64? {
+        let prefix = "outcome-\(childSessionId)-"
+        guard messageId.hasPrefix(prefix) else { return nil }
+        return Int64(messageId.dropFirst(prefix.count))
+    }
+
     public init(seq: Int64, messageId: String, childSessionId: String, prompt: String, kind: ACPDelegatedMessageKind, createdAt: Int64) {
         self.seq = seq
         self.messageId = messageId
