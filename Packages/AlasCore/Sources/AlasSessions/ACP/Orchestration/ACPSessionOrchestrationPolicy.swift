@@ -155,7 +155,8 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
     ) -> [ACPOrchestrationVisibleSession] {
         var sessions = [ACPOrchestrationVisibleSession(sessionId: callerSessionId, relationship: nil)]
 
-        if let parent {
+        // A child delegated from another Mac has no parent session here.
+        if let parent, ACPPeerParent.serverId(from: parent.parentSessionId) == nil {
             sessions.append(.init(sessionId: parent.parentSessionId, relationship: .parent))
         }
 

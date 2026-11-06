@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Alas
 
@@ -512,5 +513,193 @@ struct ACPOrchestrationStoreTests {
 
         #expect((claim != nil) == claimable)
         #expect(try store.pendingMessages(targetSessionId: "child").isEmpty == !rowKept)
+    }
+
+    // MARK: Peer delegation outbox
+
+    private func peerMessage(id: String, target: String, prompt: String = "done") -> ACPDelegatedMessage {
+        .init(id: id, sourceSessionId: "child", targetSessionId: target, prompt: prompt, createdAt: 800, kind: .prompt)
+    }
+
+    private func outboxEntry(seq: Int64) -> ACPPeerOutboxEntry {
+        .init(seq: seq, messageId: "outcome-\(seq)", childSessionId: "child", prompt: "done", kind: .prompt, createdAt: 800)
+    }
+
+    @Test("an outcome for a peer parent goes to the outbox, not the inbox")
+    func outcomeForPeerParentGoesToOutboxNotInbox() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        let sentinel = ACPPeerParent.sentinel(serverId: "s1")
+        try store.enqueue(peerMessage(id: "m1", target: sentinel))
+        try store.enqueue(peerMessage(id: "m1", target: sentinel))
+
+        let page = try store.outbox(peerServerId: "s1", after: 0, maxBytes: .max)
+        #expect(page.entries.map(\.messageId) == ["m1"])
+        #expect(page.entries.first?.childSessionId == "child")
+        #expect(try store.pendingMessages(targetSessionId: sentinel).isEmpty)
+        #expect(try store.outbox(peerServerId: "other", after: 0, maxBytes: .max).entries.isEmpty)
+    }
+
+    @Test("failing a peer child writes the outbox row in the same transaction")
+    func failedTransitionForPeerParentWritesOutboxInSameTransaction() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        let sentinel = ACPPeerParent.sentinel(serverId: "s1")
+        var record = newRecord(parentSessionId: sentinel)
+        record.peerServerId = "s1"
+        try store.insert(record)
+        var another = newRecord(childSessionId: "another", parentSessionId: ACPPeerParent.sentinel(serverId: "s2"))
+        another.peerServerId = "s2"
+        try store.insert(another)
+
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom", updatedAt: 700,
+            outcome: peerMessage(id: "outcome-child-failed", target: sentinel)
+        ))
+
+        #expect(try store.delegation(childSessionId: "child")?.phase == .failed)
+        #expect(try store.outbox(peerServerId: "s1", after: 0, maxBytes: .max).entries.map(\.messageId) == ["outcome-child-failed"])
+        #expect(try store.peerChildren(peerServerId: "s1") == [try #require(try store.delegation(childSessionId: "child"))])
+    }
+
+    /// Earlier builds of this schema version wrote stores without the column.
+    @Test func aVersion5StoreWithoutTheAwaitedColumnGainsIt() throws {
+        let path = temporaryPath()
+        do {
+            let store = try ACPOrchestrationStore(path: path)
+            #expect(try store.currentSchemaVersion() == 5)
+        }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting_since", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_settled_turn", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let store = try ACPOrchestrationStore(path: path)
+        var record = newRecord()
+        record.peerAwaiting = true
+        try store.insert(record)
+
+        try store.markPeerAwaiting(childSessionId: "child", since: 5)
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
+    }
+
+    /// An acknowledgement can arrive after the turn it started was collected,
+    /// by this instance or another on the store, and must not revive the wait.
+    @Test(arguments: [(1000, false), (1100, false), (1101, true)] as [(Int64, Bool)])
+    func aLateAcknowledgementDoesNotReviveASettledWait(acceptedAt: Int64, stillAwaited: Bool) throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        var record = newRecord()
+        record.peerServerId = "s1"
+        record.peerAwaiting = true
+        try store.insert(record)
+        let entry = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-1100", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "parent"))
+
+        try store.markPeerAwaiting(childSessionId: "child", since: acceptedAt)
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
+    }
+
+    @Test("an outbox page respects the byte limit and always returns one entry")
+    func outboxPageRespectsByteLimitAndAlwaysReturnsOneEntry() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        let sentinel = ACPPeerParent.sentinel(serverId: "s1")
+        let big = String(repeating: "x", count: 10_000)
+        try store.enqueue(peerMessage(id: "m1", target: sentinel, prompt: big))
+        try store.enqueue(peerMessage(id: "m2", target: sentinel, prompt: big))
+
+        let first = try store.outbox(peerServerId: "s1", after: 0, maxBytes: 1_000)
+        #expect(first.entries.map(\.messageId) == ["m1"])
+        #expect(first.hasMore)
+        let second = try store.outbox(peerServerId: "s1", after: first.entries[0].seq, maxBytes: 1_000)
+        #expect(second.entries.map(\.messageId) == ["m2"])
+        #expect(second.hasMore == false)
+    }
+
+    @Test("acknowledging and deleting trim only the named peer's outbox")
+    func acknowledgeAndDeleteOutbox() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        for id in ["a1", "a2", "a3"] { try store.enqueue(peerMessage(id: id, target: ACPPeerParent.sentinel(serverId: "s1"))) }
+        try store.enqueue(peerMessage(id: "b1", target: ACPPeerParent.sentinel(serverId: "s2")))
+
+        let all = try store.outbox(peerServerId: "s1", after: 0, maxBytes: .max).entries
+        try store.acknowledgeOutbox(peerServerId: "s1", through: all[1].seq)
+        #expect(try store.outbox(peerServerId: "s1", after: 0, maxBytes: .max).entries.map(\.messageId) == ["a3"])
+
+        try store.deleteOutbox(peerServerId: "s1")
+        #expect(try store.outbox(peerServerId: "s1", after: 0, maxBytes: .max).entries.isEmpty)
+        #expect(try store.outbox(peerServerId: "s2", after: 0, maxBytes: .max).entries.map(\.messageId) == ["b1"])
+    }
+
+    @Test("only one collector advances the cursor")
+    func onlyOneCollectorAdvancesTheCursor() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.peerCursor(peerServerId: "s1") == 0)
+        let entry = outboxEntry(seq: 1)
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p"))
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.pendingMessages(targetSessionId: "p").map(\.id) == ["outcome-1"])
+        #expect(try store.peerCursor(peerServerId: "s1") == 1)
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 2), peerServerId: "s1", parentSessionId: "p"))
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 1), peerServerId: "s1", parentSessionId: "p") == false)
+    }
+
+    @Test("advancing the cursor without an entry moves it forward only")
+    func advancingCursorMovesForwardOnly() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 3))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2) == false)
+        #expect(try store.peerCursor(peerServerId: "s1") == 3)
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 3), peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.pendingMessages(targetSessionId: "p").isEmpty)
+    }
+
+    @Test("migrates a version 4 database keeping its rows")
+    func migratesFromVersion4KeepingRows() throws {
+        let path = temporaryPath()
+        do {
+            let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
+            try db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            try db.exec("INSERT INTO schema_version (version) VALUES (4)")
+            try db.exec("""
+            CREATE TABLE delegations (
+                child_session_id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, parent_worktree_id TEXT NOT NULL,
+                child_worktree_id TEXT, agent_id TEXT NOT NULL, worktree_request BLOB NOT NULL,
+                pending_initial_prompt TEXT, phase TEXT NOT NULL, failure_message TEXT,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                last_parent_report_at INTEGER, requested_model TEXT, requested_reasoning TEXT, role TEXT
+            )
+            """)
+            try db.exec("""
+            CREATE TABLE delegated_messages (
+                id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL,
+                target_session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                created_at INTEGER NOT NULL, claim_instance_id TEXT,
+                claim_token TEXT, claim_expires_at INTEGER, kind TEXT NOT NULL DEFAULT 'prompt'
+            )
+            """)
+            try db.exec("""
+            INSERT INTO delegated_messages (id, source_session_id, target_session_id, prompt, created_at)
+            VALUES ('m1', 'child', 'parent', 'hello', 5)
+            """)
+            try db.exec("""
+            INSERT INTO delegations (
+                child_session_id, parent_session_id, project_id, parent_worktree_id, agent_id,
+                worktree_request, phase, created_at, updated_at, role
+            ) VALUES ('child', 'parent', 'project', 'w', 'codex', ?, 'starting', 1, 1, 'reviewer')
+            """, bindings: [try JSONEncoder().encode(ACPDelegatedWorktreeRequest.current(worktreeId: "w"))])
+        }
+
+        let store = try ACPOrchestrationStore(path: path)
+        #expect(ACPOrchestrationStore.targetSchemaVersion == 5)
+        #expect(try store.currentSchemaVersion() == 5)
+        let record = try #require(try store.delegation(childSessionId: "child"))
+        #expect(record.peerServerId == nil)
+        #expect(record.peerAwaiting == false)
+        #expect(record.role == "reviewer")
+        #expect(try store.pendingMessages(targetSessionId: "parent").map(\.id) == ["m1"])
+        #expect(try store.peerCursor(peerServerId: "s1") == 0)
     }
 }

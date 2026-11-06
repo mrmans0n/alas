@@ -15,6 +15,7 @@ struct ACPToolbar: View {
     var onOpenPreview: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var previewHovered = false
+    @State private var peerChildren: [AlasCoreContext.DelegatedPeerChild] = []
 
     var body: some View {
         HStack(spacing: 10) {
@@ -110,6 +111,34 @@ struct ACPToolbar: View {
                     }
                 }
             }
+            if let name = state.delegatedFromName(of: session.id) {
+                Text("From \(name)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .lineLimit(1)
+            }
+            ForEach(ACPPeerChildPolicy.menus(for: peerChildren.map {
+                .init(childSessionId: $0.childSessionId, serverId: $0.serverId, macName: $0.macName,
+                      agentId: $0.agentId, phase: $0.phase)
+            }), id: \.serverId) { menu in
+                Menu {
+                    ForEach(menu.items, id: \.childSessionId) { item in
+                        Button(item.title) {
+                            if let child = peerChildren.first(where: { $0.childSessionId == item.childSessionId }) {
+                                state.openPeerChild(child)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(menu.title)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Sessions running on another Mac")
+                .accessibilityLabel("Sessions \(menu.title)")
+            }
             if showsShepherdButton {
                 ACPShepherdButton(session: session, worktree: worktree, state: state)
             }
@@ -121,6 +150,9 @@ struct ACPToolbar: View {
                 state.config.harness.acpShowMinimap.toggle()
                 state.saveConfig()
             }
+        }
+        .task(id: "\(session.id)-\(state.delegationRevision)") {
+            peerChildren = await state.delegatedPeerChildren(ofParent: session.id)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)

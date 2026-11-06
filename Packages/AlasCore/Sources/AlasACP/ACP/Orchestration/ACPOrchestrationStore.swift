@@ -11,7 +11,7 @@ public final class ACPOrchestrationStore {
         case malformedWorktreeRequest
     }
 
-    public static let targetSchemaVersion = 4
+    public static let targetSchemaVersion = 5
 
     public let path: String
     public let db: SQLiteDatabase
@@ -50,8 +50,8 @@ public final class ACPOrchestrationStore {
                 child_session_id, parent_session_id, project_id, parent_worktree_id,
                 child_worktree_id, agent_id, worktree_request, pending_initial_prompt,
                 phase, failure_message, created_at, updated_at,
-                requested_model, requested_reasoning, role
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                requested_model, requested_reasoning, role, peer_server_id, peer_awaiting
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, bindings: [
                 record.childSessionId,
                 record.parentSessionId,
@@ -68,6 +68,8 @@ public final class ACPOrchestrationStore {
                 record.modelSelection?.model,
                 record.modelSelection?.reasoning,
                 record.role,
+                record.peerServerId,
+                record.peerAwaiting ? Int64(1) : Int64(0),
             ])
             try db.exec("COMMIT")
         } catch {
@@ -137,6 +139,20 @@ public final class ACPOrchestrationStore {
         """, bindings: [phase.rawValue, failureMessage, updatedAt, childSessionId])
     }
 
+    /// Moves a delegation still `.starting` to `.ready`, returning whether it
+    /// did. Conditional so a late answer cannot revive a child already failed,
+    /// whose parent has been told.
+    @discardableResult
+    public func markReadyIfStarting(childSessionId: String, updatedAt: Int64) throws -> Bool {
+        try db.execChanges("""
+        UPDATE delegations
+        SET phase = ?, failure_message = NULL, updated_at = ?
+        WHERE child_session_id = ? AND phase = ?
+        """, bindings: [
+            ACPDelegationPhase.ready.rawValue, updatedAt, childSessionId, ACPDelegationPhase.starting.rawValue,
+        ]) == 1
+    }
+
     /// Atomically transitions a delegation to `.failed` AND enqueues the
     /// outcome that tells its parent, returning `true` only for the caller
     /// that made the transition.
@@ -186,18 +202,7 @@ public final class ACPOrchestrationStore {
                 try db.exec("COMMIT")
                 return false
             }
-            try db.exec("""
-            INSERT OR IGNORE INTO delegated_messages (
-                id, source_session_id, target_session_id, prompt, created_at, kind
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """, bindings: [
-                outcome.id,
-                outcome.sourceSessionId,
-                outcome.targetSessionId,
-                outcome.prompt,
-                outcome.createdAt,
-                outcome.kind.rawValue,
-            ])
+            try enqueue(outcome)
             try db.exec("COMMIT")
             return true
         } catch {
@@ -222,7 +227,25 @@ public final class ACPOrchestrationStore {
         """, bindings: [reportedAt, reportedAt, childSessionId])
     }
 
+    /// Queues a message for its target. A target that is a paired peer's
+    /// sentinel parent has no local inbox: the message goes to that peer's
+    /// outbox instead, for the peer to collect.
     public func enqueue(_ message: ACPDelegatedMessage) throws {
+        if let peerServerId = ACPPeerParent.serverId(from: message.targetSessionId) {
+            try db.exec("""
+            INSERT OR IGNORE INTO peer_outbox (
+                peer_server_id, child_session_id, message_id, prompt, kind, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """, bindings: [
+                peerServerId,
+                message.sourceSessionId,
+                message.id,
+                message.prompt,
+                message.kind.rawValue,
+                message.createdAt,
+            ])
+            return
+        }
         try db.exec("""
         INSERT OR IGNORE INTO delegated_messages (
             id, source_session_id, target_session_id, prompt, created_at, kind
@@ -264,6 +287,161 @@ public final class ACPOrchestrationStore {
             try? db.exec("ROLLBACK")
             throw error
         }
+    }
+
+    /// A page of a peer's outbox after `after`, at most `maxBytes` of prompt
+    /// text but never fewer than one entry, so an oversized outcome still
+    /// gets through.
+    public func outbox(
+        peerServerId: String,
+        after: Int64,
+        maxBytes: Int
+    ) throws -> (entries: [ACPPeerOutboxEntry], hasMore: Bool) {
+        let rows = try db.query(
+            "SELECT * FROM peer_outbox WHERE peer_server_id = ? AND seq > ? ORDER BY seq ASC",
+            bindings: [peerServerId, after]
+        )
+        var entries: [ACPPeerOutboxEntry] = []
+        var bytes = 0
+        for row in rows {
+            let entry = decodeOutboxEntry(row)
+            let size = entry.prompt.utf8.count
+            if !entries.isEmpty, size > maxBytes - bytes { break }
+            entries.append(entry)
+            bytes += size
+        }
+        return (entries, entries.count < rows.count)
+    }
+
+    public func acknowledgeOutbox(peerServerId: String, through: Int64) throws {
+        _ = try db.execChanges(
+            "DELETE FROM peer_outbox WHERE peer_server_id = ? AND seq <= ?",
+            bindings: [peerServerId, through]
+        )
+    }
+
+    public func deleteOutbox(peerServerId: String) throws {
+        _ = try db.execChanges(
+            "DELETE FROM peer_outbox WHERE peer_server_id = ?",
+            bindings: [peerServerId]
+        )
+    }
+
+    /// Moves a peer's cursor past `entry` and enqueues its message for the
+    /// parent in one transaction. An outcome, of any kind, also ends the wait
+    /// for its child. Returns true only for the caller that advanced the
+    /// cursor, so concurrent collectors wake the parent once.
+    public func collectPeerEntry(
+        _ entry: ACPPeerOutboxEntry,
+        peerServerId: String,
+        parentSessionId: String
+    ) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            try db.exec(
+                "INSERT OR IGNORE INTO peer_delegation_cursors (peer_server_id, seq) VALUES (?, 0)",
+                bindings: [peerServerId]
+            )
+            let advanced = try db.execChanges(
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
+                bindings: [entry.seq, peerServerId, entry.seq]
+            ) == 1
+            if advanced {
+                try enqueue(.init(
+                    id: entry.messageId,
+                    sourceSessionId: entry.childSessionId,
+                    targetSessionId: parentSessionId,
+                    prompt: entry.prompt,
+                    createdAt: entry.createdAt,
+                    kind: entry.kind
+                ))
+                try endWait(for: entry, peerServerId: peerServerId)
+            }
+            try db.exec("COMMIT")
+            return advanced
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// The parent now expects a result from `childSessionId`, for the prompt
+    /// the target accepted at `since`, epoch milliseconds by the target's clock.
+    /// A turn that started at or after `since` was already collected when the
+    /// acknowledgement arrives late, and then nothing is left to wait for.
+    public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
+        try db.exec("""
+        UPDATE delegations
+        SET peer_awaiting = 1, peer_awaiting_since = MAX(COALESCE(peer_awaiting_since, 0), ?)
+        WHERE child_session_id = ? AND (peer_settled_turn IS NULL OR peer_settled_turn < ?)
+        """, bindings: [since, childSessionId, since])
+    }
+
+    private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
+        // The ids the target gives outcomes; anything else leaves the child running.
+        guard entry.messageId.hasPrefix("outcome-") else { return }
+        // A turn that started before the awaited prompt was accepted is an
+        // older one, and that prompt's turn is still to come. An outcome with
+        // no turn is the child failing, which ends every wait.
+        guard let turnStartedAt = entry.turnStartedAt else {
+            try db.exec(
+                "UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ? AND peer_server_id = ?",
+                bindings: [entry.childSessionId, peerServerId]
+            )
+            return
+        }
+        try db.exec("""
+        UPDATE delegations SET peer_settled_turn = MAX(COALESCE(peer_settled_turn, 0), ?)
+        WHERE child_session_id = ? AND peer_server_id = ?
+        """, bindings: [turnStartedAt, entry.childSessionId, peerServerId])
+        try db.exec("""
+        UPDATE delegations SET peer_awaiting = 0
+        WHERE child_session_id = ? AND peer_server_id = ?
+          AND (peer_awaiting_since IS NULL OR peer_awaiting_since <= ?)
+        """, bindings: [entry.childSessionId, peerServerId, turnStartedAt])
+    }
+
+    /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
+    /// an entry nobody here can be woken for. Never moves it back. `settling`
+    /// is an entry for one of the peer's children whose parent is gone, which
+    /// still ends the wait if it is an outcome.
+    @discardableResult
+    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            try db.exec(
+                "INSERT OR IGNORE INTO peer_delegation_cursors (peer_server_id, seq) VALUES (?, 0)",
+                bindings: [peerServerId]
+            )
+            let advanced = try db.execChanges(
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
+                bindings: [seq, peerServerId, seq]
+            ) == 1
+            if advanced, let entry { try endWait(for: entry, peerServerId: peerServerId) }
+            try db.exec("COMMIT")
+            return advanced
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func peerCursor(peerServerId: String) throws -> Int64 {
+        try db.query(
+            "SELECT seq FROM peer_delegation_cursors WHERE peer_server_id = ?",
+            bindings: [peerServerId]
+        ).first?["seq"] as? Int64 ?? 0
+    }
+
+    public func peerChildren(peerServerId: String) throws -> [ACPDelegationRecord] {
+        try db.query(
+            """
+            SELECT * FROM delegations
+            WHERE peer_server_id = ?
+            ORDER BY created_at ASC, child_session_id ASC
+            """,
+            bindings: [peerServerId]
+        ).map(decodeDelegation)
     }
 
     public func pendingMessages(targetSessionId: String) throws -> [ACPDelegatedMessage] {
@@ -434,6 +612,9 @@ public final class ACPOrchestrationStore {
             if current < 2 { try migrateToV2() }
             if current < 3 { try migrateToV3() }
             if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
+            if current < 5 { try migrateToV5() }
+            // Builds of this version before the column existed wrote stores at 5.
+            try addPeerAwaitingColumnIfMissing()
             if current == 0 {
                 try db.exec(
                     "INSERT INTO schema_version (version) VALUES (?)",
@@ -501,6 +682,43 @@ public final class ACPOrchestrationStore {
         try db.exec("ALTER TABLE delegations ADD COLUMN requested_reasoning TEXT")
     }
 
+    private func migrateToV5() throws {
+        try db.exec("ALTER TABLE delegations ADD COLUMN peer_server_id TEXT")
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS peer_outbox (
+            seq              INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_server_id   TEXT NOT NULL,
+            child_session_id TEXT NOT NULL,
+            message_id       TEXT NOT NULL UNIQUE,
+            prompt           TEXT NOT NULL,
+            kind             TEXT NOT NULL,
+            created_at       INTEGER NOT NULL
+        )
+        """)
+        try db.exec("CREATE INDEX IF NOT EXISTS peer_outbox_peer_idx ON peer_outbox(peer_server_id, seq)")
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS peer_delegation_cursors (
+            peer_server_id TEXT PRIMARY KEY,
+            seq            INTEGER NOT NULL
+        )
+        """)
+    }
+
+    private func addPeerAwaitingColumnIfMissing() throws {
+        let columns = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name LIKE 'peer_awaiting%'")
+            .compactMap { $0["name"] as? String }
+        if !columns.contains("peer_awaiting") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting INTEGER NOT NULL DEFAULT 0")
+        }
+        if !columns.contains("peer_awaiting_since") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting_since INTEGER")
+        }
+        let settled = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name = 'peer_settled_turn'")
+        if settled.isEmpty {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_settled_turn INTEGER")
+        }
+    }
+
     private func decodeDelegation(_ row: [String: Any?]) throws -> ACPDelegationRecord {
         guard let requestData = row["worktree_request"] as? Data,
               let request = try? decoder.decode(ACPDelegatedWorktreeRequest.self, from: requestData),
@@ -525,7 +743,9 @@ public final class ACPOrchestrationStore {
                 model: row["requested_model"] as? String,
                 reasoning: row["requested_reasoning"] as? String
             ),
-            role: row["role"] as? String
+            role: row["role"] as? String,
+            peerServerId: row["peer_server_id"] as? String,
+            peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0
         )
     }
 
@@ -537,6 +757,17 @@ public final class ACPOrchestrationStore {
             prompt: row["prompt"] as? String ?? "",
             createdAt: row["created_at"] as? Int64 ?? 0,
             kind: (row["kind"] as? String).flatMap(ACPDelegatedMessageKind.init(rawValue:)) ?? .prompt
+        )
+    }
+
+    private func decodeOutboxEntry(_ row: [String: Any?]) -> ACPPeerOutboxEntry {
+        .init(
+            seq: row["seq"] as? Int64 ?? 0,
+            messageId: row["message_id"] as? String ?? "",
+            childSessionId: row["child_session_id"] as? String ?? "",
+            prompt: row["prompt"] as? String ?? "",
+            kind: (row["kind"] as? String).flatMap(ACPDelegatedMessageKind.init(rawValue:)) ?? .prompt,
+            createdAt: row["created_at"] as? Int64 ?? 0
         )
     }
 }

@@ -699,6 +699,24 @@ final class NativePeerSessions {
         return hosts?.shepherds[id.serverId]?[id.sessionId]
     }
 
+    /// The paired Mac that delegated the selected session, as its host names it.
+    var selectedDelegatedFromName: String? {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return nil }
+        return hosts?.delegatedFromNames[id.serverId]?[id.sessionId]
+    }
+
+    /// The listed sessions' delegating Macs, by session id as listed.
+    func delegatedFromNames(of sessions: [RemoteSessionSummary]) -> [String: String] {
+        let peers = Set(snapshot.groups.map(\.serverId))
+        return Dictionary(sessions.compactMap { session in
+            RemoteFederatedSessionID.parse(session.id, peers: peers)
+                .flatMap { hosts?.delegatedFromNames[$0.serverId]?[$0.sessionId] }
+                .map { (session.id, $0) }
+        }) { first, _ in first }
+    }
+
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.first { selectedSessionId.hasPrefix($0.serverId + ":") }
@@ -843,6 +861,16 @@ final class NativePeerSessions {
             // which files — a rename or delete only shows up by re-listing.
             reloadWorkspace()
         }
+    }
+
+    /// Whether `serverId` is connected and carrying sessions, and whether it
+    /// lists `sessionId` (a plain id on that Mac), as `select` needs to open it.
+    func openability(serverId: String, sessionId: String) -> (connected: Bool, listed: Bool) {
+        guard let group = snapshot.groups.first(where: { $0.serverId == serverId }),
+              group.state.carriesSessions
+        else { return (false, false) }
+        let federated = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
+        return (true, group.sessions.contains { $0.id == federated })
     }
 
     func select(_ sessionId: String) {

@@ -4,8 +4,8 @@ import AppKit
 /// go straight here, never through federation.
 extension AppState {
     func makeNativePeerHosts() -> NativePeerHosts {
+        let channels = PeerHostChannels(links: remotePeers) // routes the host messages back too
         let hosts = NativePeerHosts(
-            send: { [weak self] serverId, message in self?.remotePeers.sendToPeer(.host(message), serverId: serverId) },
             sendPortForward: { [weak self] serverId, request in
                 self?.remotePeers.sendToPeer(.portForward(request), serverId: serverId)
             },
@@ -28,11 +28,13 @@ extension AppState {
                     serverId: serverId, sessionId: notice.worktreeID, peerWorktreeId: notice.worktreeID,
                     peerReviewSessionId: notice.reviewSessionID
                 )
-            }
+            },
+            channels: channels
         )
-        remotePeers.onHostMessage = { [weak hosts] serverId, message in
-            hosts?.receive(serverId: serverId, message)
-        }
+        let delegation = PeerDelegationClient(links: remotePeers, channel: { [weak channels] in channels?.channel(for: $0) })
+        hosts.onDelegationOutboxChanged = { [weak delegation] in delegation?.onOutboxChanged?($0) }
+        hosts.onAvailabilityChanged = { [weak delegation] in delegation?.onAvailabilityChanged?($0) }
+        core.delegationPeers = delegation
         remotePeers.onPortForwardEvent = { [weak hosts] serverId, event in
             hosts?.receive(serverId: serverId, event)
         }

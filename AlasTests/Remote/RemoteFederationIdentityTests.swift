@@ -173,6 +173,41 @@ struct RemoteFederationIdentityTests {
         #expect(host.pairing.devices.isEmpty)
     }
 
+    /// `alas-host peers add` for a Mac already paired with the host. A Mac's
+    /// server always pairs back, so the host gets a working link only if the
+    /// Mac can reach it; otherwise the Mac takes its token back and the host
+    /// keeps what it had, access included.
+    @Test(arguments: [true, false])
+    func aHostAddingAMacNeedsItToPairBack(macReachesHost: Bool) async throws {
+        let host = Mac(serverId: "srv-host", name: "Host")
+        let mac = Mac(serverId: "srv-mac", name: "Mac")
+        try await host.start(name: "Host", pairsBack: false, reciprocalConfirmationTimeout: macReachesHost ? 15 : 1)
+        try await mac.start(name: "Mac")
+        defer { host.stop()
+        mac.stop() }
+        #expect(await mac.peers.addPeer(code: host.pairing.beginPairing(), origins: [host.origin]) == nil)
+        try await waitUntil { host.peers.peers.first?.localDeviceId != nil }
+        let inbound = try #require(host.peers.peers.first)
+        #expect(host.peers.setAgentAccess(.ask, peerId: inbound.id))
+        if !macReachesHost { host.server.stop() }
+
+        let error = await host.peers.addPeer(code: mac.pairing.beginPairing(), origins: [mac.origin])
+
+        let record = try #require(host.peers.peers.first)
+        #expect(host.peers.summaries.first?.agentAccess == .ask)
+        if macReachesHost {
+            #expect(error == nil)
+            #expect(record.publicKey == mac.signer.publicKey)
+            #expect(!record.token.isEmpty)
+            #expect(record.localDeviceId != inbound.localDeviceId)
+            #expect(mac.peers.peers.first?.localDeviceId != nil)
+        } else {
+            #expect(error == .reciprocalPairingFailed)
+            #expect(record == inbound)
+            try await waitUntil { mac.pairing.devices.isEmpty }
+        }
+    }
+
     /// Refused before the reply, so the Mac hears it instead of keeping a
     /// token the host then revokes, and the code survives for a retry.
     @Test func aHeadlessHostRefusesAMacItHoldsUnderAnotherKey() async throws {

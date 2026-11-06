@@ -597,6 +597,31 @@ struct NativePeerSessionsTests {
         #expect(hosts.worktrees["B"] == nil)
     }
 
+    @Test func availabilityFiresOnceWhenAChannelSubscribesAndWhenItIsDropped() async throws {
+        var sent: [HostClientMessage] = []
+        let hosts = NativePeerHosts(send: { sent.append($1) }, supports: { _, _ in true })
+        var fired: [String] = []
+        hosts.onAvailabilityChanged = { fired.append($0) }
+        hosts.peersChanged(online: ["B"])
+        try await eventually("snapshot request") { sent.count == 1 }
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        hosts.receive(serverId: "B", .response(id: sent[0].id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.count == 2 }
+        #expect(fired.isEmpty)
+        hosts.receive(serverId: "B", .response(id: sent[1].id, result: .subscribed))
+        #expect(fired == ["B"])
+        // A later change on the same subscription is not a transition.
+        let project = ProjectSnapshot(ProjectConfig(
+            id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast
+        ))
+        hosts.receive(serverId: "B", .events(events: [.projectChanged(project)], cursor: cursor))
+        #expect(fired == ["B"])
+        hosts.peersChanged(online: [])
+        #expect(fired == ["B", "B"])
+    }
+
     @Test func anIdleHostWorktreeSelectsIntoItsEmptyStateAndClearsWhenTheHostDropsIt() async throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

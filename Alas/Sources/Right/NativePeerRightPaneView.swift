@@ -1078,7 +1078,10 @@ struct NativePeerRightPaneView: View {
                 NativePeerRailMessage(text: error)
             }
             AgentTabView(
-                rollup: AgentSidebarRollupBuilder.peer(client.selectedWorktreeGroup?.sessions ?? []),
+                rollup: AgentSidebarRollupBuilder.peer(
+                    client.selectedWorktreeGroup?.sessions ?? [],
+                    delegatedFromNames: client.delegatedFromNames(of: client.selectedWorktreeGroup?.sessions ?? [])
+                ),
                 agentLookup: { agentID in
                     state.agent(id: agentID == AgentKind.cursor.rawValue ? "cursor-agent" : agentID)
                 },

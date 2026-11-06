@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged", "delegationOutboxChanged"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 
@@ -215,5 +215,41 @@ struct PeerHostChannelTests {
         await first.value
         channel.disconnect()
         await second.value
+    }
+
+    @Test func channelsReconcileWithOnlinePeers() async throws {
+        var capabilities: [String: Set<String>] = [
+            "mini": [HostProtocolCapability.v1, HostProtocolCapability.eventsV1],
+            "old": [HostProtocolCapability.v1],
+        ]
+        var sent: [(String, HostClientMessage)] = []
+        let channels = PeerHostChannels(
+            supports: { serverId, capability in capabilities[serverId]?.contains(capability) == true },
+            send: { sent.append(($0, $1)) }
+        )
+        var made: [String] = []
+        var dropped: [String] = []
+        channels.onChannelMade = { serverId, _ in made.append(serverId) }
+        channels.onChannelDropped = { dropped.append($0) }
+
+        channels.peersChanged(online: ["mini", "old"])
+        try await eventually { @MainActor in sent.count == 1 }
+        #expect(sent.first?.0 == "mini")
+        #expect(channels.channel(for: "mini") != nil)
+        #expect(channels.channel(for: "old") == nil)
+
+        channels.peersChanged(online: ["mini", "old"]) // still connecting: no second channel, no second snapshot
+        #expect(made == ["mini"])
+        #expect(sent.count == 1)
+
+        let mini = try #require(channels.channel(for: "mini"))
+        channels.peersChanged(online: ["old"])
+        #expect(channels.channel(for: "mini") == nil)
+        #expect(dropped == ["mini"])
+        #expect(!mini.isConnecting)
+
+        capabilities["mini"] = [] // came back without the capability: gets none
+        channels.peersChanged(online: ["mini"])
+        #expect(channels.channel(for: "mini") == nil)
     }
 }

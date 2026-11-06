@@ -192,6 +192,13 @@ struct AlasCLIRequestTests {
             prompt: "Task", agentID: nil, worktree: .new(branch: "child", base: "origin/main")
         ))
 
+        let peerAgents = #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{"peer":"mini"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(peerAgents.utf8)).command == .agentList(worktree: nil, peer: "mini"))
+        let remote = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","peer":"mini","project":"alas","new_worktree":{"branch":"child"}}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(remote.utf8)).command == .sessionNew(
+            prompt: "Task", agentID: nil, worktree: .new(branch: "child", base: nil), peer: "mini", project: "alas"
+        ))
+
         let send = #"{"v":1,"kind":"cli","command":"session_send","session_id":"s1","params":{"session_id":"child","prompt":"Follow up"}}"#
         #expect(try AlasCLIRequest.decode(from: Data(send.utf8)).command == .sessionSend(
             sessionID: "child", prompt: "Follow up"

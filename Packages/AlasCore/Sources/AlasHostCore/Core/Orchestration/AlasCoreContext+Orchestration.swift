@@ -31,6 +31,9 @@ extension AlasCoreContext {
                         await work()
                     }
                 },
+                peerNeedsCollecting: { [weak self] serverId in
+                    Task { @MainActor [weak self] in await self?.peerOutboxCollector?.retryWhileNeeded(serverId: serverId) }
+                },
                 makeID: { UUID().uuidString },
                 worktree: { [weak self] id in self?.projectAndWorktree(withWorktreeId: id)?.worktree },
                 existingWorktree: { [weak self] projectID, selector in
@@ -109,17 +112,122 @@ extension AlasCoreContext {
                     self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in self?.environment.configuration().harness.acpAutoRunByDefault ?? false },
-                notifyChanged: {},
+                notifyChanged: { [weak self] in self?.delegationRevision &+= 1 },
+                peerOutboxChanged: { [weak self] in self?.peerOutboxDidChange?($0) },
                 admitChild: { [weak self] worktree, agentID in
                     guard let self else { return "Alas is not available." }
                     return await SessionsAPI(core: self).refusal(toStart: agentID, in: worktree).map(Self.childRefusalMessage)
+                },
+                project: { [weak self] id in self?.projects.projects.first { $0.id == id } },
+                createPeerWorktree: { [weak self] projectID, branch, base, recordDestination in
+                    guard let self else { return .failure(.init(message: "Alas is not available.")) }
+                    return await createPeerChildWorktree(
+                        projectID: projectID, branch: branch, base: base, recordDestination: recordDestination
+                    )
+                },
+                resolvePeerWorktreeBase: { [weak self] branch, base, expectedSHA, repo in
+                    let machine = self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
+                    return await PeerWorktreeBase.resolve(
+                        branch: branch, base: base, expectedSHA: expectedSHA, repo: repo, machine: machine
+                    ).mapError { .init(message: $0.message) }
+                },
+                machineName: { [weak self] in
+                    self?.environment.configuration().remote.resolvedDisplayName ?? "this Mac"
+                },
+                delegationPeers: { [weak self] in self?.delegationPeers },
+                originRemote: { worktree in
+                    let remotes = try? await GitService().remotes(worktreePath: worktree.path)
+                    return remotes?.first { $0.name == "origin" && $0.direction == .fetch }
+                        .flatMap { GitRemoteIdentity.normalized($0.url) }
+                },
+                branchState: { worktree in
+                    await ACPPeerBasePreflight.branchState(worktreePath: worktree.path)
+                },
+                resolvePeerWorktree: { selector, worktrees in
+                    switch AlasCLIWorktreeResolver.resolve(target: selector, worktrees: worktrees) {
+                    case .matched(let worktree): .matched(worktree)
+                    case .missing: .missing
+                    case .ambiguous(let labels): .ambiguous(labels)
+                    }
                 }
             )
         )
     }
 
+    /// Creates a worktree for a child a paired Mac started, the way work a
+    /// peer starts is created: nobody here is waiting to approve a hook, so an
+    /// unapproved one is skipped, and said to be.
+    private func createPeerChildWorktree(
+        projectID: String, branch: String, base: String,
+        recordDestination: @MainActor (URL) async throws -> Void
+    ) async -> Result<ACPSessionOrchestrationCoordinator.PeerWorktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
+        let worktrees = WorktreesAPI(core: self)
+        do {
+            let prepared = try await worktrees.prepareCreate(projectID: projectID, branch: branch, base: base, caller: .cli)
+            guard let project = projects.projects.first(where: { $0.id == projectID }) else {
+                return .failure(.init(message: "The project is no longer available."))
+            }
+            try await recordDestination(prepared.request.destination)
+            let repoPath = URL(fileURLWithPath: project.path)
+            // The worktree checks out the local branch when it exists, and is
+            // otherwise created from base.
+            let ref = try await Self.firstExistingRef(
+                ["refs/heads/\(branch)", "refs/heads/\(base)", "refs/remotes/\(base)"], repoPath: repoPath
+            ) ?? base
+            let gate = try await gateRepoHook(event: .worktreeCreate, project: project, consent: nil) {
+                await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: ref, repoPath: repoPath, host: project.host)
+            }
+            var request = prepared.request
+            request.launchSurface = .delegated
+            request.asksAboutRepoHooks = false
+            let worktree = try await worktrees.create(request, caller: .cli)
+            return .success(.init(worktree: worktree, skippedRepoHook: gate == .skippedUnapproved))
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
+    }
+
+    /// A paired Mac's sentinel is not a session, so it is no one's parent
+    /// here; `delegatedParentSessionID` still reads it from the record, and
+    /// `delegatedPeerOrigins` remembers which Mac it was.
     @_spi(AppHost) public func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        if let serverId = ACPPeerParent.serverId(from: parentID) {
+            delegatedPeerOrigins[childID] = serverId
+            return
+        }
         delegatedSessionParents[childID] = parentID
+    }
+
+    /// What a summary says about the Mac that delegated `sessionID`: its
+    /// device's name, or "another Mac" once it has been forgotten.
+    @_spi(AppHost) public func delegatedFromName(of sessionID: String) -> String? {
+        delegatedPeerOrigins[sessionID].map(peerMacName(serverId:))
+    }
+
+    @_spi(AppHost) public func peerMacName(serverId: String) -> String {
+        let device = delegationPairing()?.devices.first { $0.kind == .alasInstance && $0.peerServerId == serverId }
+        return device?.name ?? "another Mac"
+    }
+
+    /// A child that runs on a paired Mac, as its parent's tab shows it.
+    public struct DelegatedPeerChild: Equatable, Sendable {
+        public let childSessionId: String
+        public let serverId: String
+        public let macName: String
+        public let agentId: String
+        public let phase: ACPDelegationPhase
+    }
+
+    /// The children `parentSessionID` sent to other Macs, oldest first.
+    @_spi(AppHost) public func delegatedPeerChildren(ofParent parentSessionID: String) async -> [DelegatedPeerChild] {
+        guard let records = try? await orchestrationPersistence.children(parentSessionId: parentSessionID) else { return [] }
+        return records.compactMap { record in
+            record.peerServerId.map {
+                DelegatedPeerChild(
+                    childSessionId: record.childSessionId, serverId: $0, macName: peerMacName(serverId: $0),
+                    agentId: record.agentId, phase: record.phase)
+            }
+        }
     }
 
     /// The parent that delegated `sessionID`, from memory or its persisted
@@ -135,7 +243,11 @@ extension AlasCoreContext {
     @_spi(AppHost) public func loadDelegatedSessionParents() async {
         guard let links = try? await orchestrationPersistence.delegationParents() else { return }
         // Live entries win: they may describe a delegation still being written.
-        delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
+        delegatedSessionParents = links
+            .filter { ACPPeerParent.serverId(from: $0.value) == nil }
+            .merging(delegatedSessionParents) { _, live in live }
+        delegatedPeerOrigins = links.compactMapValues { ACPPeerParent.serverId(from: $0) }
+            .merging(delegatedPeerOrigins) { _, live in live }
     }
 
     /// What a parent hears when its child is refused as a new session.

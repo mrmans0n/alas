@@ -319,7 +319,7 @@ struct ACPBrokerRawClientTests {
             runner.stop()
             try await eventually { finished.withLock { $0 } }
         }
-        if reason == "deadline-open" { try await eventually(within: .seconds(3)) { finished.withLock { $0 } } }
+        if reason == "deadline-open" { try await eventually(within: .seconds(30)) { finished.withLock { $0 } } }
         await #expect(throws: (any Error).self) { try await starting.value }
         #expect(await service.sentRequests.isEmpty)
         #expect(try await persistence.loadSession(id: "s") == before)

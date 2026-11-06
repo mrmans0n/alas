@@ -22,6 +22,8 @@ public final class PeerHostChannel {
         public var runs: [RunRecord]
         /// Shepherd pills by session id; sessions without one are absent.
         public var shepherds: [String: HostSessionShepherd]
+        /// The paired Mac that delegated each session, by session id; sessions no Mac delegated are absent.
+        public var delegatedFromNames: [String: String] = [:]
         /// Review statuses by worktree id, as the followed ones change.
         public var reviewStatuses: [String: ReviewLoopSnapshot] = [:]
         /// Counts each `reviewsChanged` per worktree, for a view to refetch on; dropped with the worktree.
@@ -33,6 +35,7 @@ public final class PeerHostChannel {
             workspaceCheckouts = snapshot.workspaceCheckouts
             runs = snapshot.runs
             shepherds = Dictionary(snapshot.sessions.compactMap { s in s.shepherd.map { (s.id, $0) } }) { _, last in last }
+            delegatedFromNames = Dictionary(snapshot.sessions.compactMap { s in s.delegatedFromName.map { (s.id, $0) } }) { _, last in last }
         }
 
         /// Upserts or removes by key; transcript and request events are ignored.
@@ -68,14 +71,16 @@ public final class PeerHostChannel {
                 runs.removeAll { $0.id == id }
             case .sessionChanged(let summary):
                 shepherds[summary.id] = summary.shepherd
+                delegatedFromNames[summary.id] = summary.delegatedFromName
             case .sessionRemoved(_, let id):
                 shepherds[id] = nil
+                delegatedFromNames[id] = nil
             case .reviewStatus(let worktreeID, let snapshot):
                 reviewStatuses[worktreeID] = snapshot
             case .reviewsChanged(let worktreeID):
                 reviewRevisions[worktreeID, default: 0] += 1
             case .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .notice, .worktreeNotice, .fileChanged, .resync:
+                 .sessionState, .notice, .worktreeNotice, .fileChanged, .delegationOutboxChanged, .resync:
                 break
             }
         }
@@ -103,6 +108,8 @@ public final class PeerHostChannel {
     public var onWorktreeNotice: (@MainActor (HostWorktreeNotice) -> Void)?
     /// Called with each change to a file this connection follows: its new version, or nil once gone.
     public var onFileChanged: (@MainActor (_ worktreeID: String, _ path: String, _ version: WorktreeFileVersion?) -> Void)?
+    /// Called when delegation outcomes wait to be collected from this peer.
+    public var onDelegationOutboxChanged: (@MainActor () -> Void)?
 
     private let timeout: Duration
     private let send: @MainActor (HostClientMessage) -> Void
@@ -133,9 +140,9 @@ public final class PeerHostChannel {
         onChange?()
         subscribeID = nextID
         // Channels exist only for `host.events.v1` peers, which serve it; a host
-        // that predates `worktreeNotice`, `reviewStatus`, `reviewsChanged` or `fileChanged` just never matches that kind.
+        // that predates `worktreeNotice`, `reviewStatus`, `reviewsChanged`, `fileChanged` or `delegationOutboxChanged` just never matches that kind.
         _ = await request(.subscribeAccepting(
-            after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]
+            after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged", "delegationOutboxChanged"]
         )) // `finish` sets isSubscribed on .subscribed
     }
 
@@ -167,6 +174,7 @@ public final class PeerHostChannel {
             for case .notice(let notice) in events { onNotice?(notice) }
             for case .worktreeNotice(let notice) in events { onWorktreeNotice?(notice) }
             for case .fileChanged(let worktreeID, let path, let version) in events { onFileChanged?(worktreeID, path, version) }
+            if events.contains(.delegationOutboxChanged) { onDelegationOutboxChanged?() }
             if events.contains(.resync) {
                 isSubscribed = false
                 onChange?()
