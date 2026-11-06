@@ -505,7 +505,11 @@ public final class RemotePeerManager {
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
                 if shouldPublish() {
-                    if expectedPeer == nil { inheritAgentAccess(from: previousState, peerId: peer.id) }
+                    if expectedPeer == nil, previousState?.isInboundOnly == true {
+                        inheritAgentAccess(from: previousState, peerId: peer.id)
+                    } else {
+                        resetAgentAccess(serverId: serverId)
+                    }
                     return nil
                 }
                 if lastUpsertOwnerByServerId[serverId] == counterCode {
@@ -592,14 +596,24 @@ public final class RemotePeerManager {
     /// An add that upgrades an inbound-only record gives the peer a new device
     /// here, in place of the one whose access someone already chose. The
     /// person adding the peer decided nothing about that access, so it carries
-    /// over; any other re-pair starts at off. The old device stays until
-    /// `forget`, as for any re-pair: revoking it now could reach the peer as a
-    /// refusal of the token it is only about to replace.
+    /// over. The old device stays until `forget`, as for any re-pair: revoking
+    /// it now could reach the peer as a refusal of the token it is only about
+    /// to replace.
     private func inheritAgentAccess(from previous: RemotePeer?, peerId: String) {
         guard let previous, previous.isInboundOnly,
               let access = previous.localDeviceId.flatMap({ pairing.device(id: $0)?.agentAccess }),
               let deviceId = peers.first(where: { $0.id == peerId })?.localDeviceId else { return }
         _ = pairing.setAgentAccess(access, deviceId: deviceId)
+    }
+
+    /// Any other re-pair starts at off, on every device carrying the peer's
+    /// identity: the tokens it replaces stay valid until `forget`, and the
+    /// gate reads the device that authenticated, so a grant left on one of
+    /// them would outlive what Settings shows.
+    private func resetAgentAccess(serverId: String) {
+        for device in pairing.devices where device.kind == .alasInstance && device.peerServerId == serverId {
+            pairing.setAgentAccess(.off, deviceId: device.id)
+        }
     }
 
     /// Marks an attempt's counter-code as over: drops a buffered confirmation
@@ -830,6 +844,7 @@ public final class RemotePeerManager {
             if let confirmed = peers.first(where: { $0.serverId == request.peerServerId }) {
                 durableStateByServerId[request.peerServerId] = confirmed
             }
+            resetAgentAccess(serverId: request.peerServerId)
         } else {
             // We are the initiator: this is A's reciprocal call redeeming
             // OUR counter-code. Always buffer it, keyed by that code, rather
@@ -917,6 +932,7 @@ public final class RemotePeerManager {
                lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
         durableStateByServerId[request.peerServerId] = peers.first { $0.serverId == request.peerServerId }
+        resetAgentAccess(serverId: request.peerServerId)
         return true
     }
 

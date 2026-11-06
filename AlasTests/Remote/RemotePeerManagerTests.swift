@@ -1820,6 +1820,35 @@ struct RemotePeerManagerTests {
         #expect(peer.publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
         #expect(peer.localDeviceId == new.deviceId)
         #expect(pairing.device(id: new.deviceId)?.agentAccess == expected)
+        #expect(pairing.device(id: old.deviceId)?.agentAccess == expected)
+    }
+
+    /// A re-pair the peer starts leaves its older tokens valid, and the gate
+    /// reads the device that authenticated, so none of them keeps a grant.
+    /// Another peer's device is left alone.
+    @Test(arguments: [false, true])
+    func aRePairThePeerStartsTurnsAccessOffOnEveryDevice(inboundOnly: Bool) async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let old = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let other = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac C", peerServerId: "srv-c")
+        #expect(pairing.setAgentAccess(.autoRun, deviceId: old.deviceId))
+        #expect(pairing.setAgentAccess(.autoRun, deviceId: other.deviceId))
+        let code = pairing.beginPairing()
+        let new = try pairing.redeemPeer(code: code, deviceName: "Mac A", peerServerId: "srv-a")
+        let key = Curve25519.Signing.PrivateKey()
+        let manager = makeManager(pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, requests: Requests()),
+                                  links: Links())
+
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"],
+            peerPublicKey: RemoteIdentityCrypto.publicKeyString(key.publicKey),
+            counterCode: "COUNTER", localDeviceId: new.deviceId, redeemedCode: code, inboundOnly: inboundOnly))
+
+        #expect(manager.peers.first?.localDeviceId == new.deviceId)
+        #expect(pairing.device(id: old.deviceId)?.agentAccess == .off)
+        #expect(pairing.device(id: new.deviceId)?.agentAccess == .off)
+        #expect(pairing.device(id: other.deviceId)?.agentAccess == .autoRun)
     }
 
     /// Another host answers an add inbound-only, minting nothing here, so the

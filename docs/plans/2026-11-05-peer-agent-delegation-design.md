@@ -156,7 +156,8 @@ There is one switch, on the target, per peer. T3 requires a switch on both machi
 does not add one on the source, because a second switch adds a failure mode without adding
 protection for someone who owns both machines. It is easy to add later.
 
-Re-pairing creates a new device, which starts at `.off`. A person consents again.
+Re-pairing creates a new device, and every device carrying that peer's identity goes to
+`.off`, because older tokens stay valid until the peer is forgotten. A person consents again.
 
 Surfaces:
 

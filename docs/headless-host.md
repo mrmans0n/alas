@@ -229,7 +229,7 @@ still refuses them until it allows it.
 If the Mac had paired with the host and had no link back, its `peers agents`
 value stays as it was: access to the host is a separate decision. Running
 `peers add` again for a Mac that already has a link back is an ordinary re-pair,
-and that Mac's access starts at `off`.
+and that Mac's access starts at `off`, on its older tokens too.
 
 Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the
