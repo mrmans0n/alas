@@ -620,14 +620,14 @@ A child is failed, with a wake, only on proof it is gone. In `session_wait` that
 state is `gone` and also settled. It happens when the other Mac reports it has no
 such child.
 
-Revoking or forgetting a Mac has a limit. If the Mac rejects this Mac's pairing, or
-you forget it here, Alas fails the children it still knows are starting or being
-waited on, in the same run of the app. The set of children being waited on lives
-in memory only. After this Mac restarts, a running child of a revoked or
-forgotten Mac is not failed and wakes nothing; the parent finds out when it asks
-about that child (`session_wait` then reports `gone` or an error). The 15-minute
-offline notice uses the same in-memory set, so it is not sent for a child the
-parent was waiting on before a restart.
+If the Mac rejects this Mac's pairing, or you forget it here, Alas fails the
+children still starting or being waited on, with a wake each. A child counts as
+waited on from `session_new` or a successful `session_send` until one of its
+outcomes arrives, and this is stored, so it holds across a restart of this Mac.
+The 15-minute offline notice goes by the same record. A restart during an outage
+starts its 15 minutes again, and the parent can get a further notice after it.
+A child that is not being waited on stays as it is; the parent finds out if it
+asks about that child (`session_wait` then reports `gone` or an error).
 
 A child blocked on a permission, question or plan shows the same notices as a
 local one. On this Mac you also get a macOS notification, if *Notify when AI harness needs input*

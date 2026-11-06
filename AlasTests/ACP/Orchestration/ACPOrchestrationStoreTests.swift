@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Alas
 
@@ -556,6 +557,26 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.peerChildren(peerServerId: "s1") == [try #require(try store.delegation(childSessionId: "child"))])
     }
 
+    /// Earlier builds of this schema version wrote stores without the column.
+    @Test func aVersion5StoreWithoutTheAwaitedColumnGainsIt() throws {
+        let path = temporaryPath()
+        do {
+            let store = try ACPOrchestrationStore(path: path)
+            #expect(try store.currentSchemaVersion() == 5)
+        }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let store = try ACPOrchestrationStore(path: path)
+        var record = newRecord()
+        record.peerAwaiting = true
+        try store.insert(record)
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
+    }
+
     @Test("an outbox page respects the byte limit and always returns one entry")
     func outboxPageRespectsByteLimitAndAlwaysReturnsOneEntry() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())
@@ -652,6 +673,7 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.currentSchemaVersion() == 5)
         let record = try #require(try store.delegation(childSessionId: "child"))
         #expect(record.peerServerId == nil)
+        #expect(record.peerAwaiting == false)
         #expect(record.role == "reviewer")
         #expect(try store.pendingMessages(targetSessionId: "parent").map(\.id) == ["m1"])
         #expect(try store.peerCursor(peerServerId: "s1") == 0)

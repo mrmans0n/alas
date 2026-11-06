@@ -160,8 +160,12 @@ public actor ACPOrchestrationPersistence {
     }
 
     @discardableResult
-    public func advancePeerCursor(peerServerId: String, to seq: Int64) throws -> Bool {
-        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq)
+    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
+        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, settling: entry)
+    }
+
+    public func markPeerAwaiting(childSessionId: String) throws {
+        try openedStore().markPeerAwaiting(childSessionId: childSessionId)
     }
 
     public func peerCursor(peerServerId: String) throws -> Int64 {

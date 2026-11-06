@@ -50,8 +50,8 @@ public final class ACPOrchestrationStore {
                 child_session_id, parent_session_id, project_id, parent_worktree_id,
                 child_worktree_id, agent_id, worktree_request, pending_initial_prompt,
                 phase, failure_message, created_at, updated_at,
-                requested_model, requested_reasoning, role, peer_server_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                requested_model, requested_reasoning, role, peer_server_id, peer_awaiting
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, bindings: [
                 record.childSessionId,
                 record.parentSessionId,
@@ -69,6 +69,7 @@ public final class ACPOrchestrationStore {
                 record.modelSelection?.reasoning,
                 record.role,
                 record.peerServerId,
+                record.peerAwaiting ? Int64(1) : Int64(0),
             ])
             try db.exec("COMMIT")
         } catch {
@@ -327,8 +328,9 @@ public final class ACPOrchestrationStore {
     }
 
     /// Moves a peer's cursor past `entry` and enqueues its message for the
-    /// parent in one transaction. Returns true only for the caller that
-    /// advanced the cursor, so concurrent collectors wake the parent once.
+    /// parent in one transaction. An outcome, of any kind, also ends the wait
+    /// for its child. Returns true only for the caller that advanced the
+    /// cursor, so concurrent collectors wake the parent once.
     public func collectPeerEntry(
         _ entry: ACPPeerOutboxEntry,
         peerServerId: String,
@@ -353,6 +355,7 @@ public final class ACPOrchestrationStore {
                     createdAt: entry.createdAt,
                     kind: entry.kind
                 ))
+                try endWait(for: entry, peerServerId: peerServerId)
             }
             try db.exec("COMMIT")
             return advanced
@@ -362,10 +365,29 @@ public final class ACPOrchestrationStore {
         }
     }
 
+    /// The parent now expects a result from `childSessionId`.
+    public func markPeerAwaiting(childSessionId: String) throws {
+        try db.exec(
+            "UPDATE delegations SET peer_awaiting = 1 WHERE child_session_id = ?",
+            bindings: [childSessionId]
+        )
+    }
+
+    private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
+        // The ids the target gives outcomes; anything else leaves the child running.
+        guard entry.messageId.hasPrefix("outcome-") else { return }
+        try db.exec(
+            "UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ? AND peer_server_id = ?",
+            bindings: [entry.childSessionId, peerServerId]
+        )
+    }
+
     /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
-    /// an entry nobody here can be woken for. Never moves it back.
+    /// an entry nobody here can be woken for. Never moves it back. `settling`
+    /// is an entry for one of the peer's children whose parent is gone, which
+    /// still ends the wait if it is an outcome.
     @discardableResult
-    public func advancePeerCursor(peerServerId: String, to seq: Int64) throws -> Bool {
+    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
             try db.exec(
@@ -376,6 +398,7 @@ public final class ACPOrchestrationStore {
                 "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
                 bindings: [seq, peerServerId, seq]
             ) == 1
+            if advanced, let entry { try endWait(for: entry, peerServerId: peerServerId) }
             try db.exec("COMMIT")
             return advanced
         } catch {
@@ -571,6 +594,8 @@ public final class ACPOrchestrationStore {
             if current < 3 { try migrateToV3() }
             if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
             if current < 5 { try migrateToV5() }
+            // Builds of this version before the column existed wrote stores at 5.
+            try addPeerAwaitingColumnIfMissing()
             if current == 0 {
                 try db.exec(
                     "INSERT INTO schema_version (version) VALUES (?)",
@@ -660,6 +685,12 @@ public final class ACPOrchestrationStore {
         """)
     }
 
+    private func addPeerAwaitingColumnIfMissing() throws {
+        let columns = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name = 'peer_awaiting'")
+        guard columns.isEmpty else { return }
+        try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting INTEGER NOT NULL DEFAULT 0")
+    }
+
     private func decodeDelegation(_ row: [String: Any?]) throws -> ACPDelegationRecord {
         guard let requestData = row["worktree_request"] as? Data,
               let request = try? decoder.decode(ACPDelegatedWorktreeRequest.self, from: requestData),
@@ -685,7 +716,8 @@ public final class ACPOrchestrationStore {
                 reasoning: row["requested_reasoning"] as? String
             ),
             role: row["role"] as? String,
-            peerServerId: row["peer_server_id"] as? String
+            peerServerId: row["peer_server_id"] as? String,
+            peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0
         )
     }
 

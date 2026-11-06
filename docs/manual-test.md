@@ -942,12 +942,11 @@ row and the child row by eye, along with the steps below.
     failed with one wake and `session_wait` settles. Repeat by forgetting the
     peer on the source: the children it was waiting on or starting fail the same
     way.
-11a. Restart limit: with a child running that the parent is not currently
-    waiting on, restart the source, then revoke (or forget) the target. The
-    child is not failed and the parent is not woken. Only when the parent asks
-    (`session_read` or `session_wait` on it) does it learn the child is gone.
-    The 15-minute offline notice (step 9) is likewise not sent for a child the
-    parent was waiting on before a restart.
+11a. Across a restart: with a child running that its parent is still owed a
+    result from, restart the source, then revoke (or forget) the target. The
+    child fails with one wake. Repeat with the target offline when the source
+    restarts: after 15 minutes the parent gets the notice from step 9. A child
+    whose outcome already arrived fails nothing and wakes nobody.
 12. Set access to Off during a turn. The turn finishes and reports back; new
     `session_new` and `session_send` are refused; `session_read` and
     `session_interrupt` still work.

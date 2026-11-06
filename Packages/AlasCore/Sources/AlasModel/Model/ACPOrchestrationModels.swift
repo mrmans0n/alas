@@ -169,8 +169,12 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     public var role: String? = nil
     /// Set on the delegating machine for a child that runs on a paired peer.
     public var peerServerId: String? = nil
+    /// For a child on a paired peer: its parent still expects a result, from
+    /// `session_new` or a successful `session_send` until an outcome is
+    /// collected. A blocker is not an outcome: the child is still running.
+    public var peerAwaiting: Bool = false
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false) {
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -187,6 +191,7 @@ public struct ACPDelegationRecord: Equatable, Sendable {
         self.modelSelection = modelSelection
         self.role = role
         self.peerServerId = peerServerId
+        self.peerAwaiting = peerAwaiting
     }
 }
 

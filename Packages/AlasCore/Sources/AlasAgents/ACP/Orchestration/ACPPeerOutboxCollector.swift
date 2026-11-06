@@ -28,7 +28,6 @@ public final class ACPPeerOutboxCollector {
     private let parentIsGone: @MainActor (_ child: ACPDelegationRecord) async -> Bool
     private let outboxChanged: @MainActor (_ serverId: String) -> Void
     private let availabilityChanged: @MainActor (_ serverId: String) -> Void
-    private let collected: @MainActor (_ entry: ACPPeerOutboxEntry) -> Void
     private let childBlocked: @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void
     private let retryStarts: @MainActor (_ serverId: String) async -> Void
     private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
@@ -50,8 +49,6 @@ public final class ACPPeerOutboxCollector {
     ///   - outboxChanged: Also told whenever a peer reports outcomes waiting.
     ///   - availabilityChanged: Also told whenever a peer may have become
     ///     reachable or unreachable.
-    ///   - collected: Told about each entry for one of the peer's children
-    ///     that was settled here.
     ///   - childBlocked: Told once per blocked child, by the collector that
     ///     settled the notice, so two sharing a profile do not both announce it.
     ///   - retryStarts: Asks again about children still starting on a peer.
@@ -63,7 +60,6 @@ public final class ACPPeerOutboxCollector {
         parentIsGone: @escaping @MainActor (_ child: ACPDelegationRecord) async -> Bool = { _ in false },
         outboxChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
-        collected: @escaping @MainActor (_ entry: ACPPeerOutboxEntry) -> Void = { _ in },
         childBlocked: @escaping @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
@@ -74,14 +70,14 @@ public final class ACPPeerOutboxCollector {
         self.parentIsGone = parentIsGone
         self.outboxChanged = outboxChanged
         self.availabilityChanged = availabilityChanged
-        self.collected = collected
         self.childBlocked = childBlocked
         self.retryStarts = retryStarts
         self.schedule = schedule
     }
 
     /// Starts listening, and collects from every peer that is online now: its
-    /// channel may have subscribed before anyone was listening.
+    /// channel may have subscribed before anyone was listening. Any other peer
+    /// has been away for at least this long, and may never send a signal.
     public func start() {
         peers.onOutboxChanged = { [weak self] serverId in
             guard let self else { return }
@@ -93,7 +89,13 @@ public final class ACPPeerOutboxCollector {
             availabilityChanged(serverId)
             collectSoon(serverId)
         }
-        for peer in peers.peers where peer.state == .online { collectSoon(peer.serverId) }
+        for peer in peers.peers {
+            if peer.state == .online {
+                collectSoon(peer.serverId)
+            } else {
+                availabilityChanged(peer.serverId)
+            }
+        }
     }
 
     private func collectSoon(_ serverId: String) {
@@ -225,8 +227,7 @@ public final class ACPPeerOutboxCollector {
                 if isGone { gone[child.parentSessionId] = true }
             }
             if isGone {
-                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq)
-                collected(entry)
+                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, settling: entry)
                 return .some(nil)
             }
             // The parent was already woken about a failed child. Its real
@@ -236,7 +237,6 @@ public final class ACPPeerOutboxCollector {
                 prompt: entry.prompt, kind: .notice, createdAt: entry.createdAt
             ) : entry
             let won = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
-            collected(entry)
             // Decided from the original entry: a failed child's wake was rewritten
             // to a notice above, and it has nothing left to be blocked on.
             if won, child.phase != .failed, entry.isBlockedNotice { childBlocked(serverId, child, entry) }

@@ -263,7 +263,9 @@ parent gets those too, so this is consistent, but it should be checked by hand.
 
 ### 5. Records on the source
 
-Schema version 5 adds one column to `delegations`, `peer_server_id`, plus a cursor table:
+Schema version 5 adds two columns to `delegations`, `peer_server_id` and `peer_awaiting`, plus a cursor table.
+`peer_awaiting` is set at start and on a successful send, and cleared in the transaction that collects an outcome of any
+kind, so what a parent is owed survives a restart.
 
 ```sql
 CREATE TABLE peer_delegation_cursors (

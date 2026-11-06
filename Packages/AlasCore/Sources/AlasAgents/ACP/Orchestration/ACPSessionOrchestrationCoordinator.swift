@@ -243,11 +243,6 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerStartsInFlight: Set<String> = []
     private var peerStatusRounds: [String: [[String]: PeerStatusRound]] = [:]
     private var peerOutboxSignals: [String: Int] = [:]
-    /// Children whose parent still expects a result, with their peers: from
-    /// `start` or a successful `send` until a wake-kind entry is collected.
-    /// In memory only: after a restart there is no offline notice, and
-    /// revocation fails only what is still starting.
-    private var awaitedPeerChildren: [String: String] = [:]
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -604,13 +599,13 @@ public final class ACPSessionOrchestrationCoordinator {
                 parentWorktreeId: origin.worktreeId, childWorktreeId: nil, agentId: start.agentID,
                 worktreeRequest: .current(worktreeId: origin.worktreeId), phase: .starting, failureMessage: nil,
                 createdAt: now, updatedAt: now, modelSelection: request.modelSelection, role: role,
-                peerServerId: peerInfo.serverId
+                peerServerId: peerInfo.serverId, peerAwaiting: true
             ))
         } catch {
             return .error("Could not persist delegated session.")
         }
         environment.notifyChanged()
-        awaitPeerChild(childID, serverId: peerInfo.serverId)
+        notePeerAvailability(peerInfo.serverId)
 
         switch await peers.start(serverId: peerInfo.serverId, start) {
         case .success(let reply):
@@ -632,7 +627,6 @@ public final class ACPSessionOrchestrationCoordinator {
             ))
         case .failure(let error):
             // The caller hears this in the answer, so nothing wakes it.
-            awaitedPeerChildren[childID] = nil
             let message = Self.message(for: error)
             try? await environment.persistence.updatePhase(
                 childSessionId: childID, phase: .failed, failureMessage: message, updatedAt: environment.now()
@@ -768,9 +762,10 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    private func awaitPeerChild(_ childID: String, serverId: String) {
-        awaitedPeerChildren[childID] = serverId
-        notePeerAvailability(serverId)
+    /// A child its parent is owed a word about, should the pairing end. A
+    /// `.ready` child with no result owed is history.
+    private static func isUnfinishedOnPeer(_ child: ACPDelegationRecord) -> Bool {
+        child.phase != .failed && child.phase != .closed && (child.phase == .starting || child.peerAwaiting)
     }
 
     /// One notice per child still awaited, if this outage is still going on.
@@ -783,11 +778,11 @@ public final class ACPSessionOrchestrationCoordinator {
             return
         }
         let name = peerName(serverId)
-        for childID in awaitedPeerChildren.filter({ $0.value == serverId }).keys.sorted() {
-            guard let child = await peerChild(childID), child.phase != .failed, child.phase != .closed else { continue }
+        guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
+        for child in children where child.peerAwaiting && child.phase != .failed && child.phase != .closed {
             await enqueueOutcome(.init(
-                id: "peer-offline-\(serverId)-\(childID)-\(outage.lastSeenOnlineAt)",
-                sourceSessionId: childID,
+                id: "peer-offline-\(serverId)-\(child.childSessionId)-\(outage.lastSeenOnlineAt)",
+                sourceSessionId: child.childSessionId,
                 targetSessionId: child.parentSessionId,
                 prompt: ACPDelegatedOutcomeText.peerOffline(
                     outcomeContext(for: child), peer: name, minutes: Int(environment.peerOfflineNoticeDelay / 60)
@@ -798,17 +793,9 @@ public final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// The outcome of a child reached its parent, so nothing more is owed.
-    public func peerEntryCollected(_ entry: ACPPeerOutboxEntry) {
-        guard entry.kind == .prompt else { return }
-        awaitedPeerChildren[entry.childSessionId] = nil
-    }
-
     /// The pairing with `serverId` is over: its link was refused, or it was
-    /// forgotten here. Its unfinished children fail with one wake each. A
-    /// `.ready` child with no result owed is history and stays as it is, which
-    /// after a restart is every `.ready` child: the set of awaited ones is not
-    /// stored. `name` is passed because a forgotten peer is no longer listed.
+    /// forgotten here. Its unfinished children fail with one wake each.
+    /// `name` is passed because a forgotten peer is no longer listed.
     public func peerRevoked(serverId: String, name: String, forgotten: Bool) async {
         revokedPeerNames[serverId] = name
         peerOutages[serverId] = nil
@@ -816,14 +803,8 @@ public final class ACPSessionOrchestrationCoordinator {
             lastSeenPeerOnline[serverId] = nil
             await deleteOutbox(forPeer: serverId)
         }
-        // Whom this owes a result is only given up once it can act on it.
         guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
-        let awaited = Set(awaitedPeerChildren.filter { $0.value == serverId }.keys)
-        for childID in awaited { awaitedPeerChildren[childID] = nil }
-        let unfinished = children.filter { child in
-            child.phase != .failed && child.phase != .closed
-                && (child.phase == .starting || awaited.contains(child.childSessionId))
-        }
+        let unfinished = children.filter(Self.isUnfinishedOnPeer)
         let message = forgotten ? Self.forgottenMessage(name) : Self.message(for: .revoked(peer: name))
         // Together, so one slow parent holds up no other, and one parent's
         // children join one wake.
@@ -836,16 +817,14 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     /// `peerRevoked` for a process only booted to forget a peer, which ends
-    /// next and has no business attaching agents. With no awaited set to go
-    /// on, it fails what would otherwise stay starting forever: nothing retries
-    /// a peer that will not come back. The wake waits in the inbox, written
-    /// with the phase, for the next launch's recovery to deliver.
+    /// next and has no business attaching agents. The wake waits in the inbox,
+    /// written with the phase, for the next launch's recovery to deliver.
     public func peerForgottenWithoutHost(serverId: String, name: String) async {
         revokedPeerNames[serverId] = name
         await deleteOutbox(forPeer: serverId)
         guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
         let message = Self.forgottenMessage(name)
-        for child in children where child.phase == .starting {
+        for child in children where Self.isUnfinishedOnPeer(child) {
             _ = try? await environment.persistence.claimFailedPhase(
                 childSessionId: child.childSessionId,
                 failureMessage: message,
@@ -917,7 +896,14 @@ public final class ACPSessionOrchestrationCoordinator {
             // A status question asked before this could report the child
             // settled, with this turn still to run.
             peerStatusRounds[serverId] = nil
-            awaitPeerChild(child.childSessionId, serverId: serverId)
+            do {
+                try await environment.persistence.markPeerAwaiting(childSessionId: child.childSessionId)
+            } catch {
+                // The turn is running, so the send stands. Its result still arrives.
+                Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                    .error("Could not store that session \(child.childSessionId, privacy: .public) is awaited: \(String(describing: error), privacy: .public)")
+            }
+            notePeerAvailability(serverId)
             return json(ACPOrchestrationSendResponse(messageId: environment.makeID(), state: "queued"))
         case .failure(let error):
             return .error(peerFailureMessage(error, child: child))
@@ -2128,7 +2114,6 @@ public final class ACPSessionOrchestrationCoordinator {
         // call correctly losing the claim.
         guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
         else { return }
-        awaitedPeerChildren[childSessionId] = nil
         let outcome = failureOutcome(of: record, message: message)
         // A child still waiting on its model selection must never run the
         // parent's prompt on the agent's default model: drop it from the
