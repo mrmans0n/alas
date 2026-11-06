@@ -3245,7 +3245,7 @@ extension ACPSessionRunner {
         worktreePath: String,
         agentInfo: ACPImplementationInfo?,
         attachmentsDirectory: URL
-    ) async throws -> [ACPContentBlock] {
+    ) async throws(ACPPromptRefusal) -> [ACPContentBlock] {
         let embeddedPDFs = try ACPAttachmentStaging.embeddedPDFBlocks(
             in: blocks, agentInfo: agentInfo,
             promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
@@ -4788,10 +4788,35 @@ extension ACPSessionRunner {
                 await abandonUnrecordedPrompt()
                 return
             }
-            // Before the row, the checkpoint and the title: resending a refused
-            // prompt must not show it twice. A prompt no longer current falls
-            // through to the checks below, which end it without touching state.
-            if let refusal = preflight, self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent() {
+            // Hydrated off-main, before the row, the checkpoint and the title:
+            // resending a refused prompt must not show it twice. What is only
+            // known once the row exists, like plugin context, is guarded after it.
+            var refusal = preflight
+            var hydratedBlocks: [ACPContentBlock] = []
+            if refusal == nil, self.activePromptID == promptID {
+                do throws(ACPPromptRefusal) {
+                    let hydrated = try await Self.hydrate(
+                        blocks,
+                        promptCapabilities: self.session.promptCapabilities,
+                        worktreePath: self.worktreePath,
+                        agentInfo: self.session.agentInfo,
+                        attachmentsDirectory: self.session.attachmentsDirectory
+                    )
+                    hydratedBlocks = ACPSymbolReference.replacingReferences(
+                        in: await self.expandingSessionReferences(hydrated),
+                        with: symbolExpansion)
+                    try ACPPromptSizeGuard.check(hydratedBlocks)
+                } catch {
+                    refusal = error
+                }
+                guard await self.hasConfirmedLeaseForSideEffect() else {
+                    await abandonUnrecordedPrompt()
+                    return
+                }
+            }
+            // A prompt no longer current falls through to the checks below,
+            // which end it without touching state.
+            if let refusal, self.activePromptID == promptID, !self.stopped, self.isConnectionCurrent() {
                 // As a failed turn does, so a wait and the sidebar see it.
                 self.session.turnFailure = refusal.localizedDescription
                 if queuedItemId != nil {
@@ -4975,9 +5000,6 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                // Read the capability flags on the main actor (cheap), then
-                // hydrate off-main so file reads + encoding don't block UI.
-                let promptCapabilities = self.session.promptCapabilities
                 let pendingPreamble = self.session.pendingMCPPreamble
                 let pendingForkContext: String? = {
                     guard let fork = self.session.forkRecord,
@@ -4990,22 +5012,7 @@ extension ACPSessionRunner {
                         messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
                     )
                 }()
-                let hydrated: [ACPContentBlock]
-                do {
-                    hydrated = try await Self.hydrate(
-                        blocks,
-                        promptCapabilities: promptCapabilities,
-                        worktreePath: self.worktreePath,
-                        agentInfo: self.session.agentInfo,
-                        attachmentsDirectory: self.session.attachmentsDirectory
-                    )
-                } catch {
-                    onDispatchRegistered?()
-                    throw error
-                }
-                var wireBlocks = ACPSymbolReference.replacingReferences(
-                    in: await self.expandingSessionReferences(hydrated),
-                    with: symbolExpansion)
+                var wireBlocks = hydratedBlocks
                 // Wire-only context is prepended for the agent and never part
                 // of the recorded transcript — recording above used `blocks`.
                 var privateBlocks: [ACPContentBlock] = []

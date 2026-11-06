@@ -4620,6 +4620,79 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    /// Refused by what preflight can't see: hydration reads and encodes the files.
+    enum RefusedOnceHydrated: CaseIterable, Sendable {
+        case overLimit, fileChanged
+
+        var expectedInError: String {
+            switch self {
+            case .overLimit: "too large"
+            case .fileChanged: "no longer a PDF"
+            }
+        }
+
+        /// A staged PDF at the raw cap encodes to about 26.7 MiB; this text passes
+        /// preflight alone and tips the encoded prompt over.
+        @MainActor func prepare(_ session: ACPSession) throws -> (blocks: [ACPContentBlock], staged: URL) {
+            session.agentInfo = .init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")
+            session.promptCapabilities = .init(embeddedContext: true)
+            var bytes = Data("%PDF-1.7 \(UUID().uuidString)".utf8)
+            if self == .overLimit { bytes.append(Data(count: ACPAttachmentStaging.maxPDFBytesPerMessage - bytes.count)) }
+            let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: session.attachmentsDirectory)
+            if self == .fileChanged { try Data("changed".utf8).write(to: staged) }
+            let text = self == .overLimit ? String(repeating: "x", count: 6 * 1024 * 1024) : "read"
+            return ([.text(text), .resourceLink(uri: staged.absoluteString, name: "a.pdf")], staged)
+        }
+    }
+
+    @Test("a direct prompt refused once hydrated records no row or checkpoint, and resending shows one row",
+          .timeLimit(.minutes(1)), arguments: RefusedOnceHydrated.allCases)
+    func promptRefusedOnceHydrated(refused: RefusedOnceHydrated) async throws {
+        var checkpoints = 0
+        let (runner, mock, session, _) = try mkRunner(onCheckpointCapture: { _, _ in
+            checkpoints += 1
+            return nil
+        })
+        defer { runner.stop() }
+        let (blocks, staged) = try refused.prepare(session)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        let dispatches = DispatchRegistrationCounter()
+        let delivered = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: blocks, queuedItemId: nil, onDispatchRegistered: { dispatches.increment() },
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(!delivered, "false is what puts the draft back in the composer")
+        #expect(dispatches.count == 1)
+        #expect(session.lastError?.contains(refused.expectedInError) == true)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(checkpoints == 0)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let resent = await withCheckedContinuation { continuation in
+            runner.sendNow(blocks: [.text("without it")], queuedItemId: nil,
+                           onPromptFinished: { continuation.resume(returning: $0) })
+        }
+        #expect(resent)
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+    }
+
+    @Test("a queued retry whose row exists is refused once hydrated without another row", .timeLimit(.minutes(1)))
+    func recordedQueuedPromptRefusedOnceHydrated() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        let (blocks, staged) = try RefusedOnceHydrated.fileChanged.prepare(session)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        session.enqueue(blocks: blocks)
+        session.queue[0].transcriptRecorded = true
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.queue.first?.lastError?.contains(RefusedOnceHydrated.fileChanged.expectedInError) == true)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("a refused queued prompt stays at the head with the reason, unrecorded and not resent", .timeLimit(.minutes(1)))
     func refusedQueuedPrompt() async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -4780,6 +4853,23 @@ struct ACPSessionRunnerQueueTests {
             return
         }
         #expect(attachments == [.init(uri: staged.absoluteString, name: "a.pdf")])
+    }
+}
+
+private final class DispatchRegistrationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
     }
 }
 

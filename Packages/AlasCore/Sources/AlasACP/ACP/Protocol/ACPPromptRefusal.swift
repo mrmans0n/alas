@@ -50,7 +50,7 @@ public enum ACPPromptSizeGuard {
 
     /// `forkContext` is the inherited conversation among `blocks`, if any. When
     /// it alone is over the limit, nothing the user removes can make this fit.
-    public static func check(_ blocks: [ACPContentBlock], forkContext: String? = nil) throws {
+    public static func check(_ blocks: [ACPContentBlock], forkContext: String? = nil) throws(ACPPromptRefusal) {
         let size = encodedSize(of: blocks)
         guard size > maxEncodedBytes else { return }
         if let forkContext {

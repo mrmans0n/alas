@@ -167,14 +167,14 @@ public enum ACPAttachmentStaging: Sendable {
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         attachmentsDirectory: URL
     ) -> ACPPromptRefusal? {
-        do {
+        do throws(ACPPromptRefusal) {
             _ = try stagedPDFs(
                 in: blocks, agentInfo: agentInfo,
                 promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
             try ACPPromptSizeGuard.check(blocks)
             return nil
         } catch {
-            return error as? ACPPromptRefusal
+            return error
         }
     }
 
@@ -185,7 +185,7 @@ public enum ACPAttachmentStaging: Sendable {
         agentInfo: ACPImplementationInfo?,
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         attachmentsDirectory: URL
-    ) throws -> [Int: ACPContentBlock] {
+    ) throws(ACPPromptRefusal) -> [Int: ACPContentBlock] {
         let files = try stagedPDFs(
             in: blocks, agentInfo: agentInfo,
             promptCapabilities: promptCapabilities, attachmentsDirectory: attachmentsDirectory)
@@ -207,7 +207,7 @@ public enum ACPAttachmentStaging: Sendable {
         agentInfo: ACPImplementationInfo?,
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
         attachmentsDirectory: URL
-    ) throws -> [(index: Int, uri: String, name: String, url: URL)] {
+    ) throws(ACPPromptRefusal) -> [(index: Int, uri: String, name: String, url: URL)] {
         var staged: [(index: Int, uri: String, name: String, reference: StagedReference)] = []
         for (index, block) in blocks.enumerated() {
             guard case .resourceLink(let uri, let name) = block else { continue }
@@ -223,14 +223,16 @@ public enum ACPAttachmentStaging: Sendable {
         }
         guard staged.count <= maxPDFsPerMessage else { throw ACPPromptRefusal.tooManyPDFs(count: staged.count) }
         var totalBytes = 0
-        return try staged.map { item in
+        var files: [(index: Int, uri: String, name: String, url: URL)] = []
+        for item in staged {
             guard case .file(let url) = item.reference, let size = regularFileSize(atPath: url.path) else {
-                throw ACPPromptRefusal.pdfMissing(name: item.name)
+                throw .pdfMissing(name: item.name)
             }
             totalBytes += size
-            guard totalBytes <= maxPDFBytesPerMessage else { throw ACPPromptRefusal.pdfsTooLarge(name: item.name) }
-            return (item.index, item.uri, item.name, url)
+            guard totalBytes <= maxPDFBytesPerMessage else { throw .pdfsTooLarge(name: item.name) }
+            files.append((item.index, item.uri, item.name, url))
         }
+        return files
     }
 
     // MARK: - Files

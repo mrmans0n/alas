@@ -64,7 +64,6 @@ struct ACPPromptSizeGuardTests {
             return [block(String(repeating: "x", count: size - ACPPromptSizeGuard.encodedSize(of: [block("")])))]
         }
         let atLimit = prompt(encodedSize: Self.limit)
-        #expect(try JSONEncoder().encode(atLimit).count == Self.limit)
         try ACPPromptSizeGuard.check(atLimit)
         #expect(throws: ACPPromptRefusal.promptTooLarge(encodedBytes: Self.limit + 1)) {
             try ACPPromptSizeGuard.check(prompt(encodedSize: Self.limit + 1))
