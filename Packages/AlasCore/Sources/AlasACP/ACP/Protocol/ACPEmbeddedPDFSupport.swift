@@ -10,6 +10,18 @@ public enum ACPEmbeddedPDFSupport {
     static let adapterName = "@alas-ide/claude-agent-acp"
     static let minimumVersion = (major: 0, minor: 101, patch: 0, revision: 1)
 
+    /// The answer the composer works with when a PDF is attached: `nil` until the
+    /// session is connected, since an old session's `agentInfo` says nothing about
+    /// the adapter it reconnects to. Send time always has the last word.
+    public static func attachmentEligibility(
+        agentInfo: ACPImplementationInfo?,
+        promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
+        isConnected: Bool
+    ) -> Bool? {
+        guard isConnected else { return nil }
+        return supports(agentInfo: agentInfo, promptCapabilities: promptCapabilities)
+    }
+
     public static func supports(
         agentInfo: ACPImplementationInfo?,
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities

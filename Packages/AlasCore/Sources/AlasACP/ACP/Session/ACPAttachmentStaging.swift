@@ -35,6 +35,17 @@ public enum ACPAttachmentStaging: Sendable {
         case file(URL)
     }
 
+    /// The staged PDFs a draft already holds, in the terms of the per-message limits.
+    public struct StagedPDFUsage: Equatable, Sendable {
+        public let count: Int
+        public let bytes: Int
+
+        public init(count: Int, bytes: Int) {
+            self.count = count
+            self.bytes = bytes
+        }
+    }
+
     public static let maxPDFBytesPerMessage = 20 * 1024 * 1024
     public static let maxPDFsPerMessage = 5
     public static let pdfMIMEType = "application/pdf"
@@ -81,6 +92,10 @@ public enum ACPAttachmentStaging: Sendable {
         }
     }
 
+    public static func hasPDFMagic(_ data: Data) -> Bool {
+        data.starts(with: pdfMagic)
+    }
+
     public static func sanitizedPDFFileName(_ name: String) -> String {
         let last = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
         var cleaned = String(String.UnicodeScalarView(last.unicodeScalars.map { scalar in
@@ -94,6 +109,23 @@ public enum ACPAttachmentStaging: Sendable {
             base.append(character)
         }
         return (base.isEmpty ? "document" : base) + ".pdf"
+    }
+
+    // MARK: - Attach time
+
+    /// What `uris`, the mentions on a draft, already spend of the limits. Each
+    /// mention counts, like at send, so the same file twice counts twice. A missing
+    /// file is left out: it holds no bytes, and send refuses it whatever else fits.
+    public static func stagedPDFUsage(ofURIs uris: [String], attachmentsDirectory: URL) -> StagedPDFUsage {
+        var count = 0
+        var bytes = 0
+        for uri in uris {
+            guard case .file(let url) = stagedReference(uri: uri, attachmentsDirectory: attachmentsDirectory),
+                  let size = regularFileSize(atPath: url.path) else { continue }
+            count += 1
+            bytes += size
+        }
+        return StagedPDFUsage(count: count, bytes: bytes)
     }
 
     // MARK: - Send time
@@ -206,7 +238,7 @@ public enum ACPAttachmentStaging: Sendable {
         return size.intValue
     }
 
-    private static func realPath(_ path: String) -> String? {
+    static func realPath(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)

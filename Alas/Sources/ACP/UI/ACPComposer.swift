@@ -49,6 +49,10 @@ struct ACPInputField: NSViewRepresentable {
 
     var usesExternalMentionPicker = false
     var acceptsImages = true
+    /// `nil` leaves PDFs out of this composer entirely, as on a peer.
+    var pdfAttachments: ACPComposerPDFAttachments? = nil
+    /// Names the files of a drop that weren't attached. Only used with `pdfAttachments`.
+    var onAttachmentNotice: (String) -> Void = { _ in }
     var onEditorSelectionChange: () -> Void = {}
     var onEditorKeyDown: (NSEvent) -> Bool = { _ in false }
     var nextPromptOffer: String? = nil
@@ -211,6 +215,8 @@ struct ACPInputField: NSViewRepresentable {
     private func configureExternalEditor(_ textView: ACPNSTextView) {
         textView.usesExternalMentionPicker = usesExternalMentionPicker
         textView.acceptsImages = acceptsImages
+        textView.pdfAttachments = pdfAttachments
+        textView.onAttachmentNotice = onAttachmentNotice
         textView.onExternalKeyDown = onEditorKeyDown
         textView.coordinator?.onSelectionChange = onEditorSelectionChange
         textView.onDictationShortcut = onDictationShortcut
@@ -1712,6 +1718,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     var usesExternalMentionPicker = false
     var acceptsImages = true
+    var pdfAttachments: ACPComposerPDFAttachments?
+    var onAttachmentNotice: (String) -> Void = { _ in }
     var onExternalKeyDown: (NSEvent) -> Bool = { _ in false }
 
     override func keyDown(with event: NSEvent) {
@@ -1727,7 +1735,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // default ⌃V (page down / emacs binding) is otherwise preserved.
         if event.modifierFlags.contains(.control),
            event.charactersIgnoringModifiers?.lowercased() == "v",
-           pasteboardHasImage {
+           pasteboardHasAttachment {
             paste(nil)
             return
         }
@@ -2185,12 +2193,20 @@ final class ACPNSTextView: PairedDelimiterTextView {
         insertImage(data: data, worktreeId: worktreeId, replacementRange: selectedRange())
     }
 
+    /// `onError` takes a failure instead of the coordinator, for a caller
+    /// reporting a whole drop at once.
     @discardableResult
-    private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
+    private func insertImage(
+        data: Data,
+        worktreeId: String,
+        replacementRange: NSRange,
+        onError: ((ACPImageStaging.StagingError) -> Void)? = nil
+    ) -> Bool {
         guard isEditable, acceptsImages else { return false }
         invalidateNextPromptSuggestion()
+        let report = onError ?? { [weak coordinator] in coordinator?.reportImageError($0) }
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
-            coordinator?.reportImageError(.tooManyImages)
+            report(.tooManyImages)
             return false
         }
         do {
@@ -2205,23 +2221,101 @@ final class ACPNSTextView: PairedDelimiterTextView {
             // user types right after the chip is the normal label color
             // immediately — otherwise it inherits color-less attributes and
             // renders black until the debounced restyler repaints the line.
-            let baseAttrs = baseTypingAttributes
-            chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
-            let storageLength = textStorage?.length ?? 0
-            let location = min(replacementRange.location, storageLength)
-            let insertAt = NSRange(location: location, length: min(replacementRange.length, storageLength - location))
-            textStorage?.replaceCharacters(in: insertAt, with: chipString)
-            setSelectedRange(NSRange(location: insertAt.location + chipString.length, length: 0))
-            typingAttributes = baseAttrs
-            didChangeText()
+            insertAttachmentChip(chipString, replacementRange: replacementRange)
             return true
         } catch let error as ACPImageStaging.StagingError {
-            coordinator?.reportImageError(error)
+            report(error)
             return false
         } catch {
-            coordinator?.reportImageError(.writeFailed)
+            report(.writeFailed)
             return false
         }
+    }
+
+    private func insertAttachmentChip(_ chip: NSMutableAttributedString, replacementRange: NSRange) {
+        let baseAttrs = baseTypingAttributes
+        chip.append(NSAttributedString(string: " ", attributes: baseAttrs))
+        let storageLength = textStorage?.length ?? 0
+        let location = min(replacementRange.location, storageLength)
+        let insertAt = NSRange(location: location, length: min(replacementRange.length, storageLength - location))
+        textStorage?.replaceCharacters(in: insertAt, with: chip)
+        setSelectedRange(NSRange(location: insertAt.location + chip.length, length: 0))
+        typingAttributes = baseAttrs
+        didChangeText()
+    }
+
+    // MARK: PDF attachments
+
+    /// The URI of every mention chip, one per chip. Per character for the reason
+    /// `imageChipCount` is: adjacent chips of one file share an attribute run.
+    private func mentionChipURIs() -> [String] {
+        guard let storage = textStorage else { return [] }
+        return (0..<storage.length).compactMap { storage.attribute(.attachmentURI, at: $0, effectiveRange: nil) as? String }
+    }
+
+    private func stagedPDFUsage(worktreeId: String) -> ACPAttachmentStaging.StagedPDFUsage {
+        ACPAttachmentStaging.stagedPDFUsage(
+            ofURIs: mentionChipURIs(),
+            attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: worktreeId))
+    }
+
+    /// Inserts the same chip as a typed mention, at a range rather than over an
+    /// `@` token: send time recognizes it by its staged path. The limits are checked
+    /// again against the draft as it is now, because a second drop may have run
+    /// while this one was staging.
+    private func insertStagedPDF(_ url: URL, replacementRange: NSRange) -> ACPAttachmentClassifier.Reason? {
+        guard let pdfAttachments else { return .unsupported }
+        let directory = Paths.acpAttachmentsDir(forWorktreeId: pdfAttachments.worktreeId)
+        let bytes = ACPAttachmentStaging.stagedPDFUsage(ofURIs: [url.absoluteString], attachmentsDirectory: directory).bytes
+        if let refusal = ACPAttachmentClassifier.pdfRefusal(
+            bytes: bytes, eligible: pdfAttachments.eligible,
+            usage: stagedPDFUsage(worktreeId: pdfAttachments.worktreeId)
+        ) { return refusal }
+        invalidateNextPromptSuggestion()
+        let attachment = ACPMentionChipAttachment(displayName: url.lastPathComponent, uri: url.absoluteString)
+        let chip = NSMutableAttributedString(attachment: attachment)
+        chip.addAttributes([.attachmentURI: url.absoluteString], range: NSRange(location: 0, length: chip.length))
+        insertAttachmentChip(chip, replacementRange: replacementRange)
+        return nil
+    }
+
+    /// Whether `pb` holds a file that goes down the PDF path, broken ones included
+    /// so they get a notice rather than pasting their path. Reads only a few bytes.
+    private func hasPDFFile(in pb: NSPasteboard) -> Bool {
+        !isAlasDrag(pb) && containsPDFFile(pb)
+    }
+
+    private func containsPDFFile(_ pb: NSPasteboard) -> Bool {
+        guard pdfAttachments != nil else { return false }
+        return fileURLs(on: pb).contains { ACPAttachmentClassifier.probe($0).kind.isPDFPath }
+    }
+
+    /// A PDF dragged out of Alas's own panes is a reference to a worktree file,
+    /// like an `@`-mention, and keeps that behaviour on every adapter.
+    private func isAlasDrag(_ pb: NSPasteboard) -> Bool {
+        pb.availableType(from: [.alasDropPayload]) != nil
+    }
+
+    private func hasAttachment(in pb: NSPasteboard) -> Bool {
+        hasImage(in: pb) || hasPDFFile(in: pb)
+    }
+
+    private func fileURLs(on pb: NSPasteboard) -> [URL] {
+        (pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+
+    private func reportAttachmentRefusals(_ refused: [ACPAttachmentClassifier.Refusal]) {
+        guard pdfAttachments != nil else {
+            for refusal in refused {
+                if case .image(let error) = refusal.reason { coordinator?.reportImageError(error) }
+            }
+            return
+        }
+        if let notice = ACPAttachmentClassifier.notice(for: refused) { onAttachmentNotice(notice) }
+    }
+
+    private var offersPDFsInPicker: Bool {
+        pdfAttachments.map { $0.eligible != false } ?? false
     }
 
     func presentImagePicker() {
@@ -2233,13 +2327,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP] + (offersPDFsInPicker ? [.pdf] : [])
         panel.begin { [weak self] response in
             guard let self else { return }
             self.imagePickerPresented = false
             self.onNextPromptStateChange(self.nextPromptInputState)
             guard response == .OK else { return }
-            self.insertImageFiles(
+            self.insertAttachmentFiles(
                 panel.urls,
                 worktreeId: self.worktreeIdForStaging,
                 insertionRange: self.selectedRange()
@@ -2278,18 +2372,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
         case unsupported
     }
 
-    private enum FileImageCandidate {
-        case supported
-        case tooLarge
-        case unsupported
-    }
-
-    private static func imageFileCandidate(_ url: URL) -> FileImageCandidate {
-        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-           size > ACPImageStaging.maxBytes { return .tooLarge }
-        return isSupportedImageFile(url) ? .supported : .unsupported
-    }
-
     /// Read a file URL's image bytes, applying the size cap from its metadata
     /// BEFORE reading the file into memory (so an oversized pick/drop reports
     /// `.tooLarge` instead of allocating the whole file). The file read and
@@ -2313,14 +2395,22 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     /// Stage and insert every supported image from `pb` — raw bitmap data
-    /// (one screenshot) or one-per image file URL (multiple Finder files). Each
-    /// `insertImage` enforces the per-message cap; oversized file URLs surface
-    /// the `.tooLarge` notice. Returns true if any image source was handled.
+    /// (one screenshot) or one-per image file URL (multiple Finder files) — and
+    /// any PDF file, when this composer takes them. Each `insertImage` enforces
+    /// the per-message cap; oversized file URLs surface the `.tooLarge` notice.
+    /// Returns true if any image or PDF source was handled.
     /// File-URL reads are dispatched off the main thread; pasteboard bitmap
     /// data (already in memory) is handled inline.
     @discardableResult
     private func insertImages(from pb: NSPasteboard) -> Bool {
         guard acceptsImages else { return false }
+        if isAlasDrag(pb), containsPDFFile(pb) { return false }
+        // Checked before the bitmap types: a file copied in Finder also offers
+        // its icon as a bitmap, which would attach a picture of the PDF.
+        if hasPDFFile(in: pb) {
+            insertAttachmentFiles(fileURLs(on: pb), worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+            return true
+        }
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             if let data = pb.data(forType: type) {
                 if type == .tiff, let rep = NSBitmapImageRep(data: data),
@@ -2334,59 +2424,110 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 }
             }
         }
-        guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
-        else { return false }
-        guard !urls.isEmpty else { return false }
-        guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
-        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+        let urls = fileURLs(on: pb)
+        guard attachmentPlan(for: urls.map(ACPAttachmentClassifier.probe))?.handlesFiles == true else { return false }
+        insertAttachmentFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
         return true
     }
 
-    private func insertImageFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
+    /// Attaches `urls` in order. Everything that reads a file's bytes runs off the
+    /// main thread, and a whole drop's refusals go out together at the end.
+    private func insertAttachmentFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
         guard isEditable else { return }
         let coordinator = coordinator
         let generation = coordinator?.beginPendingImageFileInsertion()
+        let pdfWorktreeId = pdfAttachments?.worktreeId
         Task { @MainActor [weak self, weak coordinator] in
             defer {
                 if let generation {
                     coordinator?.finishPendingImageFileInsertion(generation: generation)
                 }
             }
+            let files = await Task.detached(priority: .userInitiated) {
+                urls.map { ACPAttachmentClassifier.probe($0) }
+            }.value
+            guard let plan = self?.attachmentPlan(for: files) else { return }
+            var refused = plan.refused
             var nextLocation = insertionRange.location
-            var isFirstImage = true
-            for url in urls {
-                switch await Self.readImageFile(url) {
-                case .data(let data):
+            var isFirstInsertion = true
+            for item in plan.accepted {
+                let name = item.url.lastPathComponent
+                switch item.kind {
+                case .image:
+                    switch await Self.readImageFile(item.url) {
+                    case .data(let data):
+                        guard let self, self.isEditable else { return }
+                        if let generation,
+                           coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+                        let beforeLength = self.textStorage?.length ?? 0
+                        let replacementRange = self.asyncImageReplacementRange(
+                            capturedRange: insertionRange,
+                            nextLocation: nextLocation,
+                            isFirstImage: isFirstInsertion
+                        )
+                        if self.insertImage(
+                            data: data, worktreeId: worktreeId, replacementRange: replacementRange,
+                            onError: { refused.append(.init(name: name, reason: .image($0))) }
+                        ) {
+                            nextLocation = self.nextInsertionLocation(after: replacementRange, beforeLength: beforeLength)
+                            isFirstInsertion = false
+                        }
+                    case .tooLarge:
+                        refused.append(.init(name: name, reason: .image(.tooLarge)))
+                    case .unsupported:
+                        refused.append(.init(name: name, reason: .unsupported))
+                    }
+                case .pdf:
+                    guard let pdfWorktreeId else { continue }
+                    let staged = await Task.detached(priority: .userInitiated) {
+                        Result { try ACPAttachmentStaging.stagePDF(fileURL: item.url, into: pdfWorktreeId) }
+                    }.value
                     guard let self, self.isEditable else { return }
                     if let generation,
                        coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
-                    let beforeLength = self.textStorage?.length ?? 0
-                    let replacementRange = self.asyncImageReplacementRange(
-                        capturedRange: insertionRange,
-                        nextLocation: nextLocation,
-                        isFirstImage: isFirstImage
-                    )
-                    if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: replacementRange) {
-                        nextLocation = self.selectedRange().location
-                        if nextLocation == replacementRange.location {
-                            nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                    switch staged {
+                    case .success(let url):
+                        let beforeLength = self.textStorage?.length ?? 0
+                        let replacementRange = self.asyncImageReplacementRange(
+                            capturedRange: insertionRange,
+                            nextLocation: nextLocation,
+                            isFirstImage: isFirstInsertion
+                        )
+                        if let reason = self.insertStagedPDF(url, replacementRange: replacementRange) {
+                            refused.append(.init(name: name, reason: reason))
+                        } else {
+                            nextLocation = self.nextInsertionLocation(after: replacementRange, beforeLength: beforeLength)
+                            isFirstInsertion = false
                         }
-                        isFirstImage = false
+                    case .failure(let error):
+                        let reason = (error as? ACPAttachmentStaging.StagingError).map(ACPAttachmentClassifier.Reason.init) ?? .saveFailed
+                        refused.append(.init(name: name, reason: reason))
                     }
-                case .tooLarge:
-                    if let generation,
-                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
-                    self?.coordinator?.reportImageError(.tooLarge)
-                case .unsupported:
-                    break
                 }
             }
+            if let generation,
+               coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+            self?.reportAttachmentRefusals(refused)
         }
+    }
+
+    private func attachmentPlan(for files: [ACPAttachmentClassifier.File]) -> ACPAttachmentClassifier.Plan? {
+        guard isEditable else { return nil }
+        let pdfs = pdfAttachments.map {
+            ACPAttachmentClassifier.PDFContext(eligible: $0.eligible, usage: stagedPDFUsage(worktreeId: $0.worktreeId))
+        }
+        return ACPAttachmentClassifier.classify(files, pdfs: pdfs)
+    }
+
+    private func nextInsertionLocation(after replacementRange: NSRange, beforeLength: Int) -> Int {
+        let location = selectedRange().location
+        guard location == replacementRange.location else { return location }
+        return location + max(0, (textStorage?.length ?? 0) - beforeLength)
     }
 
     #if DEBUG
     func insertPickedImageFilesForTesting(_ urls: [URL]) {
-        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+        insertAttachmentFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
     }
     #endif
 
@@ -2401,8 +2542,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return capturedRange
     }
 
-    /// True when the general pasteboard currently holds a supported image.
-    private var pasteboardHasImage: Bool { hasImage(in: NSPasteboard.general) }
+    /// True when the general pasteboard currently holds something to attach.
+    private var pasteboardHasAttachment: Bool { hasAttachment(in: NSPasteboard.general) }
 
     override func paste(_ sender: Any?) {
         guard isEditable else { return }
@@ -2881,7 +3022,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         dropPending = true
         onNextPromptStateChange(nextPromptInputState)
         let pasteboard = sender.draggingPasteboard
-        return hasImage(in: pasteboard) || !droppedSessionIds(in: pasteboard).isEmpty
+        return hasAttachment(in: pasteboard) || !droppedSessionIds(in: pasteboard).isEmpty
             ? .copy : super.draggingEntered(sender)
     }
 
