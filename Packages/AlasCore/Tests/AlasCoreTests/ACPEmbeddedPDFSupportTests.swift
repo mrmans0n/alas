@@ -36,7 +36,9 @@ struct ACPEmbeddedPDFSupportTests {
 }
 
 struct ACPPromptSizeGuardTests {
-    private static let limit = ACPPromptSizeGuard.maxEncodedBytes
+    /// Small, because the boundary doesn't depend on the number and scanning the
+    /// real limit takes tens of seconds in a debug build on a busy CI runner.
+    private static let limit = 4096
 
     /// The characters JSON escapes, a raw one that it does not, and multi-byte text.
     private static let tricky = #"a"b\c/d+e"# + "\n\t\r\u{8}\u{C}\u{1}\u{7F} é 日本"
@@ -64,9 +66,9 @@ struct ACPPromptSizeGuardTests {
             return [block(String(repeating: "x", count: size - ACPPromptSizeGuard.encodedSize(of: [block("")])))]
         }
         let atLimit = prompt(encodedSize: Self.limit)
-        try ACPPromptSizeGuard.check(atLimit)
+        try ACPPromptSizeGuard.check(atLimit, limit: Self.limit)
         #expect(throws: ACPPromptRefusal.promptTooLarge(encodedBytes: Self.limit + 1)) {
-            try ACPPromptSizeGuard.check(prompt(encodedSize: Self.limit + 1))
+            try ACPPromptSizeGuard.check(prompt(encodedSize: Self.limit + 1), limit: Self.limit)
         }
     }
 
@@ -74,11 +76,11 @@ struct ACPPromptSizeGuardTests {
     func blamesForkContextOnlyWhenItCannotFit() {
         let half = String(repeating: "x", count: Self.limit / 2 + 1)
         #expect(throws: ACPPromptRefusal.promptTooLarge(encodedBytes: ACPPromptSizeGuard.encodedSize(of: [.text(half), .text(half)]))) {
-            try ACPPromptSizeGuard.check([.text(half), .text(half)], forkContext: half)
+            try ACPPromptSizeGuard.check([.text(half), .text(half)], forkContext: half, limit: Self.limit)
         }
         let whole = String(repeating: "x", count: Self.limit)
         #expect(throws: ACPPromptRefusal.forkContextTooLarge(encodedBytes: ACPPromptSizeGuard.encodedSize(of: [.text(whole)]))) {
-            try ACPPromptSizeGuard.check([.text(whole)], forkContext: whole)
+            try ACPPromptSizeGuard.check([.text(whole)], forkContext: whole, limit: Self.limit)
         }
     }
 

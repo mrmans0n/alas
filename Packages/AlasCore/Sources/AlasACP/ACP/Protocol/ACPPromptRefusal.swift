@@ -50,12 +50,14 @@ public enum ACPPromptSizeGuard {
 
     /// `forkContext` is the inherited conversation among `blocks`, if any. When
     /// it alone is over the limit, nothing the user removes can make this fit.
-    public static func check(_ blocks: [ACPContentBlock], forkContext: String? = nil) throws(ACPPromptRefusal) {
+    public static func check(
+        _ blocks: [ACPContentBlock], forkContext: String? = nil, limit: Int = maxEncodedBytes
+    ) throws(ACPPromptRefusal) {
         let size = encodedSize(of: blocks)
-        guard size > maxEncodedBytes else { return }
+        guard size > limit else { return }
         if let forkContext {
             let contextSize = encodedSize(of: [.text(forkContext)])
-            if contextSize > maxEncodedBytes { throw ACPPromptRefusal.forkContextTooLarge(encodedBytes: contextSize) }
+            if contextSize > limit { throw ACPPromptRefusal.forkContextTooLarge(encodedBytes: contextSize) }
         }
         throw ACPPromptRefusal.promptTooLarge(encodedBytes: size)
     }
@@ -91,13 +93,14 @@ public enum ACPPromptSizeGuard {
     private static func escapedLength(of string: String) -> Int {
         var string = string
         return string.withUTF8 { bytes in
-            bytes.reduce(into: 0) { length, byte in
+            var length = bytes.count
+            for byte in bytes where byte < 0x20 || byte == 0x22 || byte == 0x2F || byte == 0x5C {
                 switch byte {
-                case 0x22, 0x5C, 0x2F, 0x08, 0x09, 0x0A, 0x0C, 0x0D: length += 2
-                case 0..<0x20: length += 6
-                default: length += 1
+                case 0x22, 0x5C, 0x2F, 0x08, 0x09, 0x0A, 0x0C, 0x0D: length += 1
+                default: length += 5
                 }
             }
+            return length
         }
     }
 }
