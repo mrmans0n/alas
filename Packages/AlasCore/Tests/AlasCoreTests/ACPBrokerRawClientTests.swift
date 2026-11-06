@@ -188,6 +188,77 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
+    @Test func freshBrokerRunnerBindsBeforeSetupAndWithdrawsOnDetach() async throws {
+        let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
+        let service = RawBrokerFixture(rawBytes: bytes, acceptedMessageID: "u")
+        await service.setFreshBootstrap(true)
+        let client = makeClient(service)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("runner-broker-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Runner", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "Runner")
+        let runner = try await ACPV2SessionRunner.makeBroker(session: session, client: client, persistence: persistence,
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), info: .init(name: "alas", version: "test"),
+            isCurrent: { true }, onEvent: { _ in })
+        defer { runner.stop()
+        Task { await client.detach() } }
+        #expect(await service.openCount == 0)
+        let result = try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60)))
+        #expect(result.sessionId == "upstream" && runner.status == .ready)
+        let row = try #require(await persistence.loadSession(id: "s"))
+        #expect(row.acpBrokerId == "raw" && row.acpBrokerGeneration == 7 && row.remoteSessionId == "upstream")
+        let keys = await service.sentRequests.map(\.operationKey.rawValue)
+        #expect(keys.count == 2 && keys[0].hasPrefix("alas:v2:") && keys[0].hasSuffix(":initialize"))
+        #expect(keys[1] == keys[0].replacingOccurrences(of: ":initialize", with: ":session-new"))
+        let submissionID = UUID()
+        let user = ACPMessage.user(id: UUID(), messageId: nil, text: "hello", attachments: [])
+        _ = try await runner.submit(id: submissionID, row: user, params: .init(sessionId: "upstream", prompt: [.text("hello")]))
+        let allKeys = await service.sentRequests.map(\.operationKey.rawValue)
+        #expect(allKeys.count == 3)
+        #expect(allKeys[2] == keys[0].replacingOccurrences(of: ":initialize", with: ":prompt:" + submissionID.uuidString))
+        #expect(session.transcript.messages.filter { if case .user = $0 { return true }
+        return false }.count == 1)
+        await #expect(throws: (any Error).self) { try await runner.submit(id: submissionID, row: user, params: .init(sessionId: "upstream", prompt: [.text("hello")])) }
+        #expect(await service.sentRequests.count == 3)
+        await client.detach()
+        try await eventually { await MainActor.run { runner.status == .observationLost } }
+        #expect(await service.closeCount == 0)
+    }
+
+    @MainActor
+    @Test(arguments: ["adopted", "existing-session", "stop-open"])
+    func freshBrokerRunnerRejectsSetupWithoutChangingExistingBinding(reason: String) async throws {
+        let service = RawBrokerFixture(delayOpen: reason == "stop-open")
+        await service.setFreshBootstrap(reason != "adopted")
+        let client = makeClient(service)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("refused-runner-\(UUID()).sqlite").path)
+        var row = ACPSessionRow(id: "s", agentId: "fixture", title: "Refused", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        if reason == "existing-session" { row.remoteSessionId = "existing" }
+        try await persistence.upsertSession(row)
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let before = try await persistence.loadSession(id: "s")
+        let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "Refused")
+        let runner = try await ACPV2SessionRunner.makeBroker(session: session, client: client, persistence: persistence,
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), info: .init(name: "alas", version: "test"),
+            isCurrent: { true }, onEvent: { _ in })
+        defer { runner.stop()
+        Task { await service.releaseOpen()
+        await client.detach() } }
+        let finished = Mutex(false)
+        let starting = Task { defer { finished.withLock { $0 = true } }
+        return try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60))) }
+        if reason == "stop-open" {
+            try await eventually { await service.openCount == 1 }
+            runner.stop()
+            try await eventually { finished.withLock { $0 } }
+        }
+        await #expect(throws: (any Error).self) { try await starting.value }
+        #expect(await service.sentRequests.isEmpty)
+        #expect(try await persistence.loadSession(id: "s") == before)
+        #expect(await service.closeCount == 0)
+    }
+
+    @MainActor
     @Test(arguments: ["match", "removed", "reused", "bytes", "session", "stale-helper", "removed-after-attempt", "transient-attach"])
     func responseOwnerReconcilesCurrentBrokerOriginsAcrossReattachment(reason: String) async throws {
         let service = RawBrokerFixture(pending: true)
@@ -1469,7 +1540,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         }
         if freshBootstrap {
             if outcome != nil { completionCursor += 1 }
-            let result = params.method == "initialize" ? #"{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{}}}"# : #"{"sessionId":"upstream"}"#
+            let result = params.method == "initialize" ? #"{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{}}}"# : (params.method == "session/prompt" && acceptedMessageID != nil ? #"{"messageId":"u"}"# : #"{"sessionId":"upstream"}"#)
             value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\(result)}".utf8))
         }
         if let adapterError {

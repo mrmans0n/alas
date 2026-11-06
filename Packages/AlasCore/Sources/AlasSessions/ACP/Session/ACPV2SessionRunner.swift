@@ -4,7 +4,7 @@ import AlasACP
 import AlasCode
 import AlasPlatform
 
-/// Explicit fresh-stdio installation. The embedding owner controls the lease
+/// Explicit fresh stdio or broker installation. The embedding owner controls the lease
 /// and transport lifetime and must signal ownership replacement synchronously.
 @MainActor
 public final class ACPV2SessionRunner {
@@ -36,8 +36,15 @@ public final class ACPV2SessionRunner {
     public let observations: AsyncStream<Status>
     private let continuation: AsyncStream<Status>.Continuation
     private let session: ACPSession
-    private let client: ACPStdioClient
-    private let attachment: ACPV2SessionBootstrap.Attachment
+    private let client: ACPStdioClient?
+    private let brokerClient: ACPBrokerClient?
+    private let brokerIntake: ACPV2OrderedIntake?
+    private var attachment: ACPV2SessionBootstrap.Attachment?
+    private let installationID = UUID()
+    private var brokerIdentity: ACPBrokerDurableState?
+    private var bufferedBrokerStates: [ACPBrokerDurableState] = []
+    private var brokerControlTask: Task<Void, Never>?
+    private var brokerMirrorTask: Task<Void, Never>?
     private let persistence: ACPSessionPersistence
     private let fence: ACPSessionLeaseFence
     private let info: ACPImplementationInfo
@@ -77,7 +84,32 @@ public final class ACPV2SessionRunner {
     private var projection: ACPV2SessionProjection?
     private var decisions: ACPV2RequestDecisionCoordinator?
 
-    public init(session: ACPSession, client: ACPStdioClient,
+    public convenience init(session: ACPSession, client: ACPStdioClient,
+        persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
+        info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
+        journals: ACPV2AttachmentRuntime.Journals? = nil,
+        isCurrent: @escaping @MainActor () -> Bool,
+        onEvent: @escaping @MainActor (Event) -> Void) throws {
+        try self.init(session: session, client: client, brokerClient: nil, brokerIntake: nil,
+            persistence: persistence, fence: fence, info: info, interactions: interactions,
+            journals: journals, isCurrent: isCurrent, onEvent: onEvent)
+    }
+
+    public static func makeBroker(session: ACPSession, client: ACPBrokerClient,
+        persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
+        info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
+        journals: ACPV2AttachmentRuntime.Journals? = nil,
+        isCurrent: @escaping @MainActor () -> Bool,
+        onEvent: @escaping @MainActor (Event) -> Void) async throws -> ACPV2SessionRunner {
+        guard session.id.utf8.elementsEqual(fence.sessionId.utf8), info.name == "alas", !info.version.isEmpty else { throw Failure.invalidInput }
+        try session.validateFreshV2ProjectionDestination()
+        let intake = try await client.claimV2OrderedIntake()
+        return try .init(session: session, client: nil, brokerClient: client, brokerIntake: intake,
+            persistence: persistence, fence: fence, info: info, interactions: interactions,
+            journals: journals, isCurrent: isCurrent, onEvent: onEvent)
+    }
+
+    private init(session: ACPSession, client: ACPStdioClient?, brokerClient: ACPBrokerClient?, brokerIntake: ACPV2OrderedIntake?,
         persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
         info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
         journals: ACPV2AttachmentRuntime.Journals? = nil,
@@ -87,6 +119,8 @@ public final class ACPV2SessionRunner {
         try session.validateFreshV2ProjectionDestination()
         self.session = session
         self.client = client
+        self.brokerClient = brokerClient
+        self.brokerIntake = brokerIntake
         self.persistence = persistence
         self.fence = fence
         self.info = info
@@ -97,8 +131,10 @@ public final class ACPV2SessionRunner {
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
-        let intake = try client.claimV2OrderedIntake()
-        attachment = try .init(stdioClient: client, orderedIntake: intake)
+        if let client {
+            let intake = try client.claimV2OrderedIntake()
+            attachment = try .init(stdioClient: client, orderedIntake: intake)
+        }
     }
 
     public func start(params: ACPV2SessionNewParams, deadline: ContinuousClock.Instant) async throws -> ACPV2SessionNewResult {
@@ -112,6 +148,24 @@ public final class ACPV2SessionRunner {
 
     private func startBody(params: ACPV2SessionNewParams, deadline: ContinuousClock.Instant) async throws -> ACPV2SessionNewResult {
         do {
+            if let brokerClient, let brokerIntake {
+                brokerControlTask = Task { [weak self] in
+                    for await control in brokerIntake.controls { self?.brokerControl(control) }
+                }
+                let opened = try await brokerClient.start()
+                try requireCurrent()
+                let attachment = try await ACPV2SessionBootstrap.Attachment(brokerClient: brokerClient, opened: opened, orderedIntake: brokerIntake)
+                let identity = ACPBrokerDurableState(brokerId: opened.snapshot.metadata.brokerId,
+                    generation: opened.snapshot.metadata.generation, acknowledgedCursor: .init(rawValue: 0), wireContext: .rawV2)
+                guard try await persistence.bindV2FreshBroker(state: identity, fence: fence) else { throw Failure.invalidated }
+                try requireCurrent()
+                self.attachment = attachment
+                brokerIdentity = identity
+                let buffered = bufferedBrokerStates
+                bufferedBrokerStates.removeAll()
+                for state in buffered { enqueueBrokerMirror(state) }
+            }
+            guard let attachment else { throw Failure.invalidInput }
             let bootstrap = try ACPV2SessionBootstrap(attachment: attachment, fence: fence, persistence: persistence,
                 info: info, deadline: deadline, journals: journals, isCurrent: { [weak self] in self?.current() == true },
                 onRequest: { _ in }, onCanonicalChange: { [weak self] in try self?.canonical($0) },
@@ -123,12 +177,12 @@ public final class ACPV2SessionRunner {
                 }, onLifecycleChange: { [weak self] in self?.lifecycle($0) },
                 interactionSupport: interactions.support, onInstalling: { [weak self] in try self?.install($0) })
             self.bootstrap = bootstrap
-            try client.start()
-            let initialized = try await bootstrap.initialize()
+            try client?.start()
+            let initialized = try await bootstrap.initialize(operationKey: brokerClient == nil ? nil : operationKey("initialize"))
             try requireCurrent()
             guard case .v2 = initialized.value else { terminate(.replacementRequired)
             throw Failure.invalidated }
-            let installed = try await bootstrap.createSession(params)
+            let installed = try await bootstrap.createSession(params, operationKey: brokerClient == nil ? nil : operationKey("session-new"))
             try requireCurrent()
             setStatus(.ready)
             return installed.result
@@ -152,7 +206,8 @@ public final class ACPV2SessionRunner {
             return try await perform {
                 try projection.registerOptimisticRow(row)
                 try self.requireCurrent()
-                return try await runtime.submit(id: id, localRowID: rowID, params: params)
+                return try await runtime.submit(id: id, localRowID: rowID, params: params,
+                    operationKey: self.brokerClient == nil ? nil : .init(rawValue: self.operationKey("prompt:" + id.uuidString)))
             }
         } catch {
             if !current() { terminate(.ownershipLost) }
@@ -170,7 +225,39 @@ public final class ACPV2SessionRunner {
     public func stop() { terminate(.stopped) }
     public func invalidateOwnership() { terminate(.ownershipLost) }
 
-    private func current() -> Bool { active && isCurrent() && active }
+    private func current() -> Bool {
+        guard active, isCurrent(), active else { return false }
+        if brokerIntake?.isValid == false { terminate(.observationLost)
+        return false }
+        return true
+    }
+
+    private func operationKey(_ suffix: String) -> String { "alas:v2:" + installationID.uuidString + ":" + suffix }
+
+    private func brokerControl(_ control: ACPV2OrderedIntake.Control) {
+        guard active else { return }
+        switch control {
+        case .invalidated: terminate(.observationLost)
+        case .durableState(let state):
+            if brokerIdentity == nil { bufferedBrokerStates.append(state) }
+            else { enqueueBrokerMirror(state) }
+        }
+    }
+
+    private func enqueueBrokerMirror(_ state: ACPBrokerDurableState) {
+        let previous = brokerMirrorTask
+        brokerMirrorTask = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, self.current() else { return }
+            do {
+                guard let identity = self.brokerIdentity,
+                      state.brokerId.rawValue.utf8.elementsEqual(identity.brokerId.rawValue.utf8),
+                      state.generation == identity.generation, state.wireContext == .rawV2 else { throw Failure.invalidated }
+                guard try await self.persistence.updateACPBrokerAcknowledgedCursor(sessionId: self.session.id, state: state, fence: self.fence) else { throw Failure.invalidated }
+                try self.requireCurrent()
+            } catch { self.terminate(.failed(message: String(describing: error))) }
+        }
+    }
     private func requireCurrent() throws {
         try Task.checkCancellation()
         guard current() else { if active { terminate(.ownershipLost) }
@@ -242,6 +329,9 @@ public final class ACPV2SessionRunner {
     private func terminate(_ status: Status) {
         guard active else { return }
         active = false
+        brokerControlTask?.cancel()
+        brokerMirrorTask?.cancel()
+        bufferedBrokerStates.removeAll()
         terminating = true
         setStatus(status)
         let pending = Array(operations.values)
