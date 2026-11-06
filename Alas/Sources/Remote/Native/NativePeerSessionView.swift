@@ -64,7 +64,17 @@ struct NativePeerSessionView: View {
             trailingRows: queueRows(transcript, contentMaxWidth: contentMaxWidth) + pendingRequestRows(transcript),
             fetchOlder: { _ = client.fetchOlder() },
             onQuote: { composerActions.quote($0) },
-            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil
+            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil,
+            visualActions: ACPVisualAidActions(
+                answer: { [client] id, answer in
+                    await client.answerVisualAid(id, answer: answer, sessionId: transcript.sessionId)
+                },
+                popOut: { _ in },
+                canAnswer: { [client] in client.selectedSessionId == transcript.sessionId && client.canAnswerVisuals },
+                changes: client.visualChanges.eraseToAnyPublisher()
+            ),
+            visualForm: { client.visualForm(for: $0, sessionId: transcript.sessionId) },
+            visualStatus: { client.visualStatus(for: $0, sessionId: transcript.sessionId) }
         )
     }
 

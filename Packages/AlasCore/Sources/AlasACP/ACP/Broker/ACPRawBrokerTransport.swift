@@ -43,6 +43,7 @@ public struct ACPBrokerRawFrameDelivery: Sendable {
 /// Owns only the raw transport journal, never ACP session semantics.
 actor ACPRawBrokerTransport {
     struct Summary {
+        var intake: ACPV2OrderedIntake?
         var generation: ACPBrokerGeneration?
         var count = 0
         var adopted = false
@@ -123,6 +124,22 @@ actor ACPRawBrokerTransport {
         framesCont = f.continuation
     }
 
+    private var orderedIntake: ACPV2OrderedIntake?
+    private var stagedPending: [ACPBrokerEventCursor: ACPBrokerPendingRequest] = [:]
+
+    func claimOrderedIntake() throws -> ACPV2OrderedIntake {
+        guard !started, !terminated, orderedIntake == nil else { throw ACPClientError.notRunning }
+        let intake = ACPV2OrderedIntake(connectionID: connectionID)
+        orderedIntake = intake
+        summary.withLock { $0.intake = intake }
+        return intake
+    }
+
+    nonisolated func validateOrderedIntake(_ intake: ACPV2OrderedIntake?) throws {
+        let actual = summary.withLock { $0.intake }
+        guard actual === intake, intake?.isValid != false else { throw ACPClientError.notRunning }
+    }
+
     private func validate(_ snapshot: ACPBrokerSnapshot, expected: ACPBrokerGeneration?) throws {
         guard snapshot.metadata.wireContext == .rawV2,
               snapshot.metadata.brokerId == openParams.brokerId,
@@ -142,6 +159,7 @@ actor ACPRawBrokerTransport {
     func start() async throws -> ACPBrokerOpenResult {
         guard !terminated, !started else { throw ACPClientError.notRunning }
         started = true
+        do {
         let opened = try await service.open(openParams)
         try validate(opened.snapshot, expected: openParams.expectedGeneration)
         guard !terminated else {
@@ -154,8 +172,10 @@ actor ACPRawBrokerTransport {
         generation = opened.snapshot.metadata.generation
         summary.withLock { $0.generation = generation
         $0.adopted = opened.adopted }
-        durable?(.init(brokerId: openParams.brokerId, generation: opened.snapshot.metadata.generation,
-            acknowledgedCursor: acknowledged, wireContext: .rawV2))
+        let initial = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: opened.snapshot.metadata.generation,
+            acknowledgedCursor: acknowledged, wireContext: .rawV2)
+        orderedIntake?.publishDurableState(initial)
+        durable?(initial)
         try apply(opened.snapshot)
         try await replay()
         poll = Task { [weak self, pollInterval] in
@@ -167,6 +187,10 @@ actor ACPRawBrokerTransport {
             }
         }
         return opened
+        } catch {
+            if orderedIntake != nil { loseObservation() }
+            throw error
+        }
     }
 
     private func apply(_ snapshot: ACPBrokerSnapshot) throws {
@@ -193,8 +217,18 @@ actor ACPRawBrokerTransport {
         for pending in snapshot.pendingRequests {
             guard let frame = pending.rawFrame, let cursor = pending.originCursor,
                   !seen.contains(cursor) else { continue }
-            // Snapshot receipt alone cannot consume anything. Reuse the actual journal identity.
-            publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
+            if orderedIntake != nil {
+                if let previous = stagedPending[cursor],
+                   previous.requestId != pending.requestId || previous.rawFrame?.bytes != frame.bytes {
+                    throw ACPClientError.decoding("Contradictory pending snapshot origin")
+                }
+                guard cursor > replayCursor else { throw ACPClientError.decoding("Unorderable pending snapshot origin") }
+                stagedPending[cursor] = pending
+                protected.insert(cursor)
+            } else {
+                // Standalone split mode supports historical pending snapshots.
+                publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
+            }
         }
     }
 
@@ -220,7 +254,11 @@ actor ACPRawBrokerTransport {
             // The older poll's waiter may resume after a fresh replay starts.
             if replaySequence == sequence { replayTask = nil }
         }
-        try await task.value
+        do { try await task.value }
+        catch {
+            if orderedIntake != nil { loseObservation() }
+            throw error
+        }
     }
 
     private func performReplay() async throws {
@@ -254,6 +292,11 @@ actor ACPRawBrokerTransport {
             guard let frame = request.rawFrame, request.originCursor == event.cursor else {
                 throw ACPClientError.decoding("Contradictory raw pending request")
             }
+            if let staged = stagedPending.removeValue(forKey: event.cursor) {
+                guard staged.requestId == request.requestId, staged.rawFrame?.bytes == frame.bytes else {
+                    throw ACPClientError.decoding("Contradictory pending journal origin")
+                }
+            }
             publish(frame, cursor: event.cursor, origin: .journal, pendingID: request.requestId)
         case .operationCompleted(let key, let outcome):
             seen.insert(event.cursor)
@@ -272,8 +315,11 @@ actor ACPRawBrokerTransport {
             // Factual helper status is not an adapter frame and grants no source authority.
             seen.insert(event.cursor)
             summary.withLock { $0.consumed.insert(event.cursor) }
-            if method == "adapter/stdoutClosed" || method == "adapter/writeUncertain" { updatesCont.finish()
-            framesCont.finish() }
+            if method == "adapter/stdoutClosed" || method == "adapter/writeUncertain" {
+                if orderedIntake != nil { loseObservation() }
+                else { updatesCont.finish()
+                framesCont.finish() }
+            }
         case .operationStarted, .pendingRequestResolved:
             seen.insert(event.cursor)
             summary.withLock { $0.consumed.insert(event.cursor) }
@@ -297,11 +343,15 @@ actor ACPRawBrokerTransport {
         } else { method = (try? JSONDecoder().decode(MethodHead.self, from: frame.bytes))?.method }
         if method == "session/update" {
             summary.withLock { $0.count += 1 }
-            updatesCont.yield(.init(frame: frame.bytes, connectionID: connectionID, brokerProvenance: provenance,
-                durableConsumptionAcknowledgement: ack))
+            let delivery = ACPV2SessionUpdateDelivery(frame: frame.bytes, connectionID: connectionID, brokerProvenance: provenance,
+                durableConsumptionAcknowledgement: ack)
+            if let orderedIntake { orderedIntake.continuation.yield(.update(delivery)) }
+            else { updatesCont.yield(delivery) }
         } else {
-            framesCont.yield(.init(frame: frame.bytes, connectionID: connectionID, provenance: provenance,
-                pendingRequestID: pendingID, acknowledgement: ack))
+            let delivery = ACPBrokerRawFrameDelivery(frame: frame.bytes, connectionID: connectionID, provenance: provenance,
+                pendingRequestID: pendingID, acknowledgement: ack)
+            if let orderedIntake { orderedIntake.continuation.yield(.inbound(delivery.inboundDelivery)) }
+            else { framesCont.yield(delivery) }
         }
     }
 
@@ -337,7 +387,9 @@ actor ACPRawBrokerTransport {
         _ = try await service.ack(params)
         guard !terminated, self.generation == generation else { return }
         acknowledged = max(acknowledged, target)
-        durable?(.init(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2))
+        let state = ACPBrokerDurableState(brokerId: openParams.brokerId, generation: generation, acknowledgedCursor: acknowledged, wireContext: .rawV2)
+        orderedIntake?.publishDurableState(state)
+        durable?(state)
         }
     }
 
@@ -488,7 +540,9 @@ actor ACPRawBrokerTransport {
         catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
     }
     func stop(close: Bool) async {
-        guard !terminated else { return }
+        // Observation loss withdraws delivery authority, but the caller still
+        // owns one explicit lifecycle cleanup request for this attachment.
+        guard requestedClose == nil else { return }
         requestedClose = close
         loseObservation()
         guard let generation else { return }
@@ -507,6 +561,7 @@ actor ACPRawBrokerTransport {
     }
     private func loseObservation() {
         terminated = true
+        orderedIntake?.invalidate(message: "Broker observation lost")
         poll?.cancel()
         poll = nil
         updatesCont.finish()

@@ -81,7 +81,7 @@ extension SessionSummarySourceRevision {
         .init(
             incarnation: session.incarnation,
             promptID: session.nextPromptID,
-            transcriptGeneration: session.transcript.messagesGeneration,
+            transcriptGeneration: session.transcript.conversationRevision,
             goal: session.currentGoal,
             plan: session.transcript.currentPlan,
             idleFacts: .current(session: session, composer: composer)

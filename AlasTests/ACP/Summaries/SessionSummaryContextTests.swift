@@ -38,6 +38,11 @@ import Testing
                 attachments: [.init(uri: "file:///tmp/a", name: "a")]
             ),
             .agent(id: UUID(), messageId: nil, StreamingText("attachment answer secret")),
+            .user(
+                id: UUID(), messageId: nil, text: "checkpoint secret",
+                attachments: [.checkpointReference(id: UUID())]
+            ),
+            .agent(id: UUID(), messageId: nil, StreamingText("checkpoint answer secret")),
             .user(id: UUID(), messageId: nil, text: "Newest request", attachments: []),
             .agent(id: UUID(), messageId: nil, StreamingText("Newest answer"))
         ])
@@ -48,7 +53,7 @@ import Testing
             .init(user: "Newest request", assistant: "Newest answer")
         ])
         let rendered = renderedText(context)
-        for excluded in ["tool secret", "edit secret", "notice secret", "delegated secret", "attachment secret"] {
+        for excluded in ["tool secret", "edit secret", "notice secret", "delegated secret", "attachment secret", "checkpoint secret"] {
             #expect(!rendered.contains(excluded))
         }
     }
@@ -155,7 +160,7 @@ import Testing
         let revision = try #require(context.revision)
         #expect(revision.goal == context.goal)
         #expect(revision.plan == context.plan)
-        #expect(revision.transcriptGeneration == session.transcript.messagesGeneration)
+        #expect(revision.transcriptGeneration == session.transcript.conversationRevision)
     }
 
     @Test func boundsRenderedCandidateCountForLongSessions() throws {

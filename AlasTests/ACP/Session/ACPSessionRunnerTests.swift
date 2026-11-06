@@ -814,7 +814,7 @@ struct ACPSessionRunnerTests {
             #expect(turns[0].incarnation == session.incarnation)
             #expect(turns[0].promptID == 0)
             #expect(turns[0].userMessageID == userID)
-            #expect(turns[0].transcriptRevision == session.transcript.messagesGeneration)
+            #expect(turns[0].transcriptRevision == session.transcript.conversationRevision)
         } else {
             Issue.record("expected recorded user row")
         }
@@ -2345,6 +2345,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.sessionFailure = .init()
+        session.agentFileChangeReport = .init()
         session.transcript.messages = seed
         let runner = ACPSessionRunner(
             session: session,
@@ -2418,29 +2419,276 @@ struct ACPSessionRunnerTests {
     BEGIN SELECT RAISE(ABORT, 'incident write failed'); END;
     """
 
-    @Test("a redelivered incident acknowledges only once its row is stored", arguments: [true, false])
-    func redeliveredIncidentRewritesAnUnstoredRow(writeRecovers: Bool) async throws {
-        let (runner, _, store) = try makeIncidentRunner(replaying: false)
-        try store.db.exec(Self.rejectIncidentWrites)
-        applyInfo(failureInfo(id: "f", revision: 1, title: "first"), to: runner)
+    private static let rejectReportWrites = """
+    CREATE TRIGGER reject_report BEFORE INSERT ON messages WHEN instr(CAST(NEW.payload AS TEXT), 'fileChangeReport') > 0
+    BEGIN SELECT RAISE(ABORT, 'report write failed'); END;
+    """
+
+    private func reportRow(_ reportFields: String? = nil) throws -> ACPMessage {
+        .user(id: UUID(), text: "hello", attachments: [try FileChangeReportRowCase.reference(reportFields)])
+    }
+
+    private func reportReference(in session: ACPSession, requestId: String = "alas-turn:a") -> ACPMessage.Attachment? {
+        guard let index = session.transcript.fileChangeReportIndex(requestId: requestId),
+              case .user(_, _, _, let attachments, _, _) = session.transcript.messages[index]
+        else { return nil }
+        return attachments.first { $0.fileChangeReportRequestId == requestId }
+    }
+
+    private func storedReportReference(in store: ACPSessionStore, requestId: String = "alas-turn:a") throws -> ACPMessage.Attachment? {
+        try store.loadMessages(sessionId: "s").lazy.compactMap { row -> ACPMessage.Attachment? in
+            guard case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+            else { return nil }
+            return attachments.first { $0.fileChangeReportRequestId == requestId }
+        }.first
+    }
+
+    private func sentReportRequestIds(_ mock: ACPMockClient) -> [String] {
+        sentPrompts(mock).compactMap { ($0.params as? ACPSessionPromptParams)?.meta?.agentFileChangeReportRequest?.requestId }
+    }
+
+    enum DurableInfoPayload: CaseIterable { case failureRecord, report }
+
+    private func durableInfoRunner(_ payload: DurableInfoPayload, replaying: Bool) throws -> (ACPSessionRunner, ACPSession, ACPSessionStore) {
+        try makeIncidentRunner(seed: payload == .report ? [reportRow()] : [], replaying: replaying)
+    }
+
+    @Test("a redelivered update acknowledges only once its row is stored, and keeps what came first",
+          arguments: DurableInfoPayload.allCases, [true, false])
+    func redeliveredInfoRewritesAnUnstoredRow(payload: DurableInfoPayload, writeRecovers: Bool) async throws {
+        let (runner, session, store) = try durableInfoRunner(payload, replaying: false)
+        let (rejectWrites, trigger) = payload == .report
+            ? (Self.rejectReportWrites, "reject_report") : (Self.rejectIncidentWrites, "reject_incident")
+        let (first, redelivery) = payload == .report
+            ? (fileChangeReportInfo(#","status":"reported","paths":["/first"]"#), fileChangeReportInfo(#","status":"reported","paths":["/second"]"#))
+            : (failureInfo(id: "f", revision: 1, title: "first"), failureInfo(id: "f", revision: 1, title: "first"))
+        try store.db.exec(rejectWrites)
+        applyInfo(first, to: runner)
         await runner.flushPersistence()
-        if writeRecovers { try store.db.exec("DROP TRIGGER reject_incident") }
+        if writeRecovers { try store.db.exec("DROP TRIGGER \(trigger)") }
 
         let acknowledgement = DurableAcknowledgementRecorder()
-        runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "s",
-            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "first")),
-            durableConsumptionAcknowledgement: { acknowledgement.record() }
-        ))
+        let redeliver = {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "s",
+                update: .sessionInfoUpdate(redelivery),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }
+            ))
+        }
+        redeliver()
         await runner.flushPersistence()
 
         #expect(acknowledgement.recordedCount == (writeRecovers ? 1 : 0))
         #expect(try store.loadMessages(sessionId: "s").count == (writeRecovers ? 1 : 0))
+        if payload == .report {
+            #expect(reportReference(in: session)?.fileChangeReport?.paths == ["/first"])
+            #expect(try storedReportReference(in: store)?.fileChangeReport?.paths == (writeRecovers ? ["/first"] : nil))
+        }
+        guard writeRecovers else { return }
+
+        // Confirmed now, so another redelivery has nothing to rewrite.
+        try store.db.exec(rejectWrites)
+        redeliver()
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 2)
+    }
+
+    @Test("a report's update keeps its title and incident, and its ack waits for every row it names")
+    func reportSharesItsUpdateWithATitleAndAnIncident() async throws {
+        let (runner, session, store) = try makeIncidentRunner(seed: [reportRow()], replaying: false)
+        try store.db.exec(Self.rejectReportWrites)
+        applyInfo(fileChangeReportInfo(), to: runner)
+        await runner.flushPersistence()
+
+        // The incident is new, so its row alone would look like the whole write.
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let combined = fileChangeReportInfo(
+            title: "New title",
+            alongside: #","sessionFailure":{"version":1,"id":"f","revision":1,"severity":"error","title":"Boom"}"#)
+        let deliver = {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "s",
+                update: .sessionInfoUpdate(combined),
+                durableConsumptionAcknowledgement: { acknowledgement.record() }
+            ))
+        }
+        deliver()
+        await runner.flushPersistence()
+        #expect(session.title == "New title")
+        #expect(session.transcript.failureIncidentIndex(id: "f") != nil)
+        #expect(acknowledgement.recordedCount == 0)
+
+        try store.db.exec("DROP TRIGGER reject_report")
+        deliver()
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 1)
+        #expect(try store.loadMessages(sessionId: "s").map(\.kind).sorted() == ["system", "user"])
+        #expect(try storedReportReference(in: store)?.fileChangeReport != nil)
+    }
+
+    private struct GatedPromptFixture {
+        let runner: ACPSessionRunner
+        let mock: ACPMockClient
+        let session: ACPSession
+        let store: ACPSessionStore
+        let entered: AsyncGate
+        let respond: AsyncGate
+    }
+
+    /// A started, negotiated runner whose `session/prompt` opens `entered`, then answers `response` once `respond` opens.
+    private func makeGatedPromptRunner(
+        response: ACPResponse = ACPResponse(body: ACPSessionRunnerTests.succeededPrompt),
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+    ) async throws -> GatedPromptFixture {
+        let (runner, mock, session, store) = try await makeFailureRunner(onTurnCompleted: onTurnCompleted)
+        runner.start()
+        session.agentFileChangeReport = .init()
+        let entered = AsyncGate()
+        let respond = AsyncGate()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            await entered.open()
+            await respond.wait()
+            return response
+        }
+        return .init(runner: runner, mock: mock, session: session, store: store, entered: entered, respond: respond)
+    }
+
+    private func emitReport(_ info: ACPSessionInfoUpdate, requestId: String, on fixture: GatedPromptFixture) async throws {
+        fixture.mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+        try await waitUntil { self.reportReference(in: fixture.session, requestId: requestId)?.fileChangeReport != nil }
+    }
+
+    enum ReportOutcomeRow: CaseIterable {
+        case cancelledUnavailable, endTurnUnavailable, failureRecordUnavailable, endTurnReported, noReport
+
+        var reportFields: String? {
+            switch self {
+            case .cancelledUnavailable: #","status":"unavailable","reason":"cancelled""#
+            case .endTurnUnavailable, .failureRecordUnavailable: #","status":"unavailable","reason":"providerError""#
+            case .endTurnReported: FileChangeReportRowCase.reported
+            case .noReport: nil
+            }
+        }
+
+        var turnFailure: String? { self == .failureRecordUnavailable ? "Model overloaded" : nil }
+
+        var result: ACPTurnCompletion.Result {
+            switch self {
+            case .cancelledUnavailable: .cancelled
+            case .failureRecordUnavailable: .failed("Model overloaded")
+            case .endTurnUnavailable, .endTurnReported, .noReport: .completed
+            }
+        }
+    }
+
+    /// With no report to land, the order means nothing.
+    nonisolated private static let reportLandings: [(reportFirst: Bool, outcome: ReportOutcomeRow)] =
+        [true, false].flatMap { reportFirst in
+            ReportOutcomeRow.allCases.filter { reportFirst || $0.reportFields != nil }.map { (reportFirst, $0) }
+        }
+
+    @Test(.timeLimit(.minutes(1)), arguments: reportLandings)
+    func reportNeverChangesTheOutcome(reportFirst: Bool, outcome: ReportOutcomeRow) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let response: ACPResponse = switch outcome {
+        case .failureRecordUnavailable: try Self.failedPromptResponse()
+        case .cancelledUnavailable: ACPResponse(body: Data(#"{"stopReason":"cancelled"}"#.utf8))
+        case .endTurnUnavailable, .endTurnReported, .noReport: ACPResponse(body: Self.succeededPrompt)
+        }
+        let fixture = try await makeGatedPromptRunner(response: response, onTurnCompleted: { completions.append($0) })
+        defer { fixture.runner.stop() }
+        let session = fixture.session
+        // A completed turn hands over to the next head, which must go out once.
+        let results: [ACPTurnCompletion.Result] = outcome.result == .completed ? [.completed, .completed] : [outcome.result]
+        for text in ["first", "second"].prefix(results.count) {
+            let item = UUID()
+            session.enqueue(id: item, blocks: [.text(text)])
+            session.normalQueuedTurnIDs.insert(item)
+        }
+        fixture.runner.flushQueueIfIdle()
+        await fixture.entered.wait()
+        let requestId = try #require(sentReportRequestIds(fixture.mock).first)
+        let info = outcome.reportFields.map { fileChangeReportInfo($0, requestId: requestId) }
+
+        if reportFirst, let info {
+            try await emitReport(info, requestId: requestId, on: fixture)
+            #expect(completions.isEmpty)
+        }
+        await fixture.respond.open()
+        try await waitUntil { !completions.isEmpty }
+        if !reportFirst, let info {
+            try await emitReport(info, requestId: requestId, on: fixture)
+        }
+        try await waitUntil { completions.count == results.count }
+        try await settleToIdle(fixture.runner, session)
+
+        #expect(completions.map(\.result) == results)
+        #expect(session.turnFailure == outcome.turnFailure)
+        #expect(session.lastError == nil)
+        #expect(sentPrompts(fixture.mock).count == results.count)
+        #expect(session.queue.isEmpty)
+        var report: ACPAgentFileChangeReport?
+        if let info {
+            guard case .report(let landed) = ACPAgentFileChangeReportSignal.from(metadata: info.metadata) else {
+                Issue.record("expected a readable report")
+                return
+            }
+            report = landed
+        }
+        let expected = ACPMessage.Attachment.fileChangeReportReference(requestId: requestId, report: report)
+        #expect(reportReference(in: session, requestId: requestId) == expected)
+        #expect(try storedReportReference(in: fixture.store, requestId: requestId) == expected)
+    }
+
+    @Test func childAddressedReportNeverReachesARootRow() async throws {
+        let (runner, session, _) = try makeIncidentRunner(seed: [reportRow()], replaying: false)
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        let acknowledgement = DurableAcknowledgementRecorder()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child",
+            update: .sessionInfoUpdate(fileChangeReportInfo()),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+        await runner.flushPersistence()
+        #expect(reportReference(in: session)?.fileChangeReport == nil)
+        #expect(acknowledgement.recordedCount == 1)
+    }
+
+    /// Suppression drops the echo. One that arrives past it, with a message id, rewrites the row to adopt that id.
+    @Test(arguments: [true, false], [nil, "replayed"] as [String?])
+    func replayEchoKeepsTheReference(suppressed: Bool, messageId: String?) async throws {
+        let reference = try FileChangeReportRowCase.reference(FileChangeReportRowCase.reported)
+        let (runner, session, _) = try makeIncidentRunner(
+            seed: [.user(id: UUID(), text: "hello", attachments: [reference])], replaying: suppressed)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s", update: .userMessageChunk(.init(messageId: messageId, content: .text("hello")))))
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.count == 1)
+        #expect(reportReference(in: session) == reference)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func supersededPromptsReportLandsOnItsOwnRow() async throws {
+        let fixture = try await makeGatedPromptRunner()
+        defer { fixture.runner.stop() }
+        fixture.runner.send(text: "first", attachments: []) { _ in }
+        await fixture.entered.wait()
+        fixture.runner.steer(blocks: [.text("instead")])
+        await fixture.respond.open()
+        try await waitUntil { self.sentPrompts(fixture.mock).count == 2 }
+        try await settleToIdle(fixture.runner, fixture.session)
+        let ids = sentReportRequestIds(fixture.mock)
+        try #require(ids.count == 2)
+
+        try await emitReport(fileChangeReportInfo(requestId: ids[0]), requestId: ids[0], on: fixture)
+        #expect(reportReference(in: fixture.session, requestId: ids[1])?.fileChangeReport == nil)
     }
 
     @Test("an update that writes nothing acknowledges behind the queued writes", .timeLimit(.minutes(1)), arguments: [
         ACPSessionUpdate.sessionInfoUpdate(.init(title: "New title", metadata: nil)),
         .usageUpdate(.init(used: 1, size: 10, cost: nil)),
+        .sessionInfoUpdate(fileChangeReportInfo(version: 2)),
+        .sessionInfoUpdate(fileChangeReportInfo(requestId: "alas-turn:stale")),
     ])
     func emptyWriteAcknowledgesBehindQueuedWrites(update: ACPSessionUpdate) async throws {
         let (runner, session, _) = try makeIncidentRunner(replaying: false)
@@ -2618,6 +2866,73 @@ struct ACPSessionRunnerTests {
         #expect(session.retryableFailure == nil)
         #expect(session.queue.count == 1, "the held successor stays held")
         #expect(session.queue.first?.lastError != nil)
+    }
+
+    enum ReportRequestTurn: CaseIterable, Sendable {
+        case direct, failureRetry, steerRedirect
+        case recoveryContext, notNegotiated
+
+        var requestsAReport: Bool {
+            switch self {
+            case .direct, .failureRetry, .steerRedirect: true
+            case .recoveryContext, .notNegotiated: false
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: ReportRequestTurn.allCases)
+    func turnsRequestAReportOnlyWhenTheyShould(turn: ReportRequestTurn) async throws {
+        let (runner, mock, session, _) = try await makeFailureRunner()
+        runner.start()
+        defer { runner.stop() }
+        session.agentFileChangeReport = turn == .notNegotiated ? nil : .init()
+        let succeed: (ACPRequest) async throws -> ACPResponse = { _ in ACPResponse(body: Self.succeededPrompt) }
+        mock.scriptResponse(method: "session/prompt", succeed)
+        var sends = 1
+        switch turn {
+        case .direct, .notNegotiated:
+            try await sendAndSettle(runner)
+        case .failureRetry:
+            scriptRetryableFailure(mock)
+            try await sendAndSettle(runner)
+            mock.scriptResponse(method: "session/prompt", succeed)
+            #expect(runner.retryFailedPrompt(incidentId: "t:error"))
+            sends = 2
+        case .steerRedirect:
+            let release = AsyncGate()
+            let entered = AsyncGate()
+            mock.scriptResponse(method: "session/prompt") { _ in
+                await entered.open()
+                await release.wait()
+                return ACPResponse(body: Self.succeededPrompt)
+            }
+            runner.send(text: "first", attachments: []) { _ in }
+            await entered.wait()
+            runner.steer(blocks: [.text("instead")])
+            await release.open()
+            sends = 2
+        case .recoveryContext:
+            #expect(runner.sendRecoveryContext("restore"))
+        }
+        try await waitUntil { self.sentPrompts(mock).count == sends }
+        try await settleToIdle(runner, session)
+
+        let params = sentPrompts(mock).compactMap { $0.params as? ACPSessionPromptParams }
+        #expect(params.count == sends)
+        let references = session.transcript.messages.flatMap { message -> [String] in
+            guard case .user(_, _, _, let attachments, _, _) = message else { return [] }
+            return attachments.compactMap(\.fileChangeReportRequestId)
+        }
+        guard turn.requestsAReport else {
+            #expect(params.allSatisfy { $0.meta == nil })
+            #expect(references.isEmpty)
+            return
+        }
+        let ids = params.compactMap { $0.meta?.agentFileChangeReportRequest?.requestId }
+        #expect(ids == references)
+        #expect(ids.count == sends)
+        #expect(Set(ids).count == sends)
+        #expect(ids.allSatisfy { $0.hasPrefix("alas-turn:") && ACPAgentFileChangeReport.isValidRequestId($0) })
     }
 
     @Test func retryResendsAnAttachmentAndItsPlacement() async throws {
@@ -3163,22 +3478,21 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadMessages(sessionId: "s").contains { $0.kind == "system" } == committed)
     }
 
-    @Test("an incident's ack waits for its row, live and on replay, first delivery or redelivered", arguments: [
-        (false, false),
-        (false, true),
-        (true, false),
-        (true, true),
-    ])
-    func incidentAcknowledgesAfterItsWrite(replaying: Bool, redelivered: Bool) async throws {
-        let (runner, _, store) = try makeIncidentRunner(replaying: replaying)
+    @Test("a durable info update's ack waits for its row, live and on replay, first delivery or redelivered",
+          arguments: DurableInfoPayload.allCases.flatMap { payload in
+              [(payload, false, false), (payload, false, true), (payload, true, false), (payload, true, true)]
+          })
+    func incidentAcknowledgesAfterItsWrite(payload: DurableInfoPayload, replaying: Bool, redelivered: Bool) async throws {
+        let (runner, session, store) = try durableInfoRunner(payload, replaying: replaying)
+        let info = payload == .report ? fileChangeReportInfo() : failureInfo(id: "f", revision: 1, title: "first")
         let acknowledgement = DurableAcknowledgementRecorder()
 
         if redelivered {
-            applyInfo(failureInfo(id: "f", revision: 1, title: "first"), to: runner)
+            applyInfo(info, to: runner)
         }
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "s",
-            update: .sessionInfoUpdate(failureInfo(id: "f", revision: 1, title: "first")),
+            update: .sessionInfoUpdate(info),
             durableConsumptionAcknowledgement: { acknowledgement.record() }
         ))
 
@@ -3187,11 +3501,15 @@ struct ACPSessionRunnerTests {
         #expect(acknowledgement.wasRecorded)
         let rows = try store.loadMessages(sessionId: "s")
         try #require(rows.count == 1)
-        guard case .failureIncident(_, let incident) = try ACPMessageCodec.decode(kind: rows[0].kind, payload: rows[0].payload) else {
-            Issue.record("expected a stored failure incident")
-            return
+        switch try ACPMessageCodec.decode(kind: rows[0].kind, payload: rows[0].payload) {
+        case .failureIncident(_, let incident) where payload == .failureRecord:
+            #expect(incident.record.title == "first")
+        case .user(_, _, _, let attachments, _, _) where payload == .report:
+            #expect(attachments == reportReference(in: session).map { [$0] })
+            #expect(attachments.first?.fileChangeReport != nil)
+        default:
+            Issue.record("expected the stored row of \(payload)")
         }
-        #expect(incident.record.title == "first")
     }
 
     @Test func unreadableFailureStillAppliesTheTitle() async throws {

@@ -139,7 +139,9 @@ struct ACPMCPPromptPreambleTests {
         "never repeat a drag on a warning, except once with `--direct` when the warning suggests delivery \"direct\".",
         "means the user is working there: wait and retry later instead of switching apps.",
         "Secure fields can't be typed into; ask the user instead.",
-    ]
+        "In a worktree with a VM, `alas computer` drives the VM instead of the user's Mac",
+        "pass `--vm macos` or `--vm linux` when it has both",
+    ] + vmPreferenceGuidance
 
     private static let computerTurnGuidance = [
         "Refs and screenshot x/y last for the current turn; after a stop, resume or new turn, call computer_inspect or computer_screenshot first.",

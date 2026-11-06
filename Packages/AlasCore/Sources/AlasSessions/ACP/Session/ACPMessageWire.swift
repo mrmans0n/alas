@@ -48,7 +48,7 @@ public enum ACPMessageWire: Sendable, Equatable {
         switch kind {
         case "user":
             let p = try decoder.decode(UserPayload.self, from: payload)
-            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
+            return .user(messageId: p.messageId, text: p.text, attachments: ACPStoredFileChangeReport.attachments(p.attachments, restoring: p.fileChangeReport), delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try decoder.decode(TextPayload.self, from: payload)
             return .agent(messageId: p.messageId, text: p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata)
@@ -182,13 +182,6 @@ public enum ACPMessageWire: Sendable, Equatable {
         let attachments: [ACPMessage.Attachment]
         let delegatedSource: ACPDelegatedPromptSource?
         let pastedSpans: [ACPPastedTextSpan]?
-
-        public init(messageId: String?, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource?, pastedSpans: [ACPPastedTextSpan]?) {
-            self.messageId = messageId
-            self.text = text
-            self.attachments = attachments
-            self.delegatedSource = delegatedSource
-            self.pastedSpans = pastedSpans
-        }
+        let fileChangeReport: ACPStoredFileChangeReport?
     }
 }

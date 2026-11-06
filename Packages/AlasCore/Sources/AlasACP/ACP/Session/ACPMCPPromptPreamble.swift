@@ -209,6 +209,18 @@ public enum ACPMCPPromptPreamble: Sendable {
         #endif
     }
 
+    /// `worktreeVMPreference` for sessions with the CLI only, which has no command that reports
+    /// whether the worktree has a VM.
+    private static var worktreeVMPreferenceForCLI: String {
+        #if arch(arm64)
+        "To test an app you built, prefer a VM: it leaves the user's desktop, focus and files alone. "
+            + "If this worktree has none, ask for one to be created from its VM tab before driving "
+            + "the user's Mac, unless they asked you to use their Mac or the task needs something only it has. "
+        #else
+        ""
+        #endif
+    }
+
     private static func mcpText(
         builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
@@ -435,6 +447,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "except once with `--direct` when the warning suggests delivery \"direct\". "
                         + "An error starting with computer_user_active means the user is working there: wait and retry later instead of switching apps. "
                         + "Secure fields can't be typed into; ask the user instead.")
+                    lines.append("In a worktree with a VM, `alas computer` drives the VM instead of the user's Mac; "
+                        + "pass `--vm macos` or `--vm linux` when it has both. "
+                        + worktreeVMPreferenceForCLI
+                        + "An error starting with computer_vm_starting or computer_vm_slot_pending means try again shortly.")
                 }
             }
         }

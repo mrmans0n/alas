@@ -1374,7 +1374,7 @@ public final class RemoteSessionGateway {
             // phone (we don't serve the image bytes to the client in v1).
             // The runner sends only `image/` attachments as images; the
             // rest are resource links (mentions).
-            let shown = attachments.filter { !$0.isCheckpointReference }
+            let shown = attachments.filter { !$0.isLocalReference }
             let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
             let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
                                       resourceNames: shown.filter { !isImage($0) }.map(\.name))

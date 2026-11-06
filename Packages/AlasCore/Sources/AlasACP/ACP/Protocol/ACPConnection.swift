@@ -81,6 +81,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let planFile: ACPPlanFileCapability?
     /// Structured failure incidents, when it advertised `_meta.sessionFailure`.
     public let sessionFailure: ACPSessionFailureCapability?
+    /// Per-turn changed-file reports, when it advertised `_meta.agentFileChangeReport`.
+    public let agentFileChangeReport: ACPAgentFileChangeReportCapability?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -105,7 +107,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         forkPoint: ACPForkPointCapability? = nil,
         diffPatch: ACPDiffPatchCapability? = nil,
         planFile: ACPPlanFileCapability? = nil,
-        sessionFailure: ACPSessionFailureCapability? = nil
+        sessionFailure: ACPSessionFailureCapability? = nil,
+        agentFileChangeReport: ACPAgentFileChangeReportCapability? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -128,6 +131,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.diffPatch = diffPatch
         self.planFile = planFile
         self.sessionFailure = sessionFailure
+        self.agentFileChangeReport = agentFileChangeReport
     }
 }
 
@@ -369,7 +373,8 @@ public final class ACPConnection: @unchecked Sendable {
             forkPoint: .init(),
             diffPatch: .init(),
             planFile: .init(),
-            sessionFailure: .init()
+            sessionFailure: .init(),
+            agentFileChangeReport: .init()
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
@@ -402,6 +407,7 @@ public final class ACPConnection: @unchecked Sendable {
         // The extension is ACP v1 only.
         let sessionFailure = negotiatedProtocolVersion == .v1 ? result.meta?.sessionFailure?.capability : nil
         negotiatedSessionFailure = sessionFailure != nil
+        let agentFileChangeReport = negotiatedProtocolVersion == .v1 ? result.meta?.agentFileChangeReport?.capability : nil
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -424,7 +430,8 @@ public final class ACPConnection: @unchecked Sendable {
             forkPoint: result.meta?.forkPoint?.capability,
             diffPatch: result.meta?.diffPatch?.capability,
             planFile: result.meta?.planFile?.capability,
-            sessionFailure: sessionFailure
+            sessionFailure: sessionFailure,
+            agentFileChangeReport: agentFileChangeReport
         )
     }
 
@@ -728,6 +735,7 @@ public final class ACPConnection: @unchecked Sendable {
         blocks: [ACPContentBlock],
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
+        fileChangeReportRequestId: String? = nil,
         onRequestHandoff: (@Sendable () -> Void)? = nil,
         onTransportHandoff: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
@@ -738,6 +746,11 @@ public final class ACPConnection: @unchecked Sendable {
         return try await withCodexHooksReview() {
             var params = ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)
             params.meta = hookRequestMeta
+            if let fileChangeReportRequestId {
+                var meta = params.meta ?? ACPSessionMeta()
+                meta.agentFileChangeReportRequest = .init(requestId: fileChangeReportRequestId)
+                params.meta = meta
+            }
             let request = ACPRequest(
                 method: "session/prompt",
                 params: params,

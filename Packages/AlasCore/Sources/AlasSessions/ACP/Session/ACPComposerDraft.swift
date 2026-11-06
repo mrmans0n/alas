@@ -267,7 +267,7 @@ extension ACPComposerDraft {
     public func matchesPersistedUserPrompt(text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         normalizedPromptBlocks == Self.contentBlocks(
             text: text,
-            attachments: attachments.filter { !$0.isCheckpointReference }
+            attachments: attachments.filter { !$0.isLocalReference }
         )
     }
 
