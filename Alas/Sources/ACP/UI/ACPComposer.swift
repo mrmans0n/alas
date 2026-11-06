@@ -2164,7 +2164,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
     #endif
 
-    static let maxImagesPerMessage = 10
+    static let maxImagesPerMessage = ACPImageStaging.maxImagesPerMessage
 
     /// Counts image-attachment CHARACTERS, not attribute runs: two adjacent
     /// image chips sharing the same content-addressed URI (the same file
@@ -2253,10 +2253,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return (0..<storage.length).compactMap { storage.attribute(.attachmentURI, at: $0, effectiveRange: nil) as? String }
     }
 
-    private func stagedPDFUsage(worktreeId: String) -> ACPAttachmentStaging.StagedPDFUsage {
-        ACPAttachmentStaging.stagedPDFUsage(
-            ofURIs: mentionChipURIs(),
-            attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: worktreeId))
+    private func stagedPDFUsage(in directory: URL) -> ACPAttachmentStaging.StagedPDFUsage {
+        ACPAttachmentStaging.stagedPDFUsage(ofURIs: mentionChipURIs(), attachmentsDirectory: directory)
     }
 
     /// Inserts the same chip as a typed mention, at a range rather than over an
@@ -2265,11 +2263,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// while this one was staging.
     private func insertStagedPDF(_ url: URL, replacementRange: NSRange) -> ACPAttachmentClassifier.Reason? {
         guard let pdfAttachments else { return .unsupported }
-        let directory = Paths.acpAttachmentsDir(forWorktreeId: pdfAttachments.worktreeId)
-        let bytes = ACPAttachmentStaging.stagedPDFUsage(ofURIs: [url.absoluteString], attachmentsDirectory: directory).bytes
+        let bytes = ACPAttachmentStaging.stagedPDFUsage(
+            ofURIs: [url.absoluteString], attachmentsDirectory: pdfAttachments.directory).bytes
         if let refusal = ACPAttachmentClassifier.pdfRefusal(
             bytes: bytes, eligible: pdfAttachments.eligible,
-            usage: stagedPDFUsage(worktreeId: pdfAttachments.worktreeId)
+            usage: stagedPDFUsage(in: pdfAttachments.directory)
         ) { return refusal }
         invalidateNextPromptSuggestion()
         let attachment = ACPMentionChipAttachment(displayName: url.lastPathComponent, uri: url.absoluteString)
@@ -2287,7 +2285,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private func containsPDFFile(_ pb: NSPasteboard) -> Bool {
         guard pdfAttachments != nil else { return false }
-        return fileURLs(on: pb).contains { ACPAttachmentClassifier.probe($0).kind.isPDFPath }
+        return fileURLs(on: pb).contains { ACPAttachmentClassifier.probe($0).kind.needsPDFComposer }
     }
 
     /// A PDF dragged out of Alas's own panes is a reference to a worktree file,
@@ -2436,7 +2434,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard isEditable else { return }
         let coordinator = coordinator
         let generation = coordinator?.beginPendingImageFileInsertion()
-        let pdfWorktreeId = pdfAttachments?.worktreeId
+        let pdfDirectory = pdfAttachments?.directory
         Task { @MainActor [weak self, weak coordinator] in
             defer {
                 if let generation {
@@ -2475,12 +2473,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
                     case .tooLarge:
                         refused.append(.init(name: name, reason: .image(.tooLarge)))
                     case .unsupported:
-                        refused.append(.init(name: name, reason: .unsupported))
+                        // It sniffed as an image a moment ago.
+                        refused.append(.init(name: name, reason: .unreadable))
                     }
                 case .pdf:
-                    guard let pdfWorktreeId else { continue }
+                    guard let pdfDirectory else { continue }
                     let staged = await Task.detached(priority: .userInitiated) {
-                        Result { try ACPAttachmentStaging.stagePDF(fileURL: item.url, into: pdfWorktreeId) }
+                        Result { try ACPAttachmentStaging.stagePDF(fileURL: item.url, inDirectory: pdfDirectory) }
                     }.value
                     guard let self, self.isEditable else { return }
                     if let generation,
@@ -2514,7 +2513,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private func attachmentPlan(for files: [ACPAttachmentClassifier.File]) -> ACPAttachmentClassifier.Plan? {
         guard isEditable else { return nil }
         let pdfs = pdfAttachments.map {
-            ACPAttachmentClassifier.PDFContext(eligible: $0.eligible, usage: stagedPDFUsage(worktreeId: $0.worktreeId))
+            ACPAttachmentClassifier.PDFContext(eligible: $0.eligible, usage: stagedPDFUsage(in: $0.directory))
         }
         return ACPAttachmentClassifier.classify(files, pdfs: pdfs)
     }

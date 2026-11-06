@@ -13,15 +13,6 @@ public enum ACPAttachmentStaging: Sendable {
         case tooLarge
         case unreadable
         case writeFailed
-
-        public var userMessage: String {
-            switch self {
-            case .notPDF: "That file isn't a PDF."
-            case .tooLarge: "That PDF is too large (max 20 MiB)."
-            case .unreadable: "Couldn't read that PDF."
-            case .writeFailed: "Couldn't save that PDF. Please try again."
-            }
-        }
     }
 
     /// What a mention's URI is to this worktree's attachments.
@@ -48,20 +39,12 @@ public enum ACPAttachmentStaging: Sendable {
 
     public static let maxPDFBytesPerMessage = 20 * 1024 * 1024
     public static let maxPDFsPerMessage = 5
-    public static let pdfMIMEType = "application/pdf"
+    static let pdfMIMEType = "application/pdf"
 
     private static let pdfMagic = Data("%PDF-".utf8)
     private static let maxFileNameBytes = 200
 
     // MARK: - Staging
-
-    public static func stagePDF(fileURL: URL, into worktreeId: String) throws -> URL {
-        try stagePDF(fileURL: fileURL, inDirectory: Paths.acpAttachmentsDir(forWorktreeId: worktreeId))
-    }
-
-    public static func stagePDF(data: Data, fileName: String, into worktreeId: String) throws -> URL {
-        try stagePDF(data: data, fileName: fileName, inDirectory: Paths.acpAttachmentsDir(forWorktreeId: worktreeId))
-    }
 
     /// Checks the size from metadata first, so an oversized file isn't loaded just to be refused.
     public static func stagePDF(fileURL: URL, inDirectory directory: URL) throws -> URL {
@@ -80,19 +63,28 @@ public enum ACPAttachmentStaging: Sendable {
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let folder = directory.appendingPathComponent(hash, isDirectory: true)
         // The real name stays in the URI: Claude derives its link text from it.
-        let url = folder.appendingPathComponent(sanitizedPDFFileName(fileName))
+        let url = stagedFile(named: sanitizedPDFFileName(fileName), in: folder)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: url.path) {
-                try data.write(to: url, options: .atomic)
-            }
+            // Always written, not skipped when present: a file whose contents
+            // changed would otherwise stay refused however often it's attached again.
+            try data.write(to: url, options: .atomic)
             return url
         } catch {
             throw StagingError.writeFailed
         }
     }
 
-    public static func hasPDFMagic(_ data: Data) -> Bool {
+    /// `name` in `folder`, spelled as an existing file is: on a case-insensitive
+    /// volume, a second spelling of a name is that same file.
+    private static func stagedFile(named name: String, in folder: URL) -> URL {
+        let url = folder.appendingPathComponent(name)
+        guard (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeRegular,
+              let real = realPath(url.path) else { return url }
+        return folder.appendingPathComponent(URL(fileURLWithPath: real).lastPathComponent)
+    }
+
+    static func hasPDFMagic(_ data: Data) -> Bool {
         data.starts(with: pdfMagic)
     }
 
@@ -130,26 +122,40 @@ public enum ACPAttachmentStaging: Sendable {
 
     // MARK: - Send time
 
-    /// What `uri` is to the attachments. The path is taken as spelled, so a dot
-    /// segment breaks the exact shape, and compared against what the kernel
-    /// resolves, so a symlink in either direction doesn't count. No bytes are read.
+    /// What `uri` is to the attachments. A path shaped like a staged PDF anywhere
+    /// under an `acp-attachments` directory is another worktree's, unless it sits
+    /// directly in `attachmentsDirectory`. An id is an absolute path, so worktrees
+    /// aren't siblings, and the shape alone also catches a path from another home.
+    ///
+    /// The path is taken as spelled, so a dot segment breaks the shape, and compared
+    /// against what the kernel resolves, so a symlink in either direction doesn't
+    /// count. Both stay `.notStaged`. No bytes are read.
     public static func stagedReference(uri: String, attachmentsDirectory: URL) -> StagedReference {
         guard let url = URL(string: uri), url.isFileURL else { return .notStaged }
         let path = url.path
-        if let relative = relativePath(path, under: attachmentsDirectory) {
-            let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
-            guard parts.count == 2, isStagedShape(hash: parts[0], name: parts[1]) else { return .notStaged }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count >= 3, !parts.contains(".."), !parts.contains("."),
+              isStagedShape(hash: parts[parts.count - 2], name: parts[parts.count - 1]) else { return .notStaged }
+        let tail = parts.suffix(2).joined(separator: "/")
+        if relativePath(path, under: attachmentsDirectory) == tail {
             guard let real = realPath(path) else { return .missing }
-            return real == resolvedPath(of: attachmentsDirectory) + "/" + relative
+            return isSameFile(real, resolvedPath(of: attachmentsDirectory) + "/" + tail)
                 ? .file(URL(fileURLWithPath: real)) : .notStaged
         }
-        let root = attachmentsDirectory.deletingLastPathComponent()
-        guard let relative = relativePath(path, under: root) else { return .notStaged }
-        let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] != "..", parts[0] != ".",
-              isStagedShape(hash: parts[1], name: parts[2]) else { return .notStaged }
+        // At least one component of id between the root and the file.
+        guard let root = parts.dropLast(3).lastIndex(of: Substring(Paths.acpAttachmentsRoot.lastPathComponent)) else {
+            return .notStaged
+        }
         guard let real = realPath(path) else { return .otherWorktree }
-        return real == resolvedPath(of: root) + "/" + relative ? .otherWorktree : .notStaged
+        let rootPath = URL(fileURLWithPath: parts[...root].joined(separator: "/"))
+        let relative = parts[(root + 1)...].joined(separator: "/")
+        return isSameFile(real, resolvedPath(of: rootPath) + "/" + relative) ? .otherWorktree : .notStaged
+    }
+
+    /// Case-insensitively: a staged file spelled in another case is that file on
+    /// APFS, while a symlink out of the directory differs by more than case.
+    private static func isSameFile(_ real: String, _ expected: String) -> Bool {
+        real.lowercased() == expected.lowercased()
     }
 
     /// Everything that can refuse `blocks` without reading a file's bytes: where

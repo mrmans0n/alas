@@ -786,7 +786,7 @@ struct ACPComposer: View {
 
     private var pdfAttachments: ACPComposerPDFAttachments {
         ACPComposerPDFAttachments(
-            worktreeId: session.worktreeId,
+            directory: session.attachmentsDirectory,
             eligible: ACPEmbeddedPDFSupport.attachmentEligibility(
                 agentInfo: session.agentInfo,
                 promptCapabilities: session.promptCapabilities,

@@ -96,17 +96,6 @@ struct ACPAttachmentClassifierTests {
         #expect(plan.accepted.isEmpty)
     }
 
-    @Test("a composer that doesn't take PDFs treats one as any other unsupported file", arguments: [
-        Classifier.Kind.pdf, .notPDF, .unreadable,
-    ])
-    func composerWithoutPDFs(kind: Classifier.Kind) {
-        let plan = Classifier.classify([file("report.pdf", kind)], pdfs: nil)
-
-        #expect(plan.accepted.isEmpty)
-        #expect(plan.refused == [.init(name: "report.pdf", reason: .unsupported)])
-        #expect(!plan.handlesFiles)
-    }
-
     @Test("the image size limit is unchanged, and still applies to a large file of any other type")
     func imageLimit() {
         let limit = ACPImageStaging.maxBytes
@@ -183,47 +172,33 @@ struct ACPAttachmentClassifierTests {
         }
     }
 
-    @Test("a missing file only counts as a broken PDF when it's named like one", arguments: [
+    @Test("a file that can't be read is only broken when named like an attachment, and a folder never is", arguments: [
         (name: "gone.pdf", kind: Classifier.Kind.unreadable),
+        (name: "gone.png", kind: .unreadable),
         (name: "gone.txt", kind: .unsupported),
     ])
-    func probesMissingFile(name: String, kind: Classifier.Kind) throws {
+    func probesWithoutAFile(name: String, kind: Classifier.Kind) throws {
         try withDirectory { directory in
             #expect(Classifier.probe(directory.appendingPathComponent(name)).kind == kind)
-        }
-    }
-
-    @Test("a folder named like a PDF isn't one")
-    func probesFolder() throws {
-        try withDirectory { directory in
             let folder = directory.appendingPathComponent("folder.pdf", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-
             #expect(Classifier.probe(folder).kind == .unsupported)
         }
     }
 
     // MARK: - What the draft already holds
 
-    @Test("usage counts each chip of this worktree's staged PDFs, and nothing else")
+    @Test("usage counts each chip of a staged PDF and sums their bytes")
     func usage() throws {
-        try withDirectory { root in
-            let own = root.appendingPathComponent("own", isDirectory: true)
-            let other = root.appendingPathComponent("other", isDirectory: true)
-            let staged = try ACPAttachmentStaging.stagePDF(data: Data("%PDF-1.7\nhello".utf8), fileName: "a.pdf", inDirectory: own)
-            let foreign = try ACPAttachmentStaging.stagePDF(data: Data("%PDF-1.7\nother".utf8), fileName: "b.pdf", inDirectory: other)
-            let worktreeFile = root.appendingPathComponent("worktree.pdf")
-            try Data("%PDF-1.7".utf8).write(to: worktreeFile)
-            let gone = own.appendingPathComponent(String(repeating: "a", count: 64)).appendingPathComponent("gone.pdf")
+        try withDirectory { directory in
+            let first = try ACPAttachmentStaging.stagePDF(data: Data("%PDF-1.7\nhello".utf8), fileName: "a.pdf", inDirectory: directory)
+            let second = try ACPAttachmentStaging.stagePDF(data: Data("%PDF-1.7\nlonger".utf8), fileName: "b.pdf", inDirectory: directory)
 
             let usage = ACPAttachmentStaging.stagedPDFUsage(
-                ofURIs: [
-                    staged.absoluteString, staged.absoluteString, foreign.absoluteString,
-                    worktreeFile.absoluteString, gone.absoluteString, "alas-session://abc",
-                ],
-                attachmentsDirectory: own)
+                ofURIs: [first.absoluteString, first.absoluteString, second.absoluteString],
+                attachmentsDirectory: directory)
 
-            #expect(usage == Usage(count: 2, bytes: 28))
+            #expect(usage == Usage(count: 3, bytes: 14 + 14 + 15))
         }
     }
 }

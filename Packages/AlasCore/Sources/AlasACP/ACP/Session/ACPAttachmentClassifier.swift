@@ -3,14 +3,14 @@ import Foundation
 /// What a composer needs to take PDFs. A composer without one, such as a peer's,
 /// has no PDF path at all.
 public struct ACPComposerPDFAttachments: Equatable, Sendable {
-    /// Where a staged PDF goes. It has to be the session's own: send time only
-    /// embeds what is in that directory.
-    public let worktreeId: String
+    /// Where a staged PDF goes: `ACPSession.attachmentsDirectory`, since send time
+    /// only embeds what is in that directory.
+    public let directory: URL
     /// `nil` until the session is connected; see `ACPEmbeddedPDFSupport.attachmentEligibility`.
     public let eligible: Bool?
 
-    public init(worktreeId: String, eligible: Bool?) {
-        self.worktreeId = worktreeId
+    public init(directory: URL, eligible: Bool?) {
+        self.directory = directory
         self.eligible = eligible
     }
 }
@@ -23,12 +23,13 @@ public enum ACPAttachmentClassifier {
         case pdf
         /// Named like a PDF, without the magic bytes.
         case notPDF
-        /// Named like a PDF, and can't be read.
+        /// Named like a PDF or an image, and can't be read.
         case unreadable
         case unsupported
 
-        /// Whether a composer that takes PDFs handles this file as one, broken or not.
-        public var isPDFPath: Bool {
+        /// Whether this file only gets attached, or a notice, where PDFs are taken.
+        /// Anywhere else it stays on the text path.
+        public var needsPDFComposer: Bool {
             self == .pdf || self == .notPDF || self == .unreadable
         }
     }
@@ -86,8 +87,8 @@ public enum ACPAttachmentClassifier {
             case .pdfsTooLarge: "the PDFs in one message can total \(ACPAttachmentStaging.maxPDFBytesPerMessage / (1024 * 1024)) MiB at most"
             case .saveFailed: "it couldn't be saved"
             case .image(.unsupportedFormat): "that image format isn't supported"
-            case .image(.tooLarge): "it's over the \(ACPImageStaging.maxBytes / (1024 * 1024)) MB limit"
-            case .image(.tooManyImages): "one message can hold 10 images at most"
+            case .image(.tooLarge): "it's over the \(ACPImageStaging.maxBytes / (1024 * 1024)) MiB limit"
+            case .image(.tooManyImages): "one message can hold \(ACPImageStaging.maxImagesPerMessage) images at most"
             case .image(.writeFailed): "it couldn't be saved"
             }
         }
@@ -188,19 +189,19 @@ public enum ACPAttachmentClassifier {
 
     /// Reads metadata and a few bytes, never the whole file. A symlink is the file it points at.
     public static func probe(_ url: URL) -> File {
-        let namedPDF = url.pathExtension.lowercased() == "pdf"
+        let namedAttachment = attachmentExtensions.contains(url.pathExtension.lowercased())
         // `attributesOfItem`, not `URL.resourceValues`, which caches.
         guard let path = ACPAttachmentStaging.realPath(url.path),
               let attributes = try? FileManager.default.attributesOfItem(atPath: path)
         else {
-            return File(url: url, kind: namedPDF ? .unreadable : .unsupported, bytes: nil)
+            return File(url: url, kind: namedAttachment ? .unreadable : .unsupported, bytes: nil)
         }
         guard attributes[.type] as? FileAttributeType == .typeRegular else {
             return File(url: url, kind: .unsupported, bytes: nil)
         }
         let bytes = (attributes[.size] as? NSNumber)?.intValue
         guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return File(url: url, kind: namedPDF ? .unreadable : .unsupported, bytes: bytes)
+            return File(url: url, kind: namedAttachment ? .unreadable : .unsupported, bytes: bytes)
         }
         defer { try? handle.close() }
         let header = (try? handle.read(upToCount: 16)) ?? Data()
@@ -210,10 +211,12 @@ public enum ACPAttachmentClassifier {
         } else if ACPAttachmentStaging.hasPDFMagic(header) {
             kind = .pdf
         } else {
-            kind = namedPDF ? .notPDF : .unsupported
+            kind = url.pathExtension.lowercased() == "pdf" ? .notPDF : .unsupported
         }
         return File(url: url, kind: kind, bytes: bytes)
     }
+
+    private static let attachmentExtensions: Set<String> = ["pdf", "png", "jpg", "jpeg", "gif", "webp"]
 
     private static func isOverImageLimit(_ file: File) -> Bool {
         (file.bytes ?? 0) > ACPImageStaging.maxBytes

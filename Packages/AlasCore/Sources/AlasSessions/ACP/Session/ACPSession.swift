@@ -64,6 +64,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
     nonisolated public let agentId: String
     nonisolated public let worktreeId: String
+    /// Where this session's attachments are staged. Staging and send share it,
+    /// because send only embeds a PDF found directly in here.
+    nonisolated public var attachmentsDirectory: URL { Paths.acpAttachmentsDir(forWorktreeId: worktreeId) }
     /// The durable owner of this session. `worktreeId` remains the historical
     /// compatibility field used by the SQLite schema and wire protocol.
     nonisolated public let owner: SessionOwnerID

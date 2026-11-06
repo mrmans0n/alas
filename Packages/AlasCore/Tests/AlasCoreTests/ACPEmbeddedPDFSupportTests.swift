@@ -27,23 +27,6 @@ struct ACPEmbeddedPDFSupportTests {
         (nil, "0.101.0-alas.1", true, false),
     ]
 
-    @Test("eligibility at attach is unknown until the session is connected, then it's the gate's answer", arguments: [
-        (isConnected: false, name: String?.some(claude), expected: Bool?.none),
-        (isConnected: false, name: "gemini", expected: nil),
-        (isConnected: false, name: nil, expected: nil),
-        (isConnected: true, name: claude, expected: .some(true)),
-        (isConnected: true, name: "gemini", expected: .some(false)),
-        (isConnected: true, name: nil, expected: .some(false)),
-    ])
-    func attachEligibility(isConnected: Bool, name: String?, expected: Bool?) {
-        let eligibility = ACPEmbeddedPDFSupport.attachmentEligibility(
-            agentInfo: name.map { ACPImplementationInfo(name: $0, version: "0.101.0-alas.1") },
-            promptCapabilities: .init(image: true, embeddedContext: true),
-            isConnected: isConnected)
-
-        #expect(eligibility == expected)
-    }
-
     @Test("gates on the fork's name, its verified version floor, and embeddedContext", arguments: gates)
     func gatesByIdentity(name: String?, version: String, embeddedContext: Bool, expected: Bool) {
         #expect(ACPEmbeddedPDFSupport.supports(

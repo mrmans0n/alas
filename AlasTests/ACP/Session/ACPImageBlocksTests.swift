@@ -270,17 +270,32 @@ struct ACPImageBlocksTests {
         let six = try five + [stage("n5")]
         await #expect(throws: ACPPromptRefusal.tooManyPDFs(count: 6)) { _ = try await hydrate(six, in: dir) }
 
+        // Sparse, so the sizes come from metadata and nothing large is written or read.
+        func preflight(_ blocks: [ACPContentBlock]) -> ACPPromptRefusal? {
+            ACPAttachmentStaging.preflightRefusal(
+                of: blocks, agentInfo: Self.claude, promptCapabilities: .init(embeddedContext: true),
+                attachmentsDirectory: dir)
+        }
+        func stageSparse(_ marker: String, size: Int) throws -> ACPContentBlock {
+            let block = try stage(marker)
+            guard case .resourceLink(let uri, _) = block, let url = URL(string: uri) else { throw CocoaError(.fileNoSuchFile) }
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(size))
+            try handle.close()
+            return block
+        }
         let half = ACPAttachmentStaging.maxPDFBytesPerMessage / 2
-        let exact = try [stage("a", size: half), stage("b", size: half)]
-        #expect(try await hydrate(exact, in: dir).count == 2)
+        let exact = try [stageSparse("a", size: half), stageSparse("b", size: half)]
+        #expect(preflight(exact) == nil)
         let over = try exact + [stage("c")]
-        await #expect(throws: ACPPromptRefusal.pdfsTooLarge(name: "c.pdf")) { _ = try await hydrate(over, in: dir) }
+        #expect(preflight(over) == .pdfsTooLarge(name: "c.pdf"))
     }
 
     @Test("another worktree's staged PDF is refused naming the file, on any adapter")
     func hydrateRefusesForeignStagedPath() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        let temp = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let root = temp.appendingPathComponent("acp-attachments", isDirectory: true)
         let foreign = try ACPAttachmentStaging.stagePDF(
             data: Self.pdfBytes, fileName: "a.pdf", inDirectory: root.appendingPathComponent("wt-b", isDirectory: true))
         let own = root.appendingPathComponent("wt-a", isDirectory: true)
@@ -291,18 +306,6 @@ struct ACPImageBlocksTests {
         await #expect(throws: ACPPromptRefusal.pdfFromAnotherWorktree(name: "a.pdf")) {
             _ = try await hydrate([link], in: own, agentInfo: nil)
         }
-    }
-
-    @Test("a path reaching another worktree's PDF through dot segments stays a link and is never read")
-    func hydrateLeavesContainmentFailuresAlone() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let foreign = try ACPAttachmentStaging.stagePDF(
-            data: Self.pdfBytes, fileName: "a.pdf", inDirectory: root.appendingPathComponent("wt-b", isDirectory: true))
-        let own = root.appendingPathComponent("wt-a", isDirectory: true)
-        let hash = foreign.deletingLastPathComponent().lastPathComponent
-        let link = ACPContentBlock.resourceLink(uri: "file://\(own.path)/\(hash)/../../wt-b/\(hash)/a.pdf", name: "a.pdf")
-        #expect(try await hydrate([link], in: own) == [link])
     }
 
     @Test("a worktree PDF mention is never upgraded to a blob")

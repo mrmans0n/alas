@@ -822,7 +822,7 @@ struct ACPComposerDraftBridgeTests {
         init(eligible: Bool?, coordinator: ACPInputField.Coordinator) throws {
             self.coordinator = coordinator
             textView.coordinator = coordinator
-            textView.pdfAttachments = ACPComposerPDFAttachments(worktreeId: worktreeId, eligible: eligible)
+            textView.pdfAttachments = ACPComposerPDFAttachments(directory: directory, eligible: eligible)
             textView.onAttachmentNotice = { [unowned self] in notices.append($0) }
             try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
         }
@@ -913,8 +913,8 @@ struct ACPComposerDraftBridgeTests {
         #expect(composer.textView.string.isEmpty)
     }
 
-    @Test("a PDF dragged out of Alas stays a reference rather than being staged")
-    func alasDragOfPDFStaysOnTheTextPath() throws {
+    @Test("a PDF carrying Alas's drag payload stays a reference when it arrives through paste")
+    func alasDragOfPDFStaysOnTheTextPathThroughPaste() throws {
         let composer = try makePDFComposer(eligible: true)
         defer { composer.cleanUp() }
         let item = NSPasteboardItem()

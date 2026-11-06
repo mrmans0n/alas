@@ -74,17 +74,35 @@ struct ACPImageStagingTests {
         }
     }
 
-    @Test("enforces the size cap at its boundary")
+    @Test("refuses bytes past the size cap")
     func enforcesPDFCap() throws {
         let dir = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         var bytes = Self.pdfBytes
-        bytes.append(Data(count: ACPAttachmentStaging.maxPDFBytesPerMessage - bytes.count))
-        _ = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: dir)
-        bytes.append(0)
+        bytes.append(Data(count: ACPAttachmentStaging.maxPDFBytesPerMessage + 1 - bytes.count))
         #expect(throws: ACPAttachmentStaging.StagingError.tooLarge) {
             _ = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: dir)
         }
+    }
+
+    @Test("the same bytes under a name differing only in case stage as the file already there")
+    func stagesCaseVariantAsExistingFile() throws {
+        let dir = try makeDirectory().resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let first = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "Report.pdf", inDirectory: dir)
+        let second = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "REPORT.pdf", inDirectory: dir)
+        #expect(second == first)
+        #expect(ACPAttachmentStaging.stagedPDFUsage(ofURIs: [second.absoluteString], attachmentsDirectory: dir).count == 1)
+    }
+
+    @Test("attaching a PDF again repairs a staged file whose contents changed")
+    func restagingRepairsChangedFile() throws {
+        let dir = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let staged = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "a.pdf", inDirectory: dir)
+        try Data("corrupted".utf8).write(to: staged)
+        _ = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "a.pdf", inDirectory: dir)
+        #expect(try Data(contentsOf: staged) == Self.pdfBytes)
     }
 
     @Test("an oversized file is refused from its metadata, without reading it")
@@ -103,15 +121,19 @@ struct ACPImageStagingTests {
         }
     }
 
-    @Test("a picked file stages under its own name")
-    func stagesPDFFromFile() throws {
+    @Test("a name with URL-reserved characters survives the round trip through the chip's URI")
+    func stagedNameRoundTripsThroughURI() throws {
         let dir = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let source = dir.appendingPathComponent("my report.pdf")
+        let source = dir.appendingPathComponent("a #?%.pdf")
         try Self.pdfBytes.write(to: source)
-        let staged = try ACPAttachmentStaging.stagePDF(fileURL: source, inDirectory: dir.appendingPathComponent("out"))
-        #expect(staged.lastPathComponent == "my report.pdf")
-        #expect(URL(string: staged.absoluteString)?.lastPathComponent == "my report.pdf")
+        let out = dir.appendingPathComponent("out", isDirectory: true)
+        let staged = try ACPAttachmentStaging.stagePDF(fileURL: source, inDirectory: out)
+        guard case .file(let url) = ACPAttachmentStaging.stagedReference(uri: staged.absoluteString, attachmentsDirectory: out) else {
+            Issue.record("not recognized as staged")
+            return
+        }
+        #expect(url.lastPathComponent == "a #?%.pdf")
     }
 
     @Test("a dropped symlink stages the file it points at, under the link's name")
@@ -152,16 +174,18 @@ struct ACPImageStagingTests {
     }
 
     enum StagedShape: CaseIterable, Sendable {
-        case own, missing, otherWorktree, otherWorktreeMissing, otherWorktreeLink
+        case own, caseVariant, missing, otherWorktree, otherWorktreeMissing, otherWorktreeLink, differentParent, nestedInOwn, parentOfOwn
         case dotDotEscape, rootDotDotMissing, encodedDotDot, encodedSlash, linkEscape, worktreeLinkIn, flatFile, notAFileURI
     }
 
     @Test("only this worktree's own staged path counts as staged", arguments: StagedShape.allCases)
     func classifiesStagedReference(shape: StagedShape) throws {
-        let root = try makeDirectory().resolvingSymlinksInPath()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let own = root.appendingPathComponent("wt-a", isDirectory: true)
-        let other = root.appendingPathComponent("wt-b", isDirectory: true)
+        let temp = try makeDirectory().resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let root = temp.appendingPathComponent("acp-attachments", isDirectory: true)
+        // Worktree ids are absolute paths, so they nest under the root.
+        let own = root.appendingPathComponent("Users/n/wt-a", isDirectory: true)
+        let other = root.appendingPathComponent("Users/n/wt-b", isDirectory: true)
         let staged = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "a.pdf", inDirectory: own)
         let hash = staged.deletingLastPathComponent().lastPathComponent
         let foreign = try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "b.pdf", inDirectory: other)
@@ -174,6 +198,19 @@ struct ACPImageStagingTests {
             let real = try #require(realpath(staged.path, nil))
             defer { free(real) }
             (uri, expected) = (staged.absoluteString, .file(URL(fileURLWithPath: String(cString: real))))
+        case .caseVariant:
+            let real = try #require(realpath(staged.path, nil))
+            defer { free(real) }
+            (uri, expected) = (staged.deletingLastPathComponent().appendingPathComponent("A.pdf").absoluteString, .file(URL(fileURLWithPath: String(cString: real))))
+        case .differentParent:
+            let elsewhere = root.appendingPathComponent("Users/m/wt-c", isDirectory: true)
+            (uri, expected) = (try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "c.pdf", inDirectory: elsewhere).absoluteString, .otherWorktree)
+        case .nestedInOwn:
+            let nested = own.appendingPathComponent("nested", isDirectory: true)
+            (uri, expected) = (try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "c.pdf", inDirectory: nested).absoluteString, .otherWorktree)
+        case .parentOfOwn:
+            let parent = own.deletingLastPathComponent()
+            (uri, expected) = (try ACPAttachmentStaging.stagePDF(data: Self.pdfBytes, fileName: "c.pdf", inDirectory: parent).absoluteString, .otherWorktree)
         case .missing:
             (uri, expected) = (staged.deletingLastPathComponent().appendingPathComponent("gone.pdf").absoluteString, .missing)
         case .otherWorktree:

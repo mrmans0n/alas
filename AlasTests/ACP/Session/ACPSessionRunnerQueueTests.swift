@@ -4763,7 +4763,7 @@ struct ACPSessionRunnerQueueTests {
         session.agentInfo = .init(name: "@alas-ide/claude-agent-acp", version: "0.101.0-alas.1")
         session.promptCapabilities = .init(embeddedContext: true)
         let bytes = Data("%PDF-1.7 \(UUID().uuidString)".utf8)
-        let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", into: session.worktreeId)
+        let staged = try ACPAttachmentStaging.stagePDF(data: bytes, fileName: "a.pdf", inDirectory: session.attachmentsDirectory)
         defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
         mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let delivered = await withCheckedContinuation { continuation in

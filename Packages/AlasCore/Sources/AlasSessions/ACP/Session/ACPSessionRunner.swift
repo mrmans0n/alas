@@ -3321,7 +3321,7 @@ extension ACPSessionRunner {
     private func preflightRefusal(of blocks: [ACPContentBlock]) -> ACPPromptRefusal? {
         ACPAttachmentStaging.preflightRefusal(
             of: blocks, agentInfo: session.agentInfo, promptCapabilities: session.promptCapabilities,
-            attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId))
+            attachmentsDirectory: session.attachmentsDirectory)
     }
 
     /// Replaces attached-session links with their context, resolved now so
@@ -4292,7 +4292,7 @@ extension ACPSessionRunner {
                     in: try await self.expandingSessionReferences(Self.hydrate(
                         blocks, promptCapabilities: self.session.promptCapabilities,
                         worktreePath: self.worktreePath, agentInfo: self.session.agentInfo,
-                        attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: self.session.worktreeId))),
+                        attachmentsDirectory: self.session.attachmentsDirectory)),
                     with: symbolExpansion)
                 // Before the row. Context is measured again once it is fetched:
                 // that stays after the row, which must be saved before a slow
@@ -4997,7 +4997,7 @@ extension ACPSessionRunner {
                         promptCapabilities: promptCapabilities,
                         worktreePath: self.worktreePath,
                         agentInfo: self.session.agentInfo,
-                        attachmentsDirectory: Paths.acpAttachmentsDir(forWorktreeId: self.session.worktreeId)
+                        attachmentsDirectory: self.session.attachmentsDirectory
                     )
                 } catch {
                     onDispatchRegistered?()
