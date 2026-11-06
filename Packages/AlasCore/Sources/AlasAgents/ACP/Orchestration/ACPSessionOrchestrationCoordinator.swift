@@ -892,16 +892,21 @@ public final class ACPSessionOrchestrationCoordinator {
                     continue
                 }
                 quietPeerChildren[id] = nil
-                // Read again: a pull can have collected its result during the question.
-                guard let child = await peerChild(id), child.phase == .ready, child.peerAwaiting else { continue }
-                try? await environment.persistence.endPeerWait(childSessionId: id)
-                await enqueueOutcome(.init(
+                guard let child = await peerChild(id) else { continue }
+                let outcome = ACPDelegatedMessage(
                     id: "peer-turn-lost-\(id)-\(environment.nowMillis())",
                     sourceSessionId: id,
                     targetSessionId: child.parentSessionId,
                     prompt: ACPDelegatedOutcomeText.peerTurnLost(outcomeContext(for: child)),
                     createdAt: environment.now()
-                ), child: child)
+                )
+                // False when a pull collected its result during the question, or
+                // another instance on the store got here first. A throw leaves
+                // it awaited, for a later poll.
+                guard (try? await environment.persistence.claimLostPeerTurn(childSessionId: id, outcome: outcome)) == true
+                else { continue }
+                environment.notifyChanged()
+                await deliverPendingMessages(to: child.parentSessionId, callerParent: child)
             }
         }
     }

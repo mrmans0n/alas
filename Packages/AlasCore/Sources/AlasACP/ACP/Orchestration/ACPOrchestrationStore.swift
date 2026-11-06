@@ -377,9 +377,24 @@ public final class ACPOrchestrationStore {
         """, bindings: [since, childSessionId, since])
     }
 
-    /// The parent no longer expects a result from `childSessionId`.
-    public func endPeerWait(childSessionId: String) throws {
-        try db.exec("UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ?", bindings: [childSessionId])
+    /// Ends the wait for a child that stopped without a result and enqueues
+    /// `outcome`, together, so a crash or a failed insert cannot end the wait
+    /// with nothing to wake the parent. True only for the caller that ended it:
+    /// any instance sharing the store may be asking.
+    public func claimLostPeerTurn(childSessionId: String, outcome: ACPDelegatedMessage) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let claimed = try db.execChanges(
+                "UPDATE delegations SET peer_awaiting = 0 WHERE child_session_id = ? AND peer_awaiting = 1 AND phase = ?",
+                bindings: [childSessionId, ACPDelegationPhase.ready.rawValue]
+            ) == 1
+            if claimed { try enqueue(outcome) }
+            try db.exec("COMMIT")
+            return claimed
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
     }
 
     private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
