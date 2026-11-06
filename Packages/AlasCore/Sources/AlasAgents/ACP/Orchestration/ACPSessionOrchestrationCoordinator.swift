@@ -88,9 +88,9 @@ public final class ACPSessionOrchestrationCoordinator {
         /// How long a peer stays continuously not online before the parents
         /// of its unsettled children get one notice, in seconds.
         public let peerOfflineNoticeDelay: TimeInterval
-        /// A start on a live link went unanswered: the row needs asking about
-        /// until it settles, and that link sends no signal to do it on.
-        public let peerStartUnanswered: (String) -> Void
+        /// A start went unanswered, or a result is now awaited. A live link may
+        /// send no signal for either, so the peer needs asking until it settles.
+        public let peerNeedsCollecting: (String) -> Void
         /// Fixed collection window for nearby child results; injectable for tests.
         public let waitForChildResultBatch: @Sendable () async -> Void
         public let makeID: () -> String
@@ -159,7 +159,7 @@ public final class ACPSessionOrchestrationCoordinator {
             escalationDelaySeconds: @escaping () -> Int = { 30 },
             scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
             peerOfflineNoticeDelay: TimeInterval = 900,
-            peerStartUnanswered: @escaping (String) -> Void = { _ in },
+            peerNeedsCollecting: @escaping (String) -> Void = { _ in },
             waitForChildResultBatch: @escaping @Sendable () async -> Void = {
                 try? await Task.sleep(for: .milliseconds(250))
             },
@@ -212,7 +212,7 @@ public final class ACPSessionOrchestrationCoordinator {
             self.escalationDelaySeconds = escalationDelaySeconds
             self.scheduleEscalationCheck = scheduleEscalationCheck
             self.peerOfflineNoticeDelay = peerOfflineNoticeDelay
-            self.peerStartUnanswered = peerStartUnanswered
+            self.peerNeedsCollecting = peerNeedsCollecting
             self.waitForChildResultBatch = waitForChildResultBatch
             self.makeID = makeID
             self.worktree = worktree
@@ -612,6 +612,7 @@ public final class ACPSessionOrchestrationCoordinator {
         switch await peers.start(serverId: peerInfo.serverId, start) {
         case .success(let reply):
             await markPeerChildReady(childID, serverId: peerInfo.serverId, keepingForRetry: start)
+            environment.peerNeedsCollecting(peerInfo.serverId)
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: reply.state, worktreeId: nil, peer: peerInfo.name))
         case .failure(.unreachable(let name)):
             pendingPeerStarts[childID] = start
@@ -621,7 +622,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 environment.scheduleEscalationCheck(Self.peerStartRetryDelaySeconds) { [weak self] in
                     await self?.retryPeerStarts(serverId: serverId)
                 }
-                environment.peerStartUnanswered(serverId)
+                environment.peerNeedsCollecting(serverId)
             }
             return json(ACPOrchestrationNewResponse(
                 sessionId: childID, state: ACPOrchestrationPublicState.starting.rawValue, worktreeId: nil, peer: peerInfo.name,
@@ -908,6 +909,7 @@ public final class ACPSessionOrchestrationCoordinator {
                     .error("Could not store that session \(child.childSessionId, privacy: .public) is awaited: \(String(describing: error), privacy: .public)")
             }
             notePeerAvailability(serverId)
+            environment.peerNeedsCollecting(serverId)
             return json(ACPOrchestrationSendResponse(messageId: environment.makeID(), state: "queued"))
         case .failure(let error):
             return .error(peerFailureMessage(error, child: child))

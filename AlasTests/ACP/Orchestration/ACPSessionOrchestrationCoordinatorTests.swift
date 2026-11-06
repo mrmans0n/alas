@@ -656,7 +656,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         makeID: @escaping () -> String = { "child" },
         now: @escaping () -> Int64 = { 100 },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
-        peerStartUnanswered: @escaping (String) -> Void = { _ in }
+        peerNeedsCollecting: @escaping (String) -> Void = { _ in }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -688,7 +688,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let claude = ACPOrchestrationAgent(id: "claude", isEnabled: true, isACPCapable: true)
         let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
             persistence: persistence, instanceId: "instance", now: now, nowMillis: nowMillis,
-            scheduleEscalationCheck: schedule, peerStartUnanswered: peerStartUnanswered,
+            scheduleEscalationCheck: schedule, peerNeedsCollecting: peerNeedsCollecting,
             waitForChildResultBatch: waitForChildResultBatch, makeID: makeID,
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, selector in
@@ -2659,12 +2659,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     private func insertRemoteChild(
         _ persistence: ACPOrchestrationPersistence, id: String = "child", parent: String = "parent",
-        parentWorktree: String = "worktree", server: String? = "srv-1", phase: ACPDelegationPhase = .ready
+        parentWorktree: String = "worktree", server: String? = "srv-1", phase: ACPDelegationPhase = .ready,
+        awaiting: Bool = false
     ) async throws {
         try await persistence.insert(ACPDelegationRecord(
             childSessionId: id, parentSessionId: parent, projectId: "project", parentWorktreeId: parentWorktree,
             agentId: "codex", worktreeRequest: .current(worktreeId: "worktree"), phase: phase,
-            createdAt: 1, updatedAt: 1, peerServerId: server
+            createdAt: 1, updatedAt: 1, peerServerId: server, peerAwaiting: awaiting
         ))
     }
 
@@ -2859,7 +2860,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         now: @escaping () -> Int64 = { 100 },
         branchState: ACPPeerBranchState? = nil,
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
-        peerStartUnanswered: @escaping (String) -> Void = { _ in }
+        peerNeedsCollecting: @escaping (String) -> Void = { _ in }
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         try makeModelSelectionFixture(
             client: makeSelectionClient(), setupEvaluator: { _ in .missing(reason: "Stays local") },
@@ -2868,7 +2869,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 clock.millis += clock.step
                 await onPause()
                 await Task.yield()
-            }, now: now, schedule: schedule, peerStartUnanswered: peerStartUnanswered
+            }, now: now, schedule: schedule, peerNeedsCollecting: peerNeedsCollecting
         )
     }
 
@@ -3050,7 +3051,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
         let fixture = try remoteFixture(
             peers: peers, schedule: { _, work in scheduled.work.append(work) },
-            peerStartUnanswered: { scheduled.unanswered.append($0) }
+            peerNeedsCollecting: { scheduled.unanswered.append($0) }
         )
 
         let response = try decoded(ACPOrchestrationNewResponse.self, await peerCreate(fixture))
@@ -3811,6 +3812,27 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(scheduled.delays == [60])
         peers.outboxAnswer = { _ in .success(.init(entries: [], hasMore: false)) }
         await scheduled.takeNext()?()
+        #expect(scheduled.delays.isEmpty)
+    }
+
+    /// Another instance on the target's profile can write the outcome, and only
+    /// it announces that, so the result of an awaited child is asked for anyway.
+    @Test func anAwaitedChildIsCollectedWithoutASignalUntilItsResultArrives() async throws {
+        let scheduled = ScheduledWork()
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.outboxAnswer = { _ in .success(.init(entries: [], hasMore: false)) }
+        let fixture = try remoteFixture(peers: peers)
+        let collector = makeCollector(fixture, peers: peers, schedule: scheduled.add)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+
+        await collector.collect(serverId: "srv-1")
+        #expect(scheduled.delays == [60])
+
+        let entry = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-5", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
+        peers.outboxAnswer = { after in .success(.init(entries: after < 1 ? [entry] : [], hasMore: false)) }
+        await scheduled.takeNext()?()
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == false)
         #expect(scheduled.delays.isEmpty)
     }
 

@@ -123,16 +123,18 @@ public final class ACPPeerOutboxCollector {
         await retryWhileNeeded(serverId: serverId)
     }
 
-    /// Arranges to ask an online peer again while a pull failed or a child is
-    /// still starting there: with the link up, no signal is coming. A peer that
-    /// is down needs no timer, since coming back is a signal. One timer per
-    /// peer at a time, and it ends once neither applies.
+    /// Arranges to ask an online peer again while a pull failed, a child is
+    /// still starting there, or a parent awaits a result. With the link up, no
+    /// signal may be coming: another instance on the target's profile can write
+    /// the outcome, and only it announces that. A peer that is down needs no
+    /// timer, since coming back is a signal. One timer per peer at a time, and
+    /// it ends once none of these applies.
     public func retryWhileNeeded(serverId: String) async {
         guard !retryArmed.contains(serverId), isOnline(serverId) else { return }
         var needed = failedPulls.contains(serverId)
         if !needed {
             let children = try? await persistence.peerChildren(peerServerId: serverId)
-            needed = children?.contains { $0.phase == .starting } == true
+            needed = children?.contains { $0.phase == .starting || ($0.phase == .ready && $0.peerAwaiting) } == true
         }
         guard needed, isOnline(serverId), retryArmed.insert(serverId).inserted else { return }
         schedule(Self.retrySeconds) { [weak self] in await self?.retry(serverId) }

@@ -31,7 +31,7 @@ extension AlasCoreContext {
                         await work()
                     }
                 },
-                peerStartUnanswered: { [weak self] serverId in
+                peerNeedsCollecting: { [weak self] serverId in
                     Task { @MainActor [weak self] in await self?.peerOutboxCollector?.retryWhileNeeded(serverId: serverId) }
                 },
                 makeID: { UUID().uuidString },
