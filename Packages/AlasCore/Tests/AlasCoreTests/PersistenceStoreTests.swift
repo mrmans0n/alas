@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import AlasCore
 @testable import AlasHostCore
 
@@ -72,6 +73,40 @@ struct PersistenceStoreTests {
         try store.db.exec("UPDATE schema_version SET version = 36")
         let reopened = try ACPSessionStore(path: store.path)
         #expect(try reopened.loadSession(id: "preview")?.runtimeKind == .v1)
+    }
+
+    @Test(arguments: ["sequence", "installation", "lease", "withdraw-entry", "withdraw-commit"])
+    func displaySnapshotCannotBeOverwrittenByAnOlderOrWithdrawnWriter(reason: String) throws {
+        let store = try ACPSessionStore(path: tmpURL().path)
+        defer { try? FileManager.default.removeItem(atPath: store.path) }
+        let fence = try store.createV2PreviewSession(row: previewRow(), ownerInstance: "A", pid: 1, now: 1, leaseToken: "owner")
+        let initial = ACPV2PreviewDisplaySnapshot(sessionId: "preview", installationID: UUID(), sequence: 1, status: .observing, rows: [])
+        #expect(try store.persistV2PreviewDisplay(initial, fence: fence, authorize: { true }))
+        let next = ACPV2PreviewDisplaySnapshot(sessionId: "preview", installationID: reason == "installation" ? UUID() : initial.installationID,
+            sequence: reason == "sequence" ? 1 : 2, status: .ended, rows: [])
+        let checks = Mutex(reason == "withdraw-entry" ? 0 : reason == "withdraw-commit" ? 2 : 100)
+        let attemptedFence = reason == "lease" ? ACPSessionLeaseFence(sessionId: "preview", ownerInstance: "A", token: "old") : fence
+        #expect(try store.persistV2PreviewDisplay(next, fence: attemptedFence, authorize: {
+            checks.withLock { count in defer { count -= 1 }
+            return count > 0 }
+        }) == false)
+        #expect(try store.loadV2PreviewDisplay(sessionId: "preview") == initial)
+        #expect(try store.persistV2PreviewDisplay(.init(sessionId: "preview", installationID: initial.installationID,
+            sequence: 3, status: .interrupted, rows: []), fence: fence, authorize: { true }))
+    }
+
+    @Test func previewDisplayDoesNotGrantReplayAuthority() throws {
+        let store = try ACPSessionStore(path: tmpURL().path)
+        defer { try? FileManager.default.removeItem(atPath: store.path) }
+        let fence = try store.createV2PreviewSession(row: previewRow(), ownerInstance: "A", pid: 1, now: 1, leaseToken: "owner")
+        let savedRow = try store.loadSession(id: "preview")
+        let display = ACPV2PreviewDisplaySnapshot(sessionId: "preview", installationID: UUID(), sequence: 1, status: .observing, rows: [])
+        #expect(try store.persistV2PreviewDisplay(display, fence: fence, authorize: { true }))
+        for _ in 0..<2 { #expect(try store.loadV2PreviewDisplay(sessionId: "preview")?.reopenedStatus == .interrupted) }
+        #expect(try store.loadSession(id: "preview") == savedRow)
+        #expect(try store.loadV2UpdateJournalStream(sessionId: "preview") == nil)
+        #expect(try store.loadV2InboundLedgerStream(sessionId: "preview") == nil)
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_intents").isEmpty)
     }
 
     private func previewRow() -> ACPSessionRow {

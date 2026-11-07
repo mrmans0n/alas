@@ -189,6 +189,15 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
+    public func persistV2PreviewDisplay(_ snapshot: ACPV2PreviewDisplaySnapshot, fence: ACPSessionLeaseFence,
+        authorize: @Sendable () -> Bool) throws -> Bool {
+        try openedStore().persistV2PreviewDisplay(snapshot, fence: fence, authorize: authorize)
+    }
+
+    public func loadV2PreviewDisplay(sessionId: String) throws -> ACPV2PreviewDisplaySnapshot? {
+        try openedStore().loadV2PreviewDisplay(sessionId: sessionId)
+    }
+
     public func createV2PreviewSession(row: ACPSessionRow, ownerInstance: String, pid: Int64,
         now: Int64, leaseToken: String) throws -> ACPSessionLeaseFence {
         try openedStore().createV2PreviewSession(row: row, ownerInstance: ownerInstance, pid: pid, now: now, leaseToken: leaseToken)

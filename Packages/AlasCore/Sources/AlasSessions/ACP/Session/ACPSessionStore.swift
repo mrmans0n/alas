@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 37
+    public static let targetSchemaVersion = 38
     public let path: String
     public let db: SQLiteDatabase
 
@@ -112,6 +112,7 @@ public final class ACPSessionStore {
                 try db.exec("ALTER TABLE sessions ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'v1'")
             }
         }
+        if current < 38 { try createV2PreviewDisplaySchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
