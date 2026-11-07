@@ -114,7 +114,8 @@ Settings shows "Pair again to allow this" on the agent access row of an unproven
   gets `invalidRequest`;
 - receive, from its subscription, only `delegationOutboxChanged` and `resync`.
 
-Two allowlists hold this, so a message kind or host request added later is refused until someone decides otherwise. The gateway's
+Two allowlists hold this, so a message kind or host request added later is refused until someone decides otherwise. The
+[one-way route](2026-11-07-peer-delegation-one-way-route-design.md) is the first such decision: it admits `.peerHost` answers. The gateway's
 `handle` sees every client message of the socket and passes only `.host` frames, and the gateway sends only `.host` frames back, so a
 list push or anything a later change sends is dropped. The host-protocol connection holds the second allowlist. A `.delegation`
 device gets no federation, consoles or presenter.
