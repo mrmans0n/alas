@@ -216,6 +216,7 @@
   "qualificationScope": "Fresh local package runner with text prompts, one-time permission selection and permission cancellation. No replay, resume, ownership transfer, SSH or app integration qualification.",
   "rolloutEnabled": false,
   "driver": {
+    "snapshotCommit": "7018557d7850f4bdd968dd1cb0373eaf00eff4ea",
     "coreBaseCommit": "1d7aca095b8e0d90892a75254b783c85b4eed598",
     "sourceSHA256": {
       "Tools/ACP2Qualification/Package.swift": "5fda445797d3fb4d27a21e922ad4535ba1033fe55b7013ff95e7f5116dcf87f9",
