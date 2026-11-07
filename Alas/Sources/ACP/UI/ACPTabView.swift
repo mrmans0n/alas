@@ -597,7 +597,8 @@ private struct ACPSessionView: View {
     private var chatTypography: ACPChatTypography {
         ACPChatTypography(
             fontFamily: state.config.agents.chatFontFamily,
-            fontSize: state.config.agents.chatFontSize
+            fontSize: state.config.agents.chatFontSize,
+            density: state.config.density
         )
     }
 
