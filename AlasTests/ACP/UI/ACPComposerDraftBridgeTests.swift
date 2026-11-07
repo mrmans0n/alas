@@ -20,7 +20,8 @@ struct ACPComposerDraftBridgeTests {
             onSubmit: { _, _, _, _, _ in true }, onImageError: { _ in }, filesProvider: nil
         ).fixedSize(horizontal: false, vertical: true)
         let theme = try Theme.loadBundled(id: "cool-slate")
-        let host = NSHostingView(rootView: VStack(spacing: 0) { field; Spacer(minLength: 0) }
+        let host = NSHostingView(rootView: VStack(spacing: 0) { field
+        Spacer(minLength: 0) }
             .environment(\.theme, theme).frame(width: 600, height: 400))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = host
