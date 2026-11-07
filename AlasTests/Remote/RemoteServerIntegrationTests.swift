@@ -1208,7 +1208,8 @@ struct RemoteServerIntegrationTests {
         try server.start(port: 0)
         defer { server.stop() }
         try await eventually("the server binds a port") { server.port != nil }
-        let wsURL = try #require(URL(string: "ws://127.0.0.1:\(try #require(server.port))/ws"))
+        let port = try #require(server.port)
+        let wsURL = try #require(URL(string: "ws://127.0.0.1:\(port)/ws"))
         let reverse = HostProtocolCapability.delegationReverseV1
         let macSocket = URLSession.shared.webSocketTask(with: wsURL, protocols: [mac.token])
         let otherSocket = URLSession.shared.webSocketTask(with: wsURL, protocols: [other.token])
