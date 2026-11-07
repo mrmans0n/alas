@@ -65,6 +65,34 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         self.sshDestination = sshDestination
         self.tokenScope = tokenScope
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, serverId, name, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
+        case sshDestination, tokenScope
+    }
+
+    // `FilePeerStore` drops every record when one fails to decode, so a value
+    // only a newer build knows must not fail this one.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        serverId = try c.decode(String.self, forKey: .serverId)
+        name = try c.decode(String.self, forKey: .name)
+        origins = try c.decode([String].self, forKey: .origins)
+        lastOrigin = try c.decodeIfPresent(String.self, forKey: .lastOrigin)
+        token = try c.decode(String.self, forKey: .token)
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
+        protocolVersion = try c.decodeIfPresent(Int.self, forKey: .protocolVersion)
+        localDeviceId = try c.decodeIfPresent(String.self, forKey: .localDeviceId)
+        addedAt = try c.decode(Date.self, forKey: .addedAt)
+        sshDestination = try c.decodeIfPresent(String.self, forKey: .sshDestination)
+        // A newer build only ever narrows a token.
+        if c.contains(.tokenScope), !((try? c.decodeNil(forKey: .tokenScope)) ?? false) {
+            tokenScope = (try? c.decodeIfPresent(RemoteDeviceScope.self, forKey: .tokenScope)) ?? .delegation
+        } else {
+            tokenScope = nil
+        }
+    }
 }
 
 public protocol RemotePeerStore: AnyObject {
