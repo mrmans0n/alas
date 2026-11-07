@@ -169,7 +169,7 @@ struct ACPMarkdownText: View {
                 source: source, theme: theme, typography: typography, role: .tableCell(isHeader: row == 0)
             )
         }
-        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(columns, available: tableViewportWidth, scrolls: true)
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(columns, available: tableViewportWidth)
         return ACPHorizontalScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(

@@ -177,6 +177,8 @@ struct ACPTranscriptMarkdownLayout {
             if index > 0 { builder.y += scale.transcriptBlockSpacing }
             builder.add(block)
         }
+        // Only SwiftUI scrolls a table sideways, so one that needs to stays there.
+        guard !builder.needsHorizontalScroll else { return nil }
         return ACPTranscriptMarkdownLayout(
             width: max(1, width), wideWidth: wideWidth, height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
             texts: builder.texts, attributedTexts: builder.attributedTexts, codeBlocks: builder.codeBlocks,
@@ -295,9 +297,9 @@ struct ACPTranscriptMarkdownLayout {
     /// Fits the columns to `available`. Columns that fit on one line get the
     /// room left over, prose first, so numbers stay close together. Otherwise
     /// each column gets its longest word and a share of the rest by how much it
-    /// wants. A table that can't fit even that keeps those widths when it
-    /// `scrolls`, and shrinks to `available` when not.
-    static func tableColumnWidths(_ columns: [TableColumn], available: CGFloat, scrolls: Bool) -> [CGFloat] {
+    /// wants. A table that can't fit even that keeps those widths and scrolls
+    /// sideways (SwiftUI only; see `tableFits`).
+    static func tableColumnWidths(_ columns: [TableColumn], available: CGFloat) -> [CGFloat] {
         guard !columns.isEmpty else { return [] }
         let room = available - tableDividerWidth * CGFloat(columns.count - 1)
         let totalIdeal = columns.reduce(0) { $0 + $1.idealWidth }
@@ -314,8 +316,14 @@ struct ACPTranscriptMarkdownLayout {
             let share = (room - totalMin) / (totalIdeal - totalMin)
             return columns.map { $0.minWidth + ($0.idealWidth - $0.minWidth) * share }
         }
-        if scrolls { return columns.map(\.minWidth) }
-        return columns.map { max(1, $0.minWidth * room / totalMin) }
+        return columns.map(\.minWidth)
+    }
+
+    /// Whether every column gets at least its longest word in `available`.
+    /// A table that doesn't scrolls sideways, which only the SwiftUI path does.
+    static func tableFits(_ columns: [TableColumn], available: CGFloat) -> Bool {
+        let room = available - tableDividerWidth * CGFloat(max(0, columns.count - 1))
+        return columns.reduce(0) { $0 + $1.minWidth } < room
     }
 
     /// Whether a column's cells are all numbers, units allowed: "1,240", "2.1 s",
@@ -495,6 +503,8 @@ struct ACPTranscriptMarkdownLayout {
         var codeBlocks: [CodeBlock] = []
         var tables: [Table] = []
         var blockSeparators: [String] = []
+        /// Set by a table too wide for the column; `make` then falls back to SwiftUI.
+        var needsHorizontalScroll = false
         let copyButtonStyle: CopyButtonStyle
 
         init(width: CGFloat, wideWidth: CGFloat, theme: Theme, typography: ACPChatTypography, scale: DesignScale) {
@@ -716,7 +726,11 @@ struct ACPTranscriptMarkdownLayout {
                 (0..<columns).map { inline($0 < cells.count ? cells[$0] : "", role: .tableCell(isHeader: rowIndex == 0)) }
             }
             let specs = L.tableColumns(header: header, rows: rows, typography: typography) { row, column, _ in rendered[row][column] }
-            let columnWidths = L.tableColumnWidths(specs, available: width, scrolls: false)
+            guard L.tableFits(specs, available: width) else {
+                needsHorizontalScroll = true
+                return
+            }
+            let columnWidths = L.tableColumnWidths(specs, available: width)
             var columnXs: [CGFloat] = [0]
             for columnWidth in columnWidths { columnXs.append(columnXs[columnXs.count - 1] + columnWidth + L.tableDividerWidth) }
             let top = y

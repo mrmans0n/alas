@@ -8,7 +8,11 @@ import Testing
 @Suite struct ACPTranscriptMarkdownLayoutTests {
     private var theme: Theme { try! Theme.loadBundled(id: "cool-slate") }
 
-    @Test(arguments: ["![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
+    @Test(arguments: [
+        "![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```",
+        // Too wide for 400pt even at each column's longest word: only SwiftUI scrolls it.
+        "| a | b | c | d |\n|---|---|---|---|\n| Sources/Feature/VeryLongFileName.swift | Sources/Feature/OtherLongFileName.swift | Sources/Feature/ThirdLongFileName.swift | Sources/Feature/FourthLongFileName.swift |",
+    ])
     func unsupportedBlocksFallBack(source: String) {
         #expect(ACPTranscriptMarkdownLayout.make(source: source, width: 400, theme: theme, typography: .default) == nil)
     }
@@ -162,24 +166,23 @@ import Testing
 
     @Test func spareTableWidthGoesToProseColumns() {
         let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(
-            [column(40, 60, numeric: true), column(50, 100)], available: 300.5, scrolls: false
+            [column(40, 60, numeric: true), column(50, 100)], available: 300.5
         )
         #expect(widths == [60, 240])
     }
 
     @Test func tightTableShareBeyondLongestWordFollowsWhatColumnsWant() {
         let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(
-            [column(50, 50, numeric: true), column(60, 460)], available: 310.5, scrolls: false
+            [column(50, 50, numeric: true), column(60, 460)], available: 310.5
         )
         #expect(widths == [50, 260])
     }
 
-    @Test(arguments: [(false, [CGFloat(50), 100]), (true, [100, 200])])
-    func tableThatCannotFitShrinksOrScrolls(scrolls: Bool, expected: [CGFloat]) {
-        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(
-            [column(100, 200), column(200, 400)], available: 150.5, scrolls: scrolls
-        )
-        #expect(widths == expected)
+    @Test func tableThatCannotFitKeepsItsLongestWordsAndScrolls() {
+        let columns = [column(100, 200), column(200, 400)]
+        #expect(ACPTranscriptMarkdownLayout.tableColumnWidths(columns, available: 150.5) == [100, 200])
+        #expect(!ACPTranscriptMarkdownLayout.tableFits(columns, available: 150.5))
+        #expect(ACPTranscriptMarkdownLayout.tableFits(columns, available: 310.5))
     }
 
     @Test(arguments: [
