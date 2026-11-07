@@ -296,6 +296,10 @@ extension SessionsAPI {
         guard case .needsSetup = session.setupState,
               ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil
         else { throw SessionRefusal.notPending }
+        // Retained throughout: the client that asked may go away while it
+        // installs, and the detach must not evict a session no view holds.
+        manager.retainSession(id: sessionID)
+        defer { manager.releaseSession(id: sessionID) }
         // Clears the issue while it installs: a second request is refused.
         session.setupState = .checking
         do {
@@ -306,9 +310,6 @@ extension SessionsAPI {
             session.setupState = .setupError(reason: "Couldn't install the adapter: \(error.localizedDescription)")
             throw SessionRefusal.agentUnavailable
         }
-        // Retained so the detach does not evict a session no view holds.
-        manager.retainSession(id: sessionID)
-        defer { manager.releaseSession(id: sessionID) }
         await manager.detach(sessionId: sessionID)
         session.lastError = nil
         session.setupState = .checking
