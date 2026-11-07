@@ -2478,63 +2478,69 @@ public final class ACPSessionRunner {
 
     /// What the turn ended on, for its completion. An agent that ends its turn
     /// right after its last message leaves that message in the coalescing
-    /// buffer, and it may be the rest of a message already in the transcript.
+    /// buffer, so quote the turn as it will read once the buffer is applied.
     private func turnFinalAgentText() -> String? {
-        guard let final = bufferedFinalAgentMessage() else { return currentTurnLastAgentText() }
-        let floor = activePromptTranscriptFloor ?? 0
-        let started = final.continuedRow.flatMap { row in
-            row >= floor ? ACPSessionTranscriptReader.agentText(session.transcript.messages[row]) : nil
-        } ?? ""
-        let tail = ACPDelegatedOutcomeText.tail(started + final.text, limit: ACPTurnCompletion.lastAgentTextLimit)
-        return tail.isEmpty ? currentTurnLastAgentText() : tail
+        guard bufferedAgentText() != nil else { return currentTurnLastAgentText() }
+        return turnRowsWithBufferedAgentText().reversed().lazy
+            .compactMap { row -> String? in
+                guard let text = row.text else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text, limit: ACPTurnCompletion.lastAgentTextLimit)
+                return tail.isEmpty ? nil : tail
+            }
+            .first
     }
 
-    /// The buffer's last agent message, and the transcript row it continues if
-    /// it does. Follows `ACPSession.apply` in update order, without applying:
-    /// a chunk with an id joins that id's message; one without joins the current
-    /// message unless a tool call, a user chunk, or a new phase closed it. A
-    /// boundary with no agent text after it leaves the last message standing.
-    private func bufferedFinalAgentMessage() -> (text: String, continuedRow: Int?)? {
-        func phase(ofRow row: Int?) -> ACPMessagePhase? {
-            guard let row, case .agent(_, _, let text) = session.transcript.messages[row] else { return nil }
-            return text.phase
+    /// One row of this turn's transcript. Text a chunk can continue only if `isAgent`;
+    /// a row with no text and not `isAgent` closes the agent run before it.
+    private struct TurnRow {
+        var messageId: String?
+        var text: String?
+        var phase: ACPMessagePhase?
+        var isAgent = false
+    }
+
+    /// This turn's rows with buffered agent chunks applied to a copy, finding
+    /// each chunk's row as `ACPSession.apply` does. Read-only on purpose; see
+    /// `bufferedAgentText`.
+    private func turnRowsWithBufferedAgentText() -> [TurnRow] {
+        let messages = session.transcript.messages
+        var rows = messages[min(activePromptTranscriptFloor ?? 0, messages.count)...].compactMap { message -> TurnRow? in
+            if message.isInterruptedTurnContinuationNotice { return TurnRow() }
+            switch message {
+            case .agent(_, let id, let text):
+                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true)
+            case .user, .toolCall, .fileEdit, .visualAid:
+                return TurnRow()
+            default:
+                return ACPSessionTranscriptReader.agentText(message).map { TurnRow(text: $0) }
+            }
         }
-        var row = session.agentRowContinued(byMessageId: nil)
-        var currentPhase = phase(ofRow: row)
-        var currentId: String?
-        if let row, case .agent(_, let id, _) = session.transcript.messages[row] { currentId = id }
-        var text = ""
-        var closed = false
-        var hasText = false
-        var textById: [String: String] = [:]
         for pending in pendingIncomingUpdates where !isSubagentUpdate(pending.params) {
             switch pending.params.update {
             case .userMessageChunk(let chunk) where chunk.directed != nil:
                 continue
             case .toolCall, .userMessageChunk:
-                closed = true
+                rows.append(TurnRow())
             case .agentMessageChunk(let chunk):
                 guard case .text(let part) = chunk.content else { continue }
-                if let id = chunk.messageId {
-                    if id != currentId {
-                        if let currentId { textById[currentId] = text }
-                        (currentId, text) = (id, textById[id] ?? "")
-                        row = session.agentRowContinued(byMessageId: id)
-                        currentPhase = phase(ofRow: row)
-                    }
-                } else if closed || (chunk.phase != nil && currentPhase != nil && chunk.phase != currentPhase) {
-                    if let currentId { textById[currentId] = text }
-                    (currentId, text, row, currentPhase) = (nil, "", nil, nil)
+                let found = chunk.messageId.map { id in rows.lastIndex { $0.isAgent && $0.messageId == id } }
+                    ?? rows.lastIndex { $0.isAgent || $0.text == nil }.flatMap { rows[$0].isAgent ? $0 : nil }
+                if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
+                    let text = rows[found].text ?? ""
+                    rows[found].text = text + ACPSession.streamingSeparator(between: text, and: part) + part
+                    rows[found].phase = chunk.phase ?? rows[found].phase
+                } else {
+                    rows.append(TurnRow(messageId: chunk.messageId, text: part, phase: chunk.phase, isAgent: true))
                 }
-                currentPhase = chunk.phase ?? currentPhase
-                text += part
-                closed = false
-                hasText = true
             default:
                 continue
             }
         }
-        return hasText ? (text, row) : nil
+        return rows
+    }
+
+    private static func startsNewPhase(_ phase: ACPMessagePhase?, after previous: ACPMessagePhase?) -> Bool {
+        if let phase, let previous { phase != previous } else { false }
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in

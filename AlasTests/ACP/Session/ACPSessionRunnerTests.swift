@@ -6125,7 +6125,9 @@ struct ACPSessionRunnerTests {
         ([], [agentChunk("fixed.")], "fixed."),
         ([agentChunk("Parser ")], [agentChunk("fixed.")], "Parser fixed."),
         ([agentChunk("Parser "), .agentThoughtChunk(.text("Hm."))], [agentChunk("fixed.")], "Parser fixed."),
-        ([agentChunk("Parser ", id: "m1"), agentChunk("Other.", id: "m2")], [agentChunk("fixed.", id: "m1")], "Parser fixed."),
+        // A late chunk for an older message does not take over from the last one.
+        ([agentChunk("Note ", id: "m1"), agentChunk("All fixed.", id: "m2")], [agentChunk("more", id: "m1")], "All fixed."),
+        ([agentChunk("Note ", id: "m1"), agentChunk("Parser ", id: "m2")], [agentChunk("more", id: "m1"), agentChunk("fixed.")], "Parser fixed."),
         ([agentChunk("Other.", id: "m1")], [agentChunk("fixed.", id: "m2")], "fixed."),
         // Continuing two messages at once: only the last one is the report.
         ([agentChunk("Note ", id: "m1"), agentChunk("Parser ", id: "m2")],
@@ -6140,7 +6142,7 @@ struct ACPSessionRunnerTests {
         ([agentChunk("Parser ", id: "m1")], [agentChunk("is ", id: "m1"), agentChunk("fixed.")], "Parser is fixed."),
         ([agentChunk("Parser ", id: "m1")], [agentChunk("is "), agentChunk("fixed.", id: "m1")], "Parser is fixed."),
         // Going back to an earlier message keeps what it already had.
-        ([], [agentChunk("All ", id: "m1"), agentChunk("Other", id: "m2"), agentChunk("fixed.", id: "m1")], "All fixed."),
+        ([], [agentChunk("Note ", id: "m1"), agentChunk("All ", id: "m2"), agentChunk("more", id: "m1"), agentChunk("fixed.", id: "m2")], "All fixed."),
         // A chunk with no phase stays in the phase before it.
         ([], [agentChunk("Note ", phase: "commentary"), agentChunk("more"), agentChunk("All ", phase: "final_answer"), agentChunk("fixed.")], "All fixed."),
     ] as [([ACPSessionUpdate], [ACPSessionUpdate], String)])

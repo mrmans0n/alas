@@ -4638,11 +4638,6 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return ""
     }
 
-    /// The agent row a chunk with this id would continue, found as `apply` finds it.
-    func agentRowContinued(byMessageId messageId: String?) -> Int? {
-        if let messageId { transcript.messageIndex(messageId: messageId, kind: .agent) } else { lastAgent() }
-    }
-
     private func lastAgent() -> Int? {
         for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
             // STOP on .user — every new user turn starts a fresh
