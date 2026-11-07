@@ -1202,6 +1202,33 @@ struct NativePeerSessionsTests {
         #expect(fileTreeReads() == reads + 1)
     }
 
+    /// An edit can keep a file's stats, so a poll reads the open diff again,
+    /// keeping it on screen rather than loading.
+    @Test func aPollReadsTheOpenDiffAgainWithoutShowingItLoading() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        let diffReads = { links.sent(to: "B").filter { if case .fileDiff = $0 { true } else { false } }.count }
+        client.open(.diff(path: "a", stage: .unstaged))
+        links.receive(.fileDiffResult(sessionId: "s", path: "a", stage: "unstaged", hunks: [], truncated: false,
+                                      metadataNote: nil), from: "B")
+        let reads = diffReads()
+
+        client.pollChanges()
+
+        #expect(diffReads() == reads + 1)
+        guard case .loaded = client.workspace.documentContent else {
+            Issue.record("the open diff showed loading: \(client.workspace.documentContent)")
+            return
+        }
+    }
+
     /// A session whose row carries no worktree summary keeps comparing its
     /// own (absent) summary, not the one its worktree's console lends the row.
     @Test func aSessionWithoutASummaryIsNotReloadedOnEverySessionList() {

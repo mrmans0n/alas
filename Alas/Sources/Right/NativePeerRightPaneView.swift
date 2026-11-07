@@ -149,7 +149,11 @@ struct NativePeerRightPaneView: View {
             guard !collapsed else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.changesPollInterval)
-                if !Task.isCancelled, NSApp.isActive { client.pollChanges() }
+                guard !Task.isCancelled, NSApp.isActive else { continue }
+                client.pollChanges()
+                // Either can change on the host while the changes stay the same.
+                await readStashes()
+                await readCheckpoints()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

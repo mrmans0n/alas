@@ -1377,6 +1377,13 @@ final class NativePeerSessions {
     // ponytail: polled, as hosts push no working-tree events; a host-side watcher would replace it.
     func pollChanges() {
         if requestChanges() { changesPollInFlight = true }
+        // Equal stats can hide an edit, so an open working-tree diff is read
+        // again without showing it loading; an unchanged reply keeps it as is.
+        if case .diff? = workspace.document, let document = workspace.document,
+           !documentRequestsInFlight.contains(document) {
+            documentRequestsInFlight.insert(document)
+            if !sendDocumentRead(document) { documentRequestsInFlight.remove(document) }
+        }
     }
 
     private func reloadFileTreeAndDocument() {

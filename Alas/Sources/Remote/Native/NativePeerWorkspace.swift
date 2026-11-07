@@ -313,7 +313,8 @@ struct NativePeerWorkspace: Equatable {
         case (.modified, _, .missing): .deleted
         default: plan.kind
         }
-        documentContent = .loaded(.imageDiff(before: before, after: after, kind: kind, oldPath: plan.oldPath))
+        let content = Load<DocumentContent>.loaded(.imageDiff(before: before, after: after, kind: kind, oldPath: plan.oldPath))
+        if content != documentContent { documentContent = content }
     }
 
     mutating func closeDocument() {
@@ -431,10 +432,12 @@ struct NativePeerWorkspace: Equatable {
             guard document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:))) else {
                 return true
             }
-            documentContent = .loaded(.diff(
+            // A poll's unchanged reply must not redraw the open diff.
+            let content = Load<DocumentContent>.loaded(.diff(
                 ParsedDiff(hunks: hunks.map(Self.hunk), metadataSummary: metadataNote),
                 truncated: truncated
             ))
+            if content != documentContent { documentContent = content }
         case .fileDiffFailed(_, let path, let stage, let reason, let message):
             guard document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:))) else {
                 return true
