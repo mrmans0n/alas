@@ -659,6 +659,7 @@
 		55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */; };
 		55F30DD1D8943C46FD4D1608 /* session-update-tool-call-meta.json in Resources */ = {isa = PBXBuildFile; fileRef = 3E3ADEB5299C3FFB091D55EE /* session-update-tool-call-meta.json */; };
 		55FED32790D795E0EF2572CC /* ACPSideQuestionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61827201AF3BCF4DC4049252 /* ACPSideQuestionCard.swift */; };
+		561C93C6E1DDD22CE4C44619 /* ACPV2PreviewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91512364ECA398673CDC4E2 /* ACPV2PreviewSessionView.swift */; };
 		5624DD4D16B5C0D5A8DA2D7D /* VMDiskSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2A2CE2145C46D0A3D9953C /* VMDiskSession.swift */; };
 		56286C44BC30C1716CD44363 /* GGInboxTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32762D888121D56722E03F5 /* GGInboxTabView.swift */; };
 		5632CE3BB7220370D87A987B /* AgentLauncherModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D8B88C4D4837376C123D45 /* AgentLauncherModelTests.swift */; };
@@ -3818,6 +3819,7 @@
 		F8A5D091F06D7B2D02072492 /* ACPTranscriptScrollerReconcilerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptScrollerReconcilerTests.swift; sourceTree = "<group>"; };
 		F8D36A8AF55F212B9F32A944 /* ACPSessionManagerAttachRestoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerAttachRestoreTests.swift; sourceTree = "<group>"; };
 		F8DD2FEF5D33576B468300C9 /* MarkdownCodeBlockStyler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownCodeBlockStyler.swift; sourceTree = "<group>"; };
+		F91512364ECA398673CDC4E2 /* ACPV2PreviewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPV2PreviewSessionView.swift; sourceTree = "<group>"; };
 		F936C036893FC70AD506FDD4 /* GitServiceDiscardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceDiscardTests.swift; sourceTree = "<group>"; };
 		F937FB8B70751A503689DFEB /* RunSchedulePlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunSchedulePlannerTests.swift; sourceTree = "<group>"; };
 		F94E5F7FC1D724C4DD7F489C /* VMConfigurationFactoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMConfigurationFactoryTests.swift; sourceTree = "<group>"; };
@@ -5860,6 +5862,7 @@
 				4D974BDA7FAE214495278557 /* ACPUserInputPrompt.swift */,
 				D8FDD12B80BF7793BD791661 /* ACPUserMessageImageMarkers.swift */,
 				891879D5E86331F0BC092ACC /* ACPUserScrollEvent.swift */,
+				F91512364ECA398673CDC4E2 /* ACPV2PreviewSessionView.swift */,
 				0582531788CE9D1D49769F6B /* ACPVisibleRowsCache.swift */,
 				437B1EA6CD3FC8D13486D854 /* ACPVisualAidCard.swift */,
 				FE5FDAB31C577FC38CE53032 /* ComposerAction.swift */,
@@ -7659,6 +7662,7 @@
 				971F93A8880B095537B9A2A8 /* ACPUserInputPrompt.swift in Sources */,
 				D08FB4816ED55A6844162202 /* ACPUserMessageImageMarkers.swift in Sources */,
 				D4B3426A147727B83160FEB9 /* ACPUserScrollEvent.swift in Sources */,
+				561C93C6E1DDD22CE4C44619 /* ACPV2PreviewSessionView.swift in Sources */,
 				128B611E5324A5621897A267 /* ACPVisibleRowsCache.swift in Sources */,
 				9835735BBDE6670987FD28E9 /* ACPVisualAidCard.swift in Sources */,
 				095A19B85DFA5EBA5A24786D /* AdvancedPane.swift in Sources */,

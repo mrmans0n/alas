@@ -29,7 +29,7 @@ public final class ACPV2PreviewOwner {
     public var presentation: ACPV2PreviewPresentation {
         .init(runtimeKind: session.runtimeKind, status: status, foreground: foreground,
             writerAuthority: active && isCurrent(), pendingDecision: pendingDecisions,
-            awaitingSubmission: awaitingSubmission)
+            awaitingSubmission: awaitingSubmission, cleanupAvailable: cleanupAuthority.valid && isCurrent())
     }
     private let session: ACPSession
     private let client: ACPBrokerClient
@@ -40,6 +40,7 @@ public final class ACPV2PreviewOwner {
     private let isCurrent: @MainActor () -> Bool
     private let onChange: @MainActor () -> Void
     private let displayWriter: DisplayWriter
+    private let prepareForOpen: (@MainActor () async throws -> Void)?
     private var active = true
     public private(set) var permissions: [ACPV2PreviewPermissionItem] = []
     private struct PermissionOrigin: Hashable {
@@ -75,7 +76,7 @@ public final class ACPV2PreviewOwner {
     public init(session: ACPSession, client: ACPBrokerClient, persistence: ACPSessionPersistence,
         fence: ACPSessionLeaseFence, qualification: ACPV2PreviewQualifiedAdapter, installationID: UUID,
         isCurrent: @escaping @MainActor () -> Bool, onChange: @escaping @MainActor () -> Void,
-        displayWriter: DisplayWriter? = nil) {
+        displayWriter: DisplayWriter? = nil, prepareForOpen: (@MainActor () async throws -> Void)? = nil) {
         self.session = session
         self.client = client
         self.persistence = persistence
@@ -84,6 +85,7 @@ public final class ACPV2PreviewOwner {
         self.installationID = installationID
         self.isCurrent = isCurrent
         self.onChange = onChange
+        self.prepareForOpen = prepareForOpen
         self.displayWriter = displayWriter ?? { snapshot, fence, authorize in
             try await persistence.persistV2PreviewDisplay(snapshot, fence: fence, authorize: authorize)
         }
@@ -133,6 +135,9 @@ public final class ACPV2PreviewOwner {
         monitor = Task { [weak self] in
             for await value in runner.observations { self?.observed(value) }
         }
+        try await prepareForOpen?()
+        guard await currentLease() else { throw Failure.invalidated }
+        try requireCurrent()
         let result = try await runner.start(params: params, deadline: deadline)
         try requireCurrent()
         upstreamID = result.sessionId
@@ -168,6 +173,7 @@ public final class ACPV2PreviewOwner {
         guard presentation.canSend, let runner, let upstreamID else { throw Failure.busy }
         awaitingSubmission = true
         lastCompletion = nil
+        session.lastError = nil
         onChange()
         do {
             guard await currentLease() else { throw Failure.invalidated }
@@ -195,6 +201,12 @@ public final class ACPV2PreviewOwner {
         case .completion(let completion):
             lastCompletion = completion
             awaitingSubmission = false
+            switch completion.result {
+            case .failed(let message): session.lastError = message
+            case .limited: session.lastError = "The preview turn stopped at a provider usage limit."
+            case .stopped: session.lastError = "The preview turn stopped before completion."
+            case .completed, .cancelled: break
+            }
         case .interaction(let event): permissionEvent(event)
         }
         scheduleDisplay()
@@ -305,9 +317,7 @@ public final class ACPV2PreviewOwner {
             guard closed else { throw Failure.cleanupUnavailable }
             return
         }
-        status = .ending
-        stopActions()
-        onChange()
+        prepareForEnd()
         let authority = cleanupAuthority
         let client = client
         let worker = Task { [weak self] in
@@ -324,6 +334,13 @@ public final class ACPV2PreviewOwner {
         await flushDisplay()
         onChange()
         guard closed else { throw Failure.cleanupUnavailable }
+    }
+
+    func prepareForEnd() {
+        guard status != .ended else { return }
+        status = .ending
+        stopActions()
+        onChange()
     }
 
     private final class CleanupWaiter: Sendable {
@@ -435,14 +452,18 @@ public final class ACPV2PreviewOwner {
     private func captureDisplay() {
         guard isCurrent(), displaySequence < Int64.max else { return }
         displaySequence += 1
+        let failureMessage: String?
+        if case .failed(let message) = status { failureMessage = message }
+        else { failureMessage = session.lastError }
         let displayStatus: ACPV2PreviewDisplaySnapshot.Status = switch status {
         case .ended: .ended
         case .failed: .failed
         case .ending, .interrupted: .interrupted
+        case .ready where failureMessage != nil: .failed
         default: .observing
         }
         guard let snapshot = try? ACPV2PreviewDisplaySnapshot(sessionId: session.id, installationID: installationID,
-            sequence: displaySequence, status: displayStatus, messages: session.transcript.messages) else { return }
+            sequence: displaySequence, status: displayStatus, messages: session.transcript.messages, failureMessage: failureMessage) else { return }
         let authority = displayAuthority
         let writer = displayWriter
         let fence = fence

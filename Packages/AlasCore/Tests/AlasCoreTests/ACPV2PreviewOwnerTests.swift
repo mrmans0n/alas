@@ -43,7 +43,12 @@ struct ACPV2PreviewOwnerTests {
             try await fixture.client.replayRawBrokerEvents()
             try await eventually { await MainActor.run { fixture.owner.lastCompletion != nil } }
             if result == "completed" { #expect(fixture.owner.lastCompletion?.result == .completed) }
-            else { #expect(fixture.owner.lastCompletion?.result != .completed) }
+            else {
+                #expect(fixture.owner.lastCompletion?.result != .completed)
+                #expect(fixture.session.lastError == "fixture")
+                await fixture.owner.flushDisplay()
+                #expect(try await fixture.persistence.loadV2PreviewDisplay(sessionId: "s")?.failureMessage == "fixture")
+            }
         }
     }
 
@@ -94,10 +99,13 @@ struct ACPV2PreviewOwnerTests {
         let fixture = try await PreviewOwnerFixture(agent: "claude")
         await fixture.service.setPreviewModeResponse("{\"configOptions\":[]}")
         await #expect(throws: (any Error).self) { try await fixture.start() }
+        #expect(fixture.owner.presentation.canEnd)
+        #expect(!fixture.owner.presentation.canSend)
         await fixture.client.detach()
         try await fixture.owner.end()
         try await fixture.owner.end()
         #expect(await fixture.service.closeCount == 1)
+        #expect(!fixture.owner.presentation.canEnd)
     }
 
     @Test func permissionButtonsLoseAuthorityBeforeAwaitingTheReply() async throws {
