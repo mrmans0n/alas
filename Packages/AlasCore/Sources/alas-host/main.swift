@@ -322,7 +322,9 @@ if let listen = config.hostRemoteListen {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
                 consoleCapabilities: (shells.isAvailable ? PeerConsoleCapability.headlessHost : []) + [PeerPortForwardCapability.v1],
-                hostCapabilities: host.servedCapabilities
+                // A Mac that paired here inbound-only can serve this host's
+                // agents over its own link, which no app asks of it.
+                hostCapabilities: host.servedCapabilities + [HostProtocolCapability.delegationReverseV1]
             )
         },
         signer: identityKey

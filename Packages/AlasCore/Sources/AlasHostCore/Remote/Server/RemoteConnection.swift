@@ -480,7 +480,7 @@ public final class RemoteConnection: @unchecked Sendable {
         // per connection — hashing and signing attacker-controlled
         // megabytes while freezing UI work. A malformed challenge is simply
         // dropped, not answered: it could never have verified anyway.
-        if case .helloAck(_, let challenge) = msg, let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
+        if case .helloAck(_, let challenge, _) = msg, let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
             answerIdentityChallenge(challenge)
             return
         }
