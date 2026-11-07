@@ -380,6 +380,96 @@ struct HostSessionsTests {
         try await eventually { await received.states(of: id).last?.config.agentIssue == nil }
     }
 
+    /// A paired Mac's Install installs the missing adapter on the host and
+    /// connects the session; an agent with no managed adapter, or one that
+    /// is not missing it, is refused.
+    @Test func installingAMissingAdapterConnectsTheSession() async throws {
+        let setup = Mutex(ACPSetupResult.missing(reason: "the adapter is not installed"))
+        let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
+        defer { fixture.tearDown() }
+        let installed = Mutex<[String]>([])
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { agentID in
+            installed.withLock { $0.append(agentID) }
+            setup.withLock { $0 = .ready }
+        })
+        let sessions = fixture.host.sessions
+        let gemini = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" && sessions.agentIssue(gemini) != nil } }
+        await #expect(throws: SessionRefusal.notPending) { try await sessions.installAdapter(gemini, caller: .app) }
+
+        try await sessions.installAdapter(id, caller: .app)
+
+        #expect(installed.withLock { $0 } == ["codex"])
+        try await eventually { await MainActor.run { sessions.agentIssue(id) == nil && sessions.isWriter(id) } }
+        await #expect(throws: SessionRefusal.notPending) { try await sessions.installAdapter(id, caller: .app) }
+    }
+
+    /// The client that asked for an install can go away while it runs; the
+    /// session still connects once the adapter is there.
+    @Test(.timeLimit(.minutes(1))) func anInstallOutlivesTheClientThatAskedForIt() async throws {
+        let setup = Mutex(ACPSetupResult.missing(reason: "the adapter is not installed"))
+        let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        let subscription = fixture.host.subscribe()
+        try subscription.follow(id)
+        try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" } }
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _ in
+            await MainActor.run { subscription.cancel() }
+            setup.withLock { $0 = .ready }
+        })
+
+        try await sessions.installAdapter(id, caller: .app)
+
+        try await eventually { await MainActor.run { sessions.agentIssue(id) == nil && sessions.isWriter(id) } }
+    }
+
+    /// A paired Mac's other requests keep flowing while an install runs.
+    @Test(.timeLimit(.minutes(1))) func aSlowInstallDoesNotHoldTheConnection() async throws {
+        let fixture = try Fixture(setupEvaluator: { _ in .missing(reason: "the adapter is not installed") })
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" } }
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+        })
+        let gateway = RemoteSessionGateway(host: fixture.host) { _ in }
+        defer { gateway.close() }
+
+        await gateway.handle(.installAdapter(sessionId: id))
+
+        for await _ in started.stream { break }
+        release.continuation.yield()
+    }
+
+    /// An SSH worktree's agent runs on its SSH host, so that is where its
+    /// missing adapter is installed, as the app's own Install does.
+    @Test(.timeLimit(.minutes(1))) func anSSHSessionsAdapterIsInstalledOnItsHost() async throws {
+        let fixture = try Fixture(remoteHost: "box", remoteAdapterResolver: { _, _, _ in .missing(reason: "not on box") })
+        defer { fixture.tearDown() }
+        let targets = Mutex<[String]>([])
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(
+            localInstall: { _ in targets.withLock { $0.append("local") } },
+            remoteInstall: { host, _ in targets.withLock { $0.append(host) } }
+        )
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        // The fixture's SSH attach never gets as far as its setup check: set
+        // the outcome the check reports.
+        let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
+        live.setupState = .needsSetup(reason: "not on box")
+
+        try await sessions.installAdapter(id, caller: .app)
+
+        #expect(targets.withLock { $0 } == ["box"])
+    }
+
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
     @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
@@ -978,7 +1068,9 @@ struct HostSessionsTests {
             environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
             projectHost: String? = nil,
             otherProjects: [ProjectConfig] = [],
-            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready }
+            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready },
+            remoteHost: String? = nil,
+            remoteAdapterResolver: ACPSessionManager.ACPRemoteAdapterResolver? = nil
         ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1007,7 +1099,9 @@ struct HostSessionsTests {
                         worktreePath: worktree.path.path,
                         owner: owner,
                         persistence: ACPSessionPersistence(path: database.path),
+                        remoteHost: remoteHost,
                         setupEvaluator: setupEvaluator,
+                        remoteAdapterResolver: remoteAdapterResolver,
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },

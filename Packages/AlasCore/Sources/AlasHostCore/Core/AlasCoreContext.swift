@@ -131,6 +131,8 @@ public final class AlasCoreContext {
     @ObservationIgnored var reviewRefreshes: [String: Task<Void, Never>] = [:]
     /// The configured base branch each review loop last took.
     @ObservationIgnored var reviewLoopConfiguredBases: [String: String] = [:]
+    /// Installs managed ACP adapters on this Mac, one at a time per agent.
+    @_spi(Testing) @ObservationIgnored public var adapterInstalls = ACPAdapterInstallCoordinator()
     /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
     /// Called with a worktree's id after its followed review status was read.

@@ -312,6 +312,9 @@ public final class FederatedSessionsProvider {
                     return true
                 }
                 tabActionRequesters[namespaced, default: []].append(downstream.id)
+            case .installAdapter:
+                // An older peer can't decode it; its client offers no Install.
+                guard links.peerSupports(PeerAdapterInstallCapability.v1, serverId: target.serverId) else { return true }
             case .queueEdit(_, let itemId):
                 queueEditRequesters.append((namespaced, itemId, downstream.id))
                 if queueEditRequesters.count > Self.queueEditRequesterLimit {

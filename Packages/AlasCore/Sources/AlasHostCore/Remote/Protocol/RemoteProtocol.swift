@@ -319,6 +319,9 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case openSessionTab(sessionId: String)
     /// Closes the host's tab for a session, keeping it in recent history.
     case closeSessionTab(sessionId: String)
+    /// Installs the ACP adapter the session's agent is missing on the host,
+    /// then connects it again; see `PeerAdapterInstallCapability`.
+    case installAdapter(sessionId: String)
     case sendPrompt(
         sessionId: String, text: String, attachments: [RemoteAttachment], intent: String,
         mentions: [RemoteMention] = [])
@@ -447,6 +450,8 @@ extension RemoteClientMessage: Codable {
             self = .openSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "closeSessionTab":
             self = .closeSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "installAdapter":
+            self = .installAdapter(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sendPrompt":
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -631,6 +636,9 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
         case .closeSessionTab(let s):
             try c.encode("closeSessionTab", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .installAdapter(let s):
+            try c.encode("installAdapter", forKey: .type)
             try c.encode(s, forKey: .sessionId)
         case .sendPrompt(let s, let t, let a, let intent, let mentions):
             try c.encode("sendPrompt", forKey: .type)
@@ -1520,7 +1528,8 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1] + identity.hostCapabilities)
+            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1]
+                + identity.hostCapabilities)
     }
 }
 
@@ -1614,6 +1623,11 @@ public enum HostProtocolCapability: Sendable {
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client
 /// messages silently, so clients gate the controls on this capability.
+public enum PeerAdapterInstallCapability: Sendable {
+    /// Advertised in `hello` by hosts that serve `installAdapter`.
+    public static let v1 = "peerAdapterInstall.v1"
+}
+
 public enum PeerSessionTabsCapability: Sendable {
     /// Advertised in `hello` by hosts that serve `openSessionTab` and `closeSessionTab`.
     public static let v1 = "peerSessionTabs.v1"
