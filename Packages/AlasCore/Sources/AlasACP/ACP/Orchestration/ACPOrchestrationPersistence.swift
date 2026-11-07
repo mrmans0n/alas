@@ -167,8 +167,16 @@ public actor ACPOrchestrationPersistence {
         try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, store: store, settling: entry)
     }
 
-    public func claimLostPeerTurn(childSessionId: String, awaitingSince: Int64?, outcome: ACPDelegatedMessage) throws -> Bool {
-        try openedStore().claimLostPeerTurn(childSessionId: childSessionId, awaitingSince: awaitingSince, outcome: outcome)
+    public func claimLostPeerTurn(
+        childSessionId: String, awaitingSince: Int64?, sends: Int64, outcome: ACPDelegatedMessage
+    ) throws -> Bool {
+        try openedStore().claimLostPeerTurn(
+            childSessionId: childSessionId, awaitingSince: awaitingSince, sends: sends, outcome: outcome
+        )
+    }
+
+    public func notePeerSendStarting(childSessionId: String) throws {
+        try openedStore().notePeerSendStarting(childSessionId: childSessionId)
     }
 
     public func markPeerAwaiting(childSessionId: String, since: Int64) throws {

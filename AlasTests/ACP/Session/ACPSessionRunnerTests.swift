@@ -6172,6 +6172,45 @@ struct ACPSessionRunnerTests {
         #expect(completions.first?.lastAgentText == expected)
     }
 
+    enum DroppedOnApply: CaseIterable, Sendable { case loadReplay, completedOutput }
+
+    /// Buffered text that `apply` will drop is not quoted either: a replayed
+    /// chunk, or one that would reopen output already complete.
+    @Test(arguments: DroppedOnApply.allCases)
+    func completionDoesNotQuoteBufferedTextApplyWillDrop(_ dropped: DroppedOnApply) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            session: session, onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run {
+                session.apply(agentChunk("Parser done.", id: "m1"))
+                switch dropped {
+                case .loadReplay:
+                    runner.suppressLoadReplay(throughYieldedUpdateCount: runner.observedUpdateCountForTesting + 1)
+                case .completedOutput:
+                    session.markCompletedOutputBoundary()
+                    session.allowsStreamingBoundaryCrossing = false
+                }
+            }
+            mock.emit(.init(sessionId: "s", update: agentChunk(" Parser done again.", id: "m1")))
+            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: ACPSessionRunner.blocks(text: "do it", attachments: []),
+                queuedItemId: nil,
+                onPromptFinished: { _ in continuation.resume(returning: ()) }
+            )
+        }
+
+        #expect(completions.first?.lastAgentText == "Parser done.")
+    }
+
     @Test("completion never quotes an agent message from an earlier turn")
     func completionDoesNotQuotePriorTurnText() async throws {
         var completions: [ACPTurnCompletion] = []
