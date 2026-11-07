@@ -166,11 +166,20 @@ actor ACPRawBrokerTransport {
         }
     }
 
+    private var openAuthorization: (@Sendable () async throws -> Void)?
+
+    func authorizeOpen(_ authorize: @escaping @Sendable () async throws -> Void) throws {
+        guard !started, !terminated, orderedIntake?.isValid == true, openAuthorization == nil else { throw ACPClientError.notRunning }
+        openAuthorization = authorize
+    }
+
     func start() async throws -> ACPBrokerOpenResult {
         guard !terminated, !started else { throw ACPClientError.notRunning }
         started = true
         do {
-        let opened = try await service.open(openParams)
+        let opened: ACPBrokerOpenResult
+        if let openAuthorization { opened = try await service.open(openParams, authorizeBeforeSend: openAuthorization) }
+        else { opened = try await service.open(openParams) }
         try validate(opened.snapshot, expected: openParams.expectedGeneration)
         openFinished = true
         openedIdentity = (opened.snapshot.metadata.generation, !opened.adopted && freshSourceMatches(opened.snapshot))

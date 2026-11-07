@@ -15,7 +15,7 @@ extension ACPV2PreviewEligibility {
         environment: [String: String]? = nil, cwd: URL? = nil) async throws -> ACPV2PreviewLaunchIdentity {
         let environment = environment ?? ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
         let before = try await resolveFiles(launchSpec: launchSpec, helper: helperURL, environment: environment, cwd: cwd)
-        guard qualifiedAdapters.contains(where: { contentMatches(before, $0) && $0.approvalMode == before.approvalMode && $0.providerID == before.providerID }) else { return before }
+        guard qualificationEvidence.contains(where: { contentMatches(before, $0) && $0.approvalMode == before.approvalMode && $0.providerID == before.providerID }) else { return before }
         let provider = await authenticatedProvider(before, environment: environment, cwd: cwd)
         try Task.checkCancellation()
         let after = try await resolveFiles(launchSpec: launchSpec, helper: helperURL, environment: environment, cwd: cwd)

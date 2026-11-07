@@ -1,10 +1,13 @@
 import Foundation
 
 extension ACPV2PreviewEligibility {
-    // Exact package/helper/interpreter pairs from the committed local qualification evidence.
-    // Release builds contain no eligible records.
+    // App qualification is incomplete. Package evidence alone does not enable creation.
+    public static let qualifiedAdapters: [ACPV2PreviewQualifiedAdapter] = []
+
+    // Exact pairs retained for qualification and identity verification, not admission.
+    // Release builds contain no qualification records.
     #if DEBUG
-    public static let qualifiedAdapters: [ACPV2PreviewQualifiedAdapter] = [
+    public static let qualificationEvidence: [ACPV2PreviewQualifiedAdapter] = [
         .init(
             agentID: "codex",
             packageName: "@alas-ide/codex-acp",
@@ -22,6 +25,6 @@ extension ACPV2PreviewEligibility {
         ),
     ]
     #else
-    public static let qualifiedAdapters: [ACPV2PreviewQualifiedAdapter] = []
+    public static let qualificationEvidence: [ACPV2PreviewQualifiedAdapter] = []
     #endif
 }

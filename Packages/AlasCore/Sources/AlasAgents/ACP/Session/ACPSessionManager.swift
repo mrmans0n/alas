@@ -1522,6 +1522,7 @@ public final class ACPSessionManager: ChangeTracking {
     private var v2PreviewCreations: [ACPSession.ID: UUID] = [:]
     private var v2PreviewProcessesEnded: Set<ACPSession.ID> = []
 #if DEBUG
+    public var v2PreviewAdmissionRecordsForTesting: [ACPV2PreviewQualifiedAdapter]?
     public var prepareV2PreviewLaunchForTesting: (@MainActor (String) async throws -> ACPV2PreviewPreparedLaunch)?
 #endif
     private let setupEvaluator: ACPSetupEvaluator
@@ -11073,9 +11074,16 @@ private final class WeakBrokerClientBox: @unchecked Sendable {
 }
 
 extension ACPSessionManager {
+    private var v2PreviewAdmissionRecords: [ACPV2PreviewQualifiedAdapter] {
+#if DEBUG
+        if let v2PreviewAdmissionRecordsForTesting { return v2PreviewAdmissionRecordsForTesting }
+#endif
+        return ACPV2PreviewEligibility.qualifiedAdapters
+    }
+
     public var offersV2PreviewCreation: Bool {
 #if DEBUG
-        !isDisposed && experimentalACP2Enabled() && effectiveRemoteHost() == nil && !ACPV2PreviewEligibility.qualifiedAdapters.isEmpty
+        !isDisposed && experimentalACP2Enabled() && effectiveRemoteHost() == nil && !v2PreviewAdmissionRecords.isEmpty
 #else
         false
 #endif
@@ -11102,7 +11110,7 @@ extension ACPSessionManager {
 
     private func prepareV2PreviewLaunch(agentId: String) async throws -> ACPV2PreviewPreparedLaunch {
 #if DEBUG
-        if let prepareV2PreviewLaunchForTesting { return try await prepareV2PreviewLaunchForTesting(agentId) }
+        if let prepareV2PreviewLaunchForTesting { return try canonicalV2PreviewLaunch(await prepareV2PreviewLaunchForTesting(agentId)) }
 #endif
         guard let base = ACPLaunchCatalog.spec(for: agentId), ACPManagedAdapterDescriptor.descriptor(for: agentId) != nil else { throw ACPV2PreviewManagerError.unavailable }
         await ShellEnvResolver.shared.waitUntilResolved()
@@ -11118,7 +11126,15 @@ extension ACPSessionManager {
         let helper = try LocalACPBrokerService.resolveBundledHelper(resourceURL: Bundle.main.resourceURL ?? Bundle.main.bundleURL)
         let identity = try await ACPV2PreviewEligibility.resolveIdentity(launchSpec: spec, helperURL: helper,
             environment: launchEnvironment, cwd: URL(fileURLWithPath: worktreePath))
-        return .init(spec: spec, environment: launchEnvironment, helperURL: helper, identity: identity)
+        return try canonicalV2PreviewLaunch(.init(spec: spec, environment: launchEnvironment, helperURL: helper, identity: identity))
+    }
+
+    private func canonicalV2PreviewLaunch(_ prepared: ACPV2PreviewPreparedLaunch) throws -> ACPV2PreviewPreparedLaunch {
+        guard prepared.spec.command.hasPrefix("/"),
+              URL(fileURLWithPath: prepared.spec.command).resolvingSymlinksInPath().standardizedFileURL.path
+                == prepared.identity.executable.path else { throw ACPV2PreviewManagerError.changedLaunch }
+        return .init(spec: prepared.spec.overridingCommand(prepared.identity.executable.path),
+            environment: prepared.environment, helperURL: prepared.helperURL, identity: prepared.identity)
     }
 
     private func qualifiedV2Preview(_ prepared: ACPV2PreviewPreparedLaunch, writerLeaseCurrent: Bool) throws -> ACPV2PreviewQualifiedAdapter {
@@ -11131,7 +11147,7 @@ extension ACPSessionManager {
               prepared.spec.command == prepared.identity.executable.path,
               prepared.helperURL.resolvingSymlinksInPath().path == prepared.identity.helper.path else { throw ACPV2PreviewManagerError.changedLaunch }
         let admission = ACPV2PreviewEligibility.evaluate(identity: prepared.identity,
-            records: ACPV2PreviewEligibility.qualifiedAdapters, debugBuild: debugBuild,
+            records: v2PreviewAdmissionRecords, debugBuild: debugBuild,
             experimentalEnabled: experimentalACP2Enabled(), explicitPreview: true, local: effectiveRemoteHost() == nil,
             fresh: true, writerLeaseCurrent: writerLeaseCurrent)
         guard case .allowed(let record) = admission else { throw ACPV2PreviewManagerError.unavailable }
@@ -11197,10 +11213,13 @@ extension ACPSessionManager {
                 prepareForOpen: { [weak self, weak session] in
                     guard let self, let session, !self.isDisposed, self.sessions[id] === session,
                           self.v2PreviewOwners[id]?.epoch == epoch else { throw ACPV2PreviewManagerError.invalidated }
+                    guard await self.confirmedWriterLease(for: id) else { throw ACPV2PreviewManagerError.invalidated }
                     let current = try await self.prepareV2PreviewLaunch(agentId: agentId)
+                    guard !self.isDisposed, self.sessions[id] === session, self.v2PreviewOwners[id]?.epoch == epoch,
+                          self._ownedLeases.contains(id), self.ownedLeaseTokens[id] == token else { throw ACPV2PreviewManagerError.invalidated }
                     guard current.identity == prepared.identity, current.environment == prepared.environment,
                           current.spec.command == prepared.spec.command, deadline > .now else { throw ACPV2PreviewManagerError.changedLaunch }
-                    _ = try self.qualifiedV2Preview(current, writerLeaseCurrent: await self.confirmedWriterLease(for: id))
+                    _ = try self.qualifiedV2Preview(current, writerLeaseCurrent: true)
                 })
             v2PreviewOwners[id] = (epoch, preview)
             try await preview.start(params: .init(cwd: worktreePath, mcpServers: []), deadline: deadline)

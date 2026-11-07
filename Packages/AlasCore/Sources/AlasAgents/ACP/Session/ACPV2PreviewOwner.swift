@@ -135,8 +135,14 @@ public final class ACPV2PreviewOwner {
         monitor = Task { [weak self] in
             for await value in runner.observations { self?.observed(value) }
         }
-        try await prepareForOpen?()
-        guard await currentLease() else { throw Failure.invalidated }
+        if let prepareForOpen {
+            try await client.authorizeV2PreviewOpen { [weak self] in
+                guard let self else { throw Failure.invalidated }
+                guard await self.currentLease() else { throw Failure.invalidated }
+                try await prepareForOpen()
+                try await self.requireCurrent()
+            }
+        }
         try requireCurrent()
         let result = try await runner.start(params: params, deadline: deadline)
         try requireCurrent()
@@ -183,8 +189,8 @@ public final class ACPV2PreviewOwner {
             try requireCurrent()
             switch record.recovery {
             case .accepted: break // Acceptance does not finish foreground work.
-            case .rpcFailure: awaitingSubmission = false
-            case .uncertain, .uninterpretable: fail("The prompt handoff could not be confirmed")
+            case .rpcFailure, .uncertain, .uninterpretable:
+                fail("The prompt handoff could not be confirmed")
             }
             scheduleDisplay()
             onChange()
@@ -391,6 +397,7 @@ public final class ACPV2PreviewOwner {
     private func fail(_ message: String) {
         guard active else { return }
         status = .failed(message)
+        session.lastError = message
         stopActions()
         scheduleDisplay()
         onChange()

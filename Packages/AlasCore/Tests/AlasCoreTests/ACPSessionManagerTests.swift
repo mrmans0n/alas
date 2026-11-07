@@ -5,6 +5,18 @@ import AlasCore
 // Manager membership, projection and command admission are main-actor APIs.
 @MainActor
 struct ACPSessionManagerTests {
+    @Test func incompleteAppQualificationKeepsProductionAdmissionEmpty() async throws {
+        let fixture = try PreviewManagerFixture()
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        fixture.manager.prepareV2PreviewLaunchForTesting = nil
+        fixture.manager.v2PreviewAdmissionRecordsForTesting = nil
+        #expect(ACPV2PreviewEligibility.qualifiedAdapters.isEmpty)
+        #expect(!fixture.manager.offersV2PreviewCreation)
+        await #expect(throws: (any Error).self) { try await fixture.manager.createV2PreviewSession(agentId: "codex") }
+        #expect(await fixture.service.opened.isEmpty)
+        #expect(try fixture.store.recentSessions().isEmpty)
+    }
+
     @Test(arguments: ["disabled", "changed", "startup", "reopen"])
     func explicitPreviewNeverFallsThroughTheLegacyFactories(failure: String) async throws {
         let fixture = try PreviewManagerFixture()
@@ -26,6 +38,34 @@ struct ACPSessionManagerTests {
         let rows = try fixture.store.recentSessions()
         #expect(rows.allSatisfy { $0.runtimeKind == .v2FreshPreview })
         if failure != "disabled" { #expect(rows.count == 1) }
+        await fixture.manager.disposeAllLiveSessions()
+    }
+
+    @Test func npmBinSymlinksOpenTheirQualifiedPackageExecutable() async throws {
+        let fixture = try PreviewManagerFixture(npmSymlink: true)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let session = try await fixture.manager.createV2PreviewSession(agentId: "codex")
+        #expect(fixture.manager.v2PreviewPresentation(for: session.id).status == .ready)
+        #expect(await fixture.service.opened.first?.command == fixture.canonicalCommand)
+        await fixture.manager.disposeAllLiveSessions()
+    }
+
+    @Test(arguments: ["dependency", "provider"])
+    func finalLaunchIdentityFollowsHeldBrokerPreparation(change: String) async throws {
+        let fixture = try PreviewManagerFixture(npmSymlink: true)
+        defer { fixture.manager.shutdownBackgroundTasks()
+        Task { await fixture.service.releasePreparation() } }
+        await fixture.service.holdPreparation()
+        let starting = Task { try await fixture.manager.createV2PreviewSession(agentId: "codex") }
+        try await eventually { await fixture.service.preparationCount > 0 }
+        if change == "dependency" {
+            try Data("changed dependency".utf8).write(to: #require(fixture.dependencyURL))
+        } else { fixture.probe.changeProviderOnRevalidation = true }
+        await fixture.service.releasePreparation()
+        let session = try await starting.value
+        #expect(await fixture.service.opened.isEmpty)
+        #expect(!fixture.manager.v2PreviewPresentation(for: session.id).canSend)
+        #expect(session.lastError != nil)
         await fixture.manager.disposeAllLiveSessions()
     }
 
@@ -145,13 +185,36 @@ struct ACPSessionManagerTests {
 private final class PreviewManagerFixture {
     final class Probe { var enabled = true
     var changeOnRevalidation = false
+    var changeProviderOnRevalidation = false
     var preparations = 0
     var legacyFactoryCalls = 0 }
     let probe = Probe()
     let service = PreviewManagerBrokerService()
     let store: ACPSessionStore
     let manager: ACPSessionManager
-    init() throws {
+    let canonicalCommand: String
+    let dependencyURL: URL?
+    init(npmSymlink: Bool = false) throws {
+        let command: String
+        if npmSymlink {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("preview-npm-bin-\(UUID())", isDirectory: true)
+            let entry = root.appendingPathComponent("package/dist/index.js")
+            let bin = root.appendingPathComponent("bin/codex-acp")
+            try FileManager.default.createDirectory(at: entry.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: bin.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("#!/usr/bin/env node\n".utf8).write(to: entry)
+            try FileManager.default.createSymbolicLink(at: bin, withDestinationURL: entry)
+            let dependency = root.appendingPathComponent("package/dependency.js")
+            try Data("original dependency".utf8).write(to: dependency)
+            dependencyURL = dependency
+            command = bin.path
+            canonicalCommand = entry.resolvingSymlinksInPath().path
+        } else { command = "/qualified/adapter"
+        canonicalCommand = command
+        dependencyURL = nil }
+        let canonicalCommand = canonicalCommand
+        let dependencyURL = dependencyURL
+        let originalDependency = try dependencyURL.map { try ACPLaunchContentIdentity.fileDigest($0) }
         store = try ACPSessionStore(path: FileManager.default.temporaryDirectory.appendingPathComponent("preview-manager-\(UUID()).sqlite").path)
         let probe = probe
         let service = service
@@ -160,14 +223,15 @@ private final class PreviewManagerFixture {
             setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in probe.legacyFactoryCalls += 1
             throw ACPClientError.notRunning },
             brokerServiceFactory: { service })
+        manager.v2PreviewAdmissionRecordsForTesting = ACPV2PreviewEligibility.qualificationEvidence
         manager.prepareV2PreviewLaunchForTesting = { agentId in
             probe.preparations += 1
-            let record = try #require(ACPV2PreviewEligibility.qualifiedAdapters.first { $0.agentID == agentId })
-            let spec = try #require(ACPLaunchCatalog.spec(for: agentId)).overridingCommand("/qualified/adapter").mergingExtraEnv(["INITIAL_AGENT_MODE": "read-only"])
+            let record = try #require(ACPV2PreviewEligibility.qualificationEvidence.first { $0.agentID == agentId })
+            let spec = try #require(ACPLaunchCatalog.spec(for: agentId)).overridingCommand(command).mergingExtraEnv(["INITIAL_AGENT_MODE": "read-only"])
             let identity = ACPV2PreviewLaunchIdentity(agentID: agentId, packageName: record.packageName, packageVersion: record.packageVersion,
-                packageDigest: record.packageDigest, helperDigest: probe.changeOnRevalidation && probe.preparations > 1 ? "changed" : record.helperDigest,
-                providerID: record.providerID, approvalMode: record.approvalMode, nodeDigest: record.nodeDigest, sourceCommit: record.sourceCommit,
-                executable: URL(fileURLWithPath: spec.command), packageRoot: URL(fileURLWithPath: "/qualified/package"),
+                packageDigest: try dependencyURL.map { try ACPLaunchContentIdentity.fileDigest($0) } == originalDependency ? record.packageDigest : "changed", helperDigest: probe.changeOnRevalidation && probe.preparations > 1 ? "changed" : record.helperDigest,
+                providerID: probe.changeProviderOnRevalidation && probe.preparations > 1 ? "changed" : record.providerID, approvalMode: record.approvalMode, nodeDigest: record.nodeDigest, sourceCommit: record.sourceCommit,
+                executable: URL(fileURLWithPath: canonicalCommand), packageRoot: URL(fileURLWithPath: "/qualified/package"),
                 helper: URL(fileURLWithPath: "/qualified/helper"), nodeExecutable: URL(fileURLWithPath: "/qualified/node"), routingDigest: "fixture")
             return ACPV2PreviewPreparedLaunch(spec: spec, environment: ["INITIAL_AGENT_MODE": "read-only"], helperURL: identity.helper, identity: identity)
         }
@@ -206,7 +270,27 @@ private actor PreviewManagerBrokerService: ACPBrokerServicing {
         return .init(metadata: metadata, initializeResult: nil, remoteSessionResult: nil, turnState: .unknown("unknown"),
             acknowledgedCursor: .init(rawValue: acknowledged), journalTail: .init(rawValue: cursor), pendingRequests: [], operations: [])
     }
+    private var preparationHeld = false
+    private var preparationWaiter: CheckedContinuation<Void, Never>?
+    var preparationCount = 0
+    func holdPreparation() { preparationHeld = true }
+    func releasePreparation() { preparationHeld = false
+    preparationWaiter?.resume()
+    preparationWaiter = nil }
+    private func prepareOpen() async {
+        preparationCount += 1
+        if preparationHeld { await withCheckedContinuation { preparationWaiter = $0 } }
+    }
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        await prepareOpen()
+        return try await performOpen(params)
+    }
+    func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult {
+        await prepareOpen()
+        try await authorizeBeforeSend()
+        return try await performOpen(params)
+    }
+    private func performOpen(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
         var value = ACPBrokerMetadata(brokerId: params.brokerId, generation: .init(rawValue: 7), alasSessionId: params.sessionId,
             adapterProgram: params.command, adapterArgs: params.args, cwd: params.cwd, envKeys: Array(params.env.keys), createdAtMillis: 0)

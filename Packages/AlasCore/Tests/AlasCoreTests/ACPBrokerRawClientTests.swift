@@ -1564,7 +1564,8 @@ actor RawBrokerFixture: ACPBrokerServicing {
     func preloadAcknowledgement(_ value: UInt64) { acks = [value] }
     func setPendingOverride(_ value: [ACPBrokerPendingRequest]) { pendingOverride = value }
     let isError: Bool
-    let adapterError: Data?
+    private var adapterError: Data?
+    func setAdapterError(_ frame: Data) { adapterError = frame }
     var completionCursor: UInt64 = 3
     func setCompletionCursor(_ value: UInt64) { completionCursor = value }
     func preloadOutcome(_ value: ACPBrokerRPCOutcome, cursor: UInt64) { outcome = value
@@ -1769,6 +1770,30 @@ actor RawBrokerFixture: ACPBrokerServicing {
 }
 
 struct ACPBrokerRawHelperTests {
+    @Test func brokerOpenRevalidatesAfterHelperCapabilityPreparation() async throws {
+        let transport = RawHelperTransport(supported: true, holdHello: true)
+        let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        let authorized = Mutex(true)
+        let calls = Mutex(0)
+        var params = ACPBrokerOpenParams(brokerId: .init(rawValue: "raw"), sessionId: "s", command: "fixture", args: [], cwd: "/tmp", env: [:])
+        params.wireContext = .rawV2
+        let opening = Task {
+            try await client.openACPBroker(params, authorizeBeforeSend: {
+                calls.withLock { $0 += 1 }
+                guard authorized.withLock({ $0 }) else { throw CancellationError() }
+            })
+        }
+        defer { opening.cancel()
+        Task { await client.shutdown() } }
+        try await eventually { transport.methods.contains("hello") }
+        #expect(calls.withLock { $0 } == 0)
+        authorized.withLock { $0 = false }
+        transport.releaseHello()
+        await #expect(throws: (any Error).self) { try await opening.value }
+        #expect(calls.withLock { $0 } == 1)
+        #expect(!transport.methods.contains("acp/raw/open"))
+    }
+
     @Test func helperObservationEndCannotLeaveAnRPCWaitingOrInventAnExitCode() async throws {
         let transport = RawHelperTransport(supported: true, holdAck: true)
         let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })

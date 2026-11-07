@@ -8,6 +8,7 @@ import AlasCode
 
 public protocol ACPBrokerServicing: Sendable {
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult
+    func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK
@@ -19,6 +20,10 @@ public protocol ACPBrokerServicing: Sendable {
 }
 
 extension ACPBrokerServicing {
+    public func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult {
+        throw ACPClientError.notRunning
+    }
+
     public func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
         throw ACPBrokerRawReplyError.rejected(.unavailable)
     }
@@ -106,6 +111,11 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     public func claimV2OrderedIntake() async throws -> ACPV2OrderedIntake {
         guard let rawTransport else { throw ACPClientError.notRunning }
         return try await rawTransport.claimOrderedIntake()
+    }
+
+    public func authorizeV2PreviewOpen(_ authorize: @escaping @Sendable () async throws -> Void) async throws {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        try await rawTransport.authorizeOpen(authorize)
     }
 
     public func validateV2OrderedIntake(_ intake: ACPV2OrderedIntake?) throws {

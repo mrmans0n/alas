@@ -52,6 +52,26 @@ struct ACPV2PreviewOwnerTests {
         }
     }
 
+    @Test func promptRPCFailureKeepsUncertainInsertionUnavailable() async throws {
+        let fixture = try await PreviewOwnerFixture()
+        defer { fixture.owner.withdraw()
+        Task { await fixture.client.detach() } }
+        try await fixture.start()
+        let sent = await fixture.service.sentRequests.count
+        await fixture.service.setAdapterError(Data(#"{"jsonrpc":"2.0","id":9,"error":{"code":-32000,"message":"prompt rejected"}}"#.utf8))
+        let record = try await fixture.owner.send(text: "one uncertain prompt")
+        if case .rpcFailure = record.recovery {} else { Issue.record("Expected the adapter RPC failure") }
+        #expect(!fixture.owner.presentation.canSend)
+        #expect(fixture.session.lastError != nil)
+        await #expect(throws: (any Error).self) { try await fixture.owner.send(text: "do not retry") }
+        #expect(await fixture.service.sentRequests.count == sent + 1)
+        #expect(fixture.session.transcript.messages.filter { if case .user = $0 { return true }
+        return false }.count == 1)
+        await fixture.owner.flushDisplay()
+        let saved = try await fixture.persistence.loadV2PreviewDisplay(sessionId: "s")
+        #expect(saved?.status == .failed && saved?.failureMessage != nil)
+    }
+
     @Test func withdrawalPreventsHeldDisplayAndReplyWorkFromRestoringAuthority() async throws {
         let gate = PreviewDisplayGate()
         let fixture = try await PreviewOwnerFixture(displayGate: gate)
