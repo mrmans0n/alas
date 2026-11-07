@@ -350,7 +350,7 @@ if let listen = config.hostRemoteListen {
     peers.pairingScope = .delegation
     // Before the links connect, so each offers the route it serves.
     peerRouteHost = PeerRouteHost(links: peers, server: protocolServer)
-    let delegation = HostPeerDelegation(links: peers)
+    let delegation = HostPeerDelegation(links: peers, routes: server)
     host.coreContext.delegationPeers = delegation.client
     peerDelegation = delegation
     server.pairsBackWithPeers = false

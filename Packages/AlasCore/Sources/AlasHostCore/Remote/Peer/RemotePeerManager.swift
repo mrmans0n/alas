@@ -1367,6 +1367,17 @@ public final class RemotePeerManager {
         return !isProvisional(peer.serverId) && peer.isVerified && states[peerId] == .online
     }
 
+    /// Peers that paired here inbound-only and proved their key doing so, with
+    /// the device each reaches this Mac with. This Mac can reach them only
+    /// over that device's own link.
+    public var provenInboundOnlyPeers: [(peer: RemotePeer, deviceId: String)] {
+        peers.compactMap { peer in
+            guard peer.isInboundOnly, let deviceId = peer.localDeviceId, let device = pairing.device(id: deviceId),
+                  PeerDelegationGate.isProven(device), device.peerServerId == peer.serverId else { return nil }
+            return (peer, deviceId)
+        }
+    }
+
     /// A record whose peer may send requests back over this Mac's link: one
     /// pinned to a key, which each socket proves, with no device here,
     /// which is what a host that paired inbound-only leaves.
