@@ -147,6 +147,9 @@ public struct RemoteHTTPResponder: Sendable {
             /// A nonce the pairing peer minted. Present only for peer
             /// requests; browsers pin nothing and send none.
             let challenge: String?
+            /// The redeemer's signature over its server id and `code`, with
+            /// the key it advertises. Older peers send none.
+            let proof: String?
         }
         struct PairReply: Encodable {
             let token: String
@@ -184,7 +187,9 @@ public struct RemoteHTTPResponder: Sendable {
                 let bytes = try approval.coordinator.redeem(envelope) {
                     guard approval.enabled(), let callback = onApprovedPeerPaired
                     else { throw ApprovalFailure.disabled }
-                    let result = pairing.issueApprovedPeer(deviceName: peer.name, peerServerId: peer.serverId)
+                    // The coordinator verified the envelope against this key.
+                    let result = pairing.issueApprovedPeer(deviceName: peer.name, peerServerId: peer.serverId,
+                                                           peerPublicKey: peer.publicKey)
                     do {
                         let proof = pr.challenge.flatMap { identityProof?($0) }
                         let pairBody = try JSONEncoder().encode(PairReply(token: result.token,
@@ -248,8 +253,18 @@ public struct RemoteHTTPResponder: Sendable {
             if inboundOnly, admitsInboundOnlyPeer?(peer) == false {
                 return forbidden(Self.rebindRefusedError)
             }
+            // Shape first, so nothing malformed reaches a signature check,
+            // and both refusals leave the code unconsumed.
+            if let proof = pr.proof {
+                guard let key = peer.publicKey, RemoteIdentityCrypto.isPlausibleSignature(proof)
+                else { return forbidden("peer rejected") }
+                if pairing.hasOtherProvenKey(serverId: peer.serverId, publicKey: key) {
+                    return forbidden(Self.rebindRefusedError)
+                }
+            }
             guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
-                                                       peerServerId: peer.serverId) else { return unauthorized }
+                                                       peerServerId: peer.serverId, peerPublicKey: peer.publicKey,
+                                                       proof: pr.proof) else { return unauthorized }
             token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,

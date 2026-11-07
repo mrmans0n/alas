@@ -91,6 +91,7 @@ extension AlasCoreContext {
             availabilityChanged: { orchestration.peerAvailabilityChanged(serverId: $0) },
             childBlocked: { [weak self] in self?.peerChildBlocked?($0, $1, $2) },
             retryStarts: { await orchestration.retryPeerStarts(serverId: $0) },
+            identityUnproven: { await orchestration.peerIdentityUnproven(serverId: $0, name: $1) },
             settleQuietChildren: { await orchestration.settleQuietPeerChildren(serverId: $0) },
             schedule: { delay, work in
                 Task { @MainActor in

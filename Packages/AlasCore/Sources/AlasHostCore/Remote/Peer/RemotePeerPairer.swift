@@ -73,12 +73,16 @@ public struct RemotePeerPairer {
     /// runs exactly as before.
     public func pair(origins: [String], code: String, deviceName: String,
               advertisement: RemotePeerAdvertisement?,
+              proof: String? = nil,
               isolation: isolated (any Actor)? = #isolation) async -> Outcome {
         struct Body: Encodable {
             let code: String
             let deviceName: String
             let peer: RemotePeerAdvertisement?
             let challenge: String
+            /// This Mac's signature over its server id and `code`, proving it
+            /// holds the key `peer` advertises.
+            let proof: String?
         }
         struct Reply: Decodable {
             let token: String
@@ -94,7 +98,7 @@ public struct RemotePeerPairer {
         // cannot be replayed into this one.
         let challenge = RemoteIdentityCrypto.randomChallenge()
         let body = try? JSONEncoder().encode(
-            Body(code: code, deviceName: deviceName, peer: advertisement, challenge: challenge))
+            Body(code: code, deviceName: deviceName, peer: advertisement, challenge: challenge, proof: proof))
         // A 401 or 403 only proves what THAT origin thinks: a stale advertised
         // address can have been reassigned to an unrelated Alas instance,
         // which correctly rejects a code it has never seen (401) or simply

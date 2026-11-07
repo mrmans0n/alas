@@ -339,6 +339,7 @@ if let listen = config.hostRemoteListen {
             publicKey: identityKey.publicKey
         )
     }
+    peers.signRedeem = { identityKey.redeemProof(code: $0, serverId: $1) }
     let delegation = HostPeerDelegation(links: peers)
     host.coreContext.delegationPeers = delegation.client
     peerDelegation = delegation

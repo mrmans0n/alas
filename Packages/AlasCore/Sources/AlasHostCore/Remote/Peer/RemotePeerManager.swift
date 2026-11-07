@@ -290,6 +290,20 @@ public final class RemotePeerManager {
         // `reduce`, not `Dictionary(uniqueKeysWithValues:)`: a corrupted
         // store with a duplicate `serverId` must not crash init.
         self.durableStateByServerId = self.peers.reduce(into: [:]) { $0[$1.serverId] = $1 }
+        recordProvenKeysOfEarlierPairings()
+    }
+
+    /// Devices made before they recorded keys. A record holding both a token
+    /// and a key paired two ways, and its key was proved by this Mac's own
+    /// `/pair`, so the device that peer reaches this Mac with is proven too.
+    /// An inbound-only record never proved a key, and stays unproven.
+    private func recordProvenKeysOfEarlierPairings() {
+        for peer in peers where !peer.token.isEmpty {
+            guard let key = peer.publicKey, !key.isEmpty, let deviceId = peer.localDeviceId,
+                  let device = pairing.device(id: deviceId), device.peerPublicKey == nil,
+                  device.peerServerId == peer.serverId else { continue }
+            pairing.recordPeerPublicKey(key, deviceId: deviceId)
+        }
     }
 
     // MARK: - Pairing
@@ -305,6 +319,17 @@ public final class RemotePeerManager {
         return LocalIdentity(serverId: me.serverId, name: me.name,
                              origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)),
                              publicKey: me.publicKey)
+    }
+
+    /// Signs a redeem of `code` as this Mac, when there is a key to sign
+    /// with. Set by whoever owns the identity key.
+    @ObservationIgnored public var signRedeem: (@MainActor (_ code: String, _ serverId: String) -> String?)?
+
+    /// This Mac's proof for redeeming `code` under `advertisement`. Only with
+    /// an advertised key, since the responder checks the proof against it.
+    private func redeemProof(code: String, advertisement: RemotePeerAdvertisement) -> String? {
+        guard advertisement.publicKey != nil else { return nil }
+        return signRedeem?(code, advertisement.serverId)
     }
 
     /// This Mac's advertisement, with the key a peer should pin us to.
@@ -349,7 +374,8 @@ public final class RemotePeerManager {
         let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, !origins.isEmpty else { return .invalidLink }
         return await completePairing(origins: origins, expectedPeer: nil, localPeer: nil) { ad in
-            await self.pairer.pair(origins: origins, code: code, deviceName: ad.name, advertisement: ad)
+            await self.pairer.pair(origins: origins, code: code, deviceName: ad.name, advertisement: ad,
+                                   proof: self.redeemProof(code: code, advertisement: ad))
         }
     }
 
@@ -769,7 +795,8 @@ public final class RemotePeerManager {
             let advertisement = localPeer.map { RemotePeerAdvertisement(serverId: $0.serverID, name: $0.name,
                 origins: $0.origins, counterCode: nil, publicKey: $0.publicKey) } ?? advertisement(counterCode: nil)
             guard case .paired(let token, let repliedServerId, _, let repliedPublicKey, let origin, _) = await pairer.pair(
-                origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement)
+                origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement,
+                proof: redeemProof(code: counterCode, advertisement: advertisement))
             else {
                 // The peer already holds a token for this Mac: it was minted
                 // before this branch ran. Returning empty-handed would leave it
@@ -833,6 +860,9 @@ public final class RemotePeerManager {
             }
             lastUpsertOwnerByServerId[request.peerServerId] = counterCode
             if approvalID != nil { pairing.commitApprovedPeer(deviceId: request.localDeviceId) }
+            // The pair-back proved this key, so the device it pairs with is
+            // that peer's, whatever its own redeem carried.
+            if let repliedPublicKey { pairing.recordPeerPublicKey(repliedPublicKey, deviceId: request.localDeviceId) }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, publicKey: repliedPublicKey,
                    localDeviceId: request.localDeviceId)
@@ -956,9 +986,12 @@ public final class RemotePeerManager {
     /// Sets the access of the inbound device `peerId` reaches this Mac with,
     /// and of every other device carrying its identity: a re-pair leaves the
     /// earlier ones with live tokens, and the gate reads whichever authenticated.
-    /// False when the peer has no such device (reciprocal pairing never completed).
+    /// False when the peer has no such device (reciprocal pairing never completed),
+    /// or when allowing anything on a device that never proved its identity,
+    /// which the gate would refuse anyway. Turning access off always works.
     public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
         guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
+              access == .off || pairing.device(id: deviceId).map(PeerDelegationGate.isProven) == true,
               pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
         for other in deviceIds(of: peer) where other != deviceId {
             pairing.setAgentAccess(access, deviceId: other)
@@ -1083,6 +1116,11 @@ public final class RemotePeerManager {
                 }
                 var confirmed = ownFields
                 confirmed.localDeviceId = buffered.localDeviceId
+                // This attempt's own `/pair` proved the record's key, and the
+                // callback redeemed the code minted for that attempt alone.
+                if let pinned = confirmed.publicKey, !pinned.isEmpty {
+                    pairing.recordPeerPublicKey(pinned, deviceId: buffered.localDeviceId)
+                }
                 peers[index] = confirmed
                 lastUpsertOwnerByServerId[confirmed.serverId] = counterCode
                 if approvedCounterCodes.contains(counterCode) {
