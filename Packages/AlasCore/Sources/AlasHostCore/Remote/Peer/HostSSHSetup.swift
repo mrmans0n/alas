@@ -344,9 +344,7 @@ public struct HostSSHSetup: Sendable {
         var warnings: [String] = []
         for agent in AgentBuiltins.catalog where agents[agent.id] == true {
             guard let adapter = ACPManagedAdapterDescriptor.descriptor(for: agent.id) else { continue }
-            let script = "if command -v \(SSHCommand.shellQuote(agent.binary)) >/dev/null 2>&1 "
-                + "&& ! command -v \(SSHCommand.shellQuote(adapter.binaryName)) >/dev/null 2>&1; then "
-                + "npm install -g --no-fund --no-audit \(SSHCommand.shellQuote(adapter.packageName)); fi"
+            let script = Self.adapterInstallScript(cli: agent.binary, adapter: adapter)
             // As the host reads its PATH: `npm` often comes from `.zshrc`.
             let command = "\"${SHELL:-/bin/zsh}\" -lic \(SSHCommand.shellQuote(script)) </dev/null"
             do {
@@ -359,6 +357,23 @@ public struct HostSSHSetup: Sendable {
             }
         }
         return warnings
+    }
+
+    /// Installs `adapter` unless it is ready as `ACPSetupChecker` means it:
+    /// the global binary belongs to the package, since a legacy package
+    /// exposes the same name and won't start. `--force` replaces that link.
+    /// Only Pi's adapter may also come from anywhere on PATH.
+    static func adapterInstallScript(cli: String, adapter: ACPManagedAdapterDescriptor) -> String {
+        let binary = SSHCommand.shellQuote(adapter.binaryName)
+        let package = SSHCommand.shellQuote(adapter.packageName)
+        let anywhere = adapter == .pi ? "command -v \(binary) >/dev/null 2>&1 || " : ""
+        return """
+        if command -v \(SSHCommand.shellQuote(cli)) >/dev/null 2>&1; then \
+        p=$(cd "$(npm root -g)"/\(package) 2>/dev/null && pwd -P); \
+        t=$(readlink -f "$(npm prefix -g)"/bin/\(binary) 2>/dev/null); \
+        if ! { \(anywhere){ [ -n "$p" ] && [ -x "$t" ] && [ "${t#"$p"/}" != "$t" ]; }; }; then \
+        npm install -g --force --no-fund --no-audit \(package); fi; fi
+        """
     }
 
     /// Installs and (re)starts the launchd agent that runs the host.
