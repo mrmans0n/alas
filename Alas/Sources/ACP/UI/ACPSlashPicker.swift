@@ -11,9 +11,19 @@ final class ACPSlashPickerModel: ObservableObject {
     @Published var query: String = ""
     @Published private(set) var selectedIndex: Int = 0
     @Published private(set) var allSuggestions: [ACPPromptSuggestion]
+    /// The session's live config options, read for the state of a command
+    /// whose negotiated action sets one.
+    @Published var configOptions: [ACPConfigOption]
 
-    init(suggestions: [ACPPromptSuggestion]) {
+    init(suggestions: [ACPPromptSuggestion], configOptions: [ACPConfigOption] = []) {
         self.allSuggestions = Self.deduplicated(suggestions)
+        self.configOptions = configOptions
+    }
+
+    /// Whether the config option a command's action sets already has the
+    /// action's value; nil when the command has no usable action.
+    func isOn(_ suggestion: ACPPromptSuggestion) -> Bool? {
+        suggestion.presentation?.action?.isOn(in: configOptions)
     }
 
     /// Replaces the suggestion list in place (e.g. a live
@@ -172,6 +182,14 @@ struct ACPSlashPickerView: View {
                 )
             }
             Spacer(minLength: 0)
+            if model.isOn(s) == true {
+                Text("On")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color("accent"))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(theme.color("accent").opacity(0.15)))
+                    .help("Picking it turns it off")
+            }
             if ACPAlasSlashCommand.isAlasCommand(s) {
                 ACPAlasCommandBadge()
             }
@@ -277,9 +295,10 @@ final class ACPSlashPickerPanel: NSPanel {
     private let onPick: (ACPPromptSuggestion) -> Void
 
     init(suggestions: [ACPPromptSuggestion],
+         configOptions: [ACPConfigOption] = [],
          theme: Theme,
          onPick: @escaping (ACPPromptSuggestion) -> Void) {
-        self.model = ACPSlashPickerModel(suggestions: suggestions)
+        self.model = ACPSlashPickerModel(suggestions: suggestions, configOptions: configOptions)
         self.onPick = onPick
         super.init(
             // Wider than the original 320pt so skill descriptions have

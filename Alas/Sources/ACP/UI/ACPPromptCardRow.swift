@@ -12,6 +12,8 @@ struct ACPPromptCardContext {
     /// The toolbar Ship pill's current state, shown when hovering a `/ship`
     /// badge; nil where the session doesn't offer Ship.
     var shipStatus: (@MainActor () -> ACPShipStatus?)? = nil
+    /// Opens a skill command's `SKILL.md`; nil where the host cannot.
+    var openSkill: (@MainActor (ACPPromptSuggestion) -> Void)? = nil
 }
 
 /// What the `/ship` hover card shows about the session's PR or gg stack.

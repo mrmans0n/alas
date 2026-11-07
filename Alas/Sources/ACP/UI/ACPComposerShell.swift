@@ -241,6 +241,8 @@ struct ACPComposer: View {
     let contextProviders: [String]
     /// Renders the session recap strip at the top of the pill.
     let recapCoordinator: SessionSummaryCoordinator?
+    /// Opens a skill command's `SKILL.md`; nil where the host cannot.
+    let openSkill: ((ACPPromptSuggestion) -> Void)?
 
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
@@ -274,6 +276,7 @@ struct ACPComposer: View {
         pluginPrompts: [ACPPromptSuggestion] = [],
         contextProviders: [String] = [],
         recapCoordinator: SessionSummaryCoordinator? = nil,
+        openSkill: ((ACPPromptSuggestion) -> Void)? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -303,6 +306,7 @@ struct ACPComposer: View {
         self.pluginPrompts = pluginPrompts
         self.contextProviders = contextProviders
         self.recapCoordinator = recapCoordinator
+        self.openSkill = openSkill
     }
 
     var body: some View {
@@ -499,7 +503,12 @@ struct ACPComposer: View {
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion]
                         + (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
-                        + pluginPrompts
+                        + pluginPrompts,
+                configOptions: session.availableConfigOptions,
+                onCommandAction: { configId, value in
+                    apply(configOptionId: configId, value: .string(value))
+                },
+                onOpenSkill: openSkill
             )
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)
