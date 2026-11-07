@@ -171,9 +171,16 @@ struct ACPUserInputPrompt: View {
     /// its own.
     private func noteView(_ field: ACPUserInputField) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Add a note")
+            Text(field.noteLabel)
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
+            if let description = field.schema.description, !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             fieldControl(field)
             if formState.shouldShowError(for: field),
                let error = formState.validationError(for: field) {
@@ -183,7 +190,7 @@ struct ACPUserInputPrompt: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Add a note")
+        .accessibilityLabel(field.noteLabel)
     }
 
     @ViewBuilder

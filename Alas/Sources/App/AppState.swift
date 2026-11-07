@@ -715,7 +715,7 @@ final class AppState {
     @ObservationIgnored
     private let automaticCheckpointService = WorktreeCheckpointService()
     let rightPaneStore = RightPaneStore()
-    /// The Device tab's simulator list, shared by every worktree's pane.
+    /// The Mac's simulators, shared by every worktree's Devices tab.
     let devicePane = DevicePaneModel()
     @ObservationIgnored
     let simulatorStreams = SimulatorStreamClient()

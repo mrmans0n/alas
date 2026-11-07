@@ -292,6 +292,10 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let sessionFailure: ACPSessionFailureDeclaration
     /// Asks our Claude and Codex adapter forks to report the files each turn changed.
     public let agentFileChangeReport: ACPAgentFileChangeReportDeclaration
+    /// Asks our Claude and Codex adapter forks for permission reasons and hints.
+    public let permissionPresentation: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks to link a free-text field to its question.
+    public let questionCustomAnswer: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -307,7 +311,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         diffPatch: ACPDiffPatchDeclaration = .init(),
         planFile: ACPPlanFileDeclaration = .init(),
         sessionFailure: ACPSessionFailureDeclaration = .init(),
-        agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init()
+        agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init(),
+        permissionPresentation: ACPPresentationContractDeclaration = .init(),
+        questionCustomAnswer: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -323,11 +329,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.planFile = planFile
         self.sessionFailure = sessionFailure
         self.agentFileChangeReport = agentFileChangeReport
+        self.permissionPresentation = permissionPresentation
+        self.questionCustomAnswer = questionCustomAnswer
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
-        case agentFileChangeReport
+        case agentFileChangeReport, permissionPresentation, questionCustomAnswer
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -352,6 +360,10 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         planFile = (try? c.decodeIfPresent(ACPPlanFileDeclaration.self, forKey: .planFile)) ?? .init()
         sessionFailure = (try? c.decodeIfPresent(ACPSessionFailureDeclaration.self, forKey: .sessionFailure)) ?? .init()
         agentFileChangeReport = (try? c.decodeIfPresent(ACPAgentFileChangeReportDeclaration.self, forKey: .agentFileChangeReport)) ?? .init()
+        permissionPresentation = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .permissionPresentation)) ?? .init()
+        questionCustomAnswer = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .questionCustomAnswer)) ?? .init()
     }
 }
 

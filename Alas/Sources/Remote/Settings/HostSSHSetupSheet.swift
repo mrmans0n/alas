@@ -193,6 +193,8 @@ struct HostSSHSetupSheet: View {
                 })
                 steps.append("Configuring the host")
                 try await setup.configure(host: host, options: options)
+                steps.append("Installing agent adapters")
+                let adapterWarnings = await setup.installAdapters(agents: options.agents)
                 steps.append("Starting the host")
                 try await setup.start(host: host)
                 steps.append("Pairing")
@@ -210,7 +212,7 @@ struct HostSSHSetupSheet: View {
                     peers.setSSHDestination(setup.destination, peerId: peer.id)
                 }
                 steps.append("Checking the host")
-                let warnings = await setup.check(host: host)
+                let warnings = await adapterWarnings + setup.check(host: host)
                 phase = .done(peerName: peer?.name ?? setup.destination, warnings: warnings)
             } catch {
                 phase = .failed(Self.describe(error, destination: setup.destination), back: back)

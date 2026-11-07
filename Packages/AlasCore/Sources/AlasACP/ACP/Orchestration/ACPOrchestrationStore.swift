@@ -377,6 +377,28 @@ public final class ACPOrchestrationStore {
         """, bindings: [since, childSessionId, since])
     }
 
+    /// Ends the wait for a child that stopped without a result and enqueues
+    /// `outcome`, together, so a crash or a failed insert cannot end the wait
+    /// with nothing to wake the parent. True only for the caller that ended it:
+    /// any instance sharing the store may be asking.
+    /// `awaitingSince` is the wait the caller saw go quiet: a prompt accepted
+    /// since starts another, which this must not end.
+    public func claimLostPeerTurn(childSessionId: String, awaitingSince: Int64?, outcome: ACPDelegatedMessage) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let claimed = try db.execChanges("""
+            UPDATE delegations SET peer_awaiting = 0
+            WHERE child_session_id = ? AND peer_awaiting = 1 AND phase = ? AND COALESCE(peer_awaiting_since, 0) = ?
+            """, bindings: [childSessionId, ACPDelegationPhase.ready.rawValue, awaitingSince ?? 0]) == 1
+            if claimed { try enqueue(outcome) }
+            try db.exec("COMMIT")
+            return claimed
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
     private func endWait(for entry: ACPPeerOutboxEntry, peerServerId: String) throws {
         // The ids the target gives outcomes; anything else leaves the child running.
         guard entry.messageId.hasPrefix("outcome-") else { return }
@@ -745,7 +767,8 @@ public final class ACPOrchestrationStore {
             ),
             role: row["role"] as? String,
             peerServerId: row["peer_server_id"] as? String,
-            peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0
+            peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0,
+            peerAwaitingSince: row["peer_awaiting_since"] as? Int64
         )
     }
 

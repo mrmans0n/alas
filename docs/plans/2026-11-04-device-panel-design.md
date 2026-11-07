@@ -80,6 +80,11 @@ on screen. The implementation plan checks both by hand.
 
 ## Phase 1 behavior
 
+> Superseded in part by the Devices tab redesign
+> (`docs/plans/2026-11-05-devices-tab-redesign-design.md`): no experiment
+> toggle, a Devices tab that also lists the worktree's VMs, per-worktree
+> selection, and the agent setting under Settings › Computer Use.
+
 - The Device tab appears in the rail only when **Settings › Advanced ›
   Experiments › Device panel** is on, only for local worktrees and folders,
   and never for peer worktrees. Turning the toggle off moves any pane showing

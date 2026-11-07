@@ -60,6 +60,77 @@ struct ACPUserInputSecretFieldTests {
         #expect(request.fields.first { $0.key == "question_0_note1" }?.schema.noteForQuestion == "question_0")
     }
 
+    private func questionForm(_ properties: String) throws -> ACPUserInputRequest {
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"{"mode":"form","message":"m","requestedSchema":{"type":"object","properties":{\#(properties)}}}"#.utf8)
+        )
+        return try #require(ACPUserInputRequest.elicitation(.init(id: .number(1), params: params)))
+    }
+
+    private static let select = #"{"type":"string","oneOf":[{"const":"A","title":"Same"},{"const":"B","title":"Same"}]}"#
+
+    private static func other(_ marker: String) -> String {
+        #"{"type":"string","title":"Other","description":"Type your own answer.","_meta":{"questionCustomAnswer":\#(marker)}}"#
+    }
+
+    @Test("the negotiated marker pairs each custom answer with its question, and submits under its own key")
+    @MainActor
+    func customAnswerPairsByMarker() throws {
+        // Keys are swapped on purpose: only the marker may decide the pairing.
+        let request = try questionForm("""
+        "q0":\(Self.select),"q1":\(Self.select),
+        "q0_custom":\(Self.other(#"{"version":1,"questionId":"q1"}"#)),
+        "q1_custom":\(Self.other(#"{"version":1,"questionId":"q0"}"#))
+        """)
+        #expect(request.fieldGroups.map(\.field.key) == ["q0", "q1"])
+        #expect(request.fieldGroups.map(\.note?.key) == ["q1_custom", "q0_custom"])
+        #expect(request.fieldGroups[0].note?.noteLabel == "Other")
+
+        let form = ACPUserInputFormState(request: request)
+        form.toggle("A", for: request.fieldGroups[0].field)
+        form.textValues["q1_custom"] = "typed"
+        #expect(form.submittedContent() == ["q0": .string("A"), "q1_custom": .string("typed")])
+    }
+
+    @Test("an unusable marker, or none, leaves a field independent", arguments: [
+        #"{"version":2,"questionId":"q0"}"#,
+        #"{"questionId":"q0"}"#,
+        #"{"version":1,"questionId":7}"#,
+        #"{"version":1,"questionId":""}"#,
+        #"{"version":1,"questionId":"missing"}"#,
+        #"{"version":1,"questionId":"Other"}"#,
+        #"true"#,
+    ])
+    func unusableMarkerStaysIndependent(marker: String) throws {
+        let request = try questionForm("\"q0\":\(Self.select),\"Other\":\(Self.other(marker))")
+        #expect(request.fieldGroups.map(\.field.key) == ["Other", "q0"])
+        #expect(request.fieldGroups.allSatisfy { $0.note == nil })
+    }
+
+    @Test("a generic form field titled Other is never guessed to be an answer")
+    func unmarkedOtherIsIndependent() throws {
+        let request = try questionForm(#""q0":\#(Self.select),"q0_custom":{"type":"string","title":"Other"}"#)
+        #expect(request.fieldGroups.map(\.field.key) == ["q0", "q0_custom"])
+        #expect(request.fieldGroups.allSatisfy { $0.note == nil })
+    }
+
+    @Test("a marker on a choice field, or a chain of markers, can't hide a field")
+    func markersCannotHideFields() throws {
+        let chain = try questionForm("""
+        "a":\(Self.other(#"{"version":1,"questionId":"b"}"#)),
+        "b":\(Self.other(#"{"version":1,"questionId":"c"}"#)),
+        "c":\(Self.select)
+        """)
+        #expect(chain.fieldGroups.map(\.field.key) == ["a", "c"])
+        #expect(chain.fieldGroups.map(\.note?.key) == [nil, "b"])
+
+        let choice = try questionForm(#"""
+        "c":\#(Self.select),"d":{"type":"string","oneOf":[{"const":"x"}],"_meta":{"questionCustomAnswer":{"version":1,"questionId":"c"}}}
+        """#)
+        #expect(choice.fieldGroups.map(\.field.key) == ["c", "d"])
+    }
+
     @Test("a note without its question stays its own group")
     func orphanNoteStaysAGroup() throws {
         let extra = #"""

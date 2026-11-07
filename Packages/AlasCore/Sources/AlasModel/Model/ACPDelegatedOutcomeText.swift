@@ -40,6 +40,15 @@ public enum ACPDelegatedOutcomeText: Sendable {
         return text
     }
 
+    /// A child on another Mac went idle with no result: stopping that Mac ends
+    /// the turn it is running and leaves nothing to report it.
+    public static func peerTurnLost(_ context: Context) -> String {
+        var local = context
+        local.machine = nil
+        return "\(systemPrefix)Delegated session \(label(local)) on \(context.machine ?? "another Mac") stopped without a result. "
+            + "That Mac may have restarted during its turn. Use session_read to see how far it got, and session_send to continue."
+    }
+
     public static func unreported(_ context: Context, lastAgentText: String?) -> String {
         var lines = [
             "[alas system] Delegated session \(label(context)) finished its turn without sending a result."
@@ -53,7 +62,7 @@ public enum ACPDelegatedOutcomeText: Sendable {
     }
 
     public static func failure(_ context: Context, message: String) -> String {
-        "[alas system] Delegated session \(label(context)) failed: \(message)."
+        "[alas system] Delegated session \(label(context)) failed: \(message)\(message.hasSuffix(".") ? "" : ".")"
     }
 
     public static func stopped(_ context: Context, reason: String) -> String {

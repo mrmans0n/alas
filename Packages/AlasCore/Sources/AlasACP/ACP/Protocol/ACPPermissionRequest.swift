@@ -13,10 +13,10 @@ import AlasCode
 /// `ACPToolCallPayload` failed silently and the user never saw the prompt.
 ///
 /// `metadata` carries the request's own `_meta` (decoded, not interpreted
-/// here — see `ACPPermissionPresentation`). claude-agent-acp ≥ 0.71 and
-/// codex-acp ≥ 1.7 attach a shared `_meta.permission` presentation
-/// extension (title/description/defaultToNo); older adapters omit `_meta`
-/// entirely and decode to `nil`.
+/// here — see `ACPPermissionPresentation`). Our adapter forks attach the
+/// negotiated `_meta.permissionPresentation`, and older adapters the legacy
+/// `_meta.permission` (title/description/defaultToNo). Others omit `_meta`
+/// and decode to `nil`.
 public struct ACPPermissionRequestParams: Codable, Equatable, Sendable {
     public let sessionId: String
     public let toolCall: ACPPermissionToolCall
@@ -119,7 +119,7 @@ public struct ACPPermissionOption: Codable, Equatable, Identifiable, Hashable, S
     public let optionId: String
     public let name: String
     public let kind: String        // "allow_once" | "allow_always" | "reject_once" | "reject_always"
-    /// `_meta.permission` for this option — see `presentationDescription`.
+    /// This option's presentation record — see `presentationDescription`.
     public let metadata: AnyCodable?
     public var id: String { optionId }
 
@@ -141,6 +141,17 @@ public struct ACPPermissionOption: Codable, Equatable, Identifiable, Hashable, S
         name = try c.decode(String.self, forKey: .name)
         kind = try c.decode(String.self, forKey: .kind)
         metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+/// `initialize.clientCapabilities._meta` opt-in of a client-neutral presentation
+/// contract. The agent's answer isn't read: each record is versioned and only
+/// affects display.
+public struct ACPPresentationContractDeclaration: Codable, Equatable, Sendable {
+    public let version: Int
+
+    public init(version: Int = 1) {
+        self.version = version
     }
 }
 
@@ -171,21 +182,31 @@ private enum ACPPermissionMeta {
     static func bool(_ object: [String: AnyCodable]?, _ key: String) -> Bool? {
         object?[key]?.value as? Bool
     }
+
+    /// The presentation record of a request or option `_meta`: the negotiated
+    /// `permissionPresentation`, else the legacy `permission`. A record of any
+    /// other version is unknown, so it never hides a readable one.
+    static func presentationRecord(_ metadata: AnyCodable?) -> [String: AnyCodable]? {
+        let root = object(metadata)
+        for key in ["permissionPresentation", "permission"] {
+            let record = nested(root, key)
+            if int(record, "version") == 1 { return record }
+        }
+        return nil
+    }
 }
 
-/// Decoded `_meta.permission` presentation attached by claude-agent-acp
-/// (≥ 0.71) and codex-acp (≥ 1.7) to `session/request_permission`. Gated on
-/// `version == 1`: missing, malformed, or future-versioned `_meta` decodes
-/// to `nil` and the prompt falls back to today's plain rendering.
+/// Decoded presentation of a `session/request_permission`. Display hints only:
+/// `options` stay what the user can decide. Gated on `version == 1`: missing,
+/// malformed, or future-versioned `_meta` decodes to `nil` and the prompt
+/// falls back to its plain rendering.
 public struct ACPPermissionPresentation: Equatable, Sendable {
     public let title: String?
     public let description: String?
     public let defaultToNo: Bool
 
     public init?(metadata: AnyCodable?) {
-        let permission = ACPPermissionMeta.object(
-            ACPPermissionMeta.object(metadata)?["permission"])
-        guard ACPPermissionMeta.int(permission, "version") == 1 else { return nil }
+        guard let permission = ACPPermissionMeta.presentationRecord(metadata) else { return nil }
         title = ACPPermissionMeta.string(permission, "title")
         description = ACPPermissionMeta.string(permission, "description")
         defaultToNo = ACPPermissionMeta.bool(permission, "defaultToNo") ?? false
@@ -193,12 +214,9 @@ public struct ACPPermissionPresentation: Equatable, Sendable {
 }
 
 extension ACPPermissionOption {
-    /// Per-option reason from `_meta.permission.description`.
+    /// Per-option reason from the option's presentation record.
     public var presentationDescription: String? {
-        let permission = ACPPermissionMeta.object(
-            ACPPermissionMeta.object(metadata)?["permission"])
-        guard ACPPermissionMeta.int(permission, "version") == 1 else { return nil }
-        return ACPPermissionMeta.string(permission, "description")
+        ACPPermissionMeta.string(ACPPermissionMeta.presentationRecord(metadata), "description")
     }
 }
 

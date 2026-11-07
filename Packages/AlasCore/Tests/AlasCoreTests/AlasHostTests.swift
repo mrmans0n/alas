@@ -390,11 +390,15 @@ struct AlasHostTests {
         for await _ in reading.stream { break }
 
         var shutdownFinished = false
+        let shutdownBegan = AsyncStream<Void>.makeStream()
         let shutdown = Task {
+            shutdownBegan.continuation.yield()
             await host.shutdown()
             shutdownFinished = true
         }
-        for _ in 0..<50 { await Task.yield() }
+        // Both run on the main actor: this resumes once shutdown is suspended
+        // on its first wait.
+        for await _ in shutdownBegan.stream { break }
         #expect(!shutdownFinished)
         probe.ticks.removeFirst().resume()
         await shutdown.value
@@ -433,11 +437,15 @@ struct AlasHostTests {
         host.runs.stop(scriptKey: script.key, in: worktree, caller: .cli)
 
         var shutdownFinished = false
+        let shutdownBegan = AsyncStream<Void>.makeStream()
         let shutdown = Task {
+            shutdownBegan.continuation.yield()
             await host.shutdown()
             shutdownFinished = true
         }
-        for _ in 0..<50 { await Task.yield() }
+        // Both run on the main actor: this resumes once shutdown is suspended
+        // on its first wait.
+        for await _ in shutdownBegan.stream { break }
         #expect(!shutdownFinished)
         environment.launcher.held.removeFirst().resume()
         await shutdown.value

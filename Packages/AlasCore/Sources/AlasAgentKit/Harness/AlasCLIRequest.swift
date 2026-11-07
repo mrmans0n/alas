@@ -15,7 +15,7 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case workspace(WorkspaceCommand)
         case preview(WebPreviewCommand)
         case computer(ComputerUseCommand)
-        /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+        /// MCP-only: drive an iOS simulator the user also sees in the Devices tab.
         case device(DeviceCommand)
         case review(ReviewCommand)
         case agentList(worktree: String?, peer: String? = nil)

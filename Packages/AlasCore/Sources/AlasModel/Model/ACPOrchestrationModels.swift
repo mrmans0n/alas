@@ -173,8 +173,11 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// `session_new` or a successful `session_send` until an outcome is
     /// collected. A blocker is not an outcome: the child is still running.
     public var peerAwaiting: Bool = false
+    /// When the target accepted the awaited prompt, by its clock; nil for a
+    /// child's first prompt. Identifies the wait, whichever instance reads it.
+    public var peerAwaitingSince: Int64? = nil
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false, peerAwaitingSince: Int64? = nil) {
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -192,6 +195,7 @@ public struct ACPDelegationRecord: Equatable, Sendable {
         self.role = role
         self.peerServerId = peerServerId
         self.peerAwaiting = peerAwaiting
+        self.peerAwaitingSince = peerAwaitingSince
     }
 }
 

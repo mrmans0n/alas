@@ -60,12 +60,13 @@ public struct ACPUserInputRequest: Identifiable, Equatable, Sendable {
     }
 
     /// Fields in display order with each note under its question. A note whose
-    /// question is missing stays its own group.
+    /// question is missing or is itself a note stays its own group, so a chain
+    /// of markers can't hide a field that needs an answer.
     public var fieldGroups: [FieldGroup] {
-        let keys = Set(fields.map(\.key))
+        let keys = Set(fields.filter { $0.schema.noteForQuestion == nil }.map(\.key))
         var notes: [String: ACPUserInputField] = [:]
         for field in fields {
-            if let q = field.schema.noteForQuestion, q != field.key, keys.contains(q), notes[q] == nil {
+            if let q = field.schema.noteForQuestion, keys.contains(q), notes[q] == nil {
                 notes[q] = field
             }
         }
@@ -289,6 +290,9 @@ public struct ACPUserInputField: Identifiable, Equatable, Sendable {
 
     public var id: String { key }
     public var label: String { schema.title.nonEmpty ?? key }
+    /// The heading of a note field. The adapter's own text, because what the
+    /// field means differs: Claude reads text with no option picked as the answer.
+    public var noteLabel: String { schema.title.nonEmpty ?? "Add a note" }
     public var isSupported: Bool {
         switch schema.type {
         case "string", "number", "integer", "boolean": return true

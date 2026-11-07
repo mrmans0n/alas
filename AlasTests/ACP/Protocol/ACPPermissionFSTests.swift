@@ -62,6 +62,46 @@ struct ACPPermissionFSTests {
         #expect(content.options.map(\.description) == ["Run this command one time", nil, "Don't run this command"])
     }
 
+    /// Display hints never change what the user can decide: the options keep
+    /// their ids and order, whatever the metadata says.
+    @Test("presentation reads the negotiated record, then the legacy one, then none", arguments: [
+        (#"{"permissionPresentation":{"version":1,"title":"new","description":"why","defaultToNo":true}}"#, "new", "why", true),
+        (#"{"permissionPresentation":{"version":1,"title":"new"},"permission":{"version":1,"title":"old"}}"#, "new", nil, false),
+        (#"{"permissionPresentation":{"version":2,"title":"future"},"permission":{"version":1,"title":"old"}}"#, "old", nil, false),
+        (#"{"permission":{"version":1,"title":"old","description":"was"}}"#, "old", "was", false),
+        (#"{"permissionPresentation":{"version":2,"title":"future"}}"#, nil, nil, false),
+        (#"{"permissionPresentation":true,"permission":"x"}"#, nil, nil, false),
+        (#"{"permissionPresentation":{"version":1,"title":7,"description":[],"defaultToNo":"yes"}}"#, nil, nil, false),
+        (#"{"jetbrains":{"air":{"version":1,"permission":{"version":1,"title":"air"}}}}"#, nil, nil, false),
+        (#""not an object""#, nil, nil, false),
+    ] as [(String, String?, String?, Bool)])
+    func presentationFallback(meta: String, heading: String?, reason: String?, defaultToNo: Bool) throws {
+        let json = #"""
+        {"sessionId":"s","toolCall":{"toolCallId":"t","title":"npm test"},"options":[
+          {"optionId":"a","name":"Same","kind":"allow_once","_meta":\#(meta)},
+          {"optionId":"b","name":"Same","kind":"reject_once","_meta":\#(meta)}
+        ],"_meta":\#(meta)}
+        """#
+        let params = try JSONDecoder().decode(ACPPermissionRequestParams.self, from: Data(json.utf8))
+        let content = ACPPermissionCardContent(params: params)
+        #expect(content.heading == heading)
+        #expect(content.reason == reason)
+        #expect(content.defaultToNo == defaultToNo)
+        #expect(content.options.map(\.optionId) == ["a", "b"])
+        #expect(content.options.map(\.kind) == ["allow_once", "reject_once"])
+        #expect(content.options.map(\.description) == [reason, reason])
+    }
+
+    @Test("a heading that repeats the tool call's title is dropped")
+    func headingRepeatingTitle() throws {
+        let json = #"""
+        {"sessionId":"s","toolCall":{"toolCallId":"t","title":"npm test"},"options":[],
+         "_meta":{"permissionPresentation":{"version":1,"title":"npm test"}}}
+        """#
+        let params = try JSONDecoder().decode(ACPPermissionRequestParams.self, from: Data(json.utf8))
+        #expect(ACPPermissionCardContent(params: params).heading == nil)
+    }
+
     struct DiffPreviewCase: CustomTestStringConvertible, Sendable {
         let name: String
         let requestContent: [ACPToolCallContent]?

@@ -22,13 +22,14 @@ struct RightPaneToolbar: View {
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     let onOpenPreview: () -> Void
-    /// Nil hides the button, for worktrees that cannot run a VM.
-    var onOpenVirtualMachine: ((VMGuestOS) -> Void)?
     let onNewRunScript: (RunScriptScope) -> Void
+    /// The Devices tab's switcher, shown in place of the leading text.
+    var deviceSwitcher: AnyView?
+    /// The Devices tab's actions for the selected device.
+    var deviceActions: AnyView?
 
     @Environment(\.theme) private var theme
     @State private var previewHovered = false
-    @State private var vmHovered = false
     @State private var newScriptHovered = false
 
     var body: some View {
@@ -38,9 +39,15 @@ struct RightPaneToolbar: View {
             // drag filler only claims what is left over. Without them the stack
             // splits the row evenly and the branch name ellipsizes while the
             // rest of the row sits empty.
-            leading
-                .overlay { WindowDragHandle() }
-                .layoutPriority(1)
+            if tab == .device, panelTitle == nil, let deviceSwitcher {
+                // A menu: a drag overlay would swallow its clicks.
+                deviceSwitcher
+                    .layoutPriority(1)
+            } else {
+                leading
+                    .overlay { WindowDragHandle() }
+                    .layoutPriority(1)
+            }
 
             // The leading row carries its own drag handle, so this filler can
             // collapse to nothing when the branch name needs the whole row.
@@ -51,6 +58,10 @@ struct RightPaneToolbar: View {
                     .layoutPriority(2)
                 if tab == .run {
                     runControls
+                        .layoutPriority(2)
+                }
+                if tab == .device, let deviceActions {
+                    deviceActions
                         .layoutPriority(2)
                 }
                 if tab == .changes, !pluginCommands.isEmpty {
@@ -133,31 +144,6 @@ struct RightPaneToolbar: View {
             .help("Open web preview")
             .accessibilityLabel("Open web preview")
             .accessibilityIdentifier("run-open-preview")
-
-            if let onOpenVirtualMachine {
-                Menu {
-                    Button("Open macOS VM") { onOpenVirtualMachine(.macOS) }
-                    Button("Open Linux VM") { onOpenVirtualMachine(.linux) }
-                } label: {
-                    HStack(spacing: 5) {
-                        Icon(name: "desktopcomputer", size: 11)
-                        Text("VM")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(theme.color(vmHovered ? "fg" : "fg-muted"))
-                    .padding(.horizontal, 6)
-                    .frame(height: 22)
-                    .background(vmHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
-                    .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .onHover { vmHovered = $0 }
-                .help("Open VM")
-                .accessibilityLabel("Open VM")
-                .accessibilityIdentifier("run-open-vm")
-            }
 
             Menu {
                 Button("New Repo Script") { onNewRunScript(.repo) }

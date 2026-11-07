@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 @testable import AlasHostCore
 import AlasPlatform
+import AlasACP
 
 struct HostSSHSetupTests {
     /// Records every remote command and answers each with `reply`.
@@ -113,6 +114,78 @@ struct HostSSHSetupTests {
             timeout: 10
         )
         #expect((result.exitCode == 0) == found)
+    }
+
+    @Test func installsTheAdaptersOfEnabledManagedAgentsOnly() async {
+        let remote = FakeRemote()
+        let warnings = await remote.setup().installAdapters(agents: ["claude": true, "codex": false, "gemini": true])
+        let commands = remote.commands.withLock { $0 }
+        #expect(warnings.isEmpty)
+        #expect(commands.count == 1)
+        #expect(commands[0].contains("@alas-ide/claude-agent-acp"))
+        // A fish or csh login shell can't parse the script itself.
+        #expect(commands[0].contains("-i -l -c '/bin/sh -c "))
+    }
+
+    /// Runs in a real shell: what decides here is the script's own logic.
+    @Test(arguments: [
+        (owner: "@alas-ide/codex-acp", installs: false),
+        (owner: "@agentclientprotocol/codex-acp", installs: true),
+        (owner: nil, installs: true),
+    ] as [(owner: String?, installs: Bool)])
+    func installsAnAdapterUnlessItsPackageOwnsTheBinary(owner: String?, installs: Bool) throws {
+        let adapter = ACPManagedAdapterDescriptor.codex
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("lib/node_modules")
+        let bin = directory.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        for package in [adapter.packageName, "@agentclientprotocol/codex-acp"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(package), withIntermediateDirectories: true)
+        }
+        if let owner {
+            let executable = root.appendingPathComponent(owner).appendingPathComponent("index.js")
+            try Data().write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            try FileManager.default.createSymbolicLink(at: bin.appendingPathComponent(adapter.binaryName), withDestinationURL: executable)
+        }
+        let log = directory.appendingPathComponent("npm.log")
+        let tools: [(String, String)] = [
+            ("codex", "#!/bin/sh\n"),
+            ("npm", """
+            #!/bin/sh
+            case "$1" in
+            root) echo "\(root.path)" ;;
+            prefix) echo "\(directory.path)" ;;
+            *) echo "$*" >> "\(log.path)" ;;
+            esac
+            """),
+        ]
+        for (name, body) in tools {
+            let tool = bin.appendingPathComponent(name)
+            try body.write(to: tool, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", HostSSHSetup.adapterInstallScript(cli: "codex", adapter: adapter)]
+        shell.environment = ["PATH": "\(bin.path):/usr/bin:/bin"]
+        try shell.run()
+        shell.waitUntilExit()
+
+        #expect(shell.terminationStatus == 0)
+        let logged = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        #expect(logged.contains("install -g --force") == installs)
+    }
+
+    @Test func aFailedAdapterInstallIsAWarning() async {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 127, stdout: "", stderr: "zsh: command not found: npm") }
+        let warnings = await remote.setup().installAdapters(agents: ["codex": true])
+        #expect(warnings.count == 1)
+        #expect(warnings[0].contains("@alas-ide/codex-acp"))
+        #expect(warnings[0].contains("command not found: npm"))
     }
 
     @Test func homebrewRunsWithoutItsCleanup() async throws {

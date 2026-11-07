@@ -59,7 +59,7 @@ public final class AlasSimulatorSession: @unchecked Sendable {
                 case .key(let usage, let down):
                     await hid.sendKey(type: down ? "down" : "up", usage: usage)
                 case .button(let name):
-                    await hid.sendButton(button: name, deviceUDID: udid)
+                    await Self.press(name, hid: hid, udid: udid)
                 }
             }
         }
@@ -85,6 +85,34 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     /// `side_button`, `app_switcher`, `swipe_home`.
     public func button(_ name: String) {
         input.yield(.button(name))
+    }
+
+    // Consumer-page (12) usages, as DeviceKit chrome lists them for its buttons.
+    private static let consumerPage: UInt32 = 12
+    private static let menuUsage: UInt32 = 0x40
+    private static let powerUsage: UInt32 = 0x30
+
+    /// Hardware buttons go in as arbitrary HID on the consumer page: Xcode 26
+    /// drops the button messages upstream's `sendButton` builds, and its Siri
+    /// event restarts SpringBoard. Menu is Home on every device, twice opens
+    /// the app switcher; held Sleep/Wake starts Siri.
+    private static func press(_ name: String, hid: HIDInjector, udid: String) async {
+        switch name {
+        case "home":
+            await hid.sendButtonHID(page: consumerPage, usage: menuUsage, phase: "press")
+        case "app_switcher":
+            await hid.sendButtonHID(page: consumerPage, usage: menuUsage, phase: "press")
+            try? await Task.sleep(for: .milliseconds(150))
+            await hid.sendButtonHID(page: consumerPage, usage: menuUsage, phase: "press")
+        case "lock", "side_button":
+            await hid.sendButtonHID(page: consumerPage, usage: powerUsage, phase: "press")
+        case "siri":
+            await hid.sendButtonHID(page: consumerPage, usage: powerUsage, phase: "down")
+            try? await Task.sleep(for: .milliseconds(1500))
+            await hid.sendButtonHID(page: consumerPage, usage: powerUsage, phase: "up")
+        default:
+            await hid.sendButton(button: name, deviceUDID: udid)
+        }
     }
 
     /// The booted simulator's accessibility tree as serve-sim's JSON (an array

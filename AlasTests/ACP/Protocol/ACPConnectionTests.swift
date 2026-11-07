@@ -32,7 +32,7 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
@@ -40,6 +40,8 @@ struct ACPConnectionTests {
             #expect(meta["planFile"] as? [String: Int] == ["version": 1])
             #expect(meta["sessionFailure"] as? [String: Int] == ["version": 1])
             #expect(meta["agentFileChangeReport"] as? [String: Int] == ["version": 1])
+            #expect(meta["permissionPresentation"] as? [String: Int] == ["version": 1])
+            #expect(meta["questionCustomAnswer"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
