@@ -5,7 +5,6 @@ import Foundation
 /// A row is two lines: the name, then everything the row knows, always on
 /// screen so a scan of the list reads it without a pointer.
 enum WorktreeRowPresentation {
-
     /// Agent state and conflicts get a coloured dot and lead line 2. A plain
     /// file count gets neither.
     nonisolated static func isStatusLoud(
