@@ -265,6 +265,7 @@ let peers = RemotePeerManager(
 peers.onRevokeDevice = { remote?.disconnectDevice($0) }
 host.coreContext.watchForRevokedPeers(of: peers)
 protocolServer.remotePeers = peers
+host.coreContext.delegationPeerRecordName = { serverId in peers.peers.first { $0.serverId == serverId }?.name }
 if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
         // Only the new id is written: keys this build does not model stay.
