@@ -1040,14 +1040,7 @@ public final class ACPSessionManager: ChangeTracking {
               previousOption.currentValue != value
         else { return nil }
 
-        let optimisticOption = ACPConfigOption(
-            id: previousOption.id,
-            name: previousOption.name,
-            type: previousOption.type,
-            category: previousOption.category,
-            currentValue: value,
-            options: previousOption.options
-        )
+        let optimisticOption = previousOption.withCurrentValue(value)
         let updatesModel = previousOption.category == "model" || previousOption.category == "Model"
         let isConfigBackedModel: Bool = {
             guard case .configOption(let modelId) = session.chipState.models?.source else { return false }
@@ -1181,14 +1174,7 @@ public final class ACPSessionManager: ChangeTracking {
             return
         }
         let requestRollbackOption = currentOption == optimisticOption ? rollbackOption : currentOption
-        let requestOption = ACPConfigOption(
-            id: currentOption.id,
-            name: currentOption.name,
-            type: currentOption.type,
-            category: currentOption.category,
-            currentValue: value,
-            options: currentOption.options
-        )
+        let requestOption = currentOption.withCurrentValue(value)
         if currentOption != requestOption {
             session.availableConfigOptions[currentIndex] = requestOption
         }
@@ -2672,14 +2658,7 @@ public final class ACPSessionManager: ChangeTracking {
                     side.availableConfigOptions = echoed
                 } else if let index = side.availableConfigOptions.firstIndex(where: { $0.id == configID }) {
                     let option = side.availableConfigOptions[index]
-                    side.availableConfigOptions[index] = ACPConfigOption(
-                        id: option.id,
-                        name: option.name,
-                        type: option.type,
-                        category: option.category,
-                        currentValue: .string(target),
-                        options: option.options
-                    )
+                    side.availableConfigOptions[index] = option.withCurrentValue(.string(target))
                 }
             case .model:
                 return false
@@ -6707,14 +6686,7 @@ extension ACPSessionManager {
             let updatesModel = currentOption.category == "model" || currentOption.category == "Model"
             let previousModel = session.currentModel
 
-            let optimisticOption = ACPConfigOption(
-                id: currentOption.id,
-                name: currentOption.name,
-                type: currentOption.type,
-                category: currentOption.category,
-                currentValue: selectedValue,
-                options: currentOption.options
-            )
+            let optimisticOption = currentOption.withCurrentValue(selectedValue)
             session.availableConfigOptions[index] = optimisticOption
             if updatesModel, case .string(let modelId) = selectedValue {
                 session.currentModel = modelId
@@ -8578,9 +8550,7 @@ extension ACPSessionManager {
                     let loadedValue = loadedOption.currentStringValue
                     guard m != loadedValue else { break }
                     let loadedModel = session.currentModel
-                    session.availableConfigOptions[index] = ACPConfigOption(
-                        id: loadedOption.id, name: loadedOption.name, type: loadedOption.type,
-                        category: loadedOption.category, currentValue: .string(m), options: loadedOption.options)
+                    session.availableConfigOptions[index] = loadedOption.withCurrentValue(.string(m))
                     do {
                         let baselineConfigOptions = session.availableConfigOptions
                         let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
@@ -9871,10 +9841,7 @@ extension ACPSessionManager {
                 // Older agents acknowledge without echoing; the ack stands.
                 session.availableConfigOptions = session.availableConfigOptions.map { option in
                     guard option.id == configId else { return option }
-                    return ACPConfigOption(
-                        id: option.id, name: option.name, type: option.type,
-                        category: option.category, currentValue: .string(value), options: option.options
-                    )
+                    return option.withCurrentValue(.string(value))
                 }
             } else {
                 guard let echoed = updated.first(where: { $0.id == configId }),

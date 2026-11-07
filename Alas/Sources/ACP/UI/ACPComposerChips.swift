@@ -278,7 +278,8 @@ struct ACPComposerChips {
             items: spec.options.map {
                 ACPSelectChip.Item(
                     id: $0.id, name: $0.name, description: $0.description,
-                    icon: $0.kind.map { .system($0.iconSystemName) })
+                    icon: $0.kind.map { .system($0.iconSystemName) },
+                    badge: $0.id == spec.recommendedId ? "Recommended" : nil)
             },
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,
