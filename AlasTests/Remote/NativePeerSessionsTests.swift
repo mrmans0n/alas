@@ -1244,6 +1244,7 @@ struct NativePeerSessionsTests {
         (.file(path: "logo.png"), true),
         (.file(path: "a.swift"), false),
         (.commitDiff(path: "a.swift", sha: "abc"), false),
+        (.checkpointDiff(path: "a.swift", checkpointID: CheckpointID()), true),
     ])
     func aPollReadsAgainOnlyTheDocumentsThatCanChange(document: NativePeerWorkspace.Document, polled: Bool) {
         #expect(NativePeerSessions.pollsDocument(document) == polled)

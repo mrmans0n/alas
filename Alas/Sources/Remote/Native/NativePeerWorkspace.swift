@@ -190,11 +190,13 @@ struct NativePeerWorkspace: Equatable {
     /// Lands a host-served diff for `document` if it is still the open one.
     mutating func finishDocument(_ document: Document, with result: Result<HostDiff, NativePeerReviewGitClientError>) {
         guard document == self.document else { return }
-        documentContent = switch result {
+        let content: Load<DocumentContent> = switch result {
         case .success(let diff):
             .loaded(.diff(ParsedDiff(hunks: diff.hunks.map(Self.hunk), metadataSummary: diff.note), truncated: diff.truncated))
         case .failure(let error): .failed(error.message)
         }
+        // A poll's unchanged reply must not redraw the open diff.
+        if content != documentContent { documentContent = content }
     }
 
     /// The sides an image path's diff `document` compares, from its row in the loaded lists or the

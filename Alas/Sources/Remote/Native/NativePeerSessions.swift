@@ -1394,9 +1394,10 @@ final class NativePeerSessions {
 
     nonisolated static func pollsDocument(_ document: NativePeerWorkspace.Document) -> Bool {
         switch document {
-        case .diff: true
+        // A checkpoint's diff compares against the working file.
+        case .diff, .checkpointDiff: true
         case .file(let path): ImageFileType.isSupported(relativePath: path)
-        case .commitDiff, .stashDiff, .checkpointDiff: false
+        case .commitDiff, .stashDiff: false
         }
     }
 
