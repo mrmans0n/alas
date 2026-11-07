@@ -212,8 +212,11 @@ public enum HostDelegationRequest: Codable, Equatable, Sendable {
     /// Cancels a child's running turn, as `session_interrupt` does.
     case interrupt(sessionID: String)
     /// Outbox entries after `seq`, a page at a time. Asking also acknowledges
-    /// everything up to `after`.
-    case outbox(after: Int64)
+    /// everything up to `after`. `store` is the store the caller's cursor
+    /// counts in, from an earlier answer: a store that is not this host's
+    /// any more is answered from the start, acknowledging nothing. Nil from
+    /// a caller that knows none, or an older build.
+    case outbox(after: Int64, store: String? = nil)
 
     private enum StartCodingKeys: String, CodingKey { case _0 = "start" }
 }
@@ -281,7 +284,9 @@ public enum HostDelegationResponse: Codable, Equatable, Sendable {
     /// `ACPOrchestrationWaitResponse`, encoded.
     case status(data: Data)
     case interrupted(cancelRequested: Bool)
-    case outbox(entries: [ACPPeerOutboxEntry], hasMore: Bool)
+    /// `store` identifies the database the entries' `seq` counts in; nil
+    /// from an older build.
+    case outbox(entries: [ACPPeerOutboxEntry], hasMore: Bool, store: String? = nil)
 
     private enum DiscoveredCodingKeys: String, CodingKey { case _0 = "discovery" }
 }

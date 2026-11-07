@@ -84,13 +84,18 @@ extension DelegationAPI {
             let data = try Self.payload(await core.orchestration.interrupt(origin: origin, targetSessionId: sessionID))
             let answer = try JSONDecoder().decode(ACPOrchestrationInterruptResponse.self, from: data)
             return .delegation(.interrupted(cancelRequested: answer.cancelRequested))
-        case .outbox(let after):
+        case .outbox(let requested, let store):
             let persistence = core.orchestrationPersistence
+            let own = try await persistence.storeIdentity()
+            // A cursor counted in a store this host no longer has means
+            // nothing here: acknowledging through it would delete entries
+            // the caller never read.
+            let after = store.map { $0 == own } ?? true ? requested : 0
             try await persistence.acknowledgeOutbox(peerServerId: peerServerId, through: after)
             // Stored text never encodes smaller, so this holds whatever fits.
             let stored = try await persistence.outbox(peerServerId: peerServerId, after: after, maxBytes: Self.outboxPageBudget)
             let page = Self.outboxPage(stored.entries, hasMore: stored.hasMore, budget: Self.outboxPageBudget)
-            return .delegation(.outbox(entries: page.entries, hasMore: page.hasMore))
+            return .delegation(.outbox(entries: page.entries, hasMore: page.hasMore, store: own))
         }
     }
 

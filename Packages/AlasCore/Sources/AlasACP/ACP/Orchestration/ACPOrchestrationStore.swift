@@ -9,9 +9,10 @@ public final class ACPOrchestrationStore {
     public enum Error: Swift.Error, Equatable, Sendable {
         case duplicateChildSession(String)
         case malformedWorktreeRequest
+        case missingStoreIdentity
     }
 
-    public static let targetSchemaVersion = 5
+    public static let targetSchemaVersion = 6
 
     public let path: String
     public let db: SQLiteDatabase
@@ -331,10 +332,13 @@ public final class ACPOrchestrationStore {
     /// parent in one transaction. An outcome, of any kind, also ends the wait
     /// for its child. Returns true only for the caller that advanced the
     /// cursor, so concurrent collectors wake the parent once.
+    /// `store` is the store the entry's page came from: once the cursor counts
+    /// in another, that page is stale and moves nothing.
     public func collectPeerEntry(
         _ entry: ACPPeerOutboxEntry,
         peerServerId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        store: String?
     ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -343,8 +347,8 @@ public final class ACPOrchestrationStore {
                 bindings: [peerServerId]
             )
             let advanced = try db.execChanges(
-                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
-                bindings: [entry.seq, peerServerId, entry.seq]
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ? AND store_id IS ?",
+                bindings: [entry.seq, peerServerId, entry.seq, store]
             ) == 1
             if advanced {
                 try enqueue(.init(
@@ -426,9 +430,12 @@ public final class ACPOrchestrationStore {
     /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
     /// an entry nobody here can be woken for. Never moves it back. `settling`
     /// is an entry for one of the peer's children whose parent is gone, which
-    /// still ends the wait if it is an outcome.
+    /// still ends the wait if it is an outcome. `store` fences it as in
+    /// `collectPeerEntry`.
     @discardableResult
-    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
+    public func advancePeerCursor(
+        peerServerId: String, to seq: Int64, store: String?, settling entry: ACPPeerOutboxEntry? = nil
+    ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
             try db.exec(
@@ -436,12 +443,65 @@ public final class ACPOrchestrationStore {
                 bindings: [peerServerId]
             )
             let advanced = try db.execChanges(
-                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
-                bindings: [seq, peerServerId, seq]
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ? AND store_id IS ?",
+                bindings: [seq, peerServerId, seq, store]
             ) == 1
             if advanced, let entry { try endWait(for: entry, peerServerId: peerServerId) }
             try db.exec("COMMIT")
             return advanced
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// This database's id, which a peer reads with its outbox. It changes only
+    /// when the file is made afresh, which restarts the outbox sequence.
+    public func storeIdentity() throws -> String {
+        guard let id = try db.query("SELECT id FROM store_identity LIMIT 1").first?["id"] as? String else {
+            throw Error.missingStoreIdentity
+        }
+        return id
+    }
+
+    /// `peerServerId`'s cursor and the store of the peer's it counts in, read
+    /// together so a cursor is never paired with a store adopted after it was
+    /// read. The store is nil until a peer that reports one answered.
+    public func peerPosition(peerServerId: String) throws -> ACPPeerCursorPosition {
+        let row = try db.query(
+            "SELECT seq, store_id FROM peer_delegation_cursors WHERE peer_server_id = ?",
+            bindings: [peerServerId]
+        ).first
+        return .init(seq: row?["seq"] as? Int64 ?? 0, store: row?["store_id"] as? String)
+    }
+
+    /// Counts `peerServerId`'s cursor in `storeId` from now on, provided it
+    /// still counts in `expected`, the store the caller asked the peer with.
+    /// A cursor that counted in no known store keeps its place: the peer
+    /// acknowledged it in the store it reports now. One that counted in
+    /// another store starts again at 0, since that peer's sequence did.
+    /// Returns false when the cursor no longer counts in `expected`: another
+    /// collector adopted a store meanwhile, so the answer may come from one
+    /// already replaced, and concurrent collectors reset the cursor once.
+    @discardableResult
+    public func adoptPeerStore(peerServerId: String, from expected: String?, to storeId: String) throws -> Bool {
+        guard expected != storeId else { return false }
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            try db.exec(
+                "INSERT OR IGNORE INTO peer_delegation_cursors (peer_server_id, seq) VALUES (?, 0)",
+                bindings: [peerServerId]
+            )
+            let changed = try db.execChanges(
+                """
+                UPDATE peer_delegation_cursors
+                SET seq = CASE WHEN store_id IS NULL THEN seq ELSE 0 END, store_id = ?
+                WHERE peer_server_id = ? AND store_id IS ?
+                """,
+                bindings: [storeId, peerServerId, expected]
+            ) == 1
+            try db.exec("COMMIT")
+            return changed
         } catch {
             try? db.exec("ROLLBACK")
             throw error
@@ -635,6 +695,7 @@ public final class ACPOrchestrationStore {
             if current < 3 { try migrateToV3() }
             if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
             if current < 5 { try migrateToV5() }
+            if current < 6 { try migrateToV6() }
             // Builds of this version before the column existed wrote stores at 5.
             try addPeerAwaitingColumnIfMissing()
             if current == 0 {
@@ -724,6 +785,17 @@ public final class ACPOrchestrationStore {
             seq            INTEGER NOT NULL
         )
         """)
+    }
+
+    /// A database file made afresh gets a new id, so a peer collecting from
+    /// it can tell its outbox sequence started again.
+    private func migrateToV6() throws {
+        try db.exec("CREATE TABLE IF NOT EXISTS store_identity (id TEXT NOT NULL)")
+        try db.exec(
+            "INSERT INTO store_identity (id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM store_identity)",
+            bindings: [UUID().uuidString]
+        )
+        try db.exec("ALTER TABLE peer_delegation_cursors ADD COLUMN store_id TEXT")
     }
 
     private func addPeerAwaitingColumnIfMissing() throws {

@@ -221,7 +221,10 @@ Extend the existing suites:
 The remaining follow-ups get their own designs. This one must not rule them out:
 
 - **A store epoch for a recreated target database.** The source's outbox cursor survives a target that lost its store. Nothing here
-  touches cursors.
+  touches cursors. Done after this design: the orchestration database has a random id (schema 6) that every outbox page carries,
+  and the source's cursor records the id it counts in. A request naming another id is answered from the start and acknowledges
+  nothing, since its cursor would otherwise delete the new store's entries unread. The source then resets the cursor to 0 and
+  pulls again. Older builds on either side send no id and behave as before.
 - **A one-way route to a Mac the source cannot dial.** Requests sent back over the Mac's own connection, and pairing without a pair-back.
   Decision 1 already proves the redeemer's identity without a pair-back, which is half of what that route needs.
 - **The two known gaps from #2370.** Report quoting misses the transcript's replay and completed-output boundaries, and a lost-turn check

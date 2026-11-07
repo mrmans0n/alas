@@ -18,6 +18,18 @@ public enum ACPPeerParent {
     }
 }
 
+/// How far the delegating machine has collected a peer's outbox: `seq` counts
+/// in the peer's store `store`, nil until the peer reported one.
+public struct ACPPeerCursorPosition: Equatable, Sendable {
+    public let seq: Int64
+    public let store: String?
+
+    public init(seq: Int64, store: String?) {
+        self.seq = seq
+        self.store = store
+    }
+}
+
 /// An outcome waiting for the delegating machine to collect it. `seq` is the
 /// collection cursor; `messageId` is the stable outcome/blocker id.
 public struct ACPPeerOutboxEntry: Codable, Equatable, Sendable {
