@@ -2489,45 +2489,51 @@ public final class ACPSessionRunner {
         return tail.isEmpty ? currentTurnLastAgentText() : tail
     }
 
-    /// The buffer's last agent message, divided where `ACPSession.apply` would
-    /// divide it, and the transcript row it continues if it does.
+    /// The buffer's last agent message, and the transcript row it continues if
+    /// it does. Follows `ACPSession.apply` in update order, without applying:
+    /// a chunk with an id joins that id's message; one without joins the current
+    /// message unless a tool call, a user chunk, or a new phase closed it. A
+    /// boundary with no agent text after it leaves the last message standing.
     private func bufferedFinalAgentMessage() -> (text: String, continuedRow: Int?)? {
-        let updates = pendingIncomingUpdates.map(\.params).filter { !isSubagentUpdate($0) }.map(\.update)
-        guard let last = updates.reversed().lazy.compactMap(Self.agentTextChunk).first else { return nil }
-        if let id = last.chunk.messageId {
-            let parts = updates.compactMap(Self.agentTextChunk).filter { $0.chunk.messageId == id }
-            return (parts.map(\.text).joined(), session.agentRowContinued(byMessageId: id))
+        func phase(ofRow row: Int?) -> ACPMessagePhase? {
+            guard let row, case .agent(_, _, let text) = session.transcript.messages[row] else { return nil }
+            return text.phase
         }
-        // In update order: a continuation may leave its phase out, inheriting
-        // the one before it.
         var row = session.agentRowContinued(byMessageId: nil)
-        var phase: ACPMessagePhase?
-        if let row, case .agent(_, _, let text) = session.transcript.messages[row] { phase = text.phase }
+        var currentPhase = phase(ofRow: row)
+        var currentId: String?
         var text = ""
-        for update in updates {
-            switch update {
+        var closed = false
+        var hasText = false
+        var textById: [String: String] = [:]
+        for pending in pendingIncomingUpdates where !isSubagentUpdate(pending.params) {
+            switch pending.params.update {
             case .userMessageChunk(let chunk) where chunk.directed != nil:
                 continue
             case .toolCall, .userMessageChunk:
-                (text, row, phase) = ("", nil, nil)
-            case .agentMessageChunk:
-                guard let part = Self.agentTextChunk(update) else { continue }
-                let newPhase = part.chunk.phase
-                if part.chunk.messageId != nil || (newPhase != nil && phase != nil && newPhase != phase) {
-                    (text, row) = ("", nil)
+                closed = true
+            case .agentMessageChunk(let chunk):
+                guard case .text(let part) = chunk.content else { continue }
+                if let id = chunk.messageId {
+                    if id != currentId {
+                        if let currentId { textById[currentId] = text }
+                        (currentId, text) = (id, textById[id] ?? "")
+                        row = session.agentRowContinued(byMessageId: id)
+                        currentPhase = phase(ofRow: row)
+                    }
+                } else if closed || (chunk.phase != nil && currentPhase != nil && chunk.phase != currentPhase) {
+                    if let currentId { textById[currentId] = text }
+                    (currentId, text, row, currentPhase) = (nil, "", nil, nil)
                 }
-                phase = newPhase ?? phase
-                if part.chunk.messageId == nil { text += part.text }
+                currentPhase = chunk.phase ?? currentPhase
+                text += part
+                closed = false
+                hasText = true
             default:
                 continue
             }
         }
-        return (text, row)
-    }
-
-    private static func agentTextChunk(_ update: ACPSessionUpdate) -> (chunk: ACPTextChunk, text: String)? {
-        guard case .agentMessageChunk(let chunk) = update, case .text(let text) = chunk.content else { return nil }
-        return (chunk, text)
+        return hasText ? (text, row) : nil
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
@@ -2535,8 +2541,11 @@ public final class ACPSessionRunner {
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
         let text = pendingIncomingUpdates.compactMap { pending -> String? in
-            guard !isSubagentUpdate(pending.params) else { return nil }
-            return Self.agentTextChunk(pending.params.update)?.text
+            guard !isSubagentUpdate(pending.params),
+                  case .agentMessageChunk(let chunk) = pending.params.update,
+                  case .text(let value) = chunk.content
+            else { return nil }
+            return value
         }.joined()
         return text.isEmpty ? nil : text
     }
