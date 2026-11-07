@@ -142,7 +142,11 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
             self = .availableCommandsUpdate(raw.map {
                 let cmd = $0.name.hasPrefix("/") ? $0.name : "/" + $0.name
                 return ACPPromptSuggestion(
-                    command: cmd, description: $0.description, hint: $0.input?.hint)
+                    command: cmd,
+                    description: $0.description,
+                    hint: $0.input?.hint,
+                    presentation: $0.meta?.commandPresentation.flatMap(ACPCommandPresentation.init(wire:))
+                )
             })
         case "usage_update":
             self = .usageUpdate(try ACPUsageInfo(from: decoder))
@@ -172,17 +176,28 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
     /// Mirror of the wire-format command shape from `available_commands_update`.
     /// Decoded then mapped to `ACPPromptSuggestion` so the rest of the
     /// codebase doesn't need to learn the protocol's leaner shape.
-    private struct ACPAvailableCommand: Codable {
+    private struct ACPAvailableCommand: Decodable {
         let name: String
         let description: String?
         let input: Input?
+        let meta: Meta?
         struct Input: Codable { let hint: String }
-        enum CodingKeys: String, CodingKey { case name, description, input }
+        struct Meta: Decodable {
+            let commandPresentation: ACPCommandPresentation.Wire?
+            enum CodingKeys: String, CodingKey { case commandPresentation }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                commandPresentation = try? c.decodeIfPresent(
+                    ACPCommandPresentation.Wire.self, forKey: .commandPresentation)
+            }
+        }
+        enum CodingKeys: String, CodingKey { case name, description, input, meta = "_meta" }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             name = try c.decode(String.self, forKey: .name)
             description = try? c.decodeIfPresent(String.self, forKey: .description)
             input = try? c.decodeIfPresent(Input.self, forKey: .input)
+            meta = try? c.decodeIfPresent(Meta.self, forKey: .meta)
         }
     }
 

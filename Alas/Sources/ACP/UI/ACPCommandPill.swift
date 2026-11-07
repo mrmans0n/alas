@@ -526,10 +526,20 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
 struct ACPCommandHoverCard: View {
     let suggestion: ACPPromptSuggestion
     var shipStatus: ACPShipStatus? = nil
+    /// The host opens a skill's `SKILL.md` on a click on its chip.
+    var opensSkill = false
     @Environment(\.theme) private var theme
 
     static func hasDetails(_ suggestion: ACPPromptSuggestion) -> Bool {
         !(suggestion.description ?? "").isEmpty || !(suggestion.hint ?? "").isEmpty
+            || suggestion.presentation?.isSkill == true
+    }
+
+    /// The skill line, or nil for a command that is not a skill.
+    static func skillLine(_ suggestion: ACPPromptSuggestion, opensSkill: Bool) -> String? {
+        guard let presentation = suggestion.presentation, presentation.isSkill else { return nil }
+        guard presentation.skillPath != nil else { return "Skill bundled with the agent" }
+        return opensSkill ? "Skill · click to open SKILL.md" : "Skill"
     }
 
     var body: some View {
@@ -550,6 +560,12 @@ struct ACPCommandHoverCard: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            if let skill = Self.skillLine(suggestion, opensSkill: opensSkill) {
+                Text(skill)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
                     .padding(.top, 2)
             }
             if let shipStatus {
@@ -599,7 +615,8 @@ final class ACPCommandChipHoverController {
         suggestion: ACPPromptSuggestion,
         in textView: NSTextView,
         context: ACPPromptCardContext? = nil,
-        theme: Theme? = nil
+        theme: Theme? = nil,
+        opensSkill: Bool = false
     ) {
         guard target != range else { return }
         hide()
@@ -609,7 +626,8 @@ final class ACPCommandChipHoverController {
             guard let self, let textView, self.target == range,
                   let anchor = (textView as? ACPNSTextView)?.imageChipAnchorRect(for: range)
                     ?? textView.upstreamReferenceAnchorRect(for: range) else { return }
-            let card = ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
+            let card = ACPCommandHoverCard(
+                suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion), opensSkill: opensSkill)
             let hosting = NSHostingController(rootView: card.environment(\.theme, theme ?? EnvironmentValues().theme))
             let popover = NSPopover()
             popover.behavior = .transient
@@ -682,8 +700,22 @@ struct ACPCommandPill: View {
             if !Task.isCancelled { showsCard = true }
         }
         .popover(isPresented: $showsCard, arrowEdge: .bottom) {
-            ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
+            ACPCommandHoverCard(
+                suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion),
+                opensSkill: opensSkill != nil)
         }
+        .onTapGesture {
+            guard let opensSkill else { return }
+            showsCard = false
+            opensSkill()
+        }
+    }
+
+    /// Opens the skill's `SKILL.md`, when the command is a skill with a file
+    /// and the host can open it.
+    private var opensSkill: (() -> Void)? {
+        guard suggestion.presentation?.skillPath != nil, let open = context?.openSkill else { return nil }
+        return { open(suggestion) }
     }
 }
 
