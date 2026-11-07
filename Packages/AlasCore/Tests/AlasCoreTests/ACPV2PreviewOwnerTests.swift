@@ -100,6 +100,87 @@ struct ACPV2PreviewOwnerTests {
         #expect(await fixture.service.closeCount == 1)
     }
 
+    @Test func permissionButtonsLoseAuthorityBeforeAwaitingTheReply() async throws {
+        let fixture = try await PreviewOwnerFixture()
+        defer { fixture.owner.withdraw()
+        Task { await fixture.service.releaseReply()
+        await fixture.client.detach() } }
+        try await fixture.start()
+        _ = try await fixture.permission()
+        let item = try #require(fixture.owner.permissions.first)
+        await fixture.service.holdReply()
+        let first = Task { try await fixture.owner.decide(itemID: item.id, optionID: "allow") }
+        try await eventually { await fixture.service.exactReplies.count == 1 }
+        #expect(fixture.owner.permissions.first?.phase == .sending)
+        await #expect(throws: (any Error).self) { try await fixture.owner.decide(itemID: item.id, optionID: "allow") }
+        let store = try ACPSessionStore(path: fixture.persistence.path)
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_attempts").count == 1)
+        await fixture.service.releaseReply()
+        _ = try await first.value
+        #expect(await fixture.service.exactReplies.count == 1)
+        #expect(fixture.owner.permissions.first?.phase == .unavailable)
+    }
+
+    @Test func retiredPermissionCannotAnswerAReusedWireID() async throws {
+        let fixture = try await PreviewOwnerFixture()
+        defer { fixture.owner.withdraw()
+        Task { await fixture.service.releaseReply()
+        await fixture.client.detach() } }
+        try await fixture.start()
+        _ = try await fixture.permission()
+        let old = try #require(fixture.owner.permissions.first)
+        await fixture.service.holdReply()
+        let sending = Task { try await fixture.owner.decide(itemID: old.id, optionID: "allow") }
+        try await eventually { await fixture.service.exactReplies.count == 1 }
+        _ = try await fixture.permission(cursor: 6)
+        try await eventually { await MainActor.run { fixture.owner.permissions.filter { $0.phase == .awaitingDecision }.count == 1 } }
+        let current = try #require(fixture.owner.permissions.first { $0.phase == .awaitingDecision })
+        #expect(current.id != old.id && current.ledgerOrdinal > old.ledgerOrdinal)
+        await #expect(throws: (any Error).self) { try await fixture.owner.decide(itemID: old.id, optionID: "allow") }
+        #expect(await fixture.service.exactReplies.count == 1)
+        await fixture.service.releaseReply()
+        _ = try? await sending.value
+        _ = try await fixture.owner.decide(itemID: current.id, optionID: "allow")
+        #expect(await fixture.service.exactReplies.map { $0.originCursor.rawValue } == [5, 6])
+    }
+
+    @Test(arguments: [false, true])
+    func leaseLossAndRemoteCancellationRetireOnlyCurrentItems(loseLease: Bool) async throws {
+        let fixture = try await PreviewOwnerFixture()
+        defer { fixture.owner.withdraw()
+        Task { await fixture.client.detach() } }
+        try await fixture.start()
+        let first = try await fixture.permission()
+        _ = try await fixture.permission(wire: "q", cursor: 6, retaining: [first])
+        let before = fixture.owner.permissions
+        #expect(before.count == 2 && before[0].ledgerOrdinal < before[1].ledgerOrdinal)
+        if loseLease {
+            _ = try await fixture.persistence.seizeLease(sessionId: "s", instanceId: "Other", pid: 2, now: 2, leaseToken: "other")
+            fixture.owner.withdraw()
+            #expect(fixture.owner.permissions.allSatisfy { $0.phase == .unavailable })
+        } else {
+            await fixture.service.publishControl(Data(#"{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"p"}}"#.utf8), cursor: 7)
+            try await fixture.client.replayRawBrokerEvents()
+            try await eventually { await MainActor.run { fixture.owner.permissions.first?.phase == .unavailable } }
+            #expect(fixture.owner.permissions.last?.phase == .awaitingDecision)
+        }
+        await #expect(throws: (any Error).self) { try await fixture.owner.decide(itemID: before[0].id, optionID: "allow") }
+        if loseLease { #expect(await fixture.service.exactReplies.isEmpty) }
+        else { _ = try await fixture.owner.decide(itemID: before[1].id, optionID: nil) }
+    }
+
+    @Test(arguments: ["future/request", "elicitation/create"])
+    func unknownOrUnadvertisedRequestsNeverBecomePermissionOffers(method: String) async throws {
+        let fixture = try await PreviewOwnerFixture()
+        defer { fixture.owner.withdraw()
+        Task { await fixture.client.detach() } }
+        try await fixture.start()
+        _ = try await fixture.permission(method: method)
+        try await eventually { await fixture.service.exactReplies.count == 1 }
+        #expect(fixture.owner.permissions.isEmpty)
+        #expect(fixture.session.transcript.pendingPermission == nil)
+    }
+
     @Test(arguments: ["fresh", "adopted", "foreign", "generation", "lease", "deadline-fresh", "deadline-adopted"])
     func endingLateStartupClosesOnlyItsFreshSource(source: String) async throws {
         let fixture = try await PreviewOwnerFixture(delayed: true, adopted: source.contains("adopted"))
@@ -159,6 +240,20 @@ private final class PreviewOwnerFixture {
             qualification: try #require(ACPV2PreviewEligibility.qualifiedAdapters.first { $0.agentID == agent }),
             installationID: UUID(), isCurrent: { true }, onChange: {}, displayWriter: writer)
     }
+    @discardableResult
+    func permission(wire: String = "p", cursor: UInt64 = 5, method: String = "session/request_permission",
+        retaining: [ACPBrokerPendingRequest] = []) async throws -> ACPBrokerPendingRequest {
+        var pending = ACPBrokerPendingRequest(requestId: wire, adapterRequestId: .string(wire), kind: .permission, payload: .null)
+        pending.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":\"\(wire)\",\"method\":\"\(method)\",\"params\":{\"sessionId\":\"upstream\",\"title\":\"Choose\",\"options\":[{\"optionId\":\"allow\",\"name\":\"Allow once\",\"kind\":\"allow_once\"}]}}".utf8))
+        pending.originCursor = .init(rawValue: cursor)
+        await service.publishPendingSuccessor(pending, retaining: retaining)
+        try await client.replayRawBrokerEvents()
+        if method == "session/request_permission" {
+            try await eventually { await MainActor.run { self.owner.permissions.filter { $0.phase == .awaitingDecision }.count >= retaining.count + 1 } }
+        }
+        return pending
+    }
+
     func start() async throws {
         try await owner.start(params: .init(cwd: "/tmp", mcpServers: []), deadline: .now.advanced(by: .seconds(60)))
     }

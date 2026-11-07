@@ -41,7 +41,18 @@ public final class ACPV2PreviewOwner {
     private let onChange: @MainActor () -> Void
     private let displayWriter: DisplayWriter
     private var active = true
-    private var pendingDecisions = false
+    public private(set) var permissions: [ACPV2PreviewPermissionItem] = []
+    private struct PermissionOrigin: Hashable {
+        let stream: UUID
+        let ordinal: Int64
+        init(_ record: ACPV2InboundLedgerRecord) { stream = record.streamID
+        ordinal = record.ordinal }
+    }
+    private var permissionHandles: [UUID: ACPV2RequestDecisionCoordinator.Handle] = [:]
+    private var permissionOrigins: [PermissionOrigin: UUID] = [:]
+    private var pendingRejections: [PermissionOrigin: ACPV2RequestDecisionCoordinator.Handle] = [:]
+    private var rejectionWorkers: [PermissionOrigin: Task<Void, Never>] = [:]
+    private var pendingDecisions: Bool { permissions.contains { $0.phase == .awaitingDecision || $0.phase == .sending } }
     private var runner: ACPV2SessionRunner?
     private var upstreamID: String?
     private var monitor: Task<Void, Never>?
@@ -146,6 +157,7 @@ public final class ACPV2PreviewOwner {
         guard await currentLease() else { throw Failure.invalidated }
         try requireCurrent()
         status = .ready
+        launchProtocolRejections()
         scheduleDisplay()
         onChange()
     }
@@ -183,10 +195,99 @@ public final class ACPV2PreviewOwner {
         case .completion(let completion):
             lastCompletion = completion
             awaitingSubmission = false
-        case .interaction: break // Permission presentation is installed separately.
+        case .interaction(let event): permissionEvent(event)
         }
         scheduleDisplay()
         onChange()
+    }
+
+    public func decide(itemID: UUID, optionID: String?) async throws -> ACPV2ResponseOwner.Receipt {
+        try requireCurrent()
+        guard status == .ready, let index = permissions.firstIndex(where: { $0.id == itemID }),
+              permissions[index].installationID == installationID,
+              permissions[index].phase == .awaitingDecision,
+              let handle = permissionHandles[itemID], let runner else { throw Failure.unavailable }
+        if let optionID {
+            guard permissions[index].permission.options.contains(where: { $0.optionID.utf8.elementsEqual(optionID.utf8) }) else { throw Failure.invalidInput }
+        }
+        permissions[index].phase = .sending
+        onChange()
+        do {
+            guard await currentLease() else { withdraw()
+            throw Failure.invalidated }
+            try requireCurrent()
+            guard permissionHandles[itemID] != nil,
+                  permissions.first(where: { $0.id == itemID })?.phase == .sending else { throw Failure.unavailable }
+            let receipt = try await runner.decide(handle, decision: optionID.map { .selectPermission(optionID: $0) } ?? .cancelPermission)
+            try requireCurrent()
+            retirePermission(handle.record, phase: Self.permissionPhase(receipt))
+            onChange()
+            return receipt
+        } catch {
+            if active, permissions.first(where: { $0.id == itemID })?.phase == .sending {
+                retirePermission(handle.record, phase: .uncertain)
+                onChange()
+            }
+            throw error
+        }
+    }
+
+    private static func permissionPhase(_ receipt: ACPV2ResponseOwner.Receipt) -> ACPV2PreviewPermissionItem.Phase {
+        if case .uncertain = receipt.value.fact { return .uncertain }
+        return .unavailable
+    }
+    private func retirePermission(_ record: ACPV2InboundLedgerRecord, phase: ACPV2PreviewPermissionItem.Phase) {
+        guard let id = permissionOrigins[PermissionOrigin(record)],
+              let index = permissions.firstIndex(where: { $0.id == id }) else { return }
+        permissionHandles.removeValue(forKey: id)
+        permissions[index].phase = phase
+    }
+    private func permissionEvent(_ event: ACPV2RequestDecisionCoordinator.Event) {
+        switch event {
+        case .offer(let handle):
+            guard case .permission(let permission) = handle.request.classification else { return }
+            let origin = PermissionOrigin(handle.record)
+            guard permissionOrigins[origin] == nil else { return }
+            let id = UUID()
+            permissionOrigins[origin] = id
+            permissionHandles[id] = handle
+            permissions.append(.init(id: id, installationID: installationID, ledgerOrdinal: handle.record.ordinal,
+                permission: permission, phase: .awaitingDecision))
+            permissions.sort { $0.ledgerOrdinal < $1.ledgerOrdinal }
+        case .withdrawn(let handle): retirePermission(handle.record, phase: .unavailable)
+        case .unavailable(let record, _): retirePermission(record, phase: .unavailable)
+        case .response(let handle, let result):
+            let phase: ACPV2PreviewPermissionItem.Phase
+            switch result {
+            case .success(let receipt): phase = Self.permissionPhase(receipt)
+            case .failure: phase = .uncertain
+            }
+            retirePermission(handle.record, phase: phase)
+        case .rejection(let handle):
+            pendingRejections[PermissionOrigin(handle.record)] = handle
+            launchProtocolRejections()
+        case .diagnostic, .urlChanged: break
+        }
+    }
+
+    private func launchProtocolRejections() {
+        guard active, status == .ready, let runner else { return }
+        for (origin, handle) in pendingRejections where rejectionWorkers[origin] == nil {
+            let code: ACPV2InteractiveRequest.ProtocolError
+            switch handle.request.classification {
+            case .unsupported(.unknownMethod), .unsupported(.unadvertisedMethod): code = .methodNotFound
+            default: code = .invalidParams
+            }
+            rejectionWorkers[origin] = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    self.rejectionWorkers.removeValue(forKey: origin)
+                    self.pendingRejections.removeValue(forKey: origin)
+                }
+                guard await self.currentLease(), self.isActive(), !Task.isCancelled else { return }
+                _ = try? await runner.decide(handle, decision: .reject(code))
+            }
+        }
     }
 
     private func observed(_ value: ACPV2SessionRunner.Status) {
@@ -281,6 +382,14 @@ public final class ACPV2PreviewOwner {
 
     private func stopActions() {
         active = false
+        for index in permissions.indices {
+            if permissions[index].phase == .sending { permissions[index].phase = .uncertain }
+            else if permissions[index].phase == .awaitingDecision { permissions[index].phase = .unavailable }
+        }
+        permissionHandles.removeAll()
+        for worker in rejectionWorkers.values { worker.cancel() }
+        rejectionWorkers.removeAll()
+        pendingRejections.removeAll()
         runner?.stop()
         monitor?.cancel()
         startupWorker?.cancel()

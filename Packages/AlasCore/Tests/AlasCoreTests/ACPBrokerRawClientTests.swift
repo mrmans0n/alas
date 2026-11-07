@@ -1512,8 +1512,14 @@ actor RawBrokerFixture: ACPBrokerServicing {
     private var shouldHoldReply = false
     private let replyRelease = AsyncStream<Void>.makeStream()
     func holdReply() { shouldHoldReply = true }
-    func releaseReply() { shouldHoldReply = false
-    replyRelease.continuation.yield(()) }
+    private var replyWaiters: [CheckedContinuation<Void, Never>] = []
+    func releaseReply() {
+        shouldHoldReply = false
+        let waiters = replyWaiters
+        replyWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        replyRelease.continuation.yield(())
+    }
     private var staleReply = false
     func rejectReplyAsStale() { staleReply = true }
     private var failReply = false
@@ -1523,7 +1529,10 @@ actor RawBrokerFixture: ACPBrokerServicing {
     func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
         exactReplies.append(params)
         if staleReply { throw ACPBrokerRawReplyError.rejected(.staleOrigin) }
-        if shouldHoldReply { for await _ in replyRelease.stream { break } }
+        if shouldHoldReply {
+            if holdRPCsAcrossCancellation { await withCheckedContinuation { replyWaiters.append($0) } }
+            else { for await _ in replyRelease.stream { break } }
+        }
         if failReply { throw ACPClientError.notRunning }
         let proof = wrongReplyProof ? ACPBrokerRespondExactParams(brokerId: params.brokerId, generation: params.generation,
             pendingRequestId: params.pendingRequestId, originCursor: .init(rawValue: 99), operationKey: params.operationKey, frame: params.frame) : params
