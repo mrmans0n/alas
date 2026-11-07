@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MIGRATED_LIST = ROOT / "scripts" / "design-migrated-paths.txt"
 
 PATTERNS = [
-    re.compile(r"font\(\.system\(size:"),
+    re.compile(r"font\(\.system\(size: ?[0-9]"),
     re.compile(r"NSFont\.systemFont\(ofSize: ?[0-9]"),
     re.compile(r"\.padding\((\.[a-zA-Z]+, )?[0-9]"),
     re.compile(r"cornerRadius: ?[0-9]"),
