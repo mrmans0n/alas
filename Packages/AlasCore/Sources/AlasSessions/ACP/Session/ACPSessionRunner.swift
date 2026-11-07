@@ -2312,7 +2312,7 @@ public final class ACPSessionRunner {
         // A settling session's report is deferred into
         // `applyPendingCompletedOutputBoundaryIfReady` (for its background
         // work, not its text); a legacy one keeps reporting here.
-        let lastAgentText = currentTurnLastAgentText()
+        let lastAgentText = turnFinalAgentText()
         let completion = ACPTurnCompletion(
             sessionId: sessionId,
             startedAt: startedAt,
@@ -2474,6 +2474,73 @@ public final class ACPSessionRunner {
                 return tail.isEmpty ? nil : tail
             }
             .first
+    }
+
+    /// What the turn ended on, for its completion. An agent that ends its turn
+    /// right after its last message leaves that message in the coalescing
+    /// buffer, so quote the turn as it will read once the buffer is applied.
+    private func turnFinalAgentText() -> String? {
+        guard bufferedAgentText() != nil else { return currentTurnLastAgentText() }
+        return turnRowsWithBufferedAgentText().reversed().lazy
+            .compactMap { row -> String? in
+                guard let text = row.text else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text, limit: ACPTurnCompletion.lastAgentTextLimit)
+                return tail.isEmpty ? nil : tail
+            }
+            .first
+    }
+
+    /// One row of this turn's transcript. Text a chunk can continue only if `isAgent`;
+    /// a row with no text and not `isAgent` closes the agent run before it.
+    private struct TurnRow {
+        var messageId: String?
+        var text: String?
+        var phase: ACPMessagePhase?
+        var isAgent = false
+    }
+
+    /// This turn's rows with buffered agent chunks applied to a copy, finding
+    /// each chunk's row as `ACPSession.apply` does. Read-only on purpose; see
+    /// `bufferedAgentText`.
+    private func turnRowsWithBufferedAgentText() -> [TurnRow] {
+        let messages = session.transcript.messages
+        var rows = messages[min(activePromptTranscriptFloor ?? 0, messages.count)...].compactMap { message -> TurnRow? in
+            if message.isInterruptedTurnContinuationNotice { return TurnRow() }
+            switch message {
+            case .agent(_, let id, let text):
+                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true)
+            case .user, .toolCall, .fileEdit, .visualAid:
+                return TurnRow()
+            default:
+                return ACPSessionTranscriptReader.agentText(message).map { TurnRow(text: $0) }
+            }
+        }
+        for pending in pendingIncomingUpdates where !isSubagentUpdate(pending.params) {
+            switch pending.params.update {
+            case .userMessageChunk(let chunk) where chunk.directed != nil:
+                continue
+            case .toolCall, .userMessageChunk:
+                rows.append(TurnRow())
+            case .agentMessageChunk(let chunk):
+                guard case .text(let part) = chunk.content else { continue }
+                let found = chunk.messageId.map { id in rows.lastIndex { $0.isAgent && $0.messageId == id } }
+                    ?? rows.lastIndex { $0.isAgent || $0.text == nil }.flatMap { rows[$0].isAgent ? $0 : nil }
+                if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
+                    let text = rows[found].text ?? ""
+                    rows[found].text = text + ACPSession.streamingSeparator(between: text, and: part) + part
+                    rows[found].phase = chunk.phase ?? rows[found].phase
+                } else {
+                    rows.append(TurnRow(messageId: chunk.messageId, text: part, phase: chunk.phase, isAgent: true))
+                }
+            default:
+                continue
+            }
+        }
+        return rows
+    }
+
+    private static func startsNewPhase(_ phase: ACPMessagePhase?, after previous: ACPMessagePhase?) -> Bool {
+        if let phase, let previous { phase != previous } else { false }
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in

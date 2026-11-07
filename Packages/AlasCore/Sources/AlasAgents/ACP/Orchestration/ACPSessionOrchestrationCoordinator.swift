@@ -245,6 +245,8 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerOutboxSignals: [String: Int] = [:]
     /// Counts each prompt a child's peer accepted, for waits already under way.
     private var peerChildSends: [String: Int] = [:]
+    /// Awaited children a peer last said were idle, with the wait they were on.
+    private var quietPeerChildren: [String: Int64] = [:]
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -860,6 +862,58 @@ public final class ACPSessionOrchestrationCoordinator {
 
     /// `status` or `read` found nothing on the peer for a child that started
     /// there. Reads the row again: the request took a while.
+    /// Wakes the parent of an awaited child that its peer says is idle, twice
+    /// running, with no result collected in between. Stopping a Mac ends the
+    /// turn it is running and leaves it nothing to report, and a crash leaves
+    /// less, so only this side can tell the turn is over. The collector pulls
+    /// before each call, so a result that was on its way has arrived by then.
+    public func settleQuietPeerChildren(serverId: String) async {
+        guard let peers = environment.delegationPeers(),
+              let children = try? await environment.persistence.peerChildren(peerServerId: serverId)
+        else { return }
+        // Read before asking: an answer can only speak for a wait that began first.
+        let waiting = children.filter { $0.phase == .ready && $0.peerAwaiting }
+        let awaited = waiting.map(\.childSessionId)
+        for child in children where !awaited.contains(child.childSessionId) {
+            quietPeerChildren[child.childSessionId] = nil
+        }
+        for start in stride(from: 0, to: awaited.count, by: ACPDelegatedSessionWaitRequest.maxSessions) {
+            let batch = Array(awaited[start..<min(start + ACPDelegatedSessionWaitRequest.maxSessions, awaited.count)])
+            guard case .success(let data) = await peers.status(serverId: serverId, sessionIDs: batch),
+                  let reply = try? JSONDecoder().decode(ACPOrchestrationWaitResponse.self, from: data)
+            else { return }
+            for session in reply.sessions {
+                let id = session.sessionId
+                guard session.settled, session.state == ACPOrchestrationPublicState.idle.rawValue else {
+                    quietPeerChildren[id] = nil
+                    continue
+                }
+                guard let child = waiting.first(where: { $0.childSessionId == id }) else { continue }
+                let wait = child.peerAwaitingSince ?? 0
+                guard quietPeerChildren[id] == wait else {
+                    quietPeerChildren[id] = wait
+                    continue
+                }
+                quietPeerChildren[id] = nil
+                let outcome = ACPDelegatedMessage(
+                    id: "peer-turn-lost-\(id)-\(environment.nowMillis())",
+                    sourceSessionId: id,
+                    targetSessionId: child.parentSessionId,
+                    prompt: ACPDelegatedOutcomeText.peerTurnLost(outcomeContext(for: child)),
+                    createdAt: environment.now()
+                )
+                // False when a pull collected its result during the question, a
+                // prompt started another wait, or another instance on the store
+                // got here first. A throw leaves it awaited, for a later poll.
+                guard (try? await environment.persistence.claimLostPeerTurn(
+                    childSessionId: id, awaitingSince: child.peerAwaitingSince, outcome: outcome
+                )) == true else { continue }
+                environment.notifyChanged()
+                await deliverPendingMessages(to: child.parentSessionId, callerParent: child)
+            }
+        }
+    }
+
     private func failGonePeerChild(_ childID: String) async {
         guard let current = await peerChild(childID), current.phase == .ready else { return }
         await markChildFailed(childSessionId: childID, message: peerFailureMessage(.notFound, child: current))

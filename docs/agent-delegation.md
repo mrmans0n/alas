@@ -618,6 +618,12 @@ that the parent was waiting on, the parent gets one notice (not a wake) that it
 may still be running. When the Mac is back, anything that finished meanwhile is
 delivered then, once.
 
+Stopping or restarting the other Mac ends the turn its child is running, and
+nothing there reports that. While the link is up, Alas asks about a child it is
+waiting on once a minute, and if the child is idle two times running with no
+result, the parent gets a wake saying it stopped without one. The child is not
+failed, so `session_read` shows how far it got and `session_send` continues it.
+
 A child is failed, with a wake, only on proof it is gone. In `session_wait` that
 state is `gone` and also settled. It happens when the other Mac reports it has no
 such child.

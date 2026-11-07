@@ -584,6 +584,47 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
     }
 
+    private func lostTurn(_ store: ACPOrchestrationStore) throws -> Bool {
+        try store.claimLostPeerTurn(childSessionId: "child", awaitingSince: nil, outcome: .init(
+            id: "lost", sourceSessionId: "child", targetSessionId: "parent", prompt: "Stopped", createdAt: 1
+        ))
+    }
+
+    /// Instances sharing a store may both see the child stop: one wakes its parent.
+    @Test func onlyOneCallerClaimsALostPeerTurn() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        var record = newRecord()
+        record.peerServerId = "s1"
+        record.peerAwaiting = true
+        record.phase = .ready
+        try store.insert(record)
+
+        #expect(try lostTurn(store))
+        #expect(try lostTurn(store) == false)
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == false)
+        #expect(try store.pendingMessages(targetSessionId: "parent").map(\.id) == ["lost"])
+    }
+
+    /// A wake that cannot be stored leaves the child awaited, for a later poll.
+    @Test func aLostPeerTurnThatCannotEnqueueStaysAwaited() throws {
+        let path = temporaryPath()
+        let store = try ACPOrchestrationStore(path: path)
+        var record = newRecord()
+        record.peerServerId = "s1"
+        record.peerAwaiting = true
+        record.phase = .ready
+        try store.insert(record)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE delegated_messages RENAME TO hidden", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        #expect(throws: (any Error).self) { try lostTurn(store) }
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == true)
+    }
+
     /// An acknowledgement can arrive after the turn it started was collected,
     /// by this instance or another on the store, and must not revive the wait.
     @Test(arguments: [(1000, false), (1100, false), (1101, true)] as [(Int64, Bool)])

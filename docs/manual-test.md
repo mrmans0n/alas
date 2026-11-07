@@ -882,6 +882,11 @@ two-Mac acceptance gate when that fixture is available.
 
 ## Delegating to another machine
 
+The protocol paths here also run between two real hosts on one Mac, with a
+scripted agent: `ALAS_PEER_E2E=1 swift test --package-path Packages/AlasCore
+--filter PeerDelegationEndToEnd`. It takes over seven minutes and does not
+cover the UI or a real network between two Macs.
+
 These checks need two Macs running Alas, or one Mac and a headless host,
 paired and reachable on a LAN or tailnet. CI has no two-machine setup, so they
 stay pending until someone runs them. The UI built for this

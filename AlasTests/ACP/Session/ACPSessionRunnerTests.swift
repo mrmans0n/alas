@@ -5,6 +5,15 @@ import Testing
 @testable import AlasCore
 @testable import AlasSessions
 
+private func agentChunk(_ text: String, id: String? = nil, phase: String? = nil) -> ACPSessionUpdate {
+    let metadata = phase.map { AnyCodable(["codex": AnyCodable(["phase": AnyCodable($0)])]) }
+    return .agentMessageChunk(.init(messageId: id, content: .text(text), metadata: metadata))
+}
+
+private let bufferedToolCall = ACPSessionUpdate.toolCall(.init(
+    toolCallId: "tc", title: "Run", kind: "execute", status: "completed", content: nil, locations: nil, rawInput: nil, rawOutput: nil
+))
+
 @MainActor
 @Suite("ACPSessionRunner")
 struct ACPSessionRunnerTests {
@@ -6108,6 +6117,59 @@ struct ACPSessionRunnerTests {
         #expect(completions.count == 1)
         #expect(completions.first?.delegatedSource == source)
         #expect(completions.first?.lastAgentText == "Parser fixed.")
+    }
+
+    /// An agent that ends its turn right after its last words leaves them in
+    /// the coalescing buffer. For a child on another Mac they are its whole report.
+    @Test(arguments: [
+        ([], [agentChunk("fixed.")], "fixed."),
+        ([agentChunk("Parser ")], [agentChunk("fixed.")], "Parser fixed."),
+        ([agentChunk("Parser "), .agentThoughtChunk(.text("Hm."))], [agentChunk("fixed.")], "Parser fixed."),
+        // A late chunk for an older message does not take over from the last one.
+        ([agentChunk("Note ", id: "m1"), agentChunk("All fixed.", id: "m2")], [agentChunk("more", id: "m1")], "All fixed."),
+        ([agentChunk("Note ", id: "m1"), agentChunk("Parser ", id: "m2")], [agentChunk("more", id: "m1"), agentChunk("fixed.")], "Parser fixed."),
+        ([agentChunk("Other.", id: "m1")], [agentChunk("fixed.", id: "m2")], "fixed."),
+        // Continuing two messages at once: only the last one is the report.
+        ([agentChunk("Note ", id: "m1"), agentChunk("Parser ", id: "m2")],
+         [agentChunk("more", id: "m1"), agentChunk("fixed.", id: "m2")], "Parser fixed."),
+        // A buffered tool call or new phase divides messages that have no ids.
+        ([agentChunk("Note ")], [agentChunk("more"), bufferedToolCall, agentChunk("fixed.")], "fixed."),
+        ([agentChunk("Note ", phase: "commentary")], [agentChunk("fixed.", phase: "final_answer")], "fixed."),
+        ([], [agentChunk("Note", phase: "commentary"), agentChunk("fixed.", phase: "final_answer")], "fixed."),
+        // A boundary with no text after it leaves the message as the report.
+        ([], [agentChunk("All fixed."), bufferedToolCall], "All fixed."),
+        // A chunk with no id continues the message before it, identified or not.
+        ([agentChunk("Parser ", id: "m1")], [agentChunk("is ", id: "m1"), agentChunk("fixed.")], "Parser is fixed."),
+        ([agentChunk("Parser ", id: "m1")], [agentChunk("is "), agentChunk("fixed.", id: "m1")], "Parser is fixed."),
+        // Going back to an earlier message keeps what it already had.
+        ([], [agentChunk("Note ", id: "m1"), agentChunk("All ", id: "m2"), agentChunk("more", id: "m1"), agentChunk("fixed.", id: "m2")], "All fixed."),
+        // A chunk with no phase stays in the phase before it.
+        ([], [agentChunk("Note ", phase: "commentary"), agentChunk("more"), agentChunk("All ", phase: "final_answer"), agentChunk("fixed.")], "All fixed."),
+    ] as [([ACPSessionUpdate], [ACPSessionUpdate], String)])
+    func completionQuotesAgentTextStillBuffered(applied: [ACPSessionUpdate], buffered: [ACPSessionUpdate], expected: String) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var completions: [ACPTurnCompletion] = []
+        // Long enough that the text is still waiting when the turn ends.
+        let (runner, mock) = try makeRunner(
+            session: session, onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { applied.forEach { session.apply($0) } }
+            for update in buffered { mock.emit(.init(sessionId: "s", update: update)) }
+            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == buffered.count }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: ACPSessionRunner.blocks(text: "do it", attachments: []),
+                queuedItemId: nil,
+                onPromptFinished: { _ in continuation.resume(returning: ()) }
+            )
+        }
+
+        #expect(completions.first?.lastAgentText == expected)
     }
 
     @Test("completion never quotes an agent message from an earlier turn")
