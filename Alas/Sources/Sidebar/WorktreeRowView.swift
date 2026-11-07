@@ -497,8 +497,8 @@ struct WorktreeRowView: View {
             ForEach(WorktreeRowPresentation.upstreamItemsAtRest(Self.upstreamStatusItems(upstreamStatus, isMain: isMain)), id: \.text) {
                 upstreamView($0)
             }
-            // An operation or landing takes line 2, so the agents move up.
-            if operationState != nil || landingStatus != nil, let summary = harnessSummary {
+            // On the name line, which can truncate; line 2's facts are fixed-size.
+            if let summary = harnessSummary {
                 agentBadges(summary: summary)
             }
         }
@@ -551,16 +551,10 @@ struct WorktreeRowView: View {
     ) -> some View {
         // Everything a row knows stays on screen: it is what a scan of the
         // list reads. Narrow sidebars drop the diff bar, then the time.
-        HStack(spacing: scale.space[2]) {
-            ViewThatFits(in: .horizontal) {
-                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: true, showsTime: true, showsExplanation: showsExplanation)
-                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: true, showsExplanation: showsExplanation)
-                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: false, showsExplanation: showsExplanation)
-            }
-            // Here rather than beside the name, so the name keeps the width.
-            if let summary = harnessSummary {
-                agentBadges(summary: summary)
-            }
+        ViewThatFits(in: .horizontal) {
+            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: true, showsTime: true, showsExplanation: showsExplanation)
+            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: true, showsExplanation: showsExplanation)
+            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: false, showsExplanation: showsExplanation)
         }
         .font(scale.metaFont)
         .foregroundColor(rowColor("fg-dim"))
