@@ -475,14 +475,17 @@ public final class ACPOrchestrationStore {
         return .init(seq: row?["seq"] as? Int64 ?? 0, store: row?["store_id"] as? String)
     }
 
-    /// Counts `peerServerId`'s cursor in `storeId` from now on. A cursor that
-    /// counted in no known store keeps its place: the peer acknowledged it in
-    /// the store it reports now. One that counted in another store starts
-    /// again at 0, since that peer's sequence did. Returns false when the
-    /// cursor already counts in `storeId`, so concurrent collectors reset it
-    /// once.
+    /// Counts `peerServerId`'s cursor in `storeId` from now on, provided it
+    /// still counts in `expected`, the store the caller asked the peer with.
+    /// A cursor that counted in no known store keeps its place: the peer
+    /// acknowledged it in the store it reports now. One that counted in
+    /// another store starts again at 0, since that peer's sequence did.
+    /// Returns false when the cursor no longer counts in `expected`: another
+    /// collector adopted a store meanwhile, so the answer may come from one
+    /// already replaced, and concurrent collectors reset the cursor once.
     @discardableResult
-    public func adoptPeerStore(peerServerId: String, storeId: String) throws -> Bool {
+    public func adoptPeerStore(peerServerId: String, from expected: String?, to storeId: String) throws -> Bool {
+        guard expected != storeId else { return false }
         try db.exec("BEGIN IMMEDIATE")
         do {
             try db.exec(
@@ -493,9 +496,9 @@ public final class ACPOrchestrationStore {
                 """
                 UPDATE peer_delegation_cursors
                 SET seq = CASE WHEN store_id IS NULL THEN seq ELSE 0 END, store_id = ?
-                WHERE peer_server_id = ? AND store_id IS NOT ?
+                WHERE peer_server_id = ? AND store_id IS ?
                 """,
-                bindings: [storeId, peerServerId, storeId]
+                bindings: [storeId, peerServerId, expected]
             ) == 1
             try db.exec("COMMIT")
             return changed

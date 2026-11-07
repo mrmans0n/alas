@@ -695,16 +695,27 @@ struct ACPOrchestrationStoreTests {
         let store = try ACPOrchestrationStore(path: temporaryPath())
         #expect(try store.advancePeerCursor(peerServerId: "s1", to: 57, store: nil))
 
-        #expect(try store.adoptPeerStore(peerServerId: "s1", storeId: "first"))
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "first"))
         #expect(try store.peerCursor(peerServerId: "s1") == 57)
-        #expect(try store.adoptPeerStore(peerServerId: "s1", storeId: "first") == false)
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "first") == false)
 
-        #expect(try store.adoptPeerStore(peerServerId: "s1", storeId: "recreated"))
-        #expect(try store.peerCursor(peerServerId: "s1") == 0)
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: "first", to: "recreated"))
         #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 0, store: "recreated"))
         #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2, store: "recreated"))
-        #expect(try store.adoptPeerStore(peerServerId: "s1", storeId: "recreated") == false)
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: "first", to: "recreated") == false)
         #expect(try store.peerCursor(peerServerId: "s1") == 2)
+    }
+
+    /// A late answer from a database already replaced, to a collector that
+    /// asked knowing no store, must not undo the store another adopted.
+    @Test func aStoreIsAdoptedOnlyOverTheOneTheCollectorAskedWith() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "new"))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 1, store: "new"))
+
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "old") == false)
+
+        #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 1, store: "new"))
     }
 
     /// A page read before another collector adopted the peer's new store
@@ -712,9 +723,9 @@ struct ACPOrchestrationStoreTests {
     @Test(arguments: [true, false])
     func aPageFromAReplacedStoreMovesNoCursor(collecting: Bool) throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())
-        try store.adoptPeerStore(peerServerId: "s1", storeId: "old")
+        try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "old")
         try store.advancePeerCursor(peerServerId: "s1", to: 57, store: "old")
-        try store.adoptPeerStore(peerServerId: "s1", storeId: "new")
+        try store.adoptPeerStore(peerServerId: "s1", from: "old", to: "new")
 
         let stale = outboxEntry(seq: 58)
         let moved = collecting

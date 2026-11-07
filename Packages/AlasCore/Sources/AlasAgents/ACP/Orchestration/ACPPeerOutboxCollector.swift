@@ -207,15 +207,19 @@ public final class ACPPeerOutboxCollector {
                 // the start. Counted from 0 in the new store, the pull starts
                 // over. A cursor that knew no store keeps its place.
                 let known = store
+                let adopted: Bool
                 do {
-                    try await persistence.adoptPeerStore(peerServerId: serverId, storeId: answered)
+                    adopted = try await persistence.adoptPeerStore(peerServerId: serverId, from: known, to: answered)
                 } catch {
                     logger.error("Could not record the store of peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
                     return false
                 }
-                if known != nil {
+                // Not adopted: another collector changed the store since this
+                // one read it, so this answer may come from a store already
+                // replaced. The pull starts over from what the cursor holds now.
+                if known != nil || !adopted {
                     logger.notice("Peer \(serverId, privacy: .public) has a new store; collecting its outbox from the start")
-                    // Once: the store just adopted is the one it reported.
+                    // Once: the store just read is the one it reported.
                     return restarted ? false : await pull(serverId, restarted: true)
                 }
                 store = answered

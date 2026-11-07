@@ -184,8 +184,8 @@ public actor ACPOrchestrationPersistence {
     }
 
     @discardableResult
-    public func adoptPeerStore(peerServerId: String, storeId: String) throws -> Bool {
-        try openedStore().adoptPeerStore(peerServerId: peerServerId, storeId: storeId)
+    public func adoptPeerStore(peerServerId: String, from expected: String?, to storeId: String) throws -> Bool {
+        try openedStore().adoptPeerStore(peerServerId: peerServerId, from: expected, to: storeId)
     }
 
     public func peerCursor(peerServerId: String) throws -> Int64 {

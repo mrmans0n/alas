@@ -2551,7 +2551,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try remoteFixture(peers: peers)
         try await insertRemoteChild(fixture.persistence)
         try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 57, store: nil)
-        try await fixture.persistence.adoptPeerStore(peerServerId: "srv-1", storeId: "old")
+        try await fixture.persistence.adoptPeerStore(peerServerId: "srv-1", from: nil, to: "old")
         let entries = [Self.outcome(1)]
         peers.storedOutboxAnswer = { after, store in
             .success(.init(entries: entries.filter { store != "new" || $0.seq > after }, hasMore: false, store: "new"))
