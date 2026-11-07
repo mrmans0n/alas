@@ -9,7 +9,7 @@ public protocol PeerDeviceRoutes: AnyObject {
     @discardableResult
     func send(_ message: RemoteServerMessage, toDevice deviceId: String, acknowledging capability: String) -> Bool
     var onAcknowledgedCapabilitiesChange: (@MainActor (_ deviceId: String) -> Void)? { get set }
-    var onPeerHostReply: (@MainActor (_ deviceId: String, HostServerMessage) -> Void)? { get set }
+    var onPeerHostReply: (@MainActor (_ deviceId: String, _ route: Int?, HostServerMessage) -> Void)? { get set }
 }
 
 extension RemoteServer: PeerDeviceRoutes {}
@@ -81,9 +81,13 @@ public final class HostPeerDelegation {
         // to change.
         links.onFederationEvent = { [weak self] _ in self?.reconcile() }
         routes?.onAcknowledgedCapabilitiesChange = { [weak self] _ in self?.reconcile() }
-        routes?.onPeerHostReply = { [weak self] deviceId, message in
-            // A reply from any other device answers nothing this host asked.
-            guard let self, let peer = self.links.provenInboundOnlyPeers.first(where: { $0.deviceId == deviceId })?.peer else { return }
+        routes?.onPeerHostReply = { [weak self, weak routes] deviceId, route, message in
+            // A reply from any other device answers nothing this host asked,
+            // and one from an older socket of the device belongs to a channel
+            // since replaced, whose request ids the current one reuses.
+            guard let self, let peer = self.links.provenInboundOnlyPeers.first(where: { $0.deviceId == deviceId })?.peer,
+                  let route, route == routes?.route(toDevice: deviceId, acknowledging: Self.reverse)
+            else { return }
             reverseChannels.receive(serverId: peer.serverId, message)
         }
     }

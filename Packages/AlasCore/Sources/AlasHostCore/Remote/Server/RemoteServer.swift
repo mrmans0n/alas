@@ -85,8 +85,10 @@ public final class RemoteServer {
     /// Fired on the main actor when what a device's open sockets acknowledged
     /// may have changed: one acknowledged something, or one of its sockets closed.
     public var onAcknowledgedCapabilitiesChange: (@MainActor (_ deviceId: String) -> Void)?
-    /// Takes a device's answers to requests sent it as `RemoteServerMessage.peerHost`.
-    public var onPeerHostReply: (@MainActor (_ deviceId: String, HostServerMessage) -> Void)?
+    /// Takes a device's answers to requests sent it as `RemoteServerMessage.peerHost`,
+    /// with the route `route(toDevice:acknowledging:)` gave the socket it came
+    /// on, nil for one that acknowledged nothing.
+    public var onPeerHostReply: (@MainActor (_ deviceId: String, _ route: Int?, HostServerMessage) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     public var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
     /// See `RemoteHTTPResponder.pairsBackWithPeers`. Off only on alas-host.
@@ -357,7 +359,11 @@ public final class RemoteServer {
                 if scope == .full { gateway.presenter = self?.presenter }
                 gateway.delegationPairing = self?.pairing
                 let deviceId = channel.deviceId
-                gateway.onPeerHostReply = { [weak self] reply in self?.onPeerHostReply?(deviceId, reply) }
+                let socket = channel.socket
+                gateway.onPeerHostReply = { [weak self] reply in
+                    guard let self else { return }
+                    onPeerHostReply?(deviceId, socket.flatMap { self.acknowledged[$0]?.order }, reply)
+                }
                 self?.configureGateway?(gateway)
                 return gateway
             },

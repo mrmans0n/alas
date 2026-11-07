@@ -105,7 +105,7 @@ struct HeadlessCLIRouterTests {
         var open: [String: Int] = [:]
         private(set) var sent: [HostClientMessage] = []
         var onAcknowledgedCapabilitiesChange: (@MainActor (String) -> Void)?
-        var onPeerHostReply: (@MainActor (String, HostServerMessage) -> Void)?
+        var onPeerHostReply: (@MainActor (String, Int?, HostServerMessage) -> Void)?
         func route(toDevice deviceId: String, acknowledging capability: String) -> Int? {
             capability == HostProtocolCapability.delegationReverseV1 ? open[deviceId] : nil
         }
@@ -117,7 +117,7 @@ struct HeadlessCLIRouterTests {
         /// Waits for request `id` and answers it as device `deviceId`.
         func answer(_ id: Int, from deviceId: String, with result: HostResponse) async throws {
             try await eventually { await MainActor.run { self.sent.contains { $0.id == id } } }
-            onPeerHostReply?(deviceId, .response(id: id, result: result))
+            onPeerHostReply?(deviceId, open[deviceId], .response(id: id, result: result))
         }
     }
 
@@ -158,7 +158,9 @@ struct HeadlessCLIRouterTests {
 
         async let interrupted = delegation.client.interrupt(serverId: "mac", sessionID: "child")
         try await eventually { await MainActor.run { routes.sent.count == 3 } }
-        routes.onPeerHostReply?("other", .response(id: 3, result: .delegation(.interrupted(cancelRequested: false))))
+        routes.onPeerHostReply?("other", 1, .response(id: 3, result: .delegation(.interrupted(cancelRequested: false))))
+        // From an older socket of the same device, which the route has left.
+        routes.onPeerHostReply?("d", 0, .response(id: 3, result: .delegation(.interrupted(cancelRequested: false))))
         try await routes.answer(3, from: "d", with: .delegation(.interrupted(cancelRequested: true)))
         #expect(await interrupted == .success(true))
     }

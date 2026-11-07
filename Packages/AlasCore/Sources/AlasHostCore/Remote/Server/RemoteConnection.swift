@@ -14,11 +14,17 @@ import os
 /// console output uses as flow-control credit.
 public struct RemoteGatewayChannel {
     public let deviceId: String
+    /// The socket the gateway serves, as the server keys its connections.
+    public let socket: ObjectIdentifier?
     public let send: (RemoteServerMessage) -> Void
     public let sendTracked: @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void
 
-    public init(deviceId: String, send: @escaping (RemoteServerMessage) -> Void, sendTracked: @escaping @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void) {
+    public init(
+        deviceId: String, socket: ObjectIdentifier? = nil, send: @escaping (RemoteServerMessage) -> Void,
+        sendTracked: @escaping @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void
+    ) {
         self.deviceId = deviceId
+        self.socket = socket
         self.send = send
         self.sendTracked = sendTracked
     }
@@ -399,6 +405,7 @@ public final class RemoteConnection: @unchecked Sendable {
             guard let self else { return }
             let gateway = self.makeGateway(RemoteGatewayChannel(
                 deviceId: deviceId,
+                socket: ObjectIdentifier(self),
                 send: { [weak self] msg in self?.sendServerMessage(msg) },
                 sendTracked: { [weak self] msg, onWritten in self?.sendServerMessage(msg, onWritten: onWritten) }
             ))

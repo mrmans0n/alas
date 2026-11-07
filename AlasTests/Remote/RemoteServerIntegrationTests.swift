@@ -1203,8 +1203,8 @@ struct RemoteServerIntegrationTests {
             identity: { RemoteServerIdentity(serverId: "srv-host", name: "Host") },
             signer: RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
         )
-        var replies: [(String, HostServerMessage)] = []
-        server.onPeerHostReply = { replies.append(($0, $1)) }
+        var replies: [(String, Int?, HostServerMessage)] = []
+        server.onPeerHostReply = { replies.append(($0, $1, $2)) }
         try server.start(port: 0)
         defer { server.stop() }
         try await eventually("the server binds a port") { server.port != nil }
@@ -1240,7 +1240,9 @@ struct RemoteServerIntegrationTests {
         try await macSocket.send(.data(JSONEncoder().encode(RemoteClientMessage.peerHost(.response(id: 7, result: .done)))))
         try await eventually("the answer reaches the server") { !replies.isEmpty }
         #expect(replies.first?.0 == mac.deviceId)
-        #expect(replies.first?.1 == .response(id: 7, result: .done))
+        // Tagged with the socket's route, so a reply from an older one is told apart.
+        #expect(replies.first?.1 == server.route(toDevice: mac.deviceId, acknowledging: reverse))
+        #expect(replies.first?.2 == .response(id: 7, result: .done))
     }
 
     @Test func aConnectionOpenedAfterFederationIsSetSeesPeerRows() async throws {
