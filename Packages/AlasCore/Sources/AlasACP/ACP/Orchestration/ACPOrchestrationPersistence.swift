@@ -168,6 +168,10 @@ public actor ACPOrchestrationPersistence {
         try openedStore().claimLostPeerTurn(childSessionId: childSessionId, awaitingSince: awaitingSince, outcome: outcome)
     }
 
+    public func notePeerSendStarting(childSessionId: String) throws {
+        try openedStore().notePeerSendStarting(childSessionId: childSessionId)
+    }
+
     public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
         try openedStore().markPeerAwaiting(childSessionId: childSessionId, since: since)
     }

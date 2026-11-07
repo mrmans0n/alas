@@ -377,6 +377,18 @@ public final class ACPOrchestrationStore {
         """, bindings: [since, childSessionId, since])
     }
 
+    /// A prompt is on its way to `childSessionId`'s peer. An open wait moves
+    /// on by a millisecond, so a lost-turn claim for the wait as it was,
+    /// judged from a status the peer gave before it accepted this prompt,
+    /// finds nothing to end. The peer's answer then sets the wait from when
+    /// it accepted the prompt, which is later.
+    public func notePeerSendStarting(childSessionId: String) throws {
+        try db.exec("""
+        UPDATE delegations SET peer_awaiting_since = COALESCE(peer_awaiting_since, 0) + 1
+        WHERE child_session_id = ? AND peer_awaiting = 1
+        """, bindings: [childSessionId])
+    }
+
     /// Ends the wait for a child that stopped without a result and enqueues
     /// `outcome`, together, so a crash or a failed insert cannot end the wait
     /// with nothing to wake the parent. True only for the caller that ended it:

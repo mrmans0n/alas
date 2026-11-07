@@ -952,6 +952,14 @@ public final class ACPSessionOrchestrationCoordinator {
         guard let peers = environment.delegationPeers() else {
             return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
         }
+        // Before sending: a quiet check whose status predates the peer
+        // accepting this prompt must not end the wait it starts.
+        do {
+            try await environment.persistence.notePeerSendStarting(childSessionId: child.childSessionId)
+        } catch {
+            Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                .error("Could not note a send to session \(child.childSessionId, privacy: .public): \(String(describing: error), privacy: .public)")
+        }
         switch await peers.send(serverId: serverId, sessionID: child.childSessionId, prompt: prompt) {
         case .success(let acceptedAt):
             // A status question asked before this could report the child
