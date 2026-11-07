@@ -32,13 +32,17 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public var kind: RemoteDeviceKind
     /// For `.alasInstance` devices, the peer's advertised `serverId`.
     public var peerServerId: String?
+    /// The identity key that peer proved it holds, at redeem or by the
+    /// pair-back. Nil when nothing proved it, and then `peerServerId` is only
+    /// a claim: anyone holding a live pairing code could have sent it.
+    public var peerPublicKey: String?
     /// Whether agents on that peer may delegate work here. Consent is per
     /// device, so re-pairing starts again at `.off`.
     public var agentAccess: RemoteDeviceAgentAccess
 
     public init(id: String, name: String, tokenHash: String, createdAt: Date, lastSeenAt: Date?,
          kind: RemoteDeviceKind = .browser, peerServerId: String? = nil,
-         agentAccess: RemoteDeviceAgentAccess = .off) {
+         agentAccess: RemoteDeviceAgentAccess = .off, peerPublicKey: String? = nil) {
         self.id = id
         self.name = name
         self.tokenHash = tokenHash
@@ -47,10 +51,11 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
         self.kind = kind
         self.peerServerId = peerServerId
         self.agentAccess = agentAccess
+        self.peerPublicKey = peerPublicKey
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess
+        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess, peerPublicKey
     }
 
     // Records written before federation have no `kind`; treat them as browsers
@@ -66,6 +71,7 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
         peerServerId = try c.decodeIfPresent(String.self, forKey: .peerServerId)
         // A missing or unrecognised value is no consent.
         agentAccess = (try? c.decodeIfPresent(RemoteDeviceAgentAccess.self, forKey: .agentAccess)) ?? .off
+        peerPublicKey = (try? c.decodeIfPresent(String.self, forKey: .peerPublicKey)) ?? nil
     }
 }
 

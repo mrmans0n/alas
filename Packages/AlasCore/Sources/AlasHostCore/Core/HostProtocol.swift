@@ -747,6 +747,9 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case workspace(error: WorkspaceAutomationError)
     case session(refusal: SessionRefusal)
     case failed(message: String)
+    /// The caller's device never proved the identity it paired with, so this
+    /// host will not attribute delegated work to it. Pairing again fixes it.
+    case peerIdentityUnproven
     /// The file is no longer at the version the client named: `current`, or nil when it is gone.
     case fileChanged(current: WorktreeFileVersion?)
 }

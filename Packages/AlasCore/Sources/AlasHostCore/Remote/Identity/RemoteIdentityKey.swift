@@ -111,6 +111,44 @@ public enum RemoteIdentityCrypto: Sendable {
         else { return false }
         return key.isValidSignature(rawSignature, for: payload(serverId: serverId, challenge: challenge))
     }
+
+    /// The domain of a redeemer's proof at `POST /pair`. Separate from
+    /// `domain`, so a redeem signature never passes as a socket proof or the
+    /// reverse.
+    public static let redeemDomain = "alas.peer-redeem.v1"
+
+    /// What a redeemer signs: its own server id and the code it redeems. The
+    /// responder minted the code, single use and short-lived, so it serves as
+    /// the challenge without another round trip.
+    public static func redeemPayload(serverId: String, code: String) -> Data {
+        Data("\(redeemDomain)\n\(serverId)\n\(code.uppercased())".utf8)
+    }
+
+    public static func signRedeem(serverId: String, code: String,
+                                  with privateKey: Curve25519.Signing.PrivateKey) -> String? {
+        try? privateKey.signature(for: redeemPayload(serverId: serverId, code: code)).base64EncodedString()
+    }
+
+    /// Base64 of a 64-byte Ed25519 signature is always 88 characters.
+    static let signatureBase64Length = 88
+
+    /// Whether `signature` could be a redeemer's proof at all. Checked before
+    /// any verification: the input arrives unauthenticated.
+    public static func isPlausibleSignature(_ signature: String) -> Bool {
+        signature.utf8.count == signatureBase64Length && Data(base64Encoded: signature)?.count == 64
+    }
+
+    /// Whether `signature` proves the holder of `publicKey` redeemed `code`
+    /// as `serverId`.
+    public static func verifyRedeem(signature: String, serverId: String, code: String, publicKey: String) -> Bool {
+        guard isPlausibleSignature(signature),
+              RemotePeerAdvertisement.isPlausiblePublicKey(publicKey),
+              let rawKey = Data(base64Encoded: publicKey),
+              let rawSignature = Data(base64Encoded: signature),
+              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: rawKey)
+        else { return false }
+        return key.isValidSignature(rawSignature, for: redeemPayload(serverId: serverId, code: code))
+    }
 }
 
 /// Produces proofs for this Mac. Implemented by `RemoteIdentityKeyProvider`;
@@ -121,6 +159,12 @@ public protocol RemoteIdentitySigning: AnyObject {
     /// Base64 of this Mac's public key, committed to at pairing time.
     var publicKey: String { get }
     func proof(challenge: String, serverId: String) -> RemoteIdentityProof?
+    /// This Mac's proof, as `serverId`, that it redeems `code`.
+    func redeemProof(code: String, serverId: String) -> String?
+}
+
+public extension RemoteIdentitySigning {
+    func redeemProof(code: String, serverId: String) -> String? { nil }
 }
 
 /// This Mac's long-lived peer identity key, loaded from `store` on first use
@@ -155,6 +199,11 @@ public final class RemoteIdentityKeyProvider: RemoteIdentitySigning, ApprovalSig
     public func proof(challenge: String, serverId: String) -> RemoteIdentityProof? {
         guard !challenge.isEmpty, !serverId.isEmpty, let key = privateKey() else { return nil }
         return RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key)
+    }
+
+    public func redeemProof(code: String, serverId: String) -> String? {
+        guard !code.isEmpty, !serverId.isEmpty, let key = privateKey() else { return nil }
+        return RemoteIdentityCrypto.signRedeem(serverId: serverId, code: code, with: key)
     }
 
     public func signApproval(_ payload: ApprovalPayload, reply: Bool) -> String? {

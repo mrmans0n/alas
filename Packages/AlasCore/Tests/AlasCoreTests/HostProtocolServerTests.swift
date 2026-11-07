@@ -3011,7 +3011,7 @@ struct HostProtocolServerTests {
             let server = HostProtocolServer(host: host)
             server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
                 id: "s1", name: "s1", tokenHash: "s1", createdAt: .distantPast, lastSeenAt: nil, kind: .alasInstance,
-                peerServerId: "s1", agentAccess: access
+                peerServerId: "s1", agentAccess: access, peerPublicKey: "key-s1"
             )]))
             let client = Client()
             return (server.connect(caller: .remotePeer(deviceID: "s1"), send: client.receive), client)
@@ -3277,13 +3277,19 @@ struct HostProtocolServerTests {
         #expect(GitRemoteIdentity.normalized(url) == expected)
     }
 
+    /// A device that never proved its identity is refused in a type the source
+    /// can act on, even for a child its claimed identity owns.
     @Test(arguments: [
-        (HostCaller.app, DelegationAPI.notAPeerRefusal), (.cli, DelegationAPI.notAPeerRefusal),
-        (.session(id: "child"), DelegationAPI.notAPeerRefusal), (.localUser(uid: 501), DelegationAPI.notAPeerRefusal),
-        (.remotePeer(deviceID: "browser"), DelegationAPI.notAPeerRefusal), (.remotePeer(deviceID: "unknown"), DelegationAPI.notAPeerRefusal),
-        (.remotePeer(deviceID: "no-server-id"), DelegationAPI.unknownPeerRefusal),
+        (HostCaller.app, HostError.failed(message: DelegationAPI.notAPeerRefusal)),
+        (.cli, .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.session(id: "child"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.localUser(uid: 501), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "browser"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "unknown"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "no-server-id"), .peerIdentityUnproven),
+        (.remotePeer(deviceID: "s1-unproven"), .peerIdentityUnproven),
     ])
-    func delegationIsRefusedForEveryCallerExceptAPeerInstance(caller: HostCaller, refusal: String) async throws {
+    func delegationIsRefusedForEveryCallerExceptAProvenPeerInstance(caller: HostCaller, refusal: HostError) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
@@ -3294,7 +3300,7 @@ struct HostProtocolServerTests {
             .read(sessionID: "child", offset: nil, limit: nil, maxChars: nil), .status(sessionIDs: ["child"]),
             .interrupt(sessionID: "child"), .outbox(after: 0),
         ] {
-            #expect(await fixture.ask(request, as: caller) == .failure(error: .failed(message: refusal)), "\(request)")
+            #expect(await fixture.ask(request, as: caller) == .failure(error: refusal), "\(request)")
         }
         #expect(try await fixture.persistence.delegation(childSessionId: "new") == nil)
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
@@ -3746,12 +3752,15 @@ struct HostProtocolServerTests {
             )
             core.delegatedSessionsDB = { _ in database }
             host = AlasHost(core: core)
-            func device(_ id: String, _ server: String?, _ access: RemoteDeviceAgentAccess, _ kind: RemoteDeviceKind = .alasInstance) -> RemoteDevice {
-                RemoteDevice(id: id, name: id, tokenHash: id, createdAt: .distantPast, lastSeenAt: nil, kind: kind, peerServerId: server, agentAccess: access)
+            func device(_ id: String, _ server: String?, _ access: RemoteDeviceAgentAccess, _ kind: RemoteDeviceKind = .alasInstance,
+                        proven: Bool = true) -> RemoteDevice {
+                RemoteDevice(id: id, name: id, tokenHash: id, createdAt: .distantPast, lastSeenAt: nil, kind: kind, peerServerId: server,
+                             agentAccess: access, peerPublicKey: proven ? server.map { "key-\($0)" } : nil)
             }
             pairing = RemotePairingService(store: MemoryDeviceStore(devices: [
                 device("s1", "s1", .ask), device("s2", "s2", .ask), device("s1-repaired", "s1", .off),
                 device("browser", nil, .autoRun, .browser), device("no-server-id", nil, .autoRun),
+                device("s1-unproven", "s1", .autoRun, proven: false),
             ]))
             server = HostProtocolServer(host: host)
             server.delegationPairing = pairing
