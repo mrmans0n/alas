@@ -99,6 +99,12 @@ public final class RemotePeerManager {
     /// Peer host-protocol messages, kept off the federation fan-out like
     /// console events: they answer this Mac's own host channel to that peer.
     @ObservationIgnored public var onHostMessage: (@MainActor (_ serverId: String, HostServerMessage) -> Void)?
+    /// Host-protocol requests a peer sends back over this Mac's link to it,
+    /// from a link that carries sessions. Set by whoever serves them before
+    /// the links connect: only then do they offer to.
+    @ObservationIgnored public var onPeerHostRequest: (@MainActor (_ peerId: String, HostClientMessage) -> Void)?
+    /// Told when a peer's link may have gone up or down, or its record went.
+    @ObservationIgnored public var onLinkChanged: (@MainActor (_ peerId: String) -> Void)?
     /// Optional features each peer advertised in its latest `hello`, by
     /// `serverId`. In memory only: every connection re-announces them.
     public private(set) var capabilities: [String: Set<String>] = [:]
@@ -998,21 +1004,42 @@ public final class RemotePeerManager {
         peers.map { peer in
             HostPeerSummary(
                 id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins,
-                agentAccess: peer.localDeviceId.flatMap { pairing.device(id: $0)?.agentAccess },
+                agentAccess: agentAccess(of: peer, provenOnly: false),
                 tokenScope: peer.isInboundOnly ? nil : peer.tokenScope ?? .full
             )
         }
     }
 
+    /// What `peer`'s agents may do here: as its device here says, or, for a
+    /// peer with none, as its record says, which is what a host that paired
+    /// inbound-only delegates back under. Nil when there is nothing to
+    /// allow: a device gone, or, with `provenOnly`, one that never proved its
+    /// key, and a record with no device and no pinned key.
+    public func agentAccess(of peer: RemotePeer, provenOnly: Bool = true) -> RemoteDeviceAgentAccess? {
+        guard let deviceId = peer.localDeviceId else { return peer.isVerified ? peer.agentAccess ?? .off : nil }
+        guard let device = pairing.device(id: deviceId), !provenOnly || PeerDelegationGate.isProven(device) else { return nil }
+        return device.agentAccess
+    }
+
     /// Sets the access of the inbound device `peerId` reaches this Mac with,
     /// and of every other device carrying its identity: a re-pair leaves the
     /// earlier ones with live tokens, and the gate reads whichever authenticated.
-    /// False when the peer has no such device (reciprocal pairing never completed),
-    /// or when allowing anything on a device that never proved its identity,
-    /// which the gate would refuse anyway. Turning access off always works.
+    /// A peer with no device here keeps it on its record instead, if that is
+    /// pinned to a key: a host that paired inbound-only, whose requests come
+    /// back over this Mac's link. False when there is neither, or when
+    /// allowing anything on a device that never proved its identity, which
+    /// the gate would refuse anyway. Turning access off always works.
     public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
-        guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
-              access == .off || pairing.device(id: deviceId).map(PeerDelegationGate.isProven) == true,
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return false }
+        guard let deviceId = peers[index].localDeviceId else {
+            guard peers[index].isVerified else { return false }
+            peers[index].agentAccess = access == .off ? nil : access
+            durableStateByServerId[peers[index].serverId] = peers[index]
+            savePeers()
+            return true
+        }
+        let peer = peers[index]
+        guard access == .off || pairing.device(id: deviceId).map(PeerDelegationGate.isProven) == true,
               pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
         for other in deviceIds(of: peer) where other != deviceId {
             pairing.setAgentAccess(access, deviceId: other)
@@ -1061,6 +1088,7 @@ public final class RemotePeerManager {
         savePeers()
         onPeerRevoked?(peer.serverId, peer.name, true)
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+        onLinkChanged?(peer.id)
     }
 
     /// Waits for A's reciprocal call to redeem THIS attempt's own
@@ -1232,6 +1260,7 @@ public final class RemotePeerManager {
         states = [:]
         for peer in peers {
             onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+            onLinkChanged?(peer.id)
         }
     }
 
@@ -1244,6 +1273,9 @@ public final class RemotePeerManager {
         let id = peer.id
         let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }
         connections[id] = connection
+        if onPeerHostRequest != nil, Self.mayServePeerHost(peer) {
+            connection.acknowledge([HostProtocolCapability.delegationReverseV1])
+        }
         connection.connect()
     }
 
@@ -1260,6 +1292,7 @@ public final class RemotePeerManager {
                     onPeerRevoked?(peer.serverId, peer.name, false)
                 }
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+                onLinkChanged?(peerId)
             }
         case .hello(_, let name, let protocolVersion, _, let advertised):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
@@ -1315,6 +1348,10 @@ public final class RemotePeerManager {
                 onHostMessage?(peer.serverId, message)
                 return
             }
+            if case .peerHost(let request) = message {
+                onPeerHostRequest?(peerId, request)
+                return
+            }
             onFederationEvent?(.message(serverId: peer.serverId, message))
         }
     }
@@ -1328,6 +1365,33 @@ public final class RemotePeerManager {
     public func carriesSessions(peerId: String) -> Bool {
         guard let peer = peers.first(where: { $0.id == peerId }) else { return false }
         return !isProvisional(peer.serverId) && peer.isVerified && states[peerId] == .online
+    }
+
+    /// Peers that paired here inbound-only and proved their key doing so, with
+    /// the device each reaches this Mac with. This Mac can reach them only
+    /// over that device's own link.
+    public var provenInboundOnlyPeers: [(peer: RemotePeer, deviceId: String)] {
+        peers.compactMap { peer in
+            guard peer.isInboundOnly, let deviceId = peer.localDeviceId, let device = pairing.device(id: deviceId),
+                  PeerDelegationGate.isProven(device), device.peerServerId == peer.serverId else { return nil }
+            return (peer, deviceId)
+        }
+    }
+
+    /// A record whose peer may send requests back over this Mac's link: one
+    /// pinned to a key, which each socket proves, with no device here,
+    /// which is what a host that paired inbound-only leaves.
+    private static func mayServePeerHost(_ peer: RemotePeer) -> Bool {
+        peer.isVerified && peer.localDeviceId == nil
+    }
+
+    /// The record of a peer whose requests sent back over its link are
+    /// served now: one `mayServePeerHost` allows, online and proven on this
+    /// very socket.
+    public func servesPeerHost(peerId: String) -> RemotePeer? {
+        guard carriesSessions(peerId: peerId), let peer = peers.first(where: { $0.id == peerId }),
+              Self.mayServePeerHost(peer) else { return nil }
+        return peer
     }
 
     private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String?,
@@ -1371,6 +1435,8 @@ public final class RemotePeerManager {
             if let publicKey, !publicKey.isEmpty { peers[index].publicKey = publicKey }
             peers[index].localDeviceId = localDeviceId
             peers[index].tokenScope = tokenScope
+            // A pairing is a new consent, as a new device's is.
+            peers[index].agentAccess = nil
             peer = peers[index]
         } else {
             peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, origins: origins,

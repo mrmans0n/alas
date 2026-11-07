@@ -61,6 +61,21 @@ public final class HostProtocolServer {
         )
     }
 
+    /// A delegation-only connection for a caller whose device the transport
+    /// describes itself, rather than one paired here: a host that sends its
+    /// requests back over this Mac's own link to it. `device` is read on each
+    /// request, so a change of consent applies at once.
+    public func connect(
+        caller: HostCaller,
+        device: @escaping @MainActor () -> RemoteDevice?,
+        send: @escaping @MainActor (HostServerMessage) async -> Void
+    ) -> HostProtocolConnection {
+        HostProtocolConnection(
+            host: host, caller: caller, delegationOnly: true, discoverScripts: discoverScripts,
+            isServerClosed: { [self] in isClosed }, device: device, send: send
+        )
+    }
+
     /// Stops serving requests, on every connection, before the host tears
     /// down: none can start work that teardown would miss.
     public func close() {
@@ -81,6 +96,9 @@ public final class HostProtocolConnection {
     private let remotePeers: @MainActor () -> RemotePeerManager?
     private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
     private let delegationPairing: @MainActor () -> RemotePairingService?
+    /// The caller's device as its transport describes it, in place of a
+    /// lookup in `delegationPairing`.
+    private let device: (@MainActor () -> RemoteDevice?)?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -99,6 +117,7 @@ public final class HostProtocolConnection {
         remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
         remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
         delegationPairing: @escaping @MainActor () -> RemotePairingService? = { nil },
+        device: (@MainActor () -> RemoteDevice?)? = nil,
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -110,6 +129,7 @@ public final class HostProtocolConnection {
         self.remotePeers = remotePeers
         self.remotePairingLink = remotePairingLink
         self.delegationPairing = delegationPairing
+        self.device = device
         self.send = send
     }
 
@@ -379,7 +399,7 @@ public final class HostProtocolConnection {
             let peers = try localPeers()
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             guard peers.setAgentAccess(access, peerId: peerID) else {
-                throw HostError.failed(message: "That peer never proved its identity here, or has no device. Pair it again to allow this.")
+                throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
             }
             return .done
         case .readWorktree(let ref, let read):
@@ -469,6 +489,7 @@ public final class HostProtocolConnection {
     /// The paired device this connection's transport authenticated; nil for
     /// any other caller.
     private var delegationDevice: RemoteDevice? {
+        if let device { return device() }
         guard case .remotePeer(let deviceID) = caller else { return nil }
         return delegationPairing()?.device(id: deviceID)
     }

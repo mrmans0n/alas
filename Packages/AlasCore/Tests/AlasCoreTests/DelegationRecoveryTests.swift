@@ -283,7 +283,7 @@ struct DelegationRecoveryTests {
 
         init(entries: [ACPPeerOutboxEntry]) { self.entries = entries }
 
-        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+        func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
             .success(.init(entries: entries.filter { $0.seq > after }, hasMore: false))
         }
         func discover(serverId: String, repository: String?) async -> Result<ACPPeerDiscovery, ACPPeerError> { .failure(.notFound) }

@@ -527,12 +527,11 @@ struct RemoteServerPane: View {
     }
 
     /// What the paired Mac's agents may do here. Acts on the device the peer
-    /// reaches this Mac with, so it waits for reciprocal pairing to finish. A
-    /// device that never proved its identity cannot be allowed either.
+    /// reaches this Mac with, or, for a host that paired here inbound-only
+    /// and has none, on its record. A device that never proved its identity
+    /// cannot be allowed.
     private func agentAccessRow(for peer: RemotePeer) -> some View {
-        let access = peer.localDeviceId
-            .flatMap { state.remotePairing.device(id: $0) }
-            .flatMap { PeerDelegationGate.isProven($0) ? $0.agentAccess : nil }
+        let access = state.remotePeers.agentAccess(of: peer)
         let desc: String? = if access == nil {
             "Pair again to allow this"
         } else if access == .autoRun {

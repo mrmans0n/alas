@@ -114,7 +114,8 @@ Settings shows "Pair again to allow this" on the agent access row of an unproven
   gets `invalidRequest`;
 - receive, from its subscription, only `delegationOutboxChanged` and `resync`.
 
-Two allowlists hold this, so a message kind or host request added later is refused until someone decides otherwise. The gateway's
+Two allowlists hold this, so a message kind or host request added later is refused until someone decides otherwise. The
+[one-way route](2026-11-07-peer-delegation-one-way-route-design.md) is the first such decision: it admits `.peerHost` answers. The gateway's
 `handle` sees every client message of the socket and passes only `.host` frames, and the gateway sends only `.host` frames back, so a
 list push or anything a later change sends is dropped. The host-protocol connection holds the second allowlist. A `.delegation`
 device gets no federation, consoles or presenter.
@@ -221,7 +222,10 @@ Extend the existing suites:
 The remaining follow-ups get their own designs. This one must not rule them out:
 
 - **A store epoch for a recreated target database.** The source's outbox cursor survives a target that lost its store. Nothing here
-  touches cursors.
+  touches cursors. Done after this design: the orchestration database has a random id (schema 6) that every outbox page carries,
+  and the source's cursor records the id it counts in. A request naming another id is answered from the start and acknowledges
+  nothing, since its cursor would otherwise delete the new store's entries unread. The source then resets the cursor to 0 and
+  pulls again. Older builds on either side send no id and behave as before.
 - **A one-way route to a Mac the source cannot dial.** Requests sent back over the Mac's own connection, and pairing without a pair-back.
   Decision 1 already proves the redeemer's identity without a pair-back, which is half of what that route needs.
 - **The two known gaps from #2370.** Report quoting misses the transcript's replay and completed-output boundaries, and a lost-turn check

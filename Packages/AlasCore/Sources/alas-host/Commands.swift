@@ -287,7 +287,7 @@ enum HostCommands {
     static func setPeerAgentAccess(_ id: String, _ access: RemoteDeviceAgentAccess) async throws {
         try await perform(.setPeerAgentAccess(peerID: id, access: access)) { $0 == .done ? () : nil } inProcess: { _ in
             guard localPeerManager().setAgentAccess(access, peerId: id) else {
-                throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
+                throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
             }
         }
     }

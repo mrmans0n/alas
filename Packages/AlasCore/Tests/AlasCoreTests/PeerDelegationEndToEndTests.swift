@@ -449,6 +449,35 @@ struct PeerDelegationEndToEndTests {
             #expect(!lab.b.log(event: "prompt").contains { $0["text"]?.contains("E2E-TOKEN=nope") == true })
         }
     }
+
+    // MARK: 11. Back over the other's link
+
+    /// B never paired with A, and cannot dial it: A paired with B, and B
+    /// answered inbound-only. B's agents still reach A over A's own link,
+    /// once A allows B, and the outcome comes back the same way.
+    @Test func theTargetsAgentsDelegateBackOverTheSourcesLink() async throws {
+        try await PeerLab.run { lab in
+            let allowed = try await lab.a.tool("peers", "agents", "hostB", "ask")
+            #expect(allowed.status == 0, "\(allowed.error)")
+            let peersOnA = try await lab.a.tool("peers", "list")
+            #expect(peersOnA.output.contains("agents: ask"), "\(peersOnA.output)")
+            let parent = try await lab.startParent(on: lab.b, seeing: "hostA")
+
+            let child = try await lab.startChild(parent: parent, prompt: "E2E-TOKEN=back", on: lab.b, at: "hostA")
+            try await eventually { [a = lab.a] in a.prompts(containing: "E2E-TOKEN=back").count == 1 }
+            let summary = try #require(try await lab.a.session(child), "no session \(child) on A")
+            #expect(summary.delegatedFromName == "hostB")
+
+            // The wake names the child, and it comes once.
+            try await eventually(within: .seconds(60)) { [b = lab.b] in !b.prompts(containing: child).isEmpty }
+            let wake = try #require(lab.b.prompts(containing: child).first)
+            lab.note("wake on B: \(wake)")
+            #expect(wake.contains("hostA"), "the wake should name the machine: \(wake)")
+            let awaited = try await lab.b.rows("SELECT peer_awaiting FROM delegations WHERE child_session_id='\(child)'")
+            #expect(awaited == ["0"], "\(awaited)")
+            #expect(lab.b.prompts(containing: child).count == 1)
+        }
+    }
 }
 
 // MARK: - The two hosts
@@ -773,32 +802,34 @@ final class PeerLab {
         #expect(result.status == 0, "\(result.error)")
     }
 
-    /// An idle root session on A, and its identity to call the CLI with.
-    func startParent(autoRun: Bool = false) async throws -> String {
-        let client = try #require(a.client)
-        let ref = try #require(a.mainWorktree())
+    /// An idle root session on `source` (A unless named), once it sees
+    /// `target` online, and its identity to call the CLI with.
+    func startParent(autoRun: Bool = false, on source: LabHost? = nil, seeing target: String = "hostB") async throws -> String {
+        let source = source ?? a
+        let client = try #require(source.client)
+        let ref = try #require(source.mainWorktree())
         guard case .session(let session) = try await client.request(.createSession(
             target: .worktree(ref), agentID: Self.agentID, modelID: nil, autoRun: autoRun
         )) else { throw LabError("could not start the parent") }
         let id = session.id
         try await client.waitForEvent { if case .sessionChanged(let summary) = $0 { summary.id == id && summary.isWriter } else { false } }
-        try await waitForOnline(parent: id)
+        try await waitForOnline(parent: id, on: source, seeing: target)
         return id
     }
 
-    func waitForOnline(parent: String) async throws {
-        let a = a
+    func waitForOnline(parent: String, on source: LabHost? = nil, seeing target: String = "hostB") async throws {
+        let source = source ?? a
         try await eventually(within: .seconds(45)) {
-            guard let list = try? await a.cli("agent_list", session: parent) else { return false }
+            guard let list = try? await source.cli("agent_list", session: parent) else { return false }
             return (list.json?["peers"] as? [[String: Any]])?.contains {
-                $0["name"] as? String == "hostB" && $0["state"] as? String == "online"
+                $0["name"] as? String == target && $0["state"] as? String == "online"
             } == true
         }
     }
 
-    func startChild(parent: String, prompt: String) async throws -> String {
-        let started = try await a.cli("session_new", session: parent, params: [
-            "peer": "hostB", "worktree": "main", "prompt": prompt, "agent": Self.agentID,
+    func startChild(parent: String, prompt: String, on source: LabHost? = nil, at target: String = "hostB") async throws -> String {
+        let started = try await (source ?? a).cli("session_new", session: parent, params: [
+            "peer": target, "worktree": "main", "prompt": prompt, "agent": Self.agentID,
         ])
         note("session_new: \(started.text)")
         return try #require(started.json?["session_id"] as? String, "\(started.text)")
