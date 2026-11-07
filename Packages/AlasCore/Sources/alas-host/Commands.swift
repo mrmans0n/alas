@@ -75,7 +75,8 @@ enum HostCommands {
             try await removeProject(arguments[1])
         case ("peers", "list", 1):
             for peer in try await listPeers() {
-                print("\(peer.id)  \(peer.name)  \(peer.serverId)  agents: \(peer.agentAccess.map(Self.accessLabel) ?? "unavailable")")
+                print("\(peer.id)  \(peer.name)  \(peer.serverId)  agents: \(peer.agentAccess.map(Self.accessLabel) ?? "unavailable")"
+                      + "  this host there: \(peer.tokenScope.map(Self.scopeLabel) ?? "nothing")")
             }
         case ("peers", "agents", 3):
             let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
@@ -288,6 +289,13 @@ enum HostCommands {
             guard localPeerManager().setAgentAccess(access, peerId: id) else {
                 throw HostError.failed(message: "This Mac has no device for that peer. Pair it again to allow this.")
             }
+        }
+    }
+
+    private static func scopeLabel(_ scope: RemoteDeviceScope) -> String {
+        switch scope {
+        case .full: "full"
+        case .delegation: "delegation only"
         }
     }
 

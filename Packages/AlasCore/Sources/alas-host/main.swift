@@ -42,7 +42,8 @@ pairing link a Mac pastes into Add Peer.
 `alas-host peers` lists the Macs paired with this host and removes one,
 revoking its access, through the running host when one serves the profile.
 `peers add` pairs the running host with the Mac whose pairing link it is given,
-so this host's agents can delegate there. The two must reach each other.
+so this host's agents can delegate there, and nothing else: the Mac grants
+this host a token limited to delegated work. The two must reach each other.
 
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
@@ -340,6 +341,9 @@ if let listen = config.hostRemoteListen {
         )
     }
     peers.signRedeem = { identityKey.redeemProof(code: $0, serverId: $1) }
+    // Its tokens sit in a file its agents can read, and it shows no peer
+    // view, so a Mac it adds lets it delegate and nothing else.
+    peers.pairingScope = .delegation
     let delegation = HostPeerDelegation(links: peers)
     host.coreContext.delegationPeers = delegation.client
     peerDelegation = delegation

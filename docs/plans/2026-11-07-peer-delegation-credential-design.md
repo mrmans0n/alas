@@ -1,6 +1,6 @@
 # Proven peer identity and a delegation-only credential
 
-Status: proven identity (PR 1) implemented; delegation scope (PR 2) proposed. This is the first follow-up named in the
+Status: proven identity (PR 1, #2380) and delegation scope (PR 2) implemented. This is the first follow-up named in the
 [agent delegation design](2026-11-05-peer-agent-delegation-design.md#trust-model). The user asked to work through all of that
 design's follow-ups, starting here, and left the design to the author.
 
@@ -108,12 +108,18 @@ Settings shows "Pair again to allow this" on the agent access row of an unproven
 
 `RemoteDevice` gains `scope`, `.full` by default and on decode. A `.delegation` device may only:
 
-- complete the socket handshake: `hello`, `helloAck` and identity proofs;
-- subscribe, receiving only `delegationOutboxChanged`;
-- send host-protocol `.delegation` requests, still behind the gate.
+- complete the socket handshake: `hello`, `helloAck` and identity proofs. Its `hello` names no other paired Macs;
+- send host-protocol requests from an allowlist: `.delegation`, still behind the gate, and what the source's channel needs to
+  subscribe: `snapshot`, answered with a cursor and nothing else, `subscribe`, `subscribeAccepting` and `unsubscribe`. Anything else
+  gets `invalidRequest`;
+- receive, from its subscription, only `delegationOutboxChanged` and `resync`.
 
-Everything else is refused at the gateway, by an allowlist of message kinds, so a message kind added later is refused until someone
-decides otherwise. A `.delegation` device is never served consoles.
+Two allowlists hold this, so a message kind or host request added later is refused until someone decides otherwise. The gateway's
+`handle` sees every client message of the socket and passes only `.host` frames, and the gateway sends only `.host` frames back, so a
+list push or anything a later change sends is dropped. The host-protocol connection holds the second allowlist. A `.delegation`
+device gets no federation, consoles or presenter.
+
+Answering `snapshot` with an empty one keeps the source unchanged: its channel takes a snapshot for the cursor and then subscribes.
 
 The redeemer asks for the scope: its `/pair` body gains `scope: "delegation"`. The responder honours it only with a valid proof, and
 echoes it in the reply. A responder that does not echo it is an older build that issued a full token.
@@ -122,14 +128,15 @@ echoes it in the reply. A responder that does not echo it is an older build that
 
 `alas-host peers add` asks for `.delegation`. A host has no peer view of the Mac, so it never needs more.
 
-The guard is the capability in decision 6: a host checks it before redeeming anything, and refuses to start against a Mac without it,
-saying to update Alas there.
+The guard is the capability in decision 6: before redeeming at an origin, a host checks that origin advertises it, and refuses a Mac
+without it, saying to update Alas there.
 
 The reply's echo is a fallback for a Mac that advertised the capability but issued a full token anyway. The host then drops the token
 without storing it and reports the failure. Cleanup is not clean: the Mac pairs back while the host is still answering, so by then the
 Mac holds a token for the host and the host holds a device for it, and the Mac's own device for the host is full-scope with nobody
-holding its token. The host revokes the device it minted. The Mac keeps a peer record with a dead token, and the unheld device, until
-the user forgets the host there.
+holding its token. The host cancels its counter-code, so a pair-back still on its way cannot redeem it, and revokes a device a
+pair-back already made unless an earlier pairing still holds the identity. The Mac keeps a peer record with a dead token, and the
+unheld device, until the user forgets the host there.
 
 The Mac's pair-back is unchanged: the Mac gets a full token for the host, because the person at the Mac uses the peer view of the
 host. The two links have different scopes, and the host's `peers list` says so.
@@ -138,7 +145,8 @@ The app keeps asking for full tokens.
 
 ### 6. Capability
 
-The responder advertises `pair.delegation-scope.v1` in its diagnostics. A host checks it before starting `peers add`, so it can name
+The responder advertises `pair.delegation-scope.v1` in `capabilities` of its `/health` reply, which a host can read before it holds
+any token. A host checks it before starting `peers add`, so it can name
 the problem before redeeming a code. The proof needs no capability, since an older responder ignores the field.
 
 ## Trust model, after
@@ -201,6 +209,12 @@ Extend the existing suites:
    description in decision 5.
 4. **Re-pair with a scope change.** A host re-pairing an existing two-way peer must not keep an older full-scope device alive for the same
    Mac. `forget` already revokes every device carrying the identity; check `peers add` does the same on the Mac's side.
+
+   Found: it does not. A redeem adds a device and leaves the earlier ones, because the Mac's rollback of a failed re-pair restores the
+   earlier record and needs its device alive. So a host paired before this update keeps its old full device on the Mac after it
+   re-pairs. The host stops holding that token, since the re-pair replaces it in its store, but a copy taken earlier stays valid.
+   The way out is to forget the host on the Mac, then run `peers add` again. Revoking the earlier devices once a proven re-pair
+   commits is a follow-up.
 
 ## Later
 

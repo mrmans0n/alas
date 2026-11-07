@@ -94,8 +94,13 @@ public final class RemotePairingService {
     /// before it is consumed: a proof that fails leaves the code unused and
     /// counts as a failed redeem. A device made with a proof records the key,
     /// which is what makes its `peerServerId` more than a claim.
+    ///
+    /// `scope` narrows the token. It is honoured only with a proof, so the
+    /// device it limits is one whose identity is known; without one the
+    /// device gets `.full`, as from a redeemer that asked for nothing.
     public func redeemPeer(code: String, deviceName: String, peerServerId: String,
-                           peerPublicKey: String? = nil, proof: String? = nil) throws -> RemotePeerRedeemResult {
+                           peerPublicKey: String? = nil, proof: String? = nil,
+                           scope: RemoteDeviceScope = .full) throws -> RemotePeerRedeemResult {
         guard let proof else {
             return try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
         }
@@ -103,7 +108,7 @@ public final class RemotePairingService {
             throw RemoteServerError.unauthorized
         }
         return try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId,
-                              peerPublicKey: peerPublicKey) { matched in
+                              peerPublicKey: peerPublicKey, scope: scope) { matched in
             RemoteIdentityCrypto.verifyRedeem(signature: proof, serverId: peerServerId, code: matched,
                                               publicKey: peerPublicKey)
         }
@@ -162,6 +167,7 @@ public final class RemotePairingService {
 
     private func redeemCore(code: String, deviceName: String, kind: RemoteDeviceKind,
                             peerServerId: String?, peerPublicKey: String? = nil,
+                            scope: RemoteDeviceScope = .full,
                             verify: (String) -> Bool = { _ in true }) throws -> RemotePeerRedeemResult {
         // Drop failures outside the window, then throttle if too many remain.
         recentFailedRedeems = recentFailedRedeems.filter { now().timeIntervalSince($0) < Self.rateWindow }
@@ -180,17 +186,19 @@ public final class RemotePairingService {
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
         let provisional = provisionalCodes.remove(candidate) != nil
         let result = issue(deviceName: deviceName, kind: kind, peerServerId: peerServerId,
-                           peerPublicKey: peerPublicKey, provisional: provisional)
+                           peerPublicKey: peerPublicKey, scope: scope, provisional: provisional)
         if provisional { provisionalDeviceByCode[candidate] = result.deviceId }
         return result
     }
 
     private func issue(deviceName: String, kind: RemoteDeviceKind, peerServerId: String?,
-                       peerPublicKey: String? = nil, provisional: Bool) -> RemotePeerRedeemResult {
+                       peerPublicKey: String? = nil, scope: RemoteDeviceScope = .full,
+                       provisional: Bool) -> RemotePeerRedeemResult {
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
                                   tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
-                                  kind: kind, peerServerId: peerServerId, peerPublicKey: peerPublicKey)
+                                  kind: kind, peerServerId: peerServerId, peerPublicKey: peerPublicKey,
+                                  scope: scope)
         devices.append(device)
         if provisional { provisionalDeviceIDs.insert(device.id) }
         saveDevices()

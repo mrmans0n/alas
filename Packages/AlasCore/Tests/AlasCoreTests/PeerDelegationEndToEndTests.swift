@@ -712,6 +712,9 @@ final class PeerLab {
         let added = try await a.tool("peers", "add", link)
         #expect(added.status == 0, "\(added.error)")
         guard added.status == 0 else { throw LabError("peers add failed: \(added.error)") }
+        // A host holds a token at the other limited to delegation.
+        let listed = try await a.tool("peers", "list")
+        #expect(listed.output.contains("this host there: delegation only"), "\(listed.output)")
     }
 
     /// `origin` on a host name, so the repositories' identities match as on two
