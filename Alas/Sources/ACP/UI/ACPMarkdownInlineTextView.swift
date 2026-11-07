@@ -537,8 +537,10 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         cachedNaturalFittingSize = nil
     }
 
+    /// Honours any positive width, so a narrow table cell measures at its own
+    /// width; the floor only stands in for an empty proposal.
     func fittingSize(for width: CGFloat) -> CGSize {
-        let fittingWidth = max(minimumFittingWidth, width)
+        let fittingWidth = width > 0 ? width : minimumFittingWidth
         if let cachedHeight = fittingHeightByWidth[fittingWidth] {
             return CGSize(width: fittingWidth, height: cachedHeight)
         }
