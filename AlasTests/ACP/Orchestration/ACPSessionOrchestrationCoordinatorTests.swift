@@ -2390,6 +2390,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         deliver: (@MainActor (ACPDelegationRecord) async -> Void)? = nil,
         afterDeliver: @escaping @MainActor () -> Void = {},
         childBlocked: @escaping @MainActor (String, ACPDelegationRecord, ACPPeerOutboxEntry) -> Void = { _, _, _ in },
+        settleQuietChildren: @escaping @MainActor (String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) -> ACPPeerOutboxCollector {
         let coordinator = fixture.coordinator
@@ -2404,6 +2405,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             availabilityChanged: { coordinator.peerAvailabilityChanged(serverId: $0) },
             childBlocked: childBlocked,
             retryStarts: { await coordinator.retryPeerStarts(serverId: $0) },
+            settleQuietChildren: settleQuietChildren,
             schedule: schedule
         )
     }
@@ -3854,6 +3856,54 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let messages = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
         #expect(messages.count == (wakes ? 1 : 0))
         #expect(messages.first?.prompt.contains("mini") != false)
+    }
+
+    /// A prompt accepted during the question starts a wait the answer says
+    /// nothing about. That wait can still go quiet in its own right.
+    @Test(.timeLimit(.minutes(1))) func aPromptSentDuringTheQuestionKeepsItsOwnWait() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        peers.statusGate = gate
+        let asking = Task { await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1") }
+        try await waitUntil { peers.statusCalls.count == 2 }
+        _ = await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More"))
+        release.finish()
+        await asking.value
+        peers.statusGate = nil
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == true)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    /// An idle child may still have its result in the outbox until a pull finishes.
+    @Test func quietChildrenAreCheckedOnlyAfterAPullThatWorked() async throws {
+        final class Count { var settled = 0 }
+        let count = Count()
+        let scheduled = ScheduledWork()
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.outboxAnswer = { _ in .failure(.refused("Busy.")) }
+        let fixture = try remoteFixture(peers: peers)
+        let collector = makeCollector(
+            fixture, peers: peers, settleQuietChildren: { _ in count.settled += 1 }, schedule: scheduled.add
+        )
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+
+        await collector.collect(serverId: "srv-1")
+        await scheduled.takeNext()?()
+        #expect(count.settled == 0)
+
+        peers.outboxAnswer = { _ in .success(.init(entries: [], hasMore: false)) }
+        await scheduled.takeNext()?()
+        #expect(count.settled == 1)
     }
 
     /// A prompt sent after the first idle answer starts the count again.

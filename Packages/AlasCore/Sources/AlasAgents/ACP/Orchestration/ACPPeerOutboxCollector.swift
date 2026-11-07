@@ -147,7 +147,11 @@ public final class ACPPeerOutboxCollector {
         // Pull first: asking about starts can hold a row for a minute each.
         await collect(serverId: serverId)
         await retryStarts(serverId)
-        await settleQuietChildren(serverId)
+        // Only right after a pull that finished: until then a child's result
+        // may still be in the outbox. Another pull under way is not one.
+        if !failedPulls.contains(serverId), !pulling.contains(serverId) {
+            await settleQuietChildren(serverId)
+        }
         // Held until here, so a slow retry does not get a second one beside it.
         retryArmed.remove(serverId)
         await retryWhileNeeded(serverId: serverId)

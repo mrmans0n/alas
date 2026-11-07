@@ -585,7 +585,7 @@ struct ACPOrchestrationStoreTests {
     }
 
     private func lostTurn(_ store: ACPOrchestrationStore) throws -> Bool {
-        try store.claimLostPeerTurn(childSessionId: "child", outcome: .init(
+        try store.claimLostPeerTurn(childSessionId: "child", awaitingSince: nil, outcome: .init(
             id: "lost", sourceSessionId: "child", targetSessionId: "parent", prompt: "Stopped", createdAt: 1
         ))
     }

@@ -245,8 +245,8 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerOutboxSignals: [String: Int] = [:]
     /// Counts each prompt a child's peer accepted, for waits already under way.
     private var peerChildSends: [String: Int] = [:]
-    /// Awaited children a peer last said were idle, with their send counts.
-    private var quietPeerChildren: [String: Int] = [:]
+    /// Awaited children a peer last said were idle, with the wait they were on.
+    private var quietPeerChildren: [String: Int64] = [:]
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -871,7 +871,9 @@ public final class ACPSessionOrchestrationCoordinator {
         guard let peers = environment.delegationPeers(),
               let children = try? await environment.persistence.peerChildren(peerServerId: serverId)
         else { return }
-        let awaited = children.filter { $0.phase == .ready && $0.peerAwaiting }.map(\.childSessionId)
+        // Read before asking: an answer can only speak for a wait that began first.
+        let waiting = children.filter { $0.phase == .ready && $0.peerAwaiting }
+        let awaited = waiting.map(\.childSessionId)
         for child in children where !awaited.contains(child.childSessionId) {
             quietPeerChildren[child.childSessionId] = nil
         }
@@ -886,13 +888,13 @@ public final class ACPSessionOrchestrationCoordinator {
                     quietPeerChildren[id] = nil
                     continue
                 }
-                let sends = peerChildSends[id, default: 0]
-                guard quietPeerChildren[id] == sends else {
-                    quietPeerChildren[id] = sends
+                guard let child = waiting.first(where: { $0.childSessionId == id }) else { continue }
+                let wait = child.peerAwaitingSince ?? 0
+                guard quietPeerChildren[id] == wait else {
+                    quietPeerChildren[id] = wait
                     continue
                 }
                 quietPeerChildren[id] = nil
-                guard let child = await peerChild(id) else { continue }
                 let outcome = ACPDelegatedMessage(
                     id: "peer-turn-lost-\(id)-\(environment.nowMillis())",
                     sourceSessionId: id,
@@ -900,11 +902,12 @@ public final class ACPSessionOrchestrationCoordinator {
                     prompt: ACPDelegatedOutcomeText.peerTurnLost(outcomeContext(for: child)),
                     createdAt: environment.now()
                 )
-                // False when a pull collected its result during the question, or
-                // another instance on the store got here first. A throw leaves
-                // it awaited, for a later poll.
-                guard (try? await environment.persistence.claimLostPeerTurn(childSessionId: id, outcome: outcome)) == true
-                else { continue }
+                // False when a pull collected its result during the question, a
+                // prompt started another wait, or another instance on the store
+                // got here first. A throw leaves it awaited, for a later poll.
+                guard (try? await environment.persistence.claimLostPeerTurn(
+                    childSessionId: id, awaitingSince: child.peerAwaitingSince, outcome: outcome
+                )) == true else { continue }
                 environment.notifyChanged()
                 await deliverPendingMessages(to: child.parentSessionId, callerParent: child)
             }
