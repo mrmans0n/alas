@@ -418,6 +418,8 @@ private struct NativePeerComposer: View {
     @State private var mentionHighlight = 0
     @State private var mentionScope: MentionScope = .all
     @State private var notice: String?
+    /// The issue an Install was sent for: the button stays disabled until it changes.
+    @State private var adapterInstallRequested: RemoteAgentIssue?
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
@@ -506,10 +508,20 @@ private struct NativePeerComposer: View {
         VStack(spacing: 6) {
             if let error = NativePeerSessions.composerMessage(
                 deliveryError: client.deliveryError, notice: notice, agentIssue: config?.agentIssue) {
-                Text(error)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.color("del"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    Text(error)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.color("del"))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let issue = config?.agentIssue, client.offersAdapterInstall(for: issue) {
+                        Button(adapterInstallRequested == issue ? "Installing…" : "Install") {
+                            if client.installAdapter() { adapterInstallRequested = issue }
+                        }
+                        .controlSize(.small)
+                        .disabled(adapterInstallRequested == issue)
+                        .help("Install the ACP adapter on the host")
+                    }
+                }
             }
             ACPInputField(
                 streamingState: NativePeerComposerState.streamingState(transcript.streamingState),

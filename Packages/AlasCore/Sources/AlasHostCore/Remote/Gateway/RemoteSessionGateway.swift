@@ -220,6 +220,9 @@ public final class RemoteSessionGateway {
             }
         case .openSessionTab(let id):
             reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
+        case .installAdapter(let id):
+            // The outcome reaches the client as the session's agent issue.
+            try? await sessions?.installAdapter(id, caller: hostCaller)
         case .closeSessionTab(let id):
             reportTabAction(await presenter?.closeSessionTab(for: id) ?? .failure("Closing session tabs is unavailable."), sessionId: id)
         case .sendPrompt(let id, let text, let attachments, let intent, let mentions):

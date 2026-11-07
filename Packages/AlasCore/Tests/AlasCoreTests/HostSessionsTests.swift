@@ -380,6 +380,31 @@ struct HostSessionsTests {
         try await eventually { await received.states(of: id).last?.config.agentIssue == nil }
     }
 
+    /// A paired Mac's Install installs the missing adapter on the host and
+    /// connects the session; an agent with no managed adapter, or one that
+    /// is not missing it, is refused.
+    @Test func installingAMissingAdapterConnectsTheSession() async throws {
+        let setup = Mutex(ACPSetupResult.missing(reason: "the adapter is not installed"))
+        let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
+        defer { fixture.tearDown() }
+        let installed = Mutex<[String]>([])
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { agentID in
+            installed.withLock { $0.append(agentID) }
+            setup.withLock { $0 = .ready }
+        })
+        let sessions = fixture.host.sessions
+        let gemini = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" && sessions.agentIssue(gemini) != nil } }
+        await #expect(throws: SessionRefusal.notPending) { try await sessions.installAdapter(gemini, caller: .app) }
+
+        try await sessions.installAdapter(id, caller: .app)
+
+        #expect(installed.withLock { $0 } == ["codex"])
+        try await eventually { await MainActor.run { sessions.agentIssue(id) == nil && sessions.isWriter(id) } }
+        await #expect(throws: SessionRefusal.notPending) { try await sessions.installAdapter(id, caller: .app) }
+    }
+
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
     @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
