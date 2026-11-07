@@ -82,6 +82,13 @@ public struct NativeStack: Codable, Equatable, Sendable {
         encoder.outputFormatting = .sortedKeys
         fingerprint = SHA256.hash(data: (try? encoder.encode(scope)) ?? Data()).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// The current worktree proves ordered entries and ownership; discovery membership is
+    /// validated separately against the complete server inventory by the action resolver.
+    fileprivate var ownerScopeFingerprint: String {
+        Self(id: id, name: name, base: base, host: host, repo: repo, worktree: worktree,
+             complete: complete, entries: entries, actions: []).fingerprint
+    }
 }
 
 public struct StackInventory: Codable, Equatable, Sendable {
@@ -205,6 +212,13 @@ public struct PluginStackOpenParams: Codable, Sendable {
             && entry.map { (1...1024).contains($0.utf8.count) } != false
             && (action != .landThrough || entry != nil)
     }
+    /// Check the published inventory scope before independently verifying its current owning snapshot.
+    public func resolve(in inventory: StackInventory, verifyingOwner current: NativeStack) throws -> (stack: NativeStack, entry: NativeStackEntry?) {
+        let resolved = try resolve(in: inventory)
+        guard current.ownerScopeFingerprint == resolved.stack.ownerScopeFingerprint else { throw PluginStackError("The stack changed. Refresh and try again.") }
+        return resolved
+    }
+
     public func resolve(in inventory: StackInventory) throws -> (stack: NativeStack, entry: NativeStackEntry?) {
         guard isValid else { throw PluginStackError("Invalid stack action parameters.") }
         guard let selected = inventory.stacks.first(where: { $0.id == stack }) else { throw PluginStackError("Unknown stack in this project.") }

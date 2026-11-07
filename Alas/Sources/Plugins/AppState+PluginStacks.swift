@@ -198,10 +198,11 @@ extension AppState {
                 return nil
             }
             let snapshot = try await pane.ggService.currentStackSnapshot(worktreePath: worktree.path.path, requireRemoteRefresh: true)
-            guard let stack = snapshot.stack, let remote = try await projectStackRemote(project),
-                  try await pluginNativeStack(stack, project: project, remote: remote, worktree: worktree, actionsAllowed: true).fingerprint == request.fingerprint else {
+            guard let stack = snapshot.stack, let remote = try await projectStackRemote(project) else {
                 return "The stack changed. Refresh and try again."
             }
+            let currentOwner = try await pluginNativeStack(stack, project: project, remote: remote, worktree: worktree, actionsAllowed: true)
+            _ = try request.resolve(in: inventory, verifyingOwner: currentOwner)
             switch request.action {
             case .land, .landThrough:
                 guard let target = resolved.entry, pane.pendingGGLand == nil else { return "A native stack confirmation is already open." }

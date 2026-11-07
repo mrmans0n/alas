@@ -34,6 +34,35 @@ struct PluginStacksTests {
         #expect(unknownJSON["applicable"] == nil)
     }
 
+    @Test(arguments: [NativeStackAction.sync, .rebase])
+    func mergedDiscoveryScopeVerifiesTheSameIncompleteOwnerWithoutPromotingMembership(action: NativeStackAction) throws {
+        func owner(sha: String = "full-head") -> NativeStack {
+            NativeStack(id: "p:feature", name: "feature", base: "custom", host: "github.com", repo: "owner/repo", worktree: "wt",
+                        complete: false, entries: [.init(id: "c-a", sha: sha, position: 1, title: "Unpublished")], actions: [.open, .sync, .rebase])
+        }
+        let snapshot = owner()
+        var inventory = StackInventory(complete: true, busy: false, stacks: [snapshot])
+        // gg's local directory can omit a followed owner outside the configured username;
+        // a same-named remote stack then contributes an empty, unordered membership list.
+        inventory.includeDiscoveredStack(.init(id: snapshot.id, name: snapshot.name, base: "", host: snapshot.host, repo: snapshot.repo,
+                                               complete: false, entries: [], actions: [], reviewNumbers: []))
+        let published = try #require(inventory.stacks.first)
+        #expect(published.fingerprint != snapshot.fingerprint && published.reviewNumbers == [])
+        let request = PluginStackOpenParams(stack: published.id, fingerprint: published.fingerprint, action: action)
+        #expect(throws: Never.self) { try request.resolve(in: inventory, verifyingOwner: snapshot) }
+        #expect(throws: PluginStackError.self) { try request.resolve(in: inventory, verifyingOwner: owner(sha: "rewritten-head")) }
+        var changedDiscovery = inventory
+        changedDiscovery.includeDiscoveredStack(.init(id: snapshot.id, name: snapshot.name, base: "", host: snapshot.host, repo: snapshot.repo,
+                                                       complete: false, entries: [], actions: [], reviewNumbers: [9]))
+        #expect(throws: PluginStackError.self) { try request.resolve(in: changedDiscovery, verifyingOwner: snapshot) }
+        let stale = StackInventory(complete: false, busy: false, stacks: [snapshot], error: "Refresh failed").retainingKnownStacks(from: inventory)
+        #expect(stale.stacks.allSatisfy { $0.actions.isEmpty })
+        #expect(throws: PluginStackError.self) { try request.resolve(in: stale, verifyingOwner: snapshot) }
+        #expect(throws: PluginStackError.self) {
+            try PluginStackOpenParams(stack: published.id, fingerprint: published.fingerprint, action: .land).resolve(in: inventory, verifyingOwner: snapshot)
+        }
+    }
+
     @Test func api18IsAccepted() throws {
         let data = Data(#"{"id":"io.test.stacks","name":"Stacks","version":"1","api":18,"entry":"p.js"}"#.utf8)
         #expect(try PluginManifest.parse(data).api == 18)
