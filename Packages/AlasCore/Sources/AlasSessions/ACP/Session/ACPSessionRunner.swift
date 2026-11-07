@@ -170,6 +170,7 @@ public final class ACPSessionRunner {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     public var onPersistenceFlushForTesting: (@MainActor () -> Void)?
     public var activePromptIDForTesting: Int? { activePromptID }
+    public var observedUpdateCountForTesting: Int { observedUpdateCount }
     public func visualAidFirstWriteWaiterCountForTesting(id: UUID) -> Int { unconfirmedVisualAids[id]?.count ?? 0 }
 #endif
     private var updatesTask: Task<Void, Never>?
@@ -2497,35 +2498,67 @@ public final class ACPSessionRunner {
         var text: String?
         var phase: ACPMessagePhase?
         var isAgent = false
+        var isUser = false
+        /// Output of a turn already complete, which a chunk continues only
+        /// while the session lets streaming cross that boundary.
+        var isCompletedOutput = false
     }
 
     /// This turn's rows with buffered agent chunks applied to a copy, finding
     /// each chunk's row as `ACPSession.apply` does. Read-only on purpose; see
     /// `bufferedAgentText`.
+    ///
+    /// Like `apply`, it drops what load replay will suppress and chunks that
+    /// would cross a completed-output boundary. Whether crossing is allowed is
+    /// read now, though the chunks land on the next coalescing tick: the same
+    /// approximation as quoting before the buffer drains at all.
     private func turnRowsWithBufferedAgentText() -> [TurnRow] {
         let messages = session.transcript.messages
-        var rows = messages[min(activePromptTranscriptFloor ?? 0, messages.count)...].compactMap { message -> TurnRow? in
+        let floor = min(activePromptTranscriptFloor ?? 0, messages.count)
+        let boundary = session.transcript.completedOutputBoundaryMessageIds
+        let crossing = session.allowsStreamingBoundaryCrossing
+        var rows = messages[floor...].compactMap { message -> TurnRow? in
             if message.isInterruptedTurnContinuationNotice { return TurnRow() }
             switch message {
             case .agent(_, let id, let text):
-                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true)
-            case .user, .toolCall, .fileEdit, .visualAid:
+                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true,
+                               isCompletedOutput: boundary.contains(message.stableId))
+            case .user:
+                return TurnRow(isUser: true)
+            case .toolCall, .fileEdit, .visualAid:
                 return TurnRow()
             default:
                 return ACPSessionTranscriptReader.agentText(message).map { TurnRow(text: $0) }
             }
         }
-        for pending in pendingIncomingUpdates where !isSubagentUpdate(pending.params) {
+        for pending in pendingIncomingUpdatesToApply() where !isSubagentUpdate(pending.params) {
             switch pending.params.update {
             case .userMessageChunk(let chunk) where chunk.directed != nil:
                 continue
-            case .toolCall, .userMessageChunk:
+            case .userMessageChunk:
+                rows.append(TurnRow(isUser: true))
+            case .toolCall:
                 rows.append(TurnRow())
             case .agentMessageChunk(let chunk):
                 guard case .text(let part) = chunk.content else { continue }
+                // A row of an earlier turn has this turn's prompt after it, so
+                // nothing it receives is this turn's text.
+                if let id = chunk.messageId, !rows.contains(where: { $0.isAgent && $0.messageId == id }),
+                   messages[..<floor].contains(where: { if case .agent(_, id, _) = $0 { true } else { false } }) {
+                    continue
+                }
                 let found = chunk.messageId.map { id in rows.lastIndex { $0.isAgent && $0.messageId == id } }
                     ?? rows.lastIndex { $0.isAgent || $0.text == nil }.flatMap { rows[$0].isAgent ? $0 : nil }
-                if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
+                if let found, !crossing,
+                   rows[found].isCompletedOutput || (chunk.messageId != nil && rows[(found + 1)...].contains { $0.isUser }) {
+                    continue
+                }
+                // Crossing is allowed here, and it opens the row once.
+                let crossesBoundary = found.map { rows[$0].isCompletedOutput } ?? false
+                if let found, crossesBoundary { rows[found].isCompletedOutput = false }
+                if crossesBoundary, chunk.messageId == nil {
+                    rows.append(TurnRow(messageId: nil, text: part, phase: chunk.phase, isAgent: true))
+                } else if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
                     let text = rows[found].text ?? ""
                     rows[found].text = text + ACPSession.streamingSeparator(between: text, and: part) + part
                     rows[found].phase = chunk.phase ?? rows[found].phase
@@ -2543,11 +2576,20 @@ public final class ACPSessionRunner {
         if let phase, let previous { phase != previous } else { false }
     }
 
+    /// The buffered updates `apply` will see: load replay suppresses the
+    /// first ones while it lasts, counting every update as
+    /// `applyIncomingUpdate` does.
+    private func pendingIncomingUpdatesToApply() -> ArraySlice<PendingIncomingUpdate> {
+        guard suppressingLoadReplay, let target = loadReplaySuppressionTarget else { return pendingIncomingUpdates[...] }
+        let suppressed = max(0, min(pendingIncomingUpdates.count, target - observedUpdateCount))
+        return pendingIncomingUpdates.dropFirst(suppressed)
+    }
+
     /// Agent text still in the incoming-update coalescing buffer, not yet in
     /// the transcript. Read-only on purpose: draining the buffer at turn end
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
-        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+        let text = pendingIncomingUpdatesToApply().compactMap { pending -> String? in
             guard !isSubagentUpdate(pending.params),
                   case .agentMessageChunk(let chunk) = pending.params.update,
                   case .text(let value) = chunk.content
