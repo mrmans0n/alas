@@ -62,6 +62,7 @@ struct RootView: View {
             }
             .onPreferenceChange(ApprovalStackHeightKey.self) { approvalStackHeight = $0 }
             .environment(\.theme, state.themeStore.current)
+            .environment(\.designScale, .resolved(for: state.config.density))
             .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
                 // `initial: true` is load-bearing: AppState.init() calls
                 // WindowAppearance.apply too, but that runs before the SwiftUI
@@ -500,7 +501,8 @@ struct RootView: View {
                 client: client,
                 typography: ACPChatTypography(
                     fontFamily: state.config.agents.chatFontFamily,
-                    fontSize: state.config.agents.chatFontSize
+                    fontSize: state.config.agents.chatFontSize,
+                    density: state.config.density
                 ),
                 collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
                 sendOnEnter: state.config.harness.acpSendOnEnter,
@@ -1034,6 +1036,7 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                     }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .environment(\.designScale, .resolved(for: state.config.density))
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(isPresented: $state.presentUpdateProgress, onDismiss: {
