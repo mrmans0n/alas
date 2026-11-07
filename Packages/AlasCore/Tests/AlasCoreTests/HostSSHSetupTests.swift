@@ -123,6 +123,8 @@ struct HostSSHSetupTests {
         #expect(warnings.isEmpty)
         #expect(commands.count == 1)
         #expect(commands[0].contains("@alas-ide/claude-agent-acp"))
+        // A fish or csh login shell can't parse the script itself.
+        #expect(commands[0].contains("-i -l -c '/bin/sh -c "))
     }
 
     /// Runs in a real shell: what decides here is the script's own logic.
@@ -167,8 +169,8 @@ struct HostSSHSetupTests {
         }
 
         let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        shell.arguments = ["-fc", HostSSHSetup.adapterInstallScript(cli: "codex", adapter: adapter)]
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", HostSSHSetup.adapterInstallScript(cli: "codex", adapter: adapter)]
         shell.environment = ["PATH": "\(bin.path):/usr/bin:/bin"]
         try shell.run()
         shell.waitUntilExit()

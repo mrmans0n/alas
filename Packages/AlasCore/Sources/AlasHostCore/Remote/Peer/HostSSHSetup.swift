@@ -345,8 +345,10 @@ public struct HostSSHSetup: Sendable {
         for agent in AgentBuiltins.catalog where agents[agent.id] == true {
             guard let adapter = ACPManagedAdapterDescriptor.descriptor(for: agent.id) else { continue }
             let script = Self.adapterInstallScript(cli: agent.binary, adapter: adapter)
-            // As the host reads its PATH: `npm` often comes from `.zshrc`.
-            let command = "\"${SHELL:-/bin/zsh}\" -lic \(SSHCommand.shellQuote(script)) </dev/null"
+            // The login shell only lends its PATH, as the host reads it: `npm`
+            // often comes from `.zshrc`. It may be fish or csh, so sh runs the script.
+            let inner = "/bin/sh -c \(SSHCommand.shellQuote(script))"
+            let command = "\"${SHELL:-/bin/zsh}\" -i -l -c \(SSHCommand.shellQuote(inner)) </dev/null"
             do {
                 let result = try await run(command, 300)
                 if result.exitCode != 0 {
@@ -371,7 +373,7 @@ public struct HostSSHSetup: Sendable {
         if command -v \(SSHCommand.shellQuote(cli)) >/dev/null 2>&1; then \
         p=$(cd "$(npm root -g)"/\(package) 2>/dev/null && pwd -P); \
         t=$(readlink -f "$(npm prefix -g)"/bin/\(binary) 2>/dev/null); \
-        if ! { \(anywhere){ [ -n "$p" ] && [ -x "$t" ] && [ "${t#"$p"/}" != "$t" ]; }; }; then \
+        if \(anywhere){ [ -n "$p" ] && [ -x "$t" ] && [ "${t#"$p"/}" != "$t" ]; }; then :; else \
         npm install -g --force --no-fund --no-audit \(package); fi; fi
         """
     }
