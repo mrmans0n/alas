@@ -172,6 +172,19 @@ public actor ACPOrchestrationPersistence {
         try openedStore().markPeerAwaiting(childSessionId: childSessionId, since: since)
     }
 
+    public func storeIdentity() throws -> String {
+        try openedStore().storeIdentity()
+    }
+
+    public func peerStore(peerServerId: String) throws -> String? {
+        try openedStore().peerStore(peerServerId: peerServerId)
+    }
+
+    @discardableResult
+    public func adoptPeerStore(peerServerId: String, storeId: String) throws -> Bool {
+        try openedStore().adoptPeerStore(peerServerId: peerServerId, storeId: storeId)
+    }
+
     public func peerCursor(peerServerId: String) throws -> Int64 {
         try openedStore().peerCursor(peerServerId: peerServerId)
     }

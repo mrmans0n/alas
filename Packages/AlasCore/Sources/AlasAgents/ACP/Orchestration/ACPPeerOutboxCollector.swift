@@ -168,10 +168,13 @@ public final class ACPPeerOutboxCollector {
     }
 
     /// False when it stopped on something a retry could get past.
-    private func pull(_ serverId: String) async -> Bool {
+    /// `restarted` is set on the pull that follows the peer's store changing.
+    private func pull(_ serverId: String, restarted: Bool = false) async -> Bool {
         let cursor: Int64
+        var store: String?
         do {
             cursor = try await persistence.peerCursor(peerServerId: serverId)
+            store = try await persistence.peerStore(peerServerId: serverId)
         } catch {
             logger.error("Could not read the cursor for peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
             return false
@@ -182,7 +185,7 @@ public final class ACPPeerOutboxCollector {
             // Asking also acknowledges everything through `after`, which is
             // only ever a cursor that is already committed.
             let page: ACPPeerOutboxPage
-            switch await peers.outbox(serverId: serverId, after: after) {
+            switch await peers.outbox(serverId: serverId, after: after, store: store) {
             case .success(let answer): page = answer
             case .failure(.outdated):
                 // Stays that way until the peer's build changes, which is a
@@ -196,6 +199,25 @@ public final class ACPPeerOutboxCollector {
             case .failure(let error):
                 logger.notice("Outbox of peer \(serverId, privacy: .public) not collected after \(after): \(String(describing: error), privacy: .public)")
                 return false
+            }
+            if let answered = page.store, answered != store {
+                // The peer's database was made afresh, so its sequence started
+                // again and this cursor means nothing there: it answered from
+                // the start. Counted from 0 in the new store, the pull starts
+                // over. A cursor that knew no store keeps its place.
+                let known = store
+                do {
+                    try await persistence.adoptPeerStore(peerServerId: serverId, storeId: answered)
+                } catch {
+                    logger.error("Could not record the store of peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
+                    return false
+                }
+                if known != nil {
+                    logger.notice("Peer \(serverId, privacy: .public) has a new store; collecting its outbox from the start")
+                    // Once: the store just adopted is the one it reported.
+                    return restarted ? false : await pull(serverId, restarted: true)
+                }
+                store = answered
             }
             // The whole page is committed before anyone is woken, so a slow
             // parent holds up neither another parent nor the next page.

@@ -3456,7 +3456,8 @@ struct HostProtocolServerTests {
         }
         #expect(try JSONDecoder().decode(ACPOrchestrationReadResponse.self, from: page).sessionId == "child")
         #expect(await fixture.ask(.interrupt(sessionID: "child"), as: rePaired) == .delegation(.interrupted(cancelRequested: false)))
-        #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false)))
+        let own = try await fixture.persistence.storeIdentity()
+        #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false, store: own)))
 
         let send = HostDelegationRequest.send(sessionID: "child", prompt: "Go")
         #expect(await fixture.ask(send, as: rePaired) == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
@@ -3499,7 +3500,7 @@ struct HostProtocolServerTests {
         for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: prompt) }
 
         let first = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
-        guard case .delegation(.outbox(let page, let hasMore)) = first else {
+        guard case .delegation(.outbox(let page, let hasMore, _)) = first else {
             Issue.record("expected a page")
             return
         }
@@ -3509,7 +3510,7 @@ struct HostProtocolServerTests {
         #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: first))).count <= RemoteServerMessage.sendBudget)
 
         let next = await fixture.ask(.outbox(after: try #require(page.last?.seq)), as: fixture.peer1)
-        guard case .delegation(.outbox(let rest, let more)) = next else {
+        guard case .delegation(.outbox(let rest, let more, _)) = next else {
             Issue.record("expected a page")
             return
         }
@@ -3526,7 +3527,7 @@ struct HostProtocolServerTests {
 
         let response = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
 
-        guard case .delegation(.outbox(let page, let hasMore)) = response else {
+        guard case .delegation(.outbox(let page, let hasMore, _)) = response else {
             Issue.record("expected a page")
             return
         }
@@ -3536,20 +3537,33 @@ struct HostProtocolServerTests {
         #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: response))).count <= RemoteServerMessage.sendBudget)
     }
 
-    @Test func outboxAcknowledgesEntriesThroughAfter() async throws {
+    enum AskedStore: CaseIterable, Sendable { case none, this, another }
+
+    /// Asking acknowledges through `after`, unless the cursor counts in a
+    /// store this host no longer has: its database was made afresh, so that
+    /// `after` would delete entries nobody read.
+    @Test(arguments: AskedStore.allCases)
+    func outboxAcknowledgesEntriesThroughAfterInThisStoreOnly(_ asked: AskedStore) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: "Done") }
         try await fixture.enqueueOutcome(id: "other", peer: "s2", prompt: "Done")
+        let own = try await fixture.persistence.storeIdentity()
+        let store: String? = switch asked {
+        case .none: nil
+        case .this: own
+        case .another: "a-store-since-deleted"
+        }
 
-        let response = await fixture.ask(.outbox(after: 2), as: fixture.peer1)
+        let response = await fixture.ask(.outbox(after: 2, store: store), as: fixture.peer1)
 
-        guard case .delegation(.outbox(let page, false)) = response else {
+        guard case .delegation(.outbox(let page, false, own)) = response else {
             Issue.record("\(response)")
             return
         }
-        #expect(page.map(\.messageId) == ["m3"])
-        #expect(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["m3"])
+        let kept = asked == .another ? ["m1", "m2", "m3"] : ["m3"]
+        #expect(page.map(\.messageId) == kept)
+        #expect(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == kept)
         #expect(try await fixture.persistence.outbox(peerServerId: "s2", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["other"])
     }
 

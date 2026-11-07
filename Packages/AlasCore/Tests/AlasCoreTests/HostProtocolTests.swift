@@ -355,6 +355,18 @@ struct HostProtocolTests {
         }
     }
 
+    /// An outbox request or page without `store` is one from an older build,
+    /// and a new build sends none when it knows none.
+    @Test func anOutboxWithoutAStoreIsAnOlderBuilds() throws {
+        let request = try JSONEncoder().encode(HostDelegationRequest.outbox(after: 5))
+        let page = try JSONEncoder().encode(HostDelegationResponse.outbox(entries: [], hasMore: false))
+        #expect(!String(decoding: request + page, as: UTF8.self).contains("store"))
+        #expect(try JSONDecoder().decode(HostDelegationRequest.self, from: request) == .outbox(after: 5, store: nil))
+        #expect(try JSONDecoder().decode(HostDelegationResponse.self, from: page) == .outbox(entries: [], hasMore: false, store: nil))
+        let stored = HostDelegationResponse.outbox(entries: [], hasMore: false, store: "s")
+        #expect(try JSONDecoder().decode(HostDelegationResponse.self, from: JSONEncoder().encode(stored)) == stored)
+    }
+
     /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.
     @Test(arguments: [nil, ##"{"badge":1,"number":"#7"}"##])
     func aSummaryWithoutAReadableShepherdDecodesWithNone(_ shepherd: String?) throws {

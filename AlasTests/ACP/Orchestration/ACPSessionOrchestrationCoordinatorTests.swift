@@ -2366,11 +2366,15 @@ struct ACPSessionOrchestrationCoordinatorTests {
         var outboxGate: AsyncStream<Void>?
         var onOutboxCall: ((Int64) -> Void)?
         private(set) var outboxCalls: [Int64] = []
-        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+        /// Answers in place of `outboxAnswer` when set, given the store asked about.
+        var storedOutboxAnswer: ((Int64, String?) -> Result<ACPPeerOutboxPage, ACPPeerError>)?
+        private(set) var outboxStores: [String?] = []
+        func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
             outboxCalls.append(after)
+            outboxStores.append(store)
             onOutboxCall?(after)
             if let outboxGate { for await _ in outboxGate { break } }
-            return outboxAnswer(after)
+            return storedOutboxAnswer?(after, store) ?? outboxAnswer(after)
         }
 
         /// Serves `entries` after the asked-for `seq`, `pageSize` at a time.
@@ -2538,6 +2542,26 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-2"])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    /// A peer whose database was made afresh numbers its outbox from 1 again.
+    /// A cursor left at 57 would skip, and acknowledge away, every new entry.
+    @Test func aPeerWithANewStoreIsCollectedFromTheStart() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 57)
+        try await fixture.persistence.adoptPeerStore(peerServerId: "srv-1", storeId: "old")
+        let entries = [Self.outcome(1)]
+        peers.storedOutboxAnswer = { after, store in
+            .success(.init(entries: entries.filter { store != "new" || $0.seq > after }, hasMore: false, store: "new"))
+        }
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1"])
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 1)
+        #expect(peers.outboxStores == ["old", "new"])
     }
 
     @Test func unreadableSessionStoreNeverCountsAsAGoneParent() async throws {
