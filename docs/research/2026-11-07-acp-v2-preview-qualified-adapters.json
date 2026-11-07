@@ -128,8 +128,7 @@
     }
   ],
   "pendingGates": [
-    "Whole-branch review",
-    "Integrated Debug app smoke test"
+    "Integrated Debug app smoke test in a supported launch environment"
   ],
   "qualificationScope": "Fresh local package runner with text prompts, one-time permission selection and permission cancellation. No replay, resume, ownership transfer, SSH or app integration qualification.",
   "rolloutEnabled": false,
@@ -321,5 +320,71 @@
       "Packages/AlasCore/Sources/AlasSessions/ACP/Session/ACPV2SessionRunner.swift": "1529cf28e2f87ff41c558e236745e91cb09feda34d9cc7c2ec8701c3e9855711",
       "Packages/AlasCore/Sources/AlasACP/ACP/Broker/ACPRawBrokerTransport.swift": "1840e45d5372eefe34c93e59fccc39fb92759334c2a445f5b2849242b4f9d64f"
     }
+  },
+  "admittedAdapters": [],
+  "appQualification": {
+    "status": "incomplete",
+    "reason": "Normal application and login-shell PATH contain a relative entry; identity admission refuses before preview row creation or broker open. No policy or user shell configuration was weakened.",
+    "verified": [
+      "Isolated profile with disposable repository",
+      "Experimental gate defaults off",
+      "Ordinary Codex session remains persisted v1 with gate on",
+      "Explicit preview confirmation and fail-closed preflight"
+    ],
+    "remaining": [
+      "Integrated preview startup and canonical text completion",
+      "Positive one-time permission and cancellation through the app",
+      "Gate-off behavior of an existing live preview",
+      "End and empty owned broker namespace",
+      "Saved view-only reopening and exact orphan cleanup in the app"
+    ]
+  },
+  "branchReview": {
+    "reviewedHead": "6490775b66f960f45925cc2cefabfeebf3a17d3d",
+    "critical": 0,
+    "important": 3,
+    "importantFixes": [
+      "Canonicalize the owned npm-bin symlink before comparing launch paths",
+      "Revalidate identity after helper preparation immediately before pipe handoff",
+      "Withdraw sends and persist the error after an uncertain prompt RPC failure"
+    ],
+    "deferredMinor": [
+      "Show durable unsupported-request diagnostics in saved UI",
+      "Make identity refusal messages actionable"
+    ],
+    "fixHead": "e56547e78"
+  },
+  "localValidation": {
+    "coreTests": {
+      "definitions": 128,
+      "suites": 10,
+      "result": "passed"
+    },
+    "appTests": {
+      "definitions": 295,
+      "parameterInclusiveExecutions": 365,
+      "failures": 0,
+      "skipped": 0,
+      "suites": [
+        "ACPSessionManagerTests",
+        "ACPSessionManagerAttachRestoreTests",
+        "ACPSessionManagerDisposalTests",
+        "ACPSessionManagerLeaseTests"
+      ],
+      "result": "passed"
+    },
+    "swiftFormat": {
+      "filesChecked": 2885,
+      "filesSkipped": 1,
+      "filesRequiringFormatting": 0
+    },
+    "ci": "not run for this unpublished branch",
+    "validationDependencies": {
+      "ghostty": "83fb95624b0439ee660c2679b43b38c8b63769cd",
+      "xcode": "26.6",
+      "zig": "0.17.1",
+      "method": "Exact related files copied to an isolated pinned-dependency checkout; unrelated working Ghostty changes preserved."
+    },
+    "appBuild": "passed, standalone build after final app tests"
   }
 }
