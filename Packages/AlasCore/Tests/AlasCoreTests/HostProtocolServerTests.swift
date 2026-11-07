@@ -3326,6 +3326,26 @@ struct HostProtocolServerTests {
         #expect(response == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
     }
 
+    /// A host that paired with this Mac inbound-only has no device here, so
+    /// its consent lives on the record, which `peers list` and Settings read.
+    /// Only a record pinned to a key can be allowed anything.
+    @Test(arguments: [true, false])
+    func consentForAPeerWithNoDeviceHereLivesOnItsRecord(pinned: Bool) {
+        let store = MemoryPeerStore(peers: [RemotePeer(
+            id: "p", serverId: "host", name: "Host", origins: [], token: "t", publicKey: pinned ? "key" : nil, addedAt: .distantPast
+        )])
+        let peers = RemotePeerManager(
+            store: store, pairing: RemotePairingService(store: MemoryDeviceStore()),
+            localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
+
+        #expect(peers.setAgentAccess(.ask, peerId: "p") == pinned)
+        #expect(peers.summaries.first?.agentAccess == (pinned ? .ask : nil))
+        #expect(store.peers.first?.agentAccess == (pinned ? .ask : nil))
+        #expect(peers.setAgentAccess(.off, peerId: "p") == pinned)
+        #expect(peers.summaries.first?.agentAccess == (pinned ? .off : nil))
+    }
+
     @Test func startIsRefusedWhileOffAndNoSessionIsCreated() async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
@@ -3682,6 +3702,115 @@ struct HostProtocolServerTests {
             return
         }
         Issue.record("No answer")
+    }
+
+    enum RouteRequest: CaseIterable {
+        /// Asks with consent, from a host with no device here.
+        case allowed
+        /// Asks before the record holds any consent.
+        case consentOff
+        /// Asks for more than delegation.
+        case beyondDelegation
+        /// Asks from a peer that has a device here, so it is no inbound-only host.
+        case twoWay
+    }
+
+    /// A host that paired with this Mac inbound-only sends requests back over
+    /// this Mac's link to it. They are served as a delegation-only token is,
+    /// under the consent on that host's record, and only for such a link;
+    /// any other gets a refusal rather than silence.
+    @Test(arguments: RouteRequest.allCases)
+    func aRequestBackOverAHostsLinkIsServedOnlyAsDelegationUnderItsRecordsConsent(_ route: RouteRequest) async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let (link, links, routeHost) = Self.routeLink(RemotePeer(
+            id: "host", serverId: "s1", name: "Host", origins: ["http://host:1"], token: "t", publicKey: "key-s1",
+            localDeviceId: route == .twoWay ? "s1" : nil, addedAt: .distantPast,
+            agentAccess: route == .consentOff ? nil : .ask
+        ), fixture: fixture)
+        defer { routeHost.stop() }
+
+        #expect(link.acknowledged == (route == .twoWay ? [] : [HostProtocolCapability.delegationReverseV1]))
+        let request: HostRequest = route == .beyondDelegation ? .listSessions : .delegation(.discover(repository: nil))
+        link.emit(.message(.peerHost(HostClientMessage(id: 4, request: request))))
+        try await eventually { await MainActor.run { !link.sent.isEmpty } }
+        guard case .peerHost(.response(4, let result)) = link.sent.first else {
+            Issue.record("\(link.sent)")
+            return
+        }
+        switch route {
+        case .allowed:
+            guard case .delegation(.discovered(let discovery)) = result else {
+                Issue.record("\(result)")
+                return
+            }
+            #expect(discovery.access == .ask)
+        case .consentOff: #expect(result == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
+        case .beyondDelegation:
+            #expect(result == .failure(error: .invalidRequest(reason: HostProtocolConnection.delegationOnlyRefusal)))
+        case .twoWay: #expect(result == .failure(error: .invalidRequest(reason: PeerRouteHost.refusal)))
+        }
+        withExtendedLifetime(links) {}
+    }
+
+    /// The host's subscription back over the link hears of the outcomes this
+    /// Mac holds for that host's server id, as a paired device's does.
+    @Test func aHostSubscribedBackOverItsLinkHearsOfItsOutbox() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        let (link, links, routeHost) = Self.routeLink(RemotePeer(
+            id: "host", serverId: "s1", name: "Host", origins: ["http://host:1"], token: "t", publicKey: "key-s1",
+            addedAt: .distantPast, agentAccess: .ask
+        ), fixture: fixture)
+        defer { routeHost.stop() }
+        link.emit(.message(.peerHost(HostClientMessage(id: 1, request: .subscribeAccepting(
+            after: fixture.host.cursorOnlySnapshot().cursor, events: ["delegationOutboxChanged"]
+        )))))
+        try await eventually { await MainActor.run { link.sent.contains(.peerHost(.response(id: 1, result: .subscribed))) } }
+
+        await fixture.core.orchestration.markChildFailed(childSessionId: "child", message: "No such agent")
+
+        try await eventually {
+            await MainActor.run {
+                link.sent.contains { if case .peerHost(.events(let events, _)) = $0 { events == [.delegationOutboxChanged] } else { false } }
+            }
+        }
+        withExtendedLifetime(links) {}
+    }
+
+    private final class RouteLink: RemotePeerConnecting {
+        var state: RemotePeerConnection.State = .idle
+        private(set) var sent: [RemoteClientMessage] = []
+        private(set) var acknowledged: [String] = []
+        let emit: @MainActor (RemotePeerConnection.Event) -> Void
+        init(emit: @escaping @MainActor (RemotePeerConnection.Event) -> Void) { self.emit = emit }
+        func connect() {}
+        func disconnect() {}
+        func send(_ message: RemoteClientMessage) { sent.append(message) }
+        func acknowledge(_ capabilities: [String]) { acknowledged = capabilities }
+    }
+
+    /// A Mac's online link to `record`, with a route host serving it from `fixture`.
+    private static func routeLink(
+        _ record: RemotePeer, fixture: DelegationFixture
+    ) -> (link: RouteLink, links: RemotePeerManager, routeHost: PeerRouteHost) {
+        var made: RouteLink?
+        let links = RemotePeerManager(
+            store: MemoryPeerStore(peers: [record]), pairing: fixture.pairing,
+            localIdentity: { .init(serverId: "", name: "", origins: []) },
+            makeConnection: { _, onEvent in
+                let link = RouteLink(emit: onEvent)
+                made = link
+                return link
+            }
+        )
+        let routeHost = PeerRouteHost(links: links, server: fixture.server)
+        links.connectAll()
+        let link = made!
+        link.state = .online
+        link.emit(.stateChanged(.online))
+        return (link, links, routeHost)
     }
 
     @Test func capabilityIsAdvertised() async throws {

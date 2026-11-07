@@ -243,6 +243,8 @@ var startRemote: (@MainActor () async -> Void)?
 var openSessions: HeadlessSessionPresenter?
 /// How this host's agents reach paired Macs; nil when Remote is off.
 var peerDelegation: HostPeerDelegation?
+/// How a host this one paired with inbound-only reaches its agents; nil when Remote is off.
+var peerRouteHost: PeerRouteHost?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
@@ -346,6 +348,8 @@ if let listen = config.hostRemoteListen {
     // Its tokens sit in a file its agents can read, and it shows no peer
     // view, so a Mac it adds lets it delegate and nothing else.
     peers.pairingScope = .delegation
+    // Before the links connect, so each offers the route it serves.
+    peerRouteHost = PeerRouteHost(links: peers, server: protocolServer)
     let delegation = HostPeerDelegation(links: peers)
     host.coreContext.delegationPeers = delegation.client
     peerDelegation = delegation
@@ -461,6 +465,7 @@ func stop() {
     tailscaleServe?.stop()
     openSessions?.peerConsoleHost?.shutdown()
     peerDelegation?.stop()
+    peerRouteHost?.stop()
     peers.disconnectAll()
     remote?.stop()
     keepAwake.update(enabled: false, serverRunning: false)
