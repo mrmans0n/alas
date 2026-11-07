@@ -92,6 +92,7 @@ struct PeerDelegationClientTests {
         (.failure(error: .failed(message: "The reply is too large.")), .refused("The reply is too large.")),
         (.failure(error: .failed(message: PeerHostChannel.unansweredMessage)), .unreachable(peer: "Mini")),
         (.failure(error: .failed(message: FederatedSessionsProvider.peerUnavailableMessage)), .unreachable(peer: "Mini")),
+        (.failure(error: .peerIdentityUnproven), .unproven(peer: "Mini")),
     ])
     func mapsHostFailures(response: HostResponse, error: ACPPeerError) async {
         peer.reply = response

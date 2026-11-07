@@ -88,14 +88,41 @@ public final class RemoteSessionGateway {
 
     /// Who the paired devices are, for this connection's `delegation` requests.
     public var delegationPairing: RemotePairingService?
+    /// The device authenticated with a `.delegation` token: only the host
+    /// protocol's delegation requests are served, and only their answers and
+    /// events are sent. Checked here because every client message of the
+    /// socket passes through `handle`.
+    private let delegationOnly: Bool
 
     public init(host: AlasHost?, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
+         scope: RemoteDeviceScope = .full,
          sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
+        let delegationOnly = scope == .delegation
+        self.delegationOnly = delegationOnly
         self.host = host
         self.caller = caller
+        // Whatever a later change makes this gateway send, a delegation-only
+        // client gets host-protocol frames and nothing else.
+        if delegationOnly {
+            if let sendTracked {
+                self.sendTracked = { @Sendable message, onWritten in
+                    guard case .host = message else { return onWritten() }
+                    sendTracked(message, onWritten)
+                }
+            } else {
+                self.sendTracked = nil
+            }
+            self.send = { message in
+                guard case .host = message else { return }
+                send(message)
+            }
+            self.federation = nil
+            self.consoleLink = nil
+            return
+        }
         self.sendTracked = sendTracked
         self.federation = federation
         self.consoleLink = consoleLink
@@ -113,6 +140,12 @@ public final class RemoteSessionGateway {
     }
 
     public func handle(_ message: RemoteClientMessage) async {
+        if delegationOnly {
+            // An allowlist, so a message kind added later is refused until
+            // someone decides otherwise.
+            if case .host(let request) = message { serveHost(request) }
+            return
+        }
         if let federation, let downstream, federation.route(message, from: downstream) { return }
         switch message {
         case .helloAck:
@@ -644,7 +677,7 @@ public final class RemoteSessionGateway {
         if hostConnection == nil, let host, let caller {
             let server = HostProtocolServer(host: host)
             server.delegationPairing = delegationPairing
-            hostConnection = server.connect(caller: caller) { [weak self] reply in
+            hostConnection = server.connect(caller: caller, delegationOnly: delegationOnly) { [weak self] reply in
                 await self?.sendWritten(.host(reply))
             }
         }

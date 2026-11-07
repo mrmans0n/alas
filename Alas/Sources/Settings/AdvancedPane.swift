@@ -15,14 +15,17 @@ struct AdvancedPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+#if DEBUG
                 SettingsGroup(title: "Experiments") {
                     SettingsRow(
                         name: "Experimental ACP 2",
-                        desc: "Applies to new agent connections. No agents are enabled yet; sessions continue to use ACP 1."
+                        desc: "Allows explicit fresh local previews with qualified adapters. Standard sessions continue to use ACP 1."
                     ) {
                         AlasToggle(on: state.bind(\.experimentalACP2Enabled))
                     }
                 }
+
+#endif
 
                 if let recovery = state.workspaceRecoveryError {
                     SettingsGroup(title: "Workspaces") {

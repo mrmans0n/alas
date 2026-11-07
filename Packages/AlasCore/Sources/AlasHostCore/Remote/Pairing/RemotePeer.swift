@@ -29,6 +29,9 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     public var addedAt: Date
     /// The `ssh` destination this host was set up through, when it was.
     public var sshDestination: String?
+    /// What `token` may do there, when this Mac asked for less than
+    /// everything and was granted it. Nil is a full token.
+    public var tokenScope: RemoteDeviceScope?
 
     /// Whether this record is bound to key material at all.
     ///
@@ -48,7 +51,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// that link still dials, is refused and shows as revoked.
     public var isInboundOnly: Bool { token.isEmpty && publicKey == nil }
 
-    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil) {
+    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
@@ -60,6 +63,35 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         self.localDeviceId = localDeviceId
         self.addedAt = addedAt
         self.sshDestination = sshDestination
+        self.tokenScope = tokenScope
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, serverId, name, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
+        case sshDestination, tokenScope
+    }
+
+    // `FilePeerStore` drops every record when one fails to decode, so a value
+    // only a newer build knows must not fail this one.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        serverId = try c.decode(String.self, forKey: .serverId)
+        name = try c.decode(String.self, forKey: .name)
+        origins = try c.decode([String].self, forKey: .origins)
+        lastOrigin = try c.decodeIfPresent(String.self, forKey: .lastOrigin)
+        token = try c.decode(String.self, forKey: .token)
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
+        protocolVersion = try c.decodeIfPresent(Int.self, forKey: .protocolVersion)
+        localDeviceId = try c.decodeIfPresent(String.self, forKey: .localDeviceId)
+        addedAt = try c.decode(Date.self, forKey: .addedAt)
+        sshDestination = try c.decodeIfPresent(String.self, forKey: .sshDestination)
+        // A newer build only ever narrows a token.
+        if c.contains(.tokenScope), !((try? c.decodeNil(forKey: .tokenScope)) ?? false) {
+            tokenScope = (try? c.decodeIfPresent(RemoteDeviceScope.self, forKey: .tokenScope)) ?? .delegation
+        } else {
+            tokenScope = nil
+        }
     }
 }
 

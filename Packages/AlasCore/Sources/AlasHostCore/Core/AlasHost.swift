@@ -74,6 +74,12 @@ public final class AlasHost {
         )
     }
 
+    /// A snapshot that shows nothing, for a client that may only subscribe:
+    /// its cursor is all the client needs.
+    func cursorOnlySnapshot() -> HostSnapshot {
+        HostSnapshot(cursor: events.log.cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [], sessions: [])
+    }
+
     /// The changes after `cursor`, from a snapshot. A subscriber that falls
     /// behind, or whose cursor is too old, gets `.resync`.
     public func subscribe(after cursor: HostCursor) -> HostSubscription {

@@ -41,6 +41,9 @@ public enum ACPPeerError: Error, Equatable, Sendable {
     case outdated(peer: String)
     /// This Mac's pairing with the peer was revoked or forgotten.
     case revoked(peer: String)
+    /// The peer cannot tell this Mac's pairing proved its identity, so it
+    /// refuses every delegation request until the two pair again.
+    case unproven(peer: String)
 }
 
 public enum ACPDelegationPeerState: String, Equatable, Sendable {

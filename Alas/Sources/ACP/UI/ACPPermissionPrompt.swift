@@ -61,6 +61,30 @@ struct ACPPermissionCardContent: Equatable {
         )
     }
 
+    init(permission: ACPV2InteractiveRequest.Permission, existingToolCall: ACPMessage.ToolCall? = nil,
+         worktreeRoot: String? = nil) {
+        let update = permission.subject?.toolCallUpdate
+        let title: String
+        if let update, case .value(let value) = update.title { title = value }
+        else if let subject = permission.subject, case .object(let fields) = subject.rawValue,
+                case .string(let command)? = fields["command"] { title = command }
+        else { title = permission.title }
+        let kind: String?
+        if let update, case .value(let value) = update.kind { kind = value }
+        else { kind = nil }
+        let diffs = existingToolCall.flatMap { row in
+            update?.toolCallID.utf8.elementsEqual(row.toolCallId.utf8) == true ? row.diffs : nil
+        } ?? []
+        let summary: String?
+        if let update, case .value(.object(let input)) = update.rawInput,
+           case .string(let command)? = input["command"] { summary = command }
+        else { summary = nil }
+        self.init(heading: permission.title, kind: kind, mcpServerName: nil, title: title, summary: summary,
+            reason: permission.description, defaultToNo: true,
+            options: permission.options.map { Option(optionId: $0.optionID, name: $0.name, kind: $0.kind, description: nil) },
+            diffSections: ACPToolCallPresentation.diffSections(diffs, status: "pending", worktreeRoot: worktreeRoot))
+    }
+
     init(payload: RemotePermissionPayload) {
         self.init(
             heading: payload.title,
@@ -223,6 +247,7 @@ private final class ACPPermissionCardContentCache {
 struct ACPPermissionCard: View {
     let content: ACPPermissionCardContent
     let onChoose: (ACPPermissionCardContent.Option) -> Void
+    var statusText: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -280,7 +305,7 @@ struct ACPPermissionCard: View {
 
             PendingPulse()
                 .frame(width: 6, height: 6)
-            Text("Awaiting approval")
+            Text(statusText ?? "Awaiting approval")
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
