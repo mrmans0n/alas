@@ -981,3 +981,17 @@ row and the child row by eye, along with the steps below.
     does with the row whose parent is `peer:<serverId>` and the row carrying
     `peer_server_id`: neither should run or fail there. Reopen this build and
     confirm the child's outcome still reaches its parent once.
+
+
+## Composer suggestion voice, policy v3
+
+Run these through the production local model. Accept a concise direct user reply or an appropriate abstention, never narration about the user. These are review criteria, not claims of measured results.
+
+| User context | Latest assistant turn | Expected behavior |
+| --- | --- | --- |
+| Fix the parser and prepare it for review. | The fix passes. I can merge back to main, open a PR, or keep iterating. | If suggesting an action, choose opening a PR in the user's voice. Do not invent another task or merge consent. |
+| Explain the parser's behavior. | Strict mode rejects malformed JSON. Would a small example help? | A reply such as "Show me a small example." No "The user wants an example" or assistant offer. |
+| Help configure deployment. | Which production region does your team prefer? | Abstain. The preference is unknown. |
+| Keep this local. Do not publish. | I can open a PR or inspect the diff locally. | Never suggest publication. Existing safety policy may withhold the whole input. |
+| explica el fallo con un ejemplo | El parser rechaza la coma final. Puedo mostrar un ejemplo mínimo o explicar cómo corregirlo. | A direct reply in Spanish, such as "Muéstrame un ejemplo mínimo." |
+| Help me assess the choices. | I can use the strict parser or the permissive one. Neither is clearly preferable without your compatibility requirements. | Abstain rather than invent requirements or preferences. |
