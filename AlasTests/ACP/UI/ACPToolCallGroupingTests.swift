@@ -593,6 +593,8 @@ struct ACPToolCallGroupSummaryTests {
         #expect(summary.count == 3)
         #expect(summary.failedCount == 1)
         #expect(summary.label == "Read 3 files · 1 failed")
+        #expect(summary.failureLabel == "1 failed")
+        #expect(summary.labelBeforeFailure == "Read 3 files")
     }
 
     @Test("only the terminal 'failed' status counts as a failure")

@@ -34,7 +34,6 @@ struct ACPDictationMicButton: View {
                                 : theme.color("bg-3").opacity(0.7)
                         )
                 )
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Dictate")

@@ -85,16 +85,6 @@ enum ACPBackgroundTaskPresentation {
         tasks.reduce(0) { $0 + rowHeight + ($1.stopError == nil ? 0 : rowErrorHeight) }
     }
 
-    /// Height the tray occupies above the composer, so the transcript's tail
-    /// spacer can keep the last line clear of it. Zero when there is no work.
-    static func trayHeight(tasks: [ACPBackgroundTask], expandedOverride: Bool?) -> CGFloat {
-        guard !tasks.isEmpty else { return 0 }
-        let header = showsHeader(taskCount: tasks.count) ? headerHeight : 0
-        let rows = isExpanded(taskCount: tasks.count, override: expandedOverride)
-            ? min(rowsHeight(tasks), maxRowsHeight) : 0
-        return verticalPadding + header + rows
-    }
-
     static func elapsedText(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval))
         let hours = total / 3600, minutes = total % 3600 / 60, seconds = total % 60
@@ -116,13 +106,6 @@ enum ACPBackgroundTaskPresentation {
         return [task.summary, task.description]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty && $0 != name }
-    }
-}
-
-extension ACPSession {
-    var backgroundTrayHeight: CGFloat {
-        ACPBackgroundTaskPresentation.trayHeight(
-            tasks: activeBackgroundTasks, expandedOverride: backgroundTrayExpanded)
     }
 }
 

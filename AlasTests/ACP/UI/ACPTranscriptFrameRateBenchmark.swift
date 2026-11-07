@@ -117,8 +117,8 @@ private final class BenchWindow {
         let host = ACPTranscriptScroller(
             session: session,
             transcript: session.transcript,
-            contentMaxWidth: ACPChatLayout.contentMaxWidth(forChatColumnWidth: size.width),
-            typography: .default,
+            contentMaxWidth: ACPChatLayout.readingColumnWidth(scale: .comfortable),
+            typography: ACPChatTypography(fontFamily: "", fontSize: 13, density: .comfortable),
             trustedImageRoot: nil,
             onOpenDiff: { _ in },
             onLoadFullToolCallContent: { _ in nil },

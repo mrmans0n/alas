@@ -25,6 +25,11 @@ struct ACPComposerOverflowItemsTests {
         #expect(!ACPComposerControlPresentation.modeUsesWarningTint(
             ChipSpec(source: .mode, options: spec.options, currentId: "safe")
         ))
+        // Colour marks a mode doing something, so an ordinary one stays neutral.
+        #expect(!ACPComposerControlPresentation.modeIsNeutral(spec))
+        #expect(ACPComposerControlPresentation.modeIsNeutral(
+            ChipSpec(source: .mode, options: spec.options, currentId: "safe")
+        ))
     }
 
     @Test("compact menu keeps every available session setting in a stable order")

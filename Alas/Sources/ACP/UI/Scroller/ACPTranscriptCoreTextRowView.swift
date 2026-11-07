@@ -20,7 +20,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         /// `timestamp` is shown before the duration while the pointer is over the row.
         case toolCall(presentation: ACPToolCallPresentation, target: String?, duration: String?, timestamp: String? = nil, failed: Bool)
         /// A tool-call group header, without the "Show N earlier" button.
-        case toolGroupHeader(label: String, iconSystemName: String, expanded: Bool)
+        /// `failure` is the end of `label` that says how many failed.
+        case toolGroupHeader(label: String, iconSystemName: String, expanded: Bool, failure: String? = nil)
         /// The user's prompt in its right-aligned bubble, with the title of its
         /// "Reported changes" control under it, when it shows one.
         case user(markdown: String, reportedChanges: String? = nil)
@@ -29,41 +30,29 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     // Copied from `wrapRow`, `ACPCommentaryRow`, `ACPThoughtView`,
     // `ACPToolCallCard`, `ACPToolCallGroupHeaderRow`, `ACPToolCallGroupLane`,
     // `UserMessageRow`, and `ACPUserBubbleChrome`.
-    static let columnHorizontalPadding: CGFloat = 28
+    nonisolated static let columnHorizontalPadding: CGFloat = 28
     static let laneBarWidth: CGFloat = 1.5
     static let laneBarVerticalPadding: CGFloat = 2
     static let laneSpacing: CGFloat = 12
     static let groupMemberIndent: CGFloat = 7
-    static let narrationFontSize: CGFloat = 11
     static let narrationIconSpacing: CGFloat = 7
     static let narrationHeaderSpacing: CGFloat = 6
-    static let iconPointSize: CGFloat = 11
     static let iconFrameWidth: CGFloat = 16
     static let toolSpacing: CGFloat = 8
-    static let toolLabelSize: CGFloat = 12
-    static let toolTargetSize: CGFloat = 11.5
-    static let toolTargetHorizontalPadding: CGFloat = 5
+    static let toolTargetHorizontalPadding: CGFloat = 4
     static let toolTargetVerticalPadding: CGFloat = 1
-    static let toolTargetCornerRadius: CGFloat = 4
     static let toolSpacerMinLength: CGFloat = 6
-    static let toolDurationSize: CGFloat = 10
-    static let toolVerticalPadding: CGFloat = 3
-    static let statusPointSize: CGFloat = 9
-    static let chevronPointSize: CGFloat = 9
+    static let toolVerticalPadding: CGFloat = 4
     static let groupHeaderSpacing: CGFloat = 7
+    static let failureGlyphSpacing: CGFloat = 3
     static let bubbleMaxWidthFraction: CGFloat = 0.75
     static let bubbleLeadingMinSpace: CGFloat = 40
-    static let bubbleHorizontalPadding: CGFloat = 13
-    static let bubbleVerticalPadding: CGFloat = 9
-    static let bubbleCornerRadius: CGFloat = 12
-    static let bubbleTailCornerRadius: CGFloat = 4
-    static let bubbleStrokeWidth: CGFloat = 0.5
+    static let bubbleHorizontalPadding: CGFloat = 12
+    static let bubbleVerticalPadding: CGFloat = 8
     static let bubbleTopAlpha: CGFloat = 0.32
     static let bubbleBottomAlpha: CGFloat = 0.20
     // `ACPReportedChangesButton`.
-    static let reportedChangesFontSize: CGFloat = 11
     static let reportedChangesTopSpacing: CGFloat = 4
-    static let bubbleStrokeAlpha: CGFloat = 0.5
     /// Symbols are rendered once at this scale; Retina is the common case.
     static let symbolScale: CGFloat = 2
 
@@ -76,6 +65,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     var inToolCallGroup = false
     var theme: Theme?
     var typography: ACPChatTypography = .default
+    var scale: DesignScale = .comfortable
     /// Interaction closures from the latest configure, kept even when the
     /// content token is unchanged and the layout is reused.
     private(set) var actions: ACPTranscriptNativeRows.Actions = .inert
@@ -212,13 +202,13 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
     func configure(
         content: Content, contentMaxWidth: CGFloat, inToolCallGroup: Bool, theme: Theme, typography: ACPChatTypography,
-        actions: ACPTranscriptNativeRows.Actions = .inert, source: FollowedText? = nil
+        scale: DesignScale = .comfortable, actions: ACPTranscriptNativeRows.Actions = .inert, source: FollowedText? = nil
     ) {
         self.actions = actions
         defer { syncActionsButton() }
         follow(source)
         let sizeChanged = content != self.content || contentMaxWidth != self.contentMaxWidth
-            || inToolCallGroup != self.inToolCallGroup || typography != self.typography
+            || inToolCallGroup != self.inToolCallGroup || typography != self.typography || scale != self.scale
         guard sizeChanged || theme != self.theme else { return }
         if content != self.content {
             // Offsets into the old text mean nothing in the new.
@@ -237,9 +227,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         self.inToolCallGroup = inToolCallGroup
         self.theme = theme
         self.typography = typography
+        self.scale = scale
         let palette = Palette(theme: theme)
         self.palette = palette
-        symbols = Self.renderSymbols(for: content, palette: palette)
+        symbols = Self.renderSymbols(for: content, palette: palette, scale: scale)
         cachedLayout = nil
         invalidateTiles()
         actionsButton?.apply(theme: theme)
@@ -299,7 +290,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         markNeedsRemeasure()
         configure(
             content: updated, contentMaxWidth: contentMaxWidth,
-            inToolCallGroup: inToolCallGroup, theme: theme, typography: typography, actions: actions,
+            inToolCallGroup: inToolCallGroup, theme: theme, typography: typography, scale: scale, actions: actions,
             source: (followedText, followedText.revision)
         )
     }

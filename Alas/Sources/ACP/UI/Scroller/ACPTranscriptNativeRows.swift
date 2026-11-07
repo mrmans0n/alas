@@ -142,6 +142,7 @@ enum ACPTranscriptNativeRows {
         inToolCallGroup: Bool,
         theme: Theme,
         typography: ACPChatTypography,
+        scale: DesignScale,
         actions: Actions,
         source: StreamingText? = nil
     ) -> ACPTranscriptNativeRow {
@@ -156,6 +157,7 @@ enum ACPTranscriptNativeRows {
                     inToolCallGroup: inToolCallGroup,
                     theme: theme,
                     typography: typography,
+                    scale: scale,
                     actions: actions,
                     source: followed
                 )

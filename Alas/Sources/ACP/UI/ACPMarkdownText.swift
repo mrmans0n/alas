@@ -19,11 +19,25 @@ struct ACPMarkdownText: View {
     var typography: ACPChatTypography = .default
     var showsCodeBlockCopyButton: Bool = true
     var noninteractiveTapAction: (() -> Void)? = nil
+    /// Overrides the transcript spacing for surfaces that keep their own density.
+    var spacing: Spacing? = nil
     @Environment(\.theme) private var theme
+    @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
+    @Environment(\.designScale) private var scale
     @State private var tableViewportWidth: CGFloat = 0
 
+    struct Spacing {
+        let block: CGFloat
+        let line: CGFloat
+        /// Room kept for wrapped code lines to hang into; none unless asked for.
+        var codeHangingIndent: CGFloat = 0
+    }
+
+    private var lineSpacing: CGFloat { spacing?.line ?? scale.transcriptLineSpacing }
+    private var codeHangingIndent: CGFloat { spacing?.codeHangingIndent ?? scale.codeHangingIndent }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: spacing?.block ?? scale.transcriptBlockSpacing) {
             ForEach(Array(currentRenderBlocks().enumerated()), id: \.offset) { _, renderBlock in
                 view(for: renderBlock)
                     .modifier(ACPMarkdownNoninteractiveTapModifier(
@@ -59,8 +73,8 @@ struct ACPMarkdownText: View {
                 theme: theme,
                 memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
             )
-                .padding(.top, level == 1 ? 4 : 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, level == 1 ? scale.space[1] : scale.space[0])
+                .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .paragraph(let text):
             ACPMarkdownInlineText(
                 source: text,
@@ -69,7 +83,8 @@ struct ACPMarkdownText: View {
                 theme: theme,
                 memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
             )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineSpacing(lineSpacing)
+                .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .taskList(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -82,7 +97,7 @@ struct ACPMarkdownText: View {
                             )
                         )
                             .frame(width: 16, height: 16)
-                            .padding(.top, 1)
+                            .padding(.top, 1) // design-literal: centers a 16pt checkbox on the first text line
                         ACPMarkdownInlineText(
                             source: item.text,
                             typography: typography,
@@ -90,11 +105,12 @@ struct ACPMarkdownText: View {
                             theme: theme,
                             memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
                         )
+                            .lineSpacing(lineSpacing)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .quote(let text):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle()
@@ -107,16 +123,19 @@ struct ACPMarkdownText: View {
                     theme: theme,
                     memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
                 )
+                    .lineSpacing(lineSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
+            .frame(maxWidth: proseMaxWidth ?? .infinity, alignment: .leading)
         case .code(let lang, let body):
             CodeBlockView(
                 language: lang,
                 code: body,
                 typography: typography,
                 showsCopyButton: showsCodeBlockCopyButton,
-                highlightsSyntax: true
+                highlightsSyntax: true,
+                hangingIndent: codeHangingIndent
             )
         case .streamingCode(let lang, let body):
             CodeBlockView(
@@ -124,7 +143,8 @@ struct ACPMarkdownText: View {
                 code: body,
                 typography: typography,
                 showsCopyButton: showsCodeBlockCopyButton,
-                highlightsSyntax: false
+                highlightsSyntax: false,
+                hangingIndent: codeHangingIndent
             )
         case .mermaid(let source):
             MermaidDiagramBlockView(source: source, profile: .transcript)
@@ -144,18 +164,19 @@ struct ACPMarkdownText: View {
         rows: [[String]],
         memoizesInlineMarkdown: Bool
     ) -> some View {
-        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
-        let columnWidth = Self.tableColumnWidth(
-            availableWidth: tableViewportWidth,
-            columnCount: columnCount
-        )
+        let columns = ACPTranscriptMarkdownLayout.tableColumns(header: header, rows: rows, typography: typography) { row, _, source in
+            ACPMarkdownInlineRenderer.makeAttributedString(
+                source: source, theme: theme, typography: typography, role: .tableCell(isHeader: row == 0)
+            )
+        }
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(columns, available: tableViewportWidth, scrolls: true)
         return ACPHorizontalScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(
                     cells: header,
                     isHeader: true,
-                    columnCount: columnCount,
-                    columnWidth: columnWidth,
+                    columns: columns,
+                    widths: widths,
                     memoizesInlineMarkdown: memoizesInlineMarkdown
                 )
                 Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -163,8 +184,8 @@ struct ACPMarkdownText: View {
                     tableRow(
                         cells: r,
                         isHeader: false,
-                        columnCount: columnCount,
-                        columnWidth: columnWidth,
+                        columns: columns,
+                        widths: widths,
                         memoizesInlineMarkdown: memoizesInlineMarkdown
                     )
                     if r != rows.last {
@@ -179,20 +200,23 @@ struct ACPMarkdownText: View {
         } action: { width in
             tableViewportWidth = width
         }
-        .background(theme.color("bg-1").opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .background(theme.color("bg-0").opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay {
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("line-soft"), lineWidth: ACPTranscriptMarkdownLayout.tableDividerWidth)
+        }
     }
 
     private func tableRow(
         cells: [String],
         isHeader: Bool,
-        columnCount: Int,
-        columnWidth: CGFloat,
+        columns: [ACPTranscriptMarkdownLayout.TableColumn],
+        widths: [CGFloat],
         memoizesInlineMarkdown: Bool
     ) -> some View {
         HStack(alignment: .top, spacing: 0) {
-            ForEach(0..<columnCount, id: \.self) { i in
+            ForEach(0..<columns.count, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
                 ACPMarkdownInlineText(
                     source: value,
@@ -201,24 +225,16 @@ struct ACPMarkdownText: View {
                     theme: theme,
                     memoizesInlineMarkdown: memoizesInlineMarkdown
                 )
-                    .frame(minWidth: 80, alignment: .leading)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .frame(width: columnWidth, alignment: .leading)
-                if i < columnCount - 1 {
+                    .multilineTextAlignment(columns[i].isNumeric ? .trailing : .leading)
+                    .frame(maxWidth: .infinity, alignment: columns[i].isNumeric ? .trailing : .leading)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
+                    .frame(width: widths[i], alignment: .leading)
+                if i < columns.count - 1 {
                     Rectangle().fill(theme.color("line-soft")).frame(width: 0.5)
                 }
             }
         }
         .background(isHeader ? theme.color("bg-2").opacity(0.5) : Color.clear)
-    }
-
-    static func tableColumnWidth(
-        availableWidth: CGFloat,
-        columnCount: Int,
-        dividerWidth: CGFloat = 0.5
-    ) -> CGFloat {
-        guard columnCount > 0 else { return 0 }
-        return max(100, (availableWidth - dividerWidth * CGFloat(columnCount - 1)) / CGFloat(columnCount))
     }
 
     // MARK: - Inline memoization
@@ -344,7 +360,11 @@ struct CodeBlockView: View {
     let typography: ACPChatTypography
     var showsCopyButton: Bool = true
     var highlightsSyntax: Bool = true
+    /// How far `ACPTranscriptMarkdownLayout` hangs a wrapped line; the text
+    /// breaks that much short of the width so both break alike.
+    var hangingIndent: CGFloat = 0
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var copied = false
 
     var body: some View {
@@ -354,11 +374,14 @@ struct CodeBlockView: View {
             // ScrollView here swallowed vertical trackpad gestures, freezing
             // the transcript while the pointer hovered a code block.
             codeText
-                .padding(.horizontal, 10).padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         }
         .background(theme.color("bg-0").opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay {
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("line-soft"), lineWidth: ACPTranscriptMarkdownLayout.tableDividerWidth)
+        }
     }
 
     @ViewBuilder
@@ -373,7 +396,7 @@ struct CodeBlockView: View {
                     ))
                     .tracking(0.4)
                     .textCase(.uppercase)
-                    .foregroundStyle(theme.color("fg-faint"))
+                    .foregroundStyle(theme.color("fg-dim"))
             } else {
                 Color.clear.frame(height: 1)
             }
@@ -382,7 +405,7 @@ struct CodeBlockView: View {
                 copyButton
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
         .frame(maxWidth: .infinity)
         .background(theme.color("bg-2").opacity(0.6))
         .overlay(alignment: .bottom) {
@@ -394,41 +417,50 @@ struct CodeBlockView: View {
         Button(action: copy) {
             HStack(spacing: 4) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: typography.labelSize, weight: copied ? .bold : .regular))
+                    .font(Self.labelFont(typography, weight: copied ? .bold : .regular))
                 Text(copied ? "Copied" : "Copy")
-                    .font(.system(size: typography.labelSize, weight: .medium))
+                    .font(Self.labelFont(typography, weight: .medium))
             }
+            .frame(height: ACPTranscriptMarkdownLayout.copyButtonContentHeight(typography))
             .foregroundStyle(copied ? theme.color("add") : theme.color("fg-muted"))
-            .padding(.horizontal, 6).padding(.vertical, 2)
+            .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
             .background(theme.color("bg-3").opacity(copied ? 0.4 : 0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(copied ? theme.color("add").opacity(0.5) : theme.color("line"), lineWidth: 0.5)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help("Copy code")
     }
 
+    /// Sized from the chat font rather than the scale, as the rest of the block is.
+    private static func labelFont(_ typography: ACPChatTypography, weight: Font.Weight) -> Font {
+        .system(size: typography.labelSize, weight: weight)
+    }
+
+    /// Breaks where the native row does, which hangs wrapped lines under their
+    /// first line. The continuations are not moved in here: `Text` has no
+    /// hanging indent, and drawing them shifted would leave text selection and
+    /// hit-testing on the unshifted glyphs.
     @ViewBuilder
     private var codeText: some View {
-        if highlightsSyntax {
-            ACPSyntaxHighlightedText(
-                text: code,
-                explicitLanguage: language,
-                fontFamily: typography.fontFamily,
-                fontSize: typography.codeSize
-            )
-        } else {
-            Text(verbatim: code)
-                .font(Font(CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize)))
-                .foregroundStyle(theme.color("fg"))
-                .lineSpacing(2)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            if highlightsSyntax {
+                ACPSyntaxHighlightedText(
+                    text: code,
+                    explicitLanguage: language,
+                    fontFamily: typography.fontFamily,
+                    fontSize: typography.codeSize
+                )
+            } else {
+                Text(verbatim: code)
+                    .font(Font(CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize)))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .padding(.trailing, hangingIndent)
     }
 
     private func copy() {
@@ -458,6 +490,7 @@ private struct ACPMarkdownImageBlockView: View {
     let source: String
     @Environment(\.acpTrustedImageRoot) private var trustedRoot
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let asset = ACPMessage.ToolCallAsset.image(uri: source, name: alt.isEmpty ? nil : alt)
@@ -478,7 +511,7 @@ private struct ACPMarkdownImageBlockView: View {
                             .aspectRatio(contentMode: .fit)
                             .accessibilityLabel(asset.displayTitle)
                     }
-                    .padding(12)
+                    .padding(scale.space[3])
                     .frame(maxWidth: .infinity)
                 }
             } placeholder: {
@@ -503,7 +536,7 @@ private struct ACPMarkdownImageBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text(asset.displayTitle)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -512,11 +545,11 @@ private struct ACPMarkdownImageBlockView: View {
                     Button("Open") { NSWorkspace.shared.open(url) }
                 }
             }
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .buttonStyle(.plain)
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity)
             .background(theme.color("bg-2").opacity(0.6))
             .overlay(alignment: .bottom) {
@@ -525,15 +558,12 @@ private struct ACPMarkdownImageBlockView: View {
             content()
         }
         .background(theme.color("bg-0").opacity(0.6))
-        .clipShape(.rect(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5)
-        }
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
     }
 
     private func unavailable(_ asset: ACPMessage.ToolCallAsset) -> some View {
         Label(asset.displayText, systemImage: "photo")
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-faint"))
             .lineLimit(1)
             .truncationMode(.middle)

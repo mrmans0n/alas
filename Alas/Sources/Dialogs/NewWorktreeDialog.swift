@@ -1085,6 +1085,7 @@ struct NewWorktreeDialog: View {
             label: items.first { $0.id == launchAgentId }?.name ?? "",
             placeholder: "Agent",
             accent: theme.color("fg-muted"),
+            isNeutral: true,
             items: items,
             selectedId: launchAgentId,
             searchDescriptions: false,

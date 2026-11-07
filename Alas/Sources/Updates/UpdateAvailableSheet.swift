@@ -63,7 +63,9 @@ struct UpdateAvailableSheet: View {
                         ACPMarkdownText(
                             raw: info.releaseNotes,
                             typography: Self.notesTypography,
-                            showsCodeBlockCopyButton: false
+                            showsCodeBlockCopyButton: false,
+                            // Release notes keep the spacing they had before the transcript's scale.
+                            spacing: .init(block: 8, line: 0)
                         )
                     }
                 }

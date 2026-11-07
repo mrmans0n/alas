@@ -491,18 +491,28 @@ struct ACPToolCallGroupSummary: Equatable {
 
     /// Same text collapsed or expanded; the chevron carries the state.
     var label: String {
-        let failure = failedCount > 0 ? " · \(failedCount) failed" : ""
+        failureLabel.map { labelBeforeFailure + Self.failureSeparator + $0 } ?? labelBeforeFailure
+    }
+
+    /// The part of `label` drawn in the failure colour, if any. Always comes last.
+    var failureLabel: String? {
+        failedCount > 0 ? "\(failedCount) failed" : nil
+    }
+
+    static let failureSeparator = " · "
+
+    var labelBeforeFailure: String {
         if isLive, count > 0 {
-            return (isExploring ? "Exploring" : "Running") + " · \(count) so far" + failure
+            return (isExploring ? "Exploring" : "Running") + " · \(count) so far"
         }
         let counts = verbCounts.map(Self.phrase).joined(separator: ", ")
         let running = runningCount > 0 ? " · \(runningCount) running" : ""
         switch kind {
         case .activity:
             guard !counts.isEmpty else { return isLive ? "Thinking" : "Thought" }
-            return counts.prefix(1).uppercased() + String(counts.dropFirst()) + running + failure
+            return counts.prefix(1).uppercased() + String(counts.dropFirst()) + running
         case .completedTurn(let duration):
-            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + running + failure
+            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + running
         }
     }
 

@@ -253,7 +253,11 @@ private struct ACPSessionView: View {
     @State private var agentDismissedLatest: String?
     @State private var agentUpdateOwner: ACPDetectedAgentOwner?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var composerFocusRequest: Int = 0
+    /// The bottom composer's stack (notice banner, background tray, pill),
+    /// measured, so the transcript's tail spacer keeps its last row clear.
+    @State private var composerStackHeight: CGFloat = 0
     @StateObject private var composerDropRouter = ACPComposerDropRouter()
     @StateObject private var composerActions = ACPComposerActions()
 
@@ -305,15 +309,15 @@ private struct ACPSessionView: View {
                             agentName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                             app: approval.app
                         ) { state.computerUse.answer(approval.id, $0) }
-                        .padding(.horizontal, 12).padding(.top, 8)
+                        .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
                     }
                     ForEach(state.vmSlotRequests.filter { $0.sessionID == session.id }) { request in
                         VMSlotCard(request: request) { state.answerVMSlot(requestID: request.id, choice: $0) }
-                            .padding(.horizontal, 12).padding(.top, 8)
+                            .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
                     }
                     if state.vmAutoStarter.isWaitingOnBoot(sessionID: session.id) {
                         VMStartingCard()
-                            .padding(.horizontal, 12).padding(.top, 8)
+                            .padding(.horizontal, scale.space[3]).padding(.top, scale.space[2])
                     }
                 }
                 if let err = session.lastError {
@@ -436,7 +440,19 @@ private struct ACPSessionView: View {
         state.saveConfig()
     }
 
+    @ViewBuilder
     private func sideQuestionSlot(_ placement: ACPSideQuestionDock, contentMaxWidth: CGFloat) -> some View {
+        // The side column sizes itself; the others follow the composer.
+        if placement == .side {
+            sideQuestionCard(placement)
+        } else {
+            ACPTranscriptColumnLayout(readingMax: contentMaxWidth, role: .composer) {
+                sideQuestionCard(placement)
+            }
+        }
+    }
+
+    private func sideQuestionCard(_ placement: ACPSideQuestionDock) -> some View {
         ACPSideQuestionSlot(
             manager: manager,
             parentID: sessionId,
@@ -455,9 +471,6 @@ private struct ACPSessionView: View {
             }
         )
         .environment(\.acpSideQuestionCardState, sideQuestionCardState)
-        // The side column sizes itself; the others follow the chat column.
-        .frame(maxWidth: placement == .side ? nil : contentMaxWidth)
-        .padding(.horizontal, placement == .side ? 0 : 20)
     }
 
     private func insertSideAnswer(_ answer: String) {
@@ -597,16 +610,15 @@ private struct ACPSessionView: View {
     private var chatTypography: ACPChatTypography {
         ACPChatTypography(
             fontFamily: state.config.agents.chatFontFamily,
-            fontSize: state.config.agents.chatFontSize
+            fontSize: state.config.agents.chatFontSize,
+            density: state.config.density
         )
     }
 
     private var transcriptAndComposer: some View {
         HStack(spacing: 0) {
             GeometryReader { chatProxy in
-                let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
-                    forChatColumnWidth: chatProxy.size.width
-                )
+                let chatContentMaxWidth = ACPChatLayout.readingColumnWidth(scale: scale)
                 let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
                     preferred: state.config.harness.acpShowMinimap,
                     availableWidth: chatProxy.size.width
@@ -721,7 +733,7 @@ private struct ACPSessionView: View {
                         .transition(.opacity)
                 }
 
-                VStack(spacing: 8) {
+                VStack(spacing: ACPComposerMetrics.sideQuestionCardGap) {
                     sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
                     composerView(
                         placement: composerPlacement,
@@ -735,10 +747,10 @@ private struct ACPSessionView: View {
         .overlay(alignment: .top) {
             if let coordinator = session.codexHooksReview {
                 ACPCodexHooksReviewView(coordinator: coordinator)
-                    .padding(12)
+                    .padding(scale.space[3])
             } else if !showsPreSessionUserInput {
                 sideQuestionSlot(.top, contentMaxWidth: contentMaxWidth)
-                    .padding(.top, 12)
+                    .padding(.top, scale.space[3])
                     .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
             }
         }
@@ -1015,7 +1027,8 @@ private struct ACPSessionView: View {
                     absoluteURL: URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktree.path.path)),
                     revealLine: nil, revealCharacter: nil, editable: false)
             },
-            reportedChangesActions: reportedChangesActions
+            reportedChangesActions: reportedChangesActions,
+            composerSpacerHeight: transcriptTailSpacerHeight
         )
     }
 
@@ -1083,7 +1096,7 @@ private struct ACPSessionView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             // `/btw` can be the first thing asked in a new session.
             sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
-                .padding(.bottom, 8)
+                .padding(.bottom, scale.space[2])
             composerView(
                 placement: .inFlow,
                 contentMaxWidth: contentMaxWidth,
@@ -1091,6 +1104,10 @@ private struct ACPSessionView: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var transcriptTailSpacerHeight: CGFloat {
+        ACPComposerMetrics.tailSpacerHeight(composerStack: composerStackHeight)
     }
 
     private func composerView(
@@ -1185,7 +1202,11 @@ private struct ACPSessionView: View {
             offersShip: offersShipCommand,
             pluginPrompts: pluginPrompts.map(\.suggestion),
             contextProviders: isWorkspaceCheckoutOwner ? [] : state.pluginContextProviders(projectID: worktree.projectId),
-            recapCoordinator: summaryCoordinator
+            recapCoordinator: summaryCoordinator,
+            tailSpacerHeight: transcriptTailSpacerHeight,
+            onStackHeightChange: { height in
+                if composerStackHeight != height { composerStackHeight = height }
+            }
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard
@@ -1475,7 +1496,7 @@ private struct ACPSessionView: View {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
                     .foregroundStyle(theme.color("warn"))
                 Text(warning.message)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                 Spacer()
                 if warning.canSendTranscript {
@@ -1493,8 +1514,8 @@ private struct ACPSessionView: View {
                     )
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("bg-1").opacity(0.7))
             .overlay(alignment: .bottom) {
                 Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -1624,7 +1645,7 @@ private struct ACPSessionView: View {
     ) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle").foregroundStyle(theme.color("fg-faint"))
-            Text(reason).font(.system(size: 12)).foregroundStyle(theme.color("fg-muted"))
+            Text(reason).font(scale.metaFont).foregroundStyle(theme.color("fg-muted"))
             Spacer()
             if let onRetry {
                 Button("Retry", action: onRetry)
@@ -1632,7 +1653,7 @@ private struct ACPSessionView: View {
                     .controlSize(.small)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.6))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -1726,7 +1747,7 @@ private struct ACPSessionView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color("del"))
             Text("Failed to load session history: \(message)")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
             Spacer()
@@ -1741,12 +1762,12 @@ private struct ACPSessionView: View {
                 }
             }
             .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
-            .padding(.horizontal, 8).padding(.vertical, 3)
+            .font(scale.meta.font(weight: .medium))
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             .background(theme.color("del").opacity(0.18))
             .clipShape(Capsule())
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
@@ -1764,26 +1785,26 @@ private struct ACPSessionView: View {
             if let startup {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(startup.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                     if let diagnostic = startup.diagnostic {
                         Text(diagnostic)
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     DisclosureGroup("Details") {
                         Text(startup.details)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                 }
                 .foregroundStyle(theme.color("fg"))
             } else {
                 Text(err)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .textSelection(.enabled)
                     .foregroundStyle(theme.color("fg"))
             }
@@ -1802,13 +1823,13 @@ private struct ACPSessionView: View {
                     session.lastError = nil
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
@@ -1832,7 +1853,7 @@ private struct ACPSessionView: View {
             LovebirdView(pose: .sleeping, size: 40)
                 .padding(.vertical, -8)
             Text(detail.isEmpty ? "Usage limit reached" : "Usage limit reached · \(detail)")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .textSelection(.enabled)
                 .foregroundStyle(theme.color("fg"))
             Spacer()
@@ -1848,7 +1869,7 @@ private struct ACPSessionView: View {
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("warn").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("warn").opacity(0.3)).frame(height: 0.5)
@@ -1860,12 +1881,12 @@ private struct ACPSessionView: View {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
                 .foregroundStyle(theme.color("warn"))
             Text(retry.bannerText)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .textSelection(.enabled)
                 .foregroundStyle(theme.color("fg"))
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("warn").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("warn").opacity(0.3)).frame(height: 0.5)
@@ -1906,6 +1927,7 @@ private struct ACPSideQuestionSlot: View {
     /// shorter than `size`.
     @State private var renderedHeight: CGFloat?
     @Environment(\.acpSideQuestionCardState) private var cardState
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let entry = manager.sideQuestions[parentID], preferences.dock == placement {
@@ -2098,7 +2120,7 @@ private struct ACPSideQuestionSlot: View {
                         dock: .side, cap: columnHeight, limit: columnHeight
                     ))
                     .frame(maxHeight: .infinity, alignment: .top)
-                    .padding(12)
+                    .padding(scale.space[3])
             }
             .frame(width: size)
         }
