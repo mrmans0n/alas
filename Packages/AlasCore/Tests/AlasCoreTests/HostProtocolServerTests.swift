@@ -321,12 +321,15 @@ struct HostProtocolServerTests {
         for await _ in entered.stream { break }
 
         var shutdownFinished = false
+        let shutdownBegan = AsyncStream<Void>.makeStream()
         let shutdown = Task {
+            shutdownBegan.continuation.yield()
             await fixture.host.shutdown()
             shutdownFinished = true
         }
-        // Shutdown is held while the request is served.
-        for _ in 0..<50 { await Task.yield() }
+        // Both run on the main actor: this resumes once shutdown is suspended
+        // on its first wait.
+        for await _ in shutdownBegan.stream { break }
         #expect(!shutdownFinished)
         #expect(client.messages.isEmpty)
         release.continuation.yield()
