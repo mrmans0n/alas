@@ -56,6 +56,9 @@ public struct ChipSpec: Equatable, Sendable {
     public let source: Source
     public let options: [Item]
     public let currentId: String?
+    /// The adapter's recommendation. Always one of `options`, and independent
+    /// of `currentId`.
+    public let recommendedId: String?
 
     public struct Item: Equatable, Hashable, Sendable {
         public let id: String
@@ -71,10 +74,11 @@ public struct ChipSpec: Equatable, Sendable {
         }
     }
 
-    public init(source: Source, options: [Item], currentId: String?) {
+    public init(source: Source, options: [Item], currentId: String?, recommendedId: String? = nil) {
         self.source = source
         self.options = options
         self.currentId = currentId
+        self.recommendedId = options.contains { $0.id == recommendedId } ? recommendedId : nil
     }
 }
 
@@ -187,7 +191,8 @@ extension ACPChipState {
             options: opt.options.map {
                 ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind)
             },
-            currentId: opt.currentStringValue)
+            currentId: opt.currentStringValue,
+            recommendedId: opt.recommendedValue)
     }
 
     /// Finds a configOption that advertises itself for the given category
@@ -232,7 +237,8 @@ extension ACPChipState {
                     options: opt.options.map {
                         ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind)
                     },
-                    currentId: opt.currentStringValue))
+                    currentId: opt.currentStringValue,
+                    recommendedId: opt.recommendedValue))
         }
     }
 

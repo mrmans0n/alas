@@ -27,6 +27,29 @@ struct ACPChipStateTests {
                         category: category, currentValue: .boolean(current))
     }
 
+    @Test("a recommendation shows only when the option advertises it, and never changes the selection")
+    func recommendationNamesAnAdvertisedValue() {
+        let items = [ACPConfigOptionItem(id: "a", name: "A"), ACPConfigOptionItem(id: "b", name: "B")]
+        let option = { (id: String, category: String?, recommended: String) in
+            ACPConfigOption(id: id, name: id, category: category, currentValue: .string("a"),
+                            options: items, recommendedValue: recommended)
+        }
+        let state = ACPChipState.normalize(
+            agentId: "codex", availableModels: [], currentModel: nil,
+            availableModes: [], currentMode: nil,
+            configOptions: [
+                option("model", "model", "b"),
+                option("reasoning_effort", "thought_level", "gone"),
+                option("context", nil, "b"),
+            ])
+
+        #expect(state.models?.recommendedId == "b")
+        #expect(state.models?.currentId == "a")
+        #expect(state.thinking != nil)
+        #expect(state.thinking?.recommendedId == nil)
+        #expect(state.parameters.first?.spec.recommendedId == "b")
+    }
+
     @Test("mode kind carries through normalize onto the Mode chip's items")
     func modeKindCarriesThrough() {
         let state = ACPChipState.normalize(

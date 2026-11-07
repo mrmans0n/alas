@@ -19,6 +19,8 @@ struct ACPSelectChip: View {
         /// Shown before the name: mode symbols in the composer, agent logos
         /// in the peer new-session sheet. Absent for every other chip.
         var icon: Icon? = nil
+        /// A short note after the name, such as "Recommended".
+        var badge: String? = nil
     }
 
     let label: String
@@ -332,6 +334,11 @@ private struct DropdownPanel: View {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(accent)
+                        }
+                        if let badge = item.badge {
+                            Text(badge)
+                                .font(.system(size: 10))
+                                .foregroundStyle(theme.color("fg-faint"))
                         }
                     }
                     if let desc = item.description, !desc.isEmpty {

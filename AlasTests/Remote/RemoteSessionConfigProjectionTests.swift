@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -24,6 +25,18 @@ struct RemoteSessionConfigProjectionTests {
         #expect(chips.thinking?.configId == "reasoning_effort")
         #expect(chips.thinking?.options.map(\.id) == ["low", "high"])
         #expect(chips.booleans == [RemoteBooleanOption(id: "web", name: "Web search", value: true)])
+    }
+
+    @Test func aRecommendationReachesTheViewerAndOlderHostsDecodeWithoutOne() throws {
+        let spec = ChipSpec(source: .configOption(id: "model"),
+                            options: [.init(id: "a", name: "A", description: nil)],
+                            currentId: "b", recommendedId: "a")
+        let chips = RemoteSessionConfigProjection.chips(
+            ACPChipState(models: spec, parameters: [], autoRun: .ignored), configOptions: [])
+        #expect(chips.model?.recommendedId == "a")
+
+        let older = try JSONDecoder().decode(RemoteChip.self, from: Data(#"{"source":"model","options":[]}"#.utf8))
+        #expect(older.recommendedId == nil)
     }
 
     @Test func legacyModelsAndModesKeepTheirSources() {

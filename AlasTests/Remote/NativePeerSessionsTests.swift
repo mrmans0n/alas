@@ -1250,6 +1250,19 @@ struct NativePeerSessionsTests {
         #expect(NativePeerSessions.pollsDocument(document) == polled)
     }
 
+    /// Install is offered only for a missing adapter Alas manages, on a host
+    /// that can install it.
+    @Test(arguments: [
+        ("codex", "needsSetup", true, true),
+        ("codex", "needsSetup", false, false),
+        ("codex", "needsAuth", true, false),
+        ("gemini", "needsSetup", true, false),
+    ])
+    func installIsOfferedOnlyForAManagedMissingAdapter(agentID: String, kind: String, hostInstalls: Bool, offered: Bool) {
+        let issue = RemoteAgentIssue(kind: kind, message: "")
+        #expect(NativePeerSessions.offersAdapterInstall(agentID: agentID, issue: issue, hostInstalls: hostInstalls) == offered)
+    }
+
     /// A session whose row carries no worktree summary keeps comparing its
     /// own (absent) summary, not the one its worktree's console lends the row.
     @Test func aSessionWithoutASummaryIsNotReloadedOnEverySessionList() {

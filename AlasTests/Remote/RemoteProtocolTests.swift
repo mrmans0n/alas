@@ -75,11 +75,13 @@ struct RemoteProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served)
     }
 
-    @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {
-        let requests: [RemoteClientMessage] = [.openSessionTab(sessionId: "s"), .closeSessionTab(sessionId: "s")]
+    @Test func sessionTabAndAdapterInstallMessagesRoundTripAndKeepTheirSessionScope() throws {
+        let requests: [RemoteClientMessage] = [
+            .openSessionTab(sessionId: "s"), .closeSessionTab(sessionId: "s"), .installAdapter(sessionId: "s"),
+        ]
         for request in requests {
             #expect(try roundTrip(request) == request)
             #expect(request.sessionId == "s")

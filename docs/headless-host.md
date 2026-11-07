@@ -111,6 +111,10 @@ launches adapters with it ahead of its own plus well-known directories such as
 Homebrew's, so adapters installed through nvm, fnm, asdf or mise work, launchd
 agent included.
 
+When a Claude, Codex or Pi session on the host is missing its adapter, a paired
+Mac shows **Install** next to the error. The host installs the adapter with its
+`npm` and connects the session again; hosts older than this show only the error.
+
 To install agents from the [ACP registry](https://agentclientprotocol.com) on a
 Mac without the app:
 
