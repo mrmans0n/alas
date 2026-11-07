@@ -3888,6 +3888,38 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
     }
 
+    @Test("a failed apply keeps the live recommendation, and only the choice is stored")
+    func failedApplyKeepsLiveRecommendation() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            Data(#"""
+            {"configOptions":[{"id":"model","name":"Model","type":"select","category":"model","currentValue":"a",
+            "options":[{"value":"a","name":"A"},{"value":"b","name":"B"}],
+            "_meta":{"recommendedConfigValue":{"version":1,"value":"b"}}}]}
+            """#.utf8)
+        }
+        client.script(method: "session/set_config_option") { _ in
+            throw ACPClientError.noScript(method: "session/set_config_option")
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        #expect(session.chipState.models?.recommendedId == "b")
+
+        let update = try #require(manager.setConfigOption(for: session.id, configId: "model", value: .string("b")))
+        #expect(session.chipState.models?.recommendedId == "b")
+        await update.value
+        await manager.flushAllPersistence()
+
+        #expect(session.chipState.models?.currentId == "a")
+        #expect(session.chipState.models?.recommendedId == "b")
+        #expect(try store.loadSession(id: "local")?.configOptionValues == ["model": .string("a")])
+    }
+
     @Test("failed config-option restoration retains valid saved values")
     func failedConfigOptionRestorationRetainsValidSavedValues() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

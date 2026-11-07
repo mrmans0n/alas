@@ -296,6 +296,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let permissionPresentation: ACPPresentationContractDeclaration
     /// Asks our Claude and Codex adapter forks to link a free-text field to its question.
     public let questionCustomAnswer: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks to name the recommended model and effort.
+    public let recommendedConfigValue: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -313,7 +315,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         sessionFailure: ACPSessionFailureDeclaration = .init(),
         agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init(),
         permissionPresentation: ACPPresentationContractDeclaration = .init(),
-        questionCustomAnswer: ACPPresentationContractDeclaration = .init()
+        questionCustomAnswer: ACPPresentationContractDeclaration = .init(),
+        recommendedConfigValue: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -331,11 +334,12 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.agentFileChangeReport = agentFileChangeReport
         self.permissionPresentation = permissionPresentation
         self.questionCustomAnswer = questionCustomAnswer
+        self.recommendedConfigValue = recommendedConfigValue
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
-        case agentFileChangeReport, permissionPresentation, questionCustomAnswer
+        case agentFileChangeReport, permissionPresentation, questionCustomAnswer, recommendedConfigValue
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -364,6 +368,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
             ACPPresentationContractDeclaration.self, forKey: .permissionPresentation)) ?? .init()
         questionCustomAnswer = (try? c.decodeIfPresent(
             ACPPresentationContractDeclaration.self, forKey: .questionCustomAnswer)) ?? .init()
+        recommendedConfigValue = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .recommendedConfigValue)) ?? .init()
     }
 }
 

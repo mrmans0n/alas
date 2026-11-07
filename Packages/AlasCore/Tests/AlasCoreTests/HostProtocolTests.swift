@@ -392,7 +392,7 @@ struct HostProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+        #expect(caps == console + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served)
         // An app host keeps git to the user at it; only a headless host adds it.
         #expect(Set(caps).isDisjoint(with: HostProtocolCapability.headlessOnly))
     }
