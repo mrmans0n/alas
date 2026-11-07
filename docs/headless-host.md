@@ -43,8 +43,10 @@ Alas uses the host inside an installed `Alas.app` as is, updates an installed
 running Homebrew's automatic cleanup. Otherwise, or when that install fails, it
 copies its own host files into `~/.alas/host` when both Macs share an
 architecture. You then pick the reachability, the agents to
-enable and the projects to add, and Alas starts the host at login, pairs with
-it, and lists anything `alas-host setup --check` warns about. The host Mac needs
+enable and the projects to add. Alas installs the adapter of each enabled Claude,
+Codex or Pi whose CLI is on the host Mac using that Mac's `npm`, starts the host
+at login, pairs with it, and lists anything `alas-host setup --check` warns about,
+along with any adapter it couldn't install. The host Mac needs
 a user logged in, since launchd runs the host in that user's session.
 
 A peer set up this way shows **Update host**, which reinstalls and restarts the
