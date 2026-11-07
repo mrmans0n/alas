@@ -2421,6 +2421,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             availabilityChanged: { coordinator.peerAvailabilityChanged(serverId: $0) },
             childBlocked: childBlocked,
             retryStarts: { await coordinator.retryPeerStarts(serverId: $0) },
+            identityUnproven: { await coordinator.peerIdentityUnproven(serverId: $0, name: $1) },
             settleQuietChildren: settleQuietChildren,
             schedule: schedule
         )
@@ -2650,6 +2651,24 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(peers.outboxCalls == [0, 2])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    /// A peer that will not trust this Mac's pairing refuses every pull, and
+    /// asking again cannot change that, so the parent hears now instead of
+    /// waiting forever. `old` was owed nothing.
+    @Test func aPeerThatCannotProveThisMacFailsWhatIsAwaitedThere() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        for id in ["child", "old"] { try await insertRemoteChild(fixture.persistence, id: id) }
+        try await awaitResult(fixture)
+        peers.outboxAnswer = { _ in .failure(.unproven(peer: "mini")) }
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        let record = try await fixture.persistence.delegation(childSessionId: "child")
+        #expect(record?.phase == .failed)
+        #expect(record?.failureMessage?.hasSuffix("Pair the two Macs again.") == true)
+        #expect(try await phase(fixture.persistence, "old") == .ready)
     }
 
     @Test func signalsDuringAPullQueueOneMorePull() async throws {

@@ -419,6 +419,32 @@ struct RemotePeerManagerTests {
         }
     }
 
+    /// A host asks for a delegation-only token. A Mac that advertised the
+    /// capability and issued a full one anyway leaves nothing behind here:
+    /// no record, no token, and no counter-code it could still pair back with.
+    @Test func aScopedAddKeepsNothingFromAMacThatIssuedMore() async throws {
+        let requests = Requests()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let store = InMemoryPeerStore()
+        let manager = makeManager(store: store, pairing: pairing, pairer: RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            let body = req.url?.path == "/health"
+                ? #"{"ok":true,"capabilities":["\#(RemoteDeviceScope.pairCapability)"]}"#
+                : #"{"token":"tokA","serverId":"srv-a","name":"Mac A","scope":"full"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1), links: Links())
+        manager.pairingScope = .delegation
+
+        #expect(await manager.addPeer(link: linkFromA) == .scopeUnsupported)
+
+        let posted = try body(of: try #require(requests.seen.last { $0.httpMethod == "POST" }))
+        #expect(posted["scope"] as? String == "delegation")
+        let counterCode = try #require((posted["peer"] as? [String: Any])?["counterCode"] as? String)
+        #expect(manager.peers.isEmpty)
+        #expect(store.saved.isEmpty)
+        #expect((try? pairing.redeemPeer(code: counterCode, deviceName: "Mac A", peerServerId: "srv-a")) == nil)
+    }
+
     @Test func invalidLinkIsRejectedWithoutNetwork() async {
         let requests = Requests()
         let manager = makeManager(pairer: pairer([:], requests: requests), links: Links())
@@ -776,6 +802,59 @@ struct RemotePeerManagerTests {
         #expect(sent["code"] as? String == "CC")
         let ad = try #require(sent["peer"] as? [String: Any])
         #expect(ad["counterCode"] == nil)
+    }
+
+    /// The pair-back proves the peer's key, so the device that peer reaches
+    /// this Mac with records it. The redeem carries this Mac's own proof.
+    @Test func aPairBackRecordsTheKeyItProvedAndSendsThisMacsProof() async throws {
+        let keyA = Curve25519.Signing.PrivateKey(), keyB = Curve25519.Signing.PrivateKey()
+        let publicA = RemoteIdentityCrypto.publicKeyString(keyA.publicKey)
+        let publicB = RemoteIdentityCrypto.publicKeyString(keyB.publicKey)
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let device = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let requests = Requests()
+        let answeringAsA = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            let sent = try JSONSerialization.jsonObject(with: req.httpBody!) as! [String: Any]
+            let proof = RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: sent["challenge"] as! String, with: keyA)!
+            let reply = ["token": "tokA", "serverId": "srv-a", "name": "Mac A", "publicKey": publicA, "signature": proof.signature]
+            return (try JSONSerialization.data(withJSONObject: reply),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(
+            pairing: pairing, pairer: answeringAsA, links: Links(),
+            identity: .init(serverId: "srv-b", name: "Mac B", origins: ["http://10.0.0.2:8765"], publicKey: publicB))
+        manager.signRedeem = { RemoteIdentityCrypto.signRedeem(serverId: $1, code: $0, with: keyB) }
+
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC",
+            localDeviceId: device.deviceId, redeemedCode: "ABC123"))
+
+        #expect(pairing.device(id: device.deviceId)?.peerPublicKey == publicA)
+        let sent = try #require(requests.seen.first)
+        let proof = try #require(try body(of: sent)["proof"] as? String)
+        #expect(RemoteIdentityCrypto.verifyRedeem(signature: proof, serverId: "srv-b", code: "CC", publicKey: publicB))
+    }
+
+    /// Devices from before keys were recorded: one whose peer paired two ways
+    /// had its key proved, and one an inbound-only peer reaches never did.
+    @Test func loadingRecordsTheKeysOfEarlierTwoWayPairingsOnly() throws {
+        let key = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let twoWay = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "A", peerServerId: "srv-a")
+        let inboundOnly = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "C", peerServerId: "srv-c")
+        let store = InMemoryPeerStore()
+        store.save([
+            RemotePeer(id: "a", serverId: "srv-a", name: "A", origins: [], token: "tok", publicKey: key,
+                       localDeviceId: twoWay.deviceId, addedAt: Date()),
+            RemotePeer(id: "c", serverId: "srv-c", name: "C", origins: [], token: "",
+                       localDeviceId: inboundOnly.deviceId, addedAt: Date()),
+        ])
+
+        _ = makeManager(store: store, pairing: pairing, pairer: pairer([:], requests: Requests()), links: Links())
+
+        #expect(pairing.device(id: twoWay.deviceId)?.peerPublicKey == key)
+        #expect(pairing.device(id: inboundOnly.deviceId)?.peerPublicKey == nil)
     }
 
     // `request.origins` is attacker-controlled. A request claiming identity

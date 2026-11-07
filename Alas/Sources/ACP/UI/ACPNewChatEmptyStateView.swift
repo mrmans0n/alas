@@ -6,8 +6,10 @@ struct ACPNewChatEmptyStateView: View {
     /// composer.
     let bottomInset: CGFloat
     let onStarterPrompt: (ACPStarterPrompt) -> Void
+    var onCreatePreview: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
+    @State private var confirmsPreview = false
 
     var body: some View {
         VStack(spacing: 14) {
@@ -21,6 +23,11 @@ struct ACPNewChatEmptyStateView: View {
                     .foregroundStyle(theme.color("fg-dim"))
             }
             starterChips
+            if onCreatePreview != nil {
+                Button("New ACP v2 preview") { confirmsPreview = true }
+                    .buttonStyle(.link)
+                    .font(.callout)
+            }
         }
         .frame(maxWidth: 640)
         .padding(.horizontal, 28)
@@ -28,6 +35,12 @@ struct ACPNewChatEmptyStateView: View {
         .padding(.bottom, bottomInset)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("New \(agentDisplayName) chat")
+        .confirmationDialog("Start ACP v2 preview?", isPresented: $confirmsPreview) {
+            Button("Start preview") { onCreatePreview?() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This local preview supports text and permission choices. An ended or interrupted preview cannot resume.")
+        }
     }
 
     private var mark: some View {

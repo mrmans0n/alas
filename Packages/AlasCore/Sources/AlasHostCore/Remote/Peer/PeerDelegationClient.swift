@@ -166,6 +166,7 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     static func map(_ error: HostError, peer: String) -> ACPPeerError {
         switch error {
         case .session(.notFound): .notFound
+        case .peerIdentityUnproven: .unproven(peer: peer)
         case .failed(let message) where message == PeerHostChannel.unansweredMessage
             || message == FederatedSessionsProvider.peerUnavailableMessage:
             .unreachable(peer: peer)

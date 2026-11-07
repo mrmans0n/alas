@@ -74,6 +74,7 @@ struct RemoteHTTPResponderTests {
         )
         let out = text(responder.response(for: request("GET", "/health"), body: Data()))
         #expect(out.contains(#""serverId":"srv-1""#))
+        #expect(out.contains(RemoteDeviceScope.pairCapability))
     }
 
     @Test func healthOmitsServerIdWhenUnknown() {
@@ -235,17 +236,56 @@ struct RemoteHTTPResponderTests {
         #expect(object["publicKey"] == nil)
     }
 
-    // An advertised key that could never be verified is refused while the
-    // code is still unconsumed, rather than stored as an unusable string.
-    @Test func pairWithAMalformedPublicKeyIsRejectedAndLeavesTheCodeRedeemable() {
+    nonisolated static let realKey = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+
+    // A key that could never be verified, or a proof that is not shaped like
+    // a signature or has no key to check it against, is refused before any
+    // signature check runs and while the code is still unconsumed.
+    @Test(arguments: [
+        ("not-a-key", nil),
+        (realKey, "short"),
+        (nil, String(repeating: "A", count: 86) + "=="),
+    ] as [(String?, String?)])
+    func pairWithAMalformedKeyOrProofIsRejectedAndLeavesTheCodeRedeemable(publicKey: String?, proof: String?) throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let code = pairing.beginPairing()
-        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://a:1"],"publicKey":"not-a-key"}}"#.utf8)
+        var peer: [String: Any] = ["serverId": "srv-b", "name": "Mac B", "origins": ["http://a:1"]]
+        peer["publicKey"] = publicKey
+        var fields: [String: Any] = ["code": code, "deviceName": "Mac B", "peer": peer]
+        fields["proof"] = proof
+        let body = try JSONSerialization.data(withJSONObject: fields)
         let out = text(makePeerResponder(pairing: pairing, sink: PeerSink())
             .response(for: request("POST", "/pair"), body: body))
         #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
         #expect(pairing.devices.isEmpty)
         #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    /// A narrower token goes only to a redeemer that proved its key, and the
+    /// reply says what was granted to one that asked.
+    @Test(arguments: [
+        ("delegation", true, RemoteDeviceScope.delegation, "delegation"),
+        ("delegation", false, .full, "full"),
+        ("from-a-newer-build", true, .full, nil),
+        (nil, true, .full, nil),
+    ] as [(String?, Bool, RemoteDeviceScope, String?)])
+    func pairGrantsAScopeOnlyWithAProofAndEchoesIt(requested: String?, proves: Bool, granted: RemoteDeviceScope,
+                                                   echoed: String?) throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let peer: [String: Any] = ["serverId": "srv-b", "name": "Mac B", "origins": ["http://a:1"],
+                                   "publicKey": RemoteIdentityCrypto.publicKeyString(key.publicKey)]
+        var fields: [String: Any] = ["code": code, "deviceName": "Mac B", "peer": peer]
+        fields["scope"] = requested
+        fields["proof"] = proves ? RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: key) : nil
+        let out = makePeerResponder(pairing: pairing, sink: PeerSink())
+            .response(for: request("POST", "/pair"), body: try JSONSerialization.data(withJSONObject: fields))
+
+        let json = try #require(String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n").last)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["scope"] as? String == echoed)
+        #expect(pairing.devices.map(\.scope) == [granted])
     }
 
     // The advertised key has to reach the app, or the inbound side has

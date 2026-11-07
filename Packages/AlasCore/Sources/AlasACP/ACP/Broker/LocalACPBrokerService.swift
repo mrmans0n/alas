@@ -84,6 +84,11 @@ public actor LocalACPBrokerService {
         return try await client.openACPBroker(params)
     }
 
+    public func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult {
+        try await verifyACPIfNeeded()
+        return try await client.openACPBroker(params, authorizeBeforeSend: authorizeBeforeSend)
+    }
+
     public func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
         try await verifyACPIfNeeded()
         return try await client.attachACPBroker(params)

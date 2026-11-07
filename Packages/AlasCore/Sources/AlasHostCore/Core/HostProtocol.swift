@@ -636,13 +636,18 @@ public struct HostPeerSummary: Codable, Equatable, Sendable {
     public var origins: [String]
     /// Nil for a peer that never completed reciprocal pairing, or from an older host.
     public var agentAccess: RemoteDeviceAgentAccess?
+    /// What this host's token for the peer may do there. Nil when it holds
+    /// none, or from an older host.
+    public var tokenScope: RemoteDeviceScope?
 
-    public init(id: String, serverId: String, name: String, origins: [String], agentAccess: RemoteDeviceAgentAccess? = nil) {
+    public init(id: String, serverId: String, name: String, origins: [String], agentAccess: RemoteDeviceAgentAccess? = nil,
+                tokenScope: RemoteDeviceScope? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
         self.origins = origins
         self.agentAccess = agentAccess
+        self.tokenScope = tokenScope
     }
 
     /// The peer `query` names: its id or server id, else a name only one peer has.
@@ -747,6 +752,9 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case workspace(error: WorkspaceAutomationError)
     case session(refusal: SessionRefusal)
     case failed(message: String)
+    /// The caller's device never proved the identity it paired with, so this
+    /// host will not attribute delegated work to it. Pairing again fixes it.
+    case peerIdentityUnproven
     /// The file is no longer at the version the client named: `current`, or nil when it is gone.
     case fileChanged(current: WorktreeFileVersion?)
 }

@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 36
+    public static let targetSchemaVersion = 38
     public let path: String
     public let db: SQLiteDatabase
 
@@ -106,6 +106,13 @@ public final class ACPSessionStore {
                 try db.exec("ALTER TABLE session_forks ADD COLUMN native_remote_history_start INTEGER")
             }
         }
+        if current < 37 {
+            let columns = try db.query("PRAGMA table_info(sessions)")
+            if !columns.contains(where: { ($0["name"] as? String) == "runtime_kind" }) {
+                try db.exec("ALTER TABLE sessions ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'v1'")
+            }
+        }
+        if current < 38 { try createV2PreviewDisplaySchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -685,13 +692,13 @@ extension ACPSessionStore {
         """
         let original: [Any?] = [stored?.acpBrokerId, stored?.acpBrokerGeneration, stored?.acpBrokerWireContextJSON]
         try db.exec("""
-        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
+        INSERT INTO sessions (id, agent_id, title, runtime_kind, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
                               session_instructions, session_hooks, ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_wire_context, acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -732,7 +739,7 @@ extension ACPSessionStore {
             -- explicit unarchive does.
             archived = MAX(sessions.archived, excluded.archived)
         """, bindings: [
-            s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
+            s.id, s.agentId, s.title, s.runtimeKind.rawValue, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0, s.recoveryProcId,
             s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
             s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
@@ -1488,6 +1495,7 @@ extension ACPSessionStore {
             id: r["id"] as? String ?? "",
             agentId: r["agent_id"] as? String ?? "",
             title: r["title"] as? String ?? "",
+            runtimeKind: .init(rawValue: r["runtime_kind"] as? String ?? "v1"),
             titleSource: ACPSessionTitleSource(rawValue: rawSource) ?? .placeholder,
             remoteSessionId: r["remote_session_id"] as? String,
             origin: ACPSessionOrigin(rawValue: r["origin"] as? String ?? "") ?? .alasCreated,

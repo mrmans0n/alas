@@ -84,23 +84,26 @@ public final class ACPV2SessionRunner {
     private var bootstrap: ACPV2SessionBootstrap?
     private var runtime: ACPV2AttachmentRuntime?
     private var projection: ACPV2SessionProjection?
+    private let onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)?
     private var decisions: ACPV2RequestDecisionCoordinator?
 
     public convenience init(session: ACPSession, client: ACPStdioClient,
         persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
         info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
         journals: ACPV2AttachmentRuntime.Journals? = nil,
+        onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)? = nil,
         isCurrent: @escaping @MainActor () -> Bool,
         onEvent: @escaping @MainActor (Event) -> Void) throws {
         try self.init(session: session, client: client, brokerClient: nil, brokerIntake: nil,
             persistence: persistence, fence: fence, info: info, interactions: interactions,
-            journals: journals, isCurrent: isCurrent, onEvent: onEvent)
+            journals: journals, onProjectionChange: onProjectionChange, isCurrent: isCurrent, onEvent: onEvent)
     }
 
     public static func makeBroker(session: ACPSession, client: ACPBrokerClient,
         persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
         info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
         journals: ACPV2AttachmentRuntime.Journals? = nil,
+        onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)? = nil,
         isCurrent: @escaping @MainActor () -> Bool,
         onEvent: @escaping @MainActor (Event) -> Void) async throws -> ACPV2SessionRunner {
         guard session.id.utf8.elementsEqual(fence.sessionId.utf8), info.name == "alas", !info.version.isEmpty else { throw Failure.invalidInput }
@@ -108,13 +111,14 @@ public final class ACPV2SessionRunner {
         let intake = try await client.claimV2OrderedIntake()
         return try .init(session: session, client: nil, brokerClient: client, brokerIntake: intake,
             persistence: persistence, fence: fence, info: info, interactions: interactions,
-            journals: journals, isCurrent: isCurrent, onEvent: onEvent)
+            journals: journals, onProjectionChange: onProjectionChange, isCurrent: isCurrent, onEvent: onEvent)
     }
 
     private init(session: ACPSession, client: ACPStdioClient?, brokerClient: ACPBrokerClient?, brokerIntake: ACPV2OrderedIntake?,
         persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
         info: ACPImplementationInfo, interactions: InteractionHandlers = .init(),
         journals: ACPV2AttachmentRuntime.Journals? = nil,
+        onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)? = nil,
         isCurrent: @escaping @MainActor () -> Bool,
         onEvent: @escaping @MainActor (Event) -> Void) throws {
         guard session.id.utf8.elementsEqual(fence.sessionId.utf8), info.name == "alas", !info.version.isEmpty else { throw Failure.invalidInput }
@@ -128,6 +132,7 @@ public final class ACPV2SessionRunner {
         self.info = info
         self.interactions = interactions
         self.journals = journals
+        self.onProjectionChange = onProjectionChange
         self.isCurrent = isCurrent
         self.onEvent = onEvent
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -298,6 +303,8 @@ public final class ACPV2SessionRunner {
                     guard self.current() else { return }
                     self.onEvent(.completion(completion))
                 }
+                guard self.current() else { return }
+                self.onProjectionChange?(notification)
             })
         try requireCurrent()
         let decisions = ACPV2RequestDecisionCoordinator(upstreamSessionId: context.result.sessionId, support: interactions.support,

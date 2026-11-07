@@ -560,8 +560,8 @@ public actor RemoteHelperClient {
         try await request(method: "proc/list", params: RemoteHelperNoParams())
     }
 
-    public func openACPBroker(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
-        try await request(method: params.wireContext == .rawV2 ? "acp/raw/open" : "acp/open", params: params)
+    public func openACPBroker(_ params: ACPBrokerOpenParams, authorizeBeforeSend: (@Sendable () async throws -> Void)? = nil) async throws -> ACPBrokerOpenResult {
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/open" : "acp/open", params: params, authorizeBeforeSend: authorizeBeforeSend)
     }
 
     public func attachACPBroker(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
@@ -824,7 +824,8 @@ public actor RemoteHelperClient {
         replaySubscriptionsOnStart: Bool = true,
         stripVirtualPaths: Bool = true,
         requiresSessionCoordination: Bool = false,
-        requiredGeneration: Int? = nil
+        requiredGeneration: Int? = nil,
+        authorizeBeforeSend: (@Sendable () async throws -> Void)? = nil
     ) async throws -> Result {
         let didStart: Bool
         if let requiredGeneration {
@@ -870,6 +871,16 @@ public actor RemoteHelperClient {
             scheduleIdleShutdownIfPossible()
         }
 
+        if let authorizeBeforeSend {
+            let authorizedGeneration = generation
+            authorizationsInFlight += 1
+            defer { authorizationsInFlight -= 1 }
+            try await authorizeBeforeSend()
+            guard transport != nil, generation == authorizedGeneration, !Task.isCancelled else {
+                throw RemoteHelperClientError.notRunning
+            }
+        }
+        // No suspension between final authorization and the pipe handoff.
         nextId += 1
         let id = JSONRPCID.number(nextId)
         let body = try Self.encodeRequest(
@@ -1282,8 +1293,10 @@ public actor RemoteHelperClient {
         }
     }
 
+    private var authorizationsInFlight = 0
+
     private func scheduleIdleShutdownIfPossible() {
-        guard idleShutdownNanoseconds > 0,
+        guard idleShutdownNanoseconds > 0, authorizationsInFlight == 0,
               pending.isEmpty,
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
@@ -1300,7 +1313,7 @@ public actor RemoteHelperClient {
     }
 
     private func shutdownIfIdle() {
-        guard pending.isEmpty,
+        guard authorizationsInFlight == 0, pending.isEmpty,
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
               activeProcAttachments.isEmpty,

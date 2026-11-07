@@ -96,6 +96,8 @@ actor ACPRawBrokerTransport {
     private var terminated = false
     private var requestedClose: Bool?
     private var started = false
+    private var openFinished = false
+    private var openedIdentity: (generation: ACPBrokerGeneration, fresh: Bool)?
     private var replayTask: Task<Void, Error>?
     private var replaySequence: UInt64 = 0
     private var acknowledging = false
@@ -164,14 +166,27 @@ actor ACPRawBrokerTransport {
         }
     }
 
+    private var openAuthorization: (@Sendable () async throws -> Void)?
+
+    func authorizeOpen(_ authorize: @escaping @Sendable () async throws -> Void) throws {
+        guard !started, !terminated, orderedIntake?.isValid == true, openAuthorization == nil else { throw ACPClientError.notRunning }
+        openAuthorization = authorize
+    }
+
     func start() async throws -> ACPBrokerOpenResult {
         guard !terminated, !started else { throw ACPClientError.notRunning }
         started = true
         do {
-        let opened = try await service.open(openParams)
+        let opened: ACPBrokerOpenResult
+        if let openAuthorization { opened = try await service.open(openParams, authorizeBeforeSend: openAuthorization) }
+        else { opened = try await service.open(openParams) }
         try validate(opened.snapshot, expected: openParams.expectedGeneration)
+        openFinished = true
+        openedIdentity = (opened.snapshot.metadata.generation, !opened.adopted && freshSourceMatches(opened.snapshot))
         guard !terminated else {
-            await endAttachment(generation: opened.snapshot.metadata.generation, close: requestedClose ?? false)
+            if freshCleanup != nil {
+                await endFreshPreview(generation: opened.snapshot.metadata.generation, fresh: openedIdentity?.fresh == true)
+            } else { await endAttachment(generation: opened.snapshot.metadata.generation, close: requestedClose ?? false) }
             throw CancellationError()
         }
         if !opened.adopted, opened.snapshot.operations.isEmpty,
@@ -196,6 +211,8 @@ actor ACPRawBrokerTransport {
         }
         return opened
         } catch {
+            openFinished = true
+            if freshCleanup != nil { finishFreshCleanup(false) }
             if orderedIntake != nil { loseObservation() }
             throw error
         }
@@ -609,6 +626,76 @@ actor ACPRawBrokerTransport {
         } catch let error as ACPBrokerRawReplyError { throw error }
         catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
     }
+    private func freshSourceMatches(_ snapshot: ACPBrokerSnapshot) -> Bool {
+        let metadata = snapshot.metadata
+        return metadata.alasSessionId.utf8.elementsEqual(openParams.sessionId.utf8)
+            && metadata.adapterProgram.utf8.elementsEqual(openParams.command.utf8)
+            && metadata.adapterArgs.map({ Data($0.utf8) }) == openParams.args.map({ Data($0.utf8) })
+            && metadata.cwd.utf8.elementsEqual(openParams.cwd.utf8)
+    }
+
+    private struct FreshCleanup {
+        let authorize: @Sendable () async -> Bool
+        let handoffAuthorized: @Sendable () -> Bool
+    }
+    private var freshCleanup: FreshCleanup?
+    private var freshCleanupResult: Bool?
+    private var freshCleanupRunning = false
+    private var freshCleanupWaiters: [CheckedContinuation<Bool, Never>] = []
+
+    /// Exact fresh-source cleanup, including an open that returns after withdrawal.
+    func stopFreshPreview(authorize: @escaping @Sendable () async -> Bool,
+        handoffAuthorized: @escaping @Sendable () -> Bool) async -> Bool {
+        if freshCleanup == nil {
+            // Explicit preview cleanup may follow a detach. It still needs
+            // creation evidence, a current source snapshot and a current lease.
+            guard requestedClose != true else { return false }
+            freshCleanup = .init(authorize: authorize, handoffAuthorized: handoffAuthorized)
+            requestedClose = false
+            loseObservation()
+            if let openedIdentity {
+                await endFreshPreview(generation: openedIdentity.generation, fresh: openedIdentity.fresh)
+            } else if !started || openFinished { finishFreshCleanup(false) }
+        }
+        if let freshCleanupResult { return freshCleanupResult }
+        return await withCheckedContinuation { freshCleanupWaiters.append($0) }
+    }
+
+    private func finishFreshCleanup(_ result: Bool) {
+        guard freshCleanupResult == nil else { return }
+        freshCleanupResult = result
+        let waiters = freshCleanupWaiters
+        freshCleanupWaiters.removeAll()
+        for waiter in waiters { waiter.resume(returning: result) }
+    }
+
+    private func endFreshPreview(generation: ACPBrokerGeneration, fresh: Bool) async {
+        guard let policy = freshCleanup, !freshCleanupRunning, freshCleanupResult == nil else { return }
+        freshCleanupRunning = true
+        var close = false
+        if fresh {
+            do {
+                var params = ACPBrokerAttachParams(brokerId: openParams.brokerId, generation: generation,
+                    acknowledgedCursor: acknowledged, replayAfterCursor: acknowledged, maxReplayBytes: 1)
+                params.wireContext = .rawV2
+                guard let snapshot = try await service.attach(params).snapshot else { throw ACPClientError.notRunning }
+                try validate(snapshot, expected: generation)
+                guard freshSourceMatches(snapshot) else { throw ACPClientError.notRunning }
+                close = await policy.authorize()
+                close = close && policy.handoffAuthorized()
+            } catch { close = false }
+        }
+        if close {
+            var params = ACPBrokerCloseParams(brokerId: openParams.brokerId, generation: generation)
+            params.wireContext = .rawV2
+            let result = try? await service.close(params)
+            finishFreshCleanup(result?.ok == true)
+        } else {
+            await endAttachment(generation: generation, close: false)
+            finishFreshCleanup(false)
+        }
+    }
+
     func stop(close: Bool) async {
         // Observation loss withdraws delivery authority, but the caller still
         // owns one explicit lifecycle cleanup request for this attachment.

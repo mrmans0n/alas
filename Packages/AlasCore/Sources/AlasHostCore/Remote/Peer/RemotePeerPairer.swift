@@ -36,6 +36,10 @@ public struct RemotePeerPairer {
         /// A host that does not pair back already holds this Mac's identity
         /// pinned to a different key, and refused before redeeming the code.
         case identityRebindRefused
+        /// A scope was asked for and that Mac does not grant it: it does not
+        /// advertise the capability, so no code was spent, or it issued a
+        /// broader token anyway, which was dropped.
+        case scopeUnsupported
     }
 
     // Not `@Sendable`: tests inject closures that record into plain classes,
@@ -73,12 +77,19 @@ public struct RemotePeerPairer {
     /// runs exactly as before.
     public func pair(origins: [String], code: String, deviceName: String,
               advertisement: RemotePeerAdvertisement?,
+              proof: String? = nil,
+              scope: RemoteDeviceScope? = nil,
               isolation: isolated (any Actor)? = #isolation) async -> Outcome {
         struct Body: Encodable {
             let code: String
             let deviceName: String
             let peer: RemotePeerAdvertisement?
             let challenge: String
+            /// This Mac's signature over its server id and `code`, proving it
+            /// holds the key `peer` advertises.
+            let proof: String?
+            /// The narrower token asked for; nil asks for nothing.
+            let scope: RemoteDeviceScope?
         }
         struct Reply: Decodable {
             let token: String
@@ -87,6 +98,9 @@ public struct RemotePeerPairer {
             let publicKey: String?
             let signature: String?
             let inboundOnly: Bool?
+            /// A string, so a value this build does not know reads as a
+            /// mismatch rather than failing the whole reply.
+            let scope: String?
         }
         // One challenge for the whole attempt, not one per origin: whichever
         // origin answers has to sign THIS value, and it is never reused
@@ -94,7 +108,8 @@ public struct RemotePeerPairer {
         // cannot be replayed into this one.
         let challenge = RemoteIdentityCrypto.randomChallenge()
         let body = try? JSONEncoder().encode(
-            Body(code: code, deviceName: deviceName, peer: advertisement, challenge: challenge))
+            Body(code: code, deviceName: deviceName, peer: advertisement, challenge: challenge, proof: proof,
+                 scope: scope))
         // A 401 or 403 only proves what THAT origin thinks: a stale advertised
         // address can have been reassigned to an unrelated Alas instance,
         // which correctly rejects a code it has never seen (401) or simply
@@ -112,6 +127,7 @@ public struct RemotePeerPairer {
         // where the real peer still lives. Reported only if nothing works.
         var sawUnprovenIdentity = false
         var sawRebindRefused = false
+        var sawScopeUnsupported = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -120,6 +136,15 @@ public struct RemotePeerPairer {
             // into the request target.
             guard let normalized = RemotePairingLink.normalizeOrigin(origin),
                   let url = URL(string: normalized + "/pair") else { continue }
+            // Checked before the code is spent there: a Mac that would issue
+            // a full token anyway is told apart while the code still works.
+            if let scope {
+                guard let supported = await supportsScope(scope, at: normalized) else { continue }
+                guard supported else {
+                    sawScopeUnsupported = true
+                    continue
+                }
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = timeout
@@ -154,6 +179,9 @@ public struct RemotePeerPairer {
                     sawUnprovenIdentity = true
                     continue
                 }
+                // The code is spent, so no other origin can redeem it. The
+                // token is dropped unheld.
+                if let scope, reply.scope != scope.rawValue { return .scopeUnsupported }
                 return .paired(token: reply.token, serverId: reply.serverId, name: reply.name,
                                publicKey: verifiedKey, origin: normalized, inboundOnly: inboundOnly)
             case 401:
@@ -172,11 +200,28 @@ public struct RemotePeerPairer {
         }
         if sawExpiredCode { return .expiredCode }
         if sawRebindRefused { return .identityRebindRefused }
+        if sawScopeUnsupported { return .scopeUnsupported }
         if sawOriginRejected { return .originRejected }
         // Below the two above: a dead code and a peers-off setting are both
         // more fundamental, and both are things the user can act on directly.
         if sawUnprovenIdentity { return .identityUnproven }
         return .unreachable
+    }
+}
+
+extension RemotePeerPairer {
+    /// Whether `origin`'s `/health` advertises the capability for `scope`;
+    /// nil when it did not answer.
+    private func supportsScope(_ scope: RemoteDeviceScope, at origin: String,
+                               isolation: isolated (any Actor)? = #isolation) async -> Bool? {
+        if scope == .full { return true }
+        guard let url = URL(string: origin + "/health") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        guard let (data, http) = try? await fetch(request), http.statusCode == 200 else { return nil }
+        struct Health: Decodable { let capabilities: [String]? }
+        let health = try? JSONDecoder().decode(Health.self, from: data)
+        return health?.capabilities?.contains(RemoteDeviceScope.pairCapability) == true
     }
 }
 
@@ -204,6 +249,8 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
             return "identityUnproven"
         case .identityRebindRefused:
             return "identityRebindRefused"
+        case .scopeUnsupported:
+            return "scopeUnsupported"
         }
     }
 }

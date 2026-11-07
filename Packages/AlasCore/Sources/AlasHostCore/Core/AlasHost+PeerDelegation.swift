@@ -39,15 +39,16 @@ extension DelegationAPI {
 
     nonisolated static let accessOffRefusal = "Agents on that Mac may not use this one. Allow them in this Mac's Remote settings."
     nonisolated static let notAPeerRefusal = "Only a paired Mac may delegate to this host."
-    nonisolated static let unknownPeerRefusal = "This Mac does not know that Mac's identity. Pair them again to allow this."
 
     /// `device` is the one the transport identified for `caller`, if any.
     func serve(_ request: HostDelegationRequest, device: RemoteDevice?, caller: HostCaller) async throws -> HostResponse {
-        guard PeerDelegationGate.allows(request.verb, device: device), let device else {
-            throw HostError.failed(message: device?.kind == .alasInstance ? Self.accessOffRefusal : Self.notAPeerRefusal)
+        guard let device, device.kind == .alasInstance else { throw HostError.failed(message: Self.notAPeerRefusal) }
+        // Typed, so the source can tell it from a pull that failed in transit.
+        guard PeerDelegationGate.isProven(device), let peerServerId = device.peerServerId else {
+            throw HostError.peerIdentityUnproven
         }
-        guard let peerServerId = device.peerServerId, !peerServerId.isEmpty else {
-            throw HostError.failed(message: Self.unknownPeerRefusal)
+        guard PeerDelegationGate.allows(request.verb, device: device) else {
+            throw HostError.failed(message: Self.accessOffRefusal)
         }
         caller.log("delegation", "\(request.verb) from \(peerServerId)")
         switch request {

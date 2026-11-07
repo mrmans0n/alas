@@ -276,7 +276,10 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func retainedCleanupHasActivePromptWork(for id: ACPSession.ID) -> Bool {
-        runners[id]?.hasRetainedCleanupPromptWork == true
+        runners[id]?.hasRetainedCleanupPromptWork == true || v2PreviewOwners[id].map {
+            $0.owner.awaitingSubmission || $0.owner.foreground == .running || $0.owner.foreground == .requiresAction
+                || $0.owner.permissions.contains { $0.phase == .awaitingDecision || $0.phase == .sending }
+        } == true
     }
 
     public func retainedCleanupHasSteerWork(for id: ACPSession.ID) -> Bool {
@@ -449,6 +452,8 @@ public final class ACPSessionManager: ChangeTracking {
         isStillWanted: (@MainActor () -> Bool)? = nil, onAccepted: (@MainActor () -> Void)? = nil,
         onResult: @escaping @MainActor (Bool) -> Void
     ) async {
+        guard legacyRuntimeAllowed(id) else { onResult(false)
+        return }
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
         defer { suggestionSession?.nextPromptWorkCount -= 1 }
@@ -476,6 +481,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// not drive the session.
     @discardableResult
     public func interrupt(for id: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(id) else { return false }
         guard await confirmedWriterLease(for: id), let runner = runners[id] else { return false }
         return await runner.userCancel()
     }
@@ -501,6 +507,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// An explicit click only; the runner re-checks its half of the policy.
     @discardableResult
     public func retryFailedPrompt(sessionId: ACPSession.ID, incidentId: String) -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !isMirror(sessionId: sessionId), admitsFailureRetry(sessionId: sessionId),
               let runner = runners[sessionId]
         else { return false }
@@ -592,6 +599,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// running, preserving every other pending item) — the remote-web twin
     /// of the "Up next" row's "Send now".
     public func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard let session = sessions[id] else { return }
         guard !hasManagerQueuePersistence(sessionId: id) else {
             deferQueueForceSend(session: session, itemId: itemId)
@@ -632,6 +640,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard session.removeFromQueue(id: itemId) else { return }
         resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
@@ -660,6 +669,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Clear a failed item's error so the flusher re-attempts it.
     public func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return }
         guard session.queue[idx].status == .pending else { return }
@@ -685,6 +695,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// strand the prompt outside the queue instead of just leaving it be.
     /// A pasted-text segment is plain text, so it stays editable there; the web composer just shows its full content instead of a badge.
     public func queueEdit(for id: ACPSession.ID, itemId: UUID) async -> String? {
+        guard legacyRuntimeAllowed(id) else { return nil }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return nil }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
         let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
@@ -706,6 +717,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// its structured draft. The waiter is released so later model/mode
     /// selections cannot remain blocked by an item that will not dispatch.
     public func queueEditIntoComposer(for id: ACPSession.ID, itemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let draft = session.takeForEditing(id: itemId) else { return }
         persistComposerDraft(session.composerDraft.appending(draft), for: session)
@@ -716,6 +728,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func queueClear(for id: ACPSession.ID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         let removedItems = session.clearPendingQueue()
         for item in removedItems {
@@ -729,6 +742,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// Remote twin of the "Up next" row's move up/down and drop: `itemId`
     /// takes `targetItemId`'s slot, under the same rules as the local row.
     public func queueMove(for id: ACPSession.ID, itemId: UUID, targetItemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let src = session.queue.firstIndex(where: { $0.id == itemId }),
               let dst = session.queue.firstIndex(where: { $0.id == targetItemId }),
@@ -742,6 +756,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Remote twin of the "Up next" row's "Move to front".
     public func queuePromote(for id: ACPSession.ID, itemId: UUID) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard session.forceQueueItem(id: itemId) else { return }
         persistQueue(for: session)
@@ -831,6 +846,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     public func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
+        guard legacyRuntimeAllowed(id) else { return }
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         session.autoRunEnabled = enabled
         persist(session)
@@ -852,6 +868,7 @@ public final class ACPSessionManager: ChangeTracking {
         for id: ACPSession.ID,
         selection: ModelModeSelection
     ) -> Task<Void, Never> {
+        guard legacyRuntimeAllowed(id) else { return Task {} }
         let session = sessions[id]
         session?.nextPromptWorkCount += 1
         let generation = modelModeSelectionGenerations[id] ?? UUID()
@@ -919,6 +936,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Selects a model optimistically and waits for its ordered application.
     public func setModel(for id: ACPSession.ID, modelId: String) async {
+        guard legacyRuntimeAllowed(id) else { return }
         await enqueueModelSelection(for: id, modelId: modelId).value
     }
 
@@ -971,6 +989,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Selects a mode optimistically and waits for its ordered application.
     public func setMode(for id: ACPSession.ID, modeId: String) async {
+        guard legacyRuntimeAllowed(id) else { return }
         await enqueueModeSelection(for: id, modeId: modeId).value
     }
 
@@ -1030,6 +1049,7 @@ public final class ACPSessionManager: ChangeTracking {
         configId: String,
         value: ACPConfigValue
     ) -> Task<Void, Never>? {
+        guard legacyRuntimeAllowed(id) else { return nil }
         guard !isDisposed, let session = sessions[id],
               !isMirror(sessionId: id),
               let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
@@ -1103,6 +1123,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// cannot validate it. Attach applies it after any `pendingModel`, and
     /// skips it if the agent does not advertise the option or value then.
     public func queueInitialConfigOption(for id: ACPSession.ID, configId: String, value: ACPConfigValue) {
+        guard legacyRuntimeAllowed(id) else { return }
         guard sessions[id] != nil, runners[id] == nil, !isMirror(sessionId: id) else { return }
         pendingConfigOptionValues[id, default: [:]][configId] = value
     }
@@ -1483,6 +1504,13 @@ public final class ACPSessionManager: ChangeTracking {
     /// Edits and explicit clears must win over pending saves and hydration snapshots.
     private var editedGoalDrafts: [ACPSession.ID: String] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
+    private var v2PreviewOwners: [ACPSession.ID: (epoch: UUID, owner: ACPV2PreviewOwner)] = [:]
+    private var v2PreviewCreations: [ACPSession.ID: UUID] = [:]
+    private var v2PreviewProcessesEnded: Set<ACPSession.ID> = []
+#if DEBUG
+    public var v2PreviewAdmissionRecordsForTesting: [ACPV2PreviewQualifiedAdapter]?
+    public var prepareV2PreviewLaunchForTesting: (@MainActor (String) async throws -> ACPV2PreviewPreparedLaunch)?
+#endif
     private let setupEvaluator: ACPSetupEvaluator
     private let resolvesManagedLaunchPath: Bool
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
@@ -1837,11 +1865,13 @@ public final class ACPSessionManager: ChangeTracking {
     /// history alone must not block a checkpoint restore, while an attach in
     /// progress must block it before its runner has been registered.
     public var hasActiveCheckpointWriter: Bool {
-        !runners.isEmpty || !attachingSessions.isEmpty
+        !runners.isEmpty || !attachingSessions.isEmpty || !v2PreviewCreations.isEmpty
+            || v2PreviewOwners.contains { _ownedLeases.contains($0.key) && $0.value.owner.status != .ended }
     }
 
     public var isIdleForProjectRebinding: Bool {
-        !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
+        !isDisposed && v2PreviewOwners.isEmpty && v2PreviewCreations.isEmpty
+            && attachingSessions.isEmpty && restartingConnections.isEmpty
             && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
             && activeSessionDeletionCount == 0 && activeDiscoveryImportCount == 0
             && activeDiscoveryHandles.isEmpty && teardownCounts.isEmpty
@@ -2092,6 +2122,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func flushAllPersistence() async {
+        for entry in v2PreviewOwners.values { await entry.owner.flushDisplay() }
         for runner in runners.values {
             await runner.flushPersistence()
         }
@@ -2156,6 +2187,7 @@ public final class ACPSessionManager: ChangeTracking {
         autoRunDefault: Bool,
         ephemeralTitle: String? = nil
     ) async throws -> ACPSession {
+        guard legacyRuntimeAllowed(sourceSessionID) else { throw ACPV2PreviewManagerError.viewOnly }
         let isEphemeral = ephemeralTitle != nil
         guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
             throw ACPSessionForkCreationError.sourceUnavailable
@@ -2553,6 +2585,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// during creation makes this call discard its side session.
     @discardableResult
     public func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
+        guard legacyRuntimeAllowed(parentID) else { throw ACPV2PreviewManagerError.viewOnly }
         activeSideQuestionWorkCount += 1
         defer { activeSideQuestionWorkCount -= 1 }
         let entry = ACPSideQuestion(question: question)
@@ -2779,7 +2812,7 @@ public final class ACPSessionManager: ChangeTracking {
         }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
-            title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
+            title: row.title, runtimeKind: row.runtimeKind, owner: owner, titleSource: row.titleSource, origin: row.origin,
             hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
@@ -2867,6 +2900,8 @@ public final class ACPSessionManager: ChangeTracking {
         await previousManagerDisposal?.value
         guard let session = sessions[id] else { return }
         guard session.hydrationState == .loading else { return }
+        if session.runtimeKind != .v1 { await hydrateV2Preview(session)
+        return }
         if let existing = inFlightHydrations[id] {
             await existing.value
             // The in-flight task captured an earlier session instance; if
@@ -3201,6 +3236,8 @@ public final class ACPSessionManager: ChangeTracking {
     public var onSessionRuntimeEnded: ((ACPSession.ID) -> Void)?
 
     public func closeSession(id: ACPSession.ID) {
+        // A view switch must retain the same live preview installation.
+        guard v2PreviewOwners[id] == nil else { return }
         abandonFirstAttach(of: id)
         cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
@@ -4502,6 +4539,7 @@ public final class ACPSessionManager: ChangeTracking {
         await flushPersistence()
         let row = try await persistence.loadSession(id: sessionId)
         try Task.checkCancellation()
+        guard row?.runtimeKind == nil || row?.runtimeKind == .v1 else { throw ACPV2PreviewManagerError.viewOnly }
         return try ACPBrokerRestorePolicy.resolve(row: row, supportedVersions: makeProtocolSelection().supportedVersions)
     }
 
@@ -5967,6 +6005,7 @@ extension ACPSessionManager {
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
     private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
         guard _ownedLeases.contains(sessionId), ownedLeaseTokens[sessionId] == leaseToken else { return }
+        v2PreviewOwners[sessionId]?.owner.withdraw()
         invalidateHookReview(sessionId: sessionId, retire: true)
         retireBuiltInMCPAttachment(sessionId: sessionId)
         stopHeartbeat(sessionId: sessionId)
@@ -6092,6 +6131,7 @@ extension ACPSessionManager {
     /// Remote writer heartbeats end with their lease release, not with preparation.
     public func prepareForDisposal() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for entry in v2PreviewOwners.values { entry.owner.prepareForEnd() }
         for sid in Array(hookReviewOwners.keys) { invalidateHookReview(sessionId: sid, retire: true) }
         for sid in Array(builtInMCPAttachments.keys) { retireBuiltInMCPAttachment(sessionId: sid) }
         for session in sessions.values {
@@ -6162,6 +6202,8 @@ extension ACPSessionManager {
     /// session. SQLite reads and JSON decode run through the hydrator actor
     /// when available; the main actor only materialises the visible tail.
     public func refreshMirror(sessionId: ACPSession.ID) async {
+        guard legacyRuntimeAllowed(sessionId) else { await hydrateIfNeeded(id: sessionId)
+        return }
         if let existing = inFlightMirrorRefreshes[sessionId] {
             dirtyMirrorRefreshes.insert(sessionId)
             await existing.value
@@ -6408,6 +6450,10 @@ extension ACPSessionManager {
     public func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
         defer { awaitingFirstAttach.remove(sessionId) }
         await previousManagerDisposal?.value
+        if let row = try? await storedSessionRow(id: sessionId), row.runtimeKind != .v1 {
+            if let session = placeholderSession(id: sessionId), session.hydrationState == .loading { await hydrateV2Preview(session) }
+            return nil
+        }
         // Every path that starts an agent ends here, so a worktree operation
         // (a delete being confirmed or carried out) is enforced once.
         guard admitsNewWork() else {
@@ -9390,6 +9436,7 @@ extension ACPSessionManager {
 
     @discardableResult
     public func sendTranscriptAsContext(sessionId: ACPSession.ID, agentName: String?) -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId],
               session.contextRestoreWarning?.canSendTranscript == true,
@@ -9451,6 +9498,8 @@ extension ACPSessionManager {
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
+        guard legacyRuntimeAllowed(sessionId) else { onPersisted?(false)
+        return }
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else {
             Task { @MainActor in onPersisted?(false) }
             return
@@ -9540,6 +9589,7 @@ extension ACPSessionManager {
         ahead: Bool = false,
         requiringWriter: Bool = false
     ) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !mergingForks.contains(sessionId), let suggestionSession = sessions[sessionId] else { return false }
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
@@ -9619,6 +9669,7 @@ extension ACPSessionManager {
         _ selection: ACPDelegatedModelSelection,
         to id: ACPSession.ID
     ) async throws {
+        guard legacyRuntimeAllowed(id) else { throw ACPV2PreviewManagerError.viewOnly }
         guard !isDisposed, let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
             throw ACPDelegatedModelSelectionError.sessionUnavailable
         }
@@ -9869,6 +9920,7 @@ extension ACPSessionManager {
     /// the lease; callers treat `false` like a rejected delegated prompt and
     /// release their inbox claim.
     public func appendDelegatedNotice(text: String, into sessionId: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard sessions[sessionId] != nil else { return false }
         await awaitBackfill(id: sessionId)
         guard let runner = runners[sessionId], isWriter(for: sessionId) else { return false }
@@ -9889,6 +9941,7 @@ extension ACPSessionManager {
     /// Append a visual aid an agent showed. True only once its row is written,
     /// so `visual_show` never reports a visual that a reload would lose.
     public func showVisualAid(_ visual: ACPVisualAid, in sessionId: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
         await awaitBackfill(id: sessionId)
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
@@ -9916,6 +9969,7 @@ extension ACPSessionManager {
     /// A send that reports failure clears the answer too. A send whose callback
     /// never fires (superseded prompt) keeps the answer.
     public func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !isDisposed, let answeringSession = sessions[sessionId] else { return false }
         answeringSession.nextPromptWorkCount += 1
         defer { answeringSession.nextPromptWorkCount -= 1 }
@@ -10052,6 +10106,7 @@ extension ACPSessionManager {
         card: ACPPromptCard? = nil,
         into sessionId: ACPSession.ID
     ) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !mergingForks.contains(sessionId), var session = sessions[sessionId] else { return false }
         let suggestionSession = session
         suggestionSession.nextPromptWorkCount += 1
@@ -10148,6 +10203,7 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
         guard !isDisposed, !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         // Prompts into an attached session start turns without attaching, so
         // the worktree operation gate is enforced here too.
@@ -10437,6 +10493,22 @@ extension ACPSessionManager {
     }
 
     public func disposeSession(id: ACPSession.ID) async throws {
+        if let entry = v2PreviewOwners[id] {
+            var failure: (any Error)?
+            do { try await entry.owner.end()
+            v2PreviewProcessesEnded.insert(id) }
+            catch { failure = error
+            persistenceError = error.localizedDescription }
+            await entry.owner.flushDisplay()
+            if v2PreviewOwners[id]?.epoch == entry.epoch { v2PreviewOwners.removeValue(forKey: id) }
+            await releaseWriterLease(sessionId: id, leaseToken: ownedLeaseTokens[id])
+            if let failure { throw failure }
+            return
+        }
+        if !legacyRuntimeAllowed(id) {
+            await releaseWriterLease(sessionId: id, leaseToken: ownedLeaseTokens[id])
+            return
+        }
         sessions[id]?.nextPromptActivity.send()
         if let task = disposalTasks[id] {
             try await task.value
@@ -10458,6 +10530,8 @@ extension ACPSessionManager {
             await dismissSideQuestion(parentID: parentID)
         }
         let ids = Set(runners.keys)
+            .union(v2PreviewOwners.keys)
+            .union(v2PreviewCreations.keys)
             .union(attachingSessions.keys)
             .union(attachmentAttempts.keys)
         for id in ids {
@@ -10968,4 +11042,265 @@ extension ACPSessionManager {
 /// Lets a broker client's callbacks reach the client itself without a cycle.
 private final class WeakBrokerClientBox: @unchecked Sendable {
     weak var client: ACPBrokerClient?
+}
+
+extension ACPSessionManager {
+    private var v2PreviewAdmissionRecords: [ACPV2PreviewQualifiedAdapter] {
+#if DEBUG
+        if let v2PreviewAdmissionRecordsForTesting { return v2PreviewAdmissionRecordsForTesting }
+#endif
+        return ACPV2PreviewEligibility.qualifiedAdapters
+    }
+
+    public var offersV2PreviewCreation: Bool {
+#if DEBUG
+        !isDisposed && experimentalACP2Enabled() && effectiveRemoteHost() == nil && !v2PreviewAdmissionRecords.isEmpty
+#else
+        false
+#endif
+    }
+
+    private func legacyRuntimeAllowed(_ id: ACPSession.ID) -> Bool {
+        (sessions[id]?.runtimeKind ?? persistedRows[id]?.runtimeKind ?? .v1) == .v1
+    }
+
+    public func v2PreviewPresentation(for id: ACPSession.ID) -> ACPV2PreviewPresentation {
+        if let entry = v2PreviewOwners[id] { return entry.owner.presentation }
+        return .init(runtimeKind: sessions[id]?.runtimeKind ?? persistedRows[id]?.runtimeKind ?? .unsupported("missing"),
+            status: v2PreviewProcessesEnded.contains(id) ? .ended : nil, foreground: .unknown,
+            writerAuthority: false, pendingDecision: false)
+    }
+    public func v2PreviewPermissions(for id: ACPSession.ID) -> [ACPV2PreviewPermissionItem] {
+        v2PreviewOwners[id]?.owner.permissions ?? []
+    }
+    public func v2PreviewCanEndRemainingProcess(for id: ACPSession.ID) -> Bool {
+        guard !v2PreviewProcessesEnded.contains(id), v2PreviewPresentation(for: id).viewOnly,
+              let row = persistedRows[id], row.runtimeKind == .v2FreshPreview else { return false }
+        return row.acpBrokerId != nil && row.acpBrokerGeneration != nil
+    }
+
+    private func prepareV2PreviewLaunch(agentId: String) async throws -> ACPV2PreviewPreparedLaunch {
+#if DEBUG
+        if let prepareV2PreviewLaunchForTesting { return try canonicalV2PreviewLaunch(await prepareV2PreviewLaunchForTesting(agentId)) }
+#endif
+        guard let base = ACPLaunchCatalog.spec(for: agentId), ACPManagedAdapterDescriptor.descriptor(for: agentId) != nil else { throw ACPV2PreviewManagerError.unavailable }
+        await ShellEnvResolver.shared.waitUntilResolved()
+        var spec = launchSpecTransformer(base, false)
+        let environment = ACPProcessEnvironment.baseEnvironment()
+        let resolver = ACPLaunchPathResolver(env: environment, additionalPathDirectories: AgentPath.wellKnownDirectories,
+            npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: environment),
+            npmGlobalRootDirectory: ACPLaunchPathResolver.defaultNpmGlobalRootDirectory(env: environment))
+        guard let path = await resolver.resolvedLaunchPath(for: spec), path.hasPrefix("/") else { throw ACPV2PreviewManagerError.unavailable }
+        spec = spec.overridingCommand(path)
+        if agentId == "codex" { spec = spec.mergingExtraEnv(["INITIAL_AGENT_MODE": "read-only"]) }
+        let launchEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
+        let helper = try LocalACPBrokerService.resolveBundledHelper(resourceURL: Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+        let identity = try await ACPV2PreviewEligibility.resolveIdentity(launchSpec: spec, helperURL: helper,
+            environment: launchEnvironment, cwd: URL(fileURLWithPath: worktreePath))
+        return try canonicalV2PreviewLaunch(.init(spec: spec, environment: launchEnvironment, helperURL: helper, identity: identity))
+    }
+
+    private func canonicalV2PreviewLaunch(_ prepared: ACPV2PreviewPreparedLaunch) throws -> ACPV2PreviewPreparedLaunch {
+        guard prepared.spec.command.hasPrefix("/"),
+              URL(fileURLWithPath: prepared.spec.command).resolvingSymlinksInPath().standardizedFileURL.path
+                == prepared.identity.executable.path else { throw ACPV2PreviewManagerError.changedLaunch }
+        return .init(spec: prepared.spec.overridingCommand(prepared.identity.executable.path),
+            environment: prepared.environment, helperURL: prepared.helperURL, identity: prepared.identity)
+    }
+
+    private func qualifiedV2Preview(_ prepared: ACPV2PreviewPreparedLaunch, writerLeaseCurrent: Bool) throws -> ACPV2PreviewQualifiedAdapter {
+#if DEBUG
+        let debugBuild = true
+#else
+        let debugBuild = false
+#endif
+        guard prepared.spec.agentID == prepared.identity.agentID,
+              prepared.spec.command == prepared.identity.executable.path,
+              prepared.helperURL.resolvingSymlinksInPath().path == prepared.identity.helper.path else { throw ACPV2PreviewManagerError.changedLaunch }
+        let admission = ACPV2PreviewEligibility.evaluate(identity: prepared.identity,
+            records: v2PreviewAdmissionRecords, debugBuild: debugBuild,
+            experimentalEnabled: experimentalACP2Enabled(), explicitPreview: true, local: effectiveRemoteHost() == nil,
+            fresh: true, writerLeaseCurrent: writerLeaseCurrent)
+        guard case .allowed(let record) = admission else { throw ACPV2PreviewManagerError.unavailable }
+        return record
+    }
+
+    public func createV2PreviewSession(agentId: String) async throws -> ACPSession {
+        guard offersV2PreviewCreation, admitsNewWork() else { throw ACPV2PreviewManagerError.unavailable }
+        await previousManagerDisposal?.value
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        let prepared = try await prepareV2PreviewLaunch(agentId: agentId)
+        // Preflight avoids creating a row for an unqualified package. Actual
+        // writer authority is established and checked again before open.
+        let qualification = try qualifiedV2Preview(prepared, writerLeaseCurrent: true)
+        guard offersV2PreviewCreation, admitsNewWork(), deadline > .now else { throw ACPV2PreviewManagerError.unavailable }
+        let id = UUID().uuidString
+        let epoch = UUID()
+        let token = UUID().uuidString
+        v2PreviewCreations[id] = epoch
+        defer { if v2PreviewCreations[id] == epoch { v2PreviewCreations.removeValue(forKey: id) } }
+        let now = Int64(Date().timeIntervalSince1970)
+        let row = ACPSessionRow(id: id, agentId: agentId, title: "ACP v2 preview", runtimeKind: .v2FreshPreview,
+            titleSource: .manual, autoRun: false, createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
+        let fence = try await persistence.createV2PreviewSession(row: row, ownerInstance: instanceId, pid: pid, now: now, leaseToken: token)
+        guard !isDisposed, v2PreviewCreations[id] == epoch else {
+            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: token)
+            throw ACPV2PreviewManagerError.invalidated
+        }
+        let session = ACPSession(id: id, agentId: agentId, worktreeId: worktreeId, title: row.title,
+            runtimeKind: .v2FreshPreview, owner: owner, titleSource: .manual)
+        let stored = try await persistence.loadSession(id: id) ?? row
+        let storedLease = try await persistence.loadLease(sessionId: id)
+        guard !isDisposed, v2PreviewCreations[id] == epoch else {
+            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: token)
+            throw ACPV2PreviewManagerError.invalidated
+        }
+        installSession(session)
+        persistedRows[id] = stored
+        recent.insert(stored, at: 0)
+        _ownedLeases.insert(id)
+        ownedLeaseTokens[id] = token
+        observedLeases[id] = storedLease
+        startHeartbeat(sessionId: id)
+        session.agentState = .spawning
+        willChange.send()
+        do {
+            guard let factory = isolatedBrokerServiceFactory ?? brokerServiceFactory else { throw ACPV2PreviewManagerError.unavailable }
+            let service = try await factory()
+            guard !isDisposed, sessions[id] === session, v2PreviewCreations[id] == epoch else { throw ACPV2PreviewManagerError.invalidated }
+            let revalidated = prepared
+            _ = try qualifiedV2Preview(prepared, writerLeaseCurrent: await confirmedWriterLease(for: id))
+            guard !isDisposed, sessions[id] === session, v2PreviewCreations[id] == epoch else { throw ACPV2PreviewManagerError.invalidated }
+            let client = ACPBrokerClient(service: service, brokerId: .init(rawValue: "alas-v2-preview-\(epoch.uuidString)"),
+                sessionId: id, command: revalidated.spec.command, args: revalidated.spec.arguments, cwd: worktreePath,
+                env: revalidated.environment, operationKeyPrefix: "alas:v2:preview:\(epoch)", wireContext: .rawV2)
+            let preview = ACPV2PreviewOwner(session: session, client: client, persistence: persistence, fence: fence,
+                qualification: qualification, installationID: epoch,
+                isCurrent: { [weak self, weak session] in
+                    guard let self, let session else { return false }
+                    return self.sessions[id] === session && self.v2PreviewOwners[id]?.epoch == epoch
+                        && self._ownedLeases.contains(id) && self.ownedLeaseTokens[id] == token
+                }, onChange: { [weak self] in self?.v2PreviewChanged(id: id, epoch: epoch) },
+                prepareForOpen: { [weak self, weak session] in
+                    guard let self, let session, !self.isDisposed, self.sessions[id] === session,
+                          self.v2PreviewOwners[id]?.epoch == epoch else { throw ACPV2PreviewManagerError.invalidated }
+                    guard await self.confirmedWriterLease(for: id) else { throw ACPV2PreviewManagerError.invalidated }
+                    let current = try await self.prepareV2PreviewLaunch(agentId: agentId)
+                    guard !self.isDisposed, self.sessions[id] === session, self.v2PreviewOwners[id]?.epoch == epoch,
+                          self._ownedLeases.contains(id), self.ownedLeaseTokens[id] == token else { throw ACPV2PreviewManagerError.invalidated }
+                    guard current.identity == prepared.identity, current.environment == prepared.environment,
+                          current.spec.command == prepared.spec.command, deadline > .now else { throw ACPV2PreviewManagerError.changedLaunch }
+                    _ = try self.qualifiedV2Preview(current, writerLeaseCurrent: true)
+                })
+            v2PreviewOwners[id] = (epoch, preview)
+            try await preview.start(params: .init(cwd: worktreePath, mcpServers: []), deadline: deadline)
+            guard !isDisposed, sessions[id] === session, v2PreviewOwners[id]?.epoch == epoch else { throw ACPV2PreviewManagerError.invalidated }
+            if let stored = try await persistence.loadSession(id: id) {
+                persistedRows[id] = stored
+                recent.removeAll { $0.id == id }
+                recent.insert(stored, at: 0)
+            }
+        } catch {
+            if sessions[id] === session, !isDisposed {
+                session.lastError = error.localizedDescription
+                session.agentState = .failed(error.localizedDescription)
+            }
+        }
+        return session
+    }
+
+    private func v2PreviewChanged(id: ACPSession.ID, epoch: UUID) {
+        guard let entry = v2PreviewOwners[id], entry.epoch == epoch, let session = sessions[id] else { return }
+        switch entry.owner.status {
+        case .idle, .starting: session.agentState = .spawning
+        case .ready: session.setupState = .ready
+        session.agentState = .ready
+        case .failed(let message): session.lastError = message
+        session.agentState = .failed(message)
+        case .ending, .ended, .interrupted: session.agentState = .idle
+        }
+        session.willChange.send()
+        willChange.send()
+        summaryWillChange.send()
+    }
+
+    public func sendV2PreviewText(for id: ACPSession.ID, text: String) async throws -> ACPV2SubmissionRecord {
+        guard !isDisposed, let entry = v2PreviewOwners[id], sessions[id]?.runtimeKind == .v2FreshPreview,
+              await confirmedWriterLease(for: id), v2PreviewOwners[id]?.epoch == entry.epoch else { throw ACPV2PreviewManagerError.viewOnly }
+        return try await entry.owner.send(text: text)
+    }
+    public func respondToV2PreviewPermission(for id: ACPSession.ID, itemID: UUID, optionID: String?) async throws -> ACPV2ResponseOwner.Receipt {
+        guard !isDisposed, let entry = v2PreviewOwners[id], sessions[id]?.runtimeKind == .v2FreshPreview,
+              await confirmedWriterLease(for: id), v2PreviewOwners[id]?.epoch == entry.epoch else { throw ACPV2PreviewManagerError.viewOnly }
+        return try await entry.owner.decide(itemID: itemID, optionID: optionID)
+    }
+    public func endV2PreviewSession(for id: ACPSession.ID) async throws {
+        guard let entry = v2PreviewOwners[id] else { throw ACPV2PreviewManagerError.viewOnly }
+        try await entry.owner.end()
+        await entry.owner.flushDisplay()
+        v2PreviewProcessesEnded.insert(id)
+        if v2PreviewOwners[id]?.epoch == entry.epoch { v2PreviewOwners.removeValue(forKey: id) }
+        await releaseWriterLease(sessionId: id, leaseToken: ownedLeaseTokens[id])
+        willChange.send()
+    }
+
+    private func hydrateV2Preview(_ session: ACPSession) async {
+        let id = session.id
+        do {
+            let snapshot = try await persistence.loadV2PreviewDisplay(sessionId: id)
+            guard sessions[id] === session else { return }
+            let messages = try snapshot?.decodeMessages() ?? []
+            session.transcript.replaceMessages(with: messages)
+            session.hydrationState = .ready
+            session.agentState = .idle
+            session.lastError = snapshot?.failureMessage
+            if snapshot?.status == .ended { v2PreviewProcessesEnded.insert(id) }
+            if let draft = try await persistence.loadComposerDraftRecord(sessionId: id), sessions[id] === session {
+                session.replaceComposerDraft(draft.draft)
+            }
+        } catch {
+            guard sessions[id] === session else { return }
+            session.hydrationState = .failed("Saved preview display is unavailable: \(error.localizedDescription)")
+        }
+    }
+
+    public func endRemainingV2PreviewProcess(for id: ACPSession.ID) async throws {
+        guard !isDisposed, v2PreviewOwners[id] == nil, effectiveRemoteHost() == nil,
+              let row = try await persistence.loadSession(id: id), row.runtimeKind == .v2FreshPreview,
+              let descriptor = try ACPBrokerRestorePolicy.resolve(row: row, supportedVersions: [.v2]),
+              let generation = descriptor.generation, descriptor.wireContext == .rawV2,
+              let factory = isolatedBrokerServiceFactory ?? brokerServiceFactory else { throw ACPV2PreviewManagerError.cleanupUnavailable }
+        // Cleanup can reclaim a dead process's lease, never a live writer's
+        // merely stale heartbeat. It does not install a session consumer.
+        let requested = ownedLeaseTokens[id] ?? UUID().uuidString
+        guard let lease = try await persistence.claimLease(sessionId: id, instanceId: instanceId, pid: pid,
+            now: Int64(Date().timeIntervalSince1970), staleAfter: Int64.max, leaseToken: requested) else { throw ACPV2PreviewManagerError.cleanupUnavailable }
+        _ownedLeases.insert(id)
+        ownedLeaseTokens[id] = lease.token
+        observedLeases[id] = lease
+        do {
+        let service = try await factory()
+        var params = ACPBrokerAttachParams(brokerId: descriptor.brokerId, generation: generation,
+            acknowledgedCursor: descriptor.acknowledgedCursor, replayAfterCursor: descriptor.acknowledgedCursor, maxReplayBytes: 1)
+        params.wireContext = .rawV2
+        guard let snapshot = try await service.attach(params).snapshot,
+              snapshot.metadata.wireContext == .rawV2, snapshot.metadata.brokerId == descriptor.brokerId,
+              snapshot.metadata.generation == generation,
+              snapshot.metadata.alasSessionId.utf8.elementsEqual(id.utf8),
+              await confirmedWriterLease(for: id),
+              let current = try await persistence.loadSession(id: id), current.runtimeKind == .v2FreshPreview,
+              current.acpBrokerId == row.acpBrokerId, current.acpBrokerGeneration == row.acpBrokerGeneration,
+              !isDisposed else { throw ACPV2PreviewManagerError.cleanupUnavailable }
+        var close = ACPBrokerCloseParams(brokerId: descriptor.brokerId, generation: generation)
+        close.wireContext = .rawV2
+        guard try await service.close(close).ok else { throw ACPV2PreviewManagerError.cleanupUnavailable }
+        v2PreviewOwners.removeValue(forKey: id)?.owner.withdraw()
+        v2PreviewProcessesEnded.insert(id)
+        await releaseWriterLease(sessionId: id, leaseToken: lease.token)
+        willChange.send()
+        } catch {
+            await releaseWriterLease(sessionId: id, leaseToken: lease.token)
+            throw error
+        }
+    }
 }
