@@ -149,6 +149,19 @@ private struct ACPManagedTabView: View {
 
     var body: some View {
         if let session = manager.placeholderSession(id: sessionId) {
+            Group {
+                if session.runtimeKind != .v1 {
+                    ACPV2PreviewSessionView(session: session, manager: manager, worktree: worktree,
+                        agentDisplayName: { state.agent(id: $0)?.displayName ?? $0 },
+                        typography: .init(fontFamily: state.config.agents.chatFontFamily, fontSize: state.config.agents.chatFontSize),
+                        onNewStandardSession: {
+                            if let checkout = state.workspaceCheckout(for: owner) {
+                                Task { _ = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: session.agentId) }
+                            } else {
+                                state.openNewACPSession(agentID: session.agentId, owner: manager.owner, projectId: worktree.projectId)
+                            }
+                        })
+                } else {
             ACPSessionView(
                 sessionId: sessionId,
                 state: state,
@@ -166,6 +179,8 @@ private struct ACPManagedTabView: View {
                 onNextPromptStateChange: onNextPromptStateChange,
                 nextPromptInputBlocked: nextPromptInputBlocked
             )
+                }
+            }
             // Refcount this tab's hold on the cached `ACPSession`. When the
             // tab is dismissed (worktree switch, tab close, window close)
             // and no other UI surface still retains the same id, the manager
@@ -590,6 +605,20 @@ private struct ACPSessionView: View {
         )
     }
 
+    private var previewCreationAction: (() -> Void)? {
+        guard manager.offersV2PreviewCreation else { return nil }
+        return { createV2Preview() }
+    }
+
+    private func createV2Preview() {
+        Task {
+            do {
+                let preview = try await manager.createV2PreviewSession(agentId: session.agentId)
+                state.tabs.append(acpSession: .init(sessionId: preview.id, title: preview.title), to: manager.owner)
+            } catch { session.lastError = error.localizedDescription }
+        }
+    }
+
     private var emptyStateAnimation: Animation {
         .spring(response: 0.32, dampingFraction: 0.86)
     }
@@ -698,7 +727,8 @@ private struct ACPSessionView: View {
                     ACPNewChatEmptyStateView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         bottomInset: 0,
-                        onStarterPrompt: insertStarterPrompt
+                        onStarterPrompt: insertStarterPrompt,
+                        onCreatePreview: previewCreationAction
                     )
                     .transition(
                         .opacity.combined(with: .move(edge: .top))

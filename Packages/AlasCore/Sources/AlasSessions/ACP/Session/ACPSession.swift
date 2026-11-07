@@ -62,6 +62,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         defer { nextPromptID += 1 }
         return nextPromptID
     }
+    nonisolated public let runtimeKind: ACPSessionRuntimeKind
     nonisolated public let agentId: String
     nonisolated public let worktreeId: String
     /// Where this session's attachments are staged. Staging and send share it,
@@ -867,6 +868,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     public init(id: ID, agentId: String, worktreeId: String, title: String,
+         runtimeKind: ACPSessionRuntimeKind = .v1,
          owner: SessionOwnerID? = nil,
          titleSource: ACPSessionTitleSource = .placeholder,
          origin: ACPSessionOrigin = .alasCreated,
@@ -874,6 +876,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
          hydrationState: HydrationState = .ready,
          restoredFromPersistence: Bool = false) {
         self.id = id
+        self.runtimeKind = runtimeKind
         self.agentId = agentId
         self.worktreeId = worktreeId
         self.owner = owner ?? .worktree(worktreeId)
