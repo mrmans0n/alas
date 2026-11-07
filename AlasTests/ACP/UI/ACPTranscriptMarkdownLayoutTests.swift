@@ -10,8 +10,6 @@ import Testing
 
     @Test(arguments: [
         "![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```",
-        // Too wide for 400pt even at each column's longest word: only SwiftUI scrolls it.
-        "| a | b | c | d |\n|---|---|---|---|\n| Sources/Feature/VeryLongFileName.swift | Sources/Feature/OtherLongFileName.swift | Sources/Feature/ThirdLongFileName.swift | Sources/Feature/FourthLongFileName.swift |",
     ])
     func unsupportedBlocksFallBack(source: String) {
         #expect(ACPTranscriptMarkdownLayout.make(source: source, width: 400, theme: theme, typography: .default) == nil)
@@ -178,11 +176,9 @@ import Testing
         #expect(widths == [50, 260])
     }
 
-    @Test func tableThatCannotFitKeepsItsLongestWordsAndScrolls() {
-        let columns = [column(100, 200), column(200, 400)]
-        #expect(ACPTranscriptMarkdownLayout.tableColumnWidths(columns, available: 150.5) == [100, 200])
-        #expect(!ACPTranscriptMarkdownLayout.tableFits(columns, available: 150.5))
-        #expect(ACPTranscriptMarkdownLayout.tableFits(columns, available: 310.5))
+    @Test func tableThatCannotFitShrinksToTheWidth() {
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths([column(100, 200), column(200, 400)], available: 150.5)
+        #expect(widths == [50, 100])
     }
 
     @Test(arguments: [

@@ -303,7 +303,7 @@ private struct DropdownPanel: View {
                         }
                         if let badge = item.badge {
                             Text(badge)
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-faint"))
                         }
                     }
