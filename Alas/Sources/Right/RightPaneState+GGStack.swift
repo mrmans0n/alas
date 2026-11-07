@@ -536,6 +536,7 @@ extension RightPaneState {
     /// re-validate the stack runs later, while the landing tab is visible —
     /// preparing first made the menu click look frozen for seconds.
     func requestGGLand(_ request: GGLandRequest) {
+        pendingGGPluginLandScope = nil
         guard let snapshot = cachedGGStackSnapshot,
               let stack = snapshot.stack,
               let target = Self.ggLandUntilTarget(for: request, in: stack)
@@ -761,6 +762,7 @@ extension RightPaneState {
     func cancelGGLand() {
         pendingGGLand = nil
         pendingGGLandPrepared = nil
+        pendingGGPluginLandScope = nil
     }
     func requestGGCleanAll() {
         Task { @MainActor in
@@ -874,6 +876,9 @@ extension RightPaneState {
 
     var pendingGGLandConfirmationMessage: String? {
         guard let request = pendingGGLand else { return nil }
+        if let scope = pendingGGPluginLandScope {
+            return "Land these remaining entries in order. gg waits for approvals and CI.\n\n" + scope
+        }
         guard case .land(let target, let commits) = pendingGGLandPrepared?.confirmation,
               let stack = pendingGGLandPrepared?.stack,
               let entry = stack.entries.first(where: { $0.id == target || $0.sha == target })
@@ -899,6 +904,11 @@ extension RightPaneState {
         guard pendingGGLand != nil, let prepared = pendingGGLandPrepared else { return }
         pendingGGLand = nil
         pendingGGLandPrepared = nil
+        pendingGGPluginLandScope = nil
+        if prepared.expectedFullMembers != nil, !ggCapabilities().landJSONL || !ggCapabilities().clientOperationID {
+            ggActionState.setError("Native stack landing support changed. Refresh and confirm the stack again.")
+            return
+        }
         guard ggCapabilities().landJSONL else {
             runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
             return
@@ -1027,6 +1037,7 @@ extension RightPaneState {
             guard let operation = ggMutationCoordinator.startApplying(
                 prepared.request,
                 confirmedAgainst: prepared.snapshot,
+                expectedFullMembers: prepared.expectedFullMembers,
                 onPreflight: { [weak self] fresh in
                     guard let self,
                           let seed = self.ggLandingSeed(target: target, stack: fresh.stack)

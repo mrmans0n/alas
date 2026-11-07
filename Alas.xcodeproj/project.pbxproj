@@ -968,6 +968,7 @@
 		82544FFCF9960E0BA0FD2C7F /* ProcessMemoryProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9830BAAE86AA0A20A77731D /* ProcessMemoryProbeTests.swift */; };
 		82D3560952F0B800F56377D7 /* AgentHookInstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CA47D5E0D1BF962CF45ABE /* AgentHookInstallNudgeBanner.swift */; };
 		82E9F713C1BFF433E540314C /* AgentLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F6E707551671670D8CBA38 /* AgentLogoView.swift */; };
+		82EC3BE08C89B6D6C68EC78D /* AppState+PluginStacks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AFACF077779B6217A707C14 /* AppState+PluginStacks.swift */; };
 		82F5A171BDDFE0A5E0BD587A /* DiffReviewStagedMutationActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0F10B6B1311831E53DA45C0 /* DiffReviewStagedMutationActionsTests.swift */; };
 		832BDA6FD48E68F76E46D786 /* ACPSessionQueueAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B057D23BD5B72E06E790C5B /* ACPSessionQueueAPITests.swift */; };
 		8352A6C0D7AE371907E50217 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 3A5746CAB67E5EF4C74D444B /* Tokenizers */; };
@@ -2079,6 +2080,7 @@
 		0A216C9D856D2A6C43964E74 /* AppConfigHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigHarnessTests.swift; sourceTree = "<group>"; };
 		0AB6FA9F258818E8B464CB0A /* ACPSetupNudgeBannerModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSetupNudgeBannerModeTests.swift; sourceTree = "<group>"; };
 		0AF8152B18C9D6290724122F /* HoverFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverFeature.swift; sourceTree = "<group>"; };
+		0AFACF077779B6217A707C14 /* AppState+PluginStacks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+PluginStacks.swift"; sourceTree = "<group>"; };
 		0B057D23BD5B72E06E790C5B /* ACPSessionQueueAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionQueueAPITests.swift; sourceTree = "<group>"; };
 		0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonospaceFontCatalog.swift; sourceTree = "<group>"; };
 		0B44AABB5C13BEBDAF636E3C /* PluginViewTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginViewTreeTests.swift; sourceTree = "<group>"; };
@@ -6906,6 +6908,7 @@
 			isa = PBXGroup;
 			children = (
 				7F6602E3EE8B43A85FB5C881 /* AppState+Plugins.swift */,
+				0AFACF077779B6217A707C14 /* AppState+PluginStacks.swift */,
 				AFAB3B0EF938880D1073E2D9 /* PluginCommands.swift */,
 				164F0840942DD163D1D88EFC /* PluginDecorations.swift */,
 				0F4B064183B1D357EF4E187E /* PluginPanelView.swift */,
@@ -7718,6 +7721,7 @@
 				C43E42415BA089A482AE45BE /* AppState+PairingApproval.swift in Sources */,
 				134F7DE151C7728BE1C73F31 /* AppState+PeerConsoles.swift in Sources */,
 				BF99528DAEA1EE6E5840E704 /* AppState+PeerHosts.swift in Sources */,
+				82EC3BE08C89B6D6C68EC78D /* AppState+PluginStacks.swift in Sources */,
 				CEC8F80B42EB6B8FBCC84AE2 /* AppState+Plugins.swift in Sources */,
 				0DB6C3F4DA06AF24182225E6 /* AppState+PromptCards.swift in Sources */,
 				FF154C3D22EE1C8E7857D61F /* AppState+RepoConfig.swift in Sources */,

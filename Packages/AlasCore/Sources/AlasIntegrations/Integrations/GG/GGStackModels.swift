@@ -113,6 +113,8 @@ public struct GGStack: Decodable, Equatable, Sendable {
     public let currentPosition: Int?
     public let behindBase: Int?
     public let entries: [GGStackEntry]
+    /// Work gg has not integrated into its ordered entry chain. Nil supports older gg snapshots.
+    public let unintegratedCommits: [GGUnintegratedCommit]?
 
     public var summary: GGStackSummary {
         GGStackSummary(
@@ -136,6 +138,7 @@ public struct GGStack: Decodable, Equatable, Sendable {
             syncedCommits: syncedCommits,
             currentPosition: currentPosition,
             behindBase: behindBase,
+            unintegratedCommits: unintegratedCommits,
             entries: entries.map { entry in
                 guard let match = remote.entries.first(where: {
                     if let ggId = entry.ggId {
@@ -230,7 +233,7 @@ public struct GGStack: Decodable, Equatable, Sendable {
         return currentEntries[0]
     }
 
-    public init(name: String, base: String, totalCommits: Int, syncedCommits: Int, currentPosition: Int?, behindBase: Int?, entries: [GGStackEntry]) {
+    public init(name: String, base: String, totalCommits: Int, syncedCommits: Int, currentPosition: Int?, behindBase: Int?, unintegratedCommits: [GGUnintegratedCommit]? = nil, entries: [GGStackEntry]) {
         self.name = name
         self.base = base
         self.totalCommits = totalCommits
@@ -238,7 +241,15 @@ public struct GGStack: Decodable, Equatable, Sendable {
         self.currentPosition = currentPosition
         self.behindBase = behindBase
         self.entries = entries
+        self.unintegratedCommits = unintegratedCommits
     }
+}
+
+public struct GGUnintegratedCommit: Decodable, Equatable, Sendable {
+    public let sha: String
+    public let subject: String
+    public let sitsOnPosition: Int
+    public let count: Int
 }
 
 public enum GGStackCommitRelation: Equatable, Sendable {

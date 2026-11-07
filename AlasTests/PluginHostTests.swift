@@ -65,6 +65,8 @@ struct PluginHostTests {
         /// A run of "repo:slow.sh" waits here, then records whether it was cancelled.
         var slowRun: CheckedContinuation<Void, Never>?
         var slowRunCancelled: Bool?
+        var stackOpens: [NativeStackAction] = []
+        var inventory: StackInventory = .unavailable
     }
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
@@ -87,6 +89,7 @@ struct PluginHostTests {
         worktreeRoot: URL? = nil,
         projectHost: String? = nil,
         usageHistory: UsageHistoryStore? = nil,
+        mutationGate: GGProjectMutationGate? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
@@ -154,7 +157,9 @@ struct PluginHostTests {
                     default: nil
                     }
                 },
-                usageHistory: usageHistory),
+                usageHistory: usageHistory,
+                stackInventory: { _ in recorder.inventory },
+                openStack: { request in recorder.stackOpens.append(request.action); return nil }),
             storage: storage,
             pluginStorage: pluginStorage ?? PluginStorage(
                 file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),
@@ -162,6 +167,7 @@ struct PluginHostTests {
             transport: transport,
             launcher: launcher,
             limits: limits,
+            mutationGate: mutationGate,
             now: now,
             sleep: { try await sleeper.sleep($0) })
     }
@@ -179,6 +185,72 @@ struct PluginHostTests {
 
     func lastReply(_ host: PluginHost) -> String? {
         host.trace.last { $0.direction == .toPlugin }?.text
+    }
+
+    @Test func nativeStackOpenValidatesFingerprintAndOnlyPresentsAnAction() async throws {
+        let recorder = Recorder()
+        let stack = NativeStack(id: "stack", name: "feature", base: "main", host: "github.com", repo: "owner/repo",
+                                worktree: "wt", complete: true,
+                                entries: [.init(id: "id", sha: "head", position: 1, number: 1, title: "One")], actions: [.open, .land])
+        recorder.inventory = .init(complete: true, busy: false, stacks: [stack])
+        let manifest = Self.plainManifest.replacingOccurrences(of: #""api":4"#, with: #""api":18"#)
+        let host = try makeHost([[.send(activateOK), .send(request(1, "stacks/open", #"{"stack":"stack","fingerprint":"stale","action":"land"}"#)),
+                                 .send(request(2, "stacks/open", #"{"stack":"stack","fingerprint":"\#(stack.fingerprint)","action":"land"}"#))]],
+                                grants: [.workspaceRead], recorder: recorder, manifest: manifest)
+        await host.activate()
+        #expect(await awaitCondition { recorder.stackOpens.count == 1 })
+        #expect(recorder.stackOpens == [.land])
+        #expect(host.trace.contains { $0.text.contains("The stack changed") })
+        await host.deactivate()
+    }
+
+    @Test func stackReservationSurvivesPluginShutdownUntilTheProcessSettles() async throws {
+        let gate = GGProjectMutationGate()
+        let launcher = FakeLauncher()
+        let manifest = Self.processManifest.replacingOccurrences(of: #""api":6"#, with: #""api":18"#)
+        let host = try makeHost([[.send(activateOK), .send(request(1, "stacks/acquire", "{}")), .send(processCall(2))]],
+                                grants: [.processExec], manifest: manifest, launcher: launcher, mutationGate: gate)
+        await host.activate()
+        #expect(gate.isBusy(project: "proj"))
+        await host.deactivate()
+        #expect(gate.isBusy(project: "proj"))
+        #expect(gate.acquire(project: "proj", owner: "native:other-worktree") == nil)
+        launcher.handles[0].emit(.exit(143))
+        #expect(await awaitCondition { !gate.isBusy(project: "proj") })
+    }
+
+    @Test func uncertainRemoteSpawnRetainsOwnershipUntilItsCleanupStreamSettles() async throws {
+        let gate = GGProjectMutationGate()
+        let launcher = FakeLauncher()
+        launcher.remoteRefusal = "spawn reply lost"
+        launcher.remoteRefusalSettlesImmediately = false
+        let startup = AsyncStream<Void>.makeStream()
+        launcher.remoteStartGate = startup.stream
+        let manifest = Self.remoteProcessManifest.replacingOccurrences(of: #""api":11"#, with: #""api":18"#)
+        let host = try makeHost([[.send(activateOK), .send(request(1, "stacks/acquire", "{}")), .send(processCall(2, worktree: "far"))]],
+                                grants: [.processExec], manifest: manifest, launcher: launcher, mutationGate: gate)
+        await host.activate()
+        #expect(await awaitCondition { !launcher.remoteHandles.isEmpty })
+        await host.deactivate()
+        #expect(gate.isBusy(project: "proj"))
+        startup.continuation.yield()
+        #expect(await awaitCondition { gate.problem(project: "proj") != nil })
+        #expect(gate.isBusy(project: "proj"))
+        #expect(gate.acquire(project: "proj", owner: "native:late-claim") == nil)
+        launcher.remoteHandles[0].emit(.exit(-1))
+        #expect(await awaitCondition { !gate.isBusy(project: "proj") })
+    }
+
+    @Test func stacksMethodsRequireAPI18AndTheirCapabilities() async throws {
+        let host = try makeHost([[.send(activateOK), .send(request(1, "stacks/list", #"{"refresh":true}"#))]], grants: [.workspaceRead])
+        await host.activate()
+        #expect(lastReply(host)?.contains("method not found") == true)
+        let newer = try makeHost([[.send(activateOK), .send(request(1, "stacks/acquire", "{}"))]],
+                                 manifest: Self.plainManifest.replacingOccurrences(of: #""api":4"#, with: #""api":18"#))
+        await newer.activate()
+        #expect(lastReply(newer)?.contains("capability not granted: process.exec") == true)
+        await host.deactivate()
+        await newer.deactivate()
     }
 
     private static let regionsR = #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[{"id":"r","label":"R","rect":[0,0,4,4]}]}}"#
@@ -1268,6 +1340,8 @@ struct PluginHostTests {
             /// For a remote process: what the helper was asked to start, or the refusal it answers.
             private var spawn: (argv: [String], cwd: String, longRunning: Bool)?
             var refusal: String?
+            var refusalSettlesImmediately = true
+            var startGate: AsyncStream<Void>?
 
             var signals: [Int32] { lock.withLock { sent } }
             var spawned: (argv: [String], cwd: String, longRunning: Bool)? { lock.withLock { spawn } }
@@ -1282,7 +1356,11 @@ struct PluginHostTests {
             func kill() { lock.withLock { sent.append(SIGKILL) } }
 
             func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws {
-                if let refusal { throw PluginProcessError.refused(refusal) }
+                if let startGate { for await _ in startGate { break } }
+                if let refusal {
+                    if refusalSettlesImmediately { emit(.exit(-1)) }
+                    throw refusalSettlesImmediately ? PluginProcessError.refused(refusal) : PluginProcessError.settlementUnknown(refusal)
+                }
                 lock.withLock { spawn = (argv, cwd, longRunning) }
             }
 
@@ -1296,6 +1374,8 @@ struct PluginHostTests {
         private var launched: [Handle] = []
         private var launchedRemote: [Handle] = []
         var remoteRefusal: String?
+        var remoteRefusalSettlesImmediately = true
+        var remoteStartGate: AsyncStream<Void>?
 
         var handles: [Handle] { lock.withLock { launched } }
         var remoteHandles: [Handle] { lock.withLock { launchedRemote } }
@@ -1305,6 +1385,8 @@ struct PluginHostTests {
         ) -> any PluginRemoteProcessHandle {
             let handle = Handle(argv: [], directory: URL(fileURLWithPath: "/"))
             handle.refusal = remoteRefusal
+            handle.refusalSettlesImmediately = remoteRefusalSettlesImmediately
+            handle.startGate = remoteStartGate
             lock.withLock { launchedRemote.append(handle) }
             return handle
         }

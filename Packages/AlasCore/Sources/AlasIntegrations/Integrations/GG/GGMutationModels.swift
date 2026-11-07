@@ -119,6 +119,16 @@ public struct GGStackIdentity: Equatable, Sendable {
     }
 }
 
+public struct GGStackMemberIdentity: Equatable, Sendable {
+    public let id: String
+    public let sha: String
+    public let position: Int
+    public let number: Int?
+    public init(id: String, sha: String, position: Int, number: Int?) {
+        self.id = id; self.sha = sha; self.position = position; self.number = number
+    }
+}
+
 /// The stable portion of a stack identity used to protect a commit-and-sync
 /// workflow across the local commit that intentionally changes the stack head.
 public struct GGStackTargetIdentity: Codable, Equatable, Sendable {
@@ -151,6 +161,7 @@ public struct GGPreparedMutation: Equatable, Sendable {
     public var snapshot: GGStackIdentity
     public var confirmation: GGMutationConfirmation?
     public var stack: GGStack? = nil
+    public var expectedFullMembers: [GGStackMemberIdentity]? = nil
 
     public init(request: GGMutationRequest, snapshot: GGStackIdentity, confirmation: GGMutationConfirmation? = nil, stack: GGStack? = nil) {
         self.request = request

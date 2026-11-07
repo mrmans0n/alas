@@ -20,8 +20,10 @@ public struct GGMutationContext: Sendable {
     /// The worktree's current branch, used to scope final-drop undo recovery.
     public var currentBranch: () -> String?
     public var publishLandEvent: (GGLandEvent) -> Bool
+    public var resolveCommitSHA: (String) async throws -> String = { $0 }
 
-    public init(loadFreshStack: @escaping () async throws -> GGStackSnapshot, loadCurrentBranch: @escaping () async throws -> String, loadCurrentHead: @escaping () async throws -> String, refreshStack: @escaping () async -> Void, refreshGitChanges: @escaping () async -> Void, refreshProviderReviews: @escaping () async -> Void, refreshProjectTopology: @escaping () async -> Void, finishPendingStaging: @escaping () async -> Bool, worktreeExists: @escaping () -> Bool, invalidateInbox: @escaping () -> Void, selectWorktreeAtPath: @escaping (String) async -> Void, currentBranch: @escaping () -> String?, publishLandEvent: @escaping (GGLandEvent) -> Bool) {
+    public init(loadFreshStack: @escaping () async throws -> GGStackSnapshot, loadCurrentBranch: @escaping () async throws -> String, loadCurrentHead: @escaping () async throws -> String, refreshStack: @escaping () async -> Void, refreshGitChanges: @escaping () async -> Void, refreshProviderReviews: @escaping () async -> Void, refreshProjectTopology: @escaping () async -> Void, finishPendingStaging: @escaping () async -> Bool, worktreeExists: @escaping () -> Bool, invalidateInbox: @escaping () -> Void, selectWorktreeAtPath: @escaping (String) async -> Void, currentBranch: @escaping () -> String?, publishLandEvent: @escaping (GGLandEvent) -> Bool,
+                resolveCommitSHA: @escaping (String) async throws -> String = { $0 }) {
         self.loadFreshStack = loadFreshStack
         self.loadCurrentBranch = loadCurrentBranch
         self.loadCurrentHead = loadCurrentHead
@@ -35,6 +37,7 @@ public struct GGMutationContext: Sendable {
         self.selectWorktreeAtPath = selectWorktreeAtPath
         self.currentBranch = currentBranch
         self.publishLandEvent = publishLandEvent
+        self.resolveCommitSHA = resolveCommitSHA
     }
 }
 
@@ -74,6 +77,10 @@ public final class GGMutationCoordinator {
     private let landJSONLCapability: () -> Bool
     private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
+    private let mutationGate: GGProjectMutationGate
+    private let projectID: String
+    private let mutationOwner = "native:\(UUID().uuidString)"
+    private var mutationToken: String?
 
     public private(set) var activeRequest: GGMutationRequest?
     public private(set) var undoCandidate: GGUndoCandidate?
@@ -100,6 +107,8 @@ public final class GGMutationCoordinator {
         clientOperationIDGenerator: @escaping () -> String = {
             "alas:\(UUID().uuidString)"
         },
+        mutationGate: GGProjectMutationGate? = nil,
+        projectID: String? = nil,
         context: GGMutationContext
     ) {
         self.worktreeId = worktreeId
@@ -112,6 +121,8 @@ public final class GGMutationCoordinator {
         self.landJSONLCapability = landJSONLCapability
         self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
+        self.mutationGate = mutationGate ?? GGProjectMutationGate()
+        self.projectID = projectID ?? worktreeId
     }
 
     public func prepare(_ request: GGMutationRequest) async throws -> GGPreparedMutation {
@@ -214,7 +225,8 @@ public final class GGMutationCoordinator {
         try await applyReserved(
             prepared.request,
             confirmedAgainst: prepared.snapshot,
-            confirmedWith: prepared.confirmation
+            confirmedWith: prepared.confirmation,
+            expectedFullMembers: prepared.expectedFullMembers
         )
     }
 
@@ -225,6 +237,7 @@ public final class GGMutationCoordinator {
         _ request: GGMutationRequest,
         confirmedAgainst identity: GGStackIdentity?,
         expectedTarget: GGStackTargetIdentity? = nil,
+        expectedFullMembers: [GGStackMemberIdentity]? = nil,
         onPreflight: @escaping @MainActor (GGPreparedMutation) -> Void = { _ in },
         onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Error>? {
@@ -235,6 +248,7 @@ public final class GGMutationCoordinator {
                 confirmedAgainst: identity,
                 confirmedWith: nil,
                 expectedTarget: expectedTarget,
+                expectedFullMembers: expectedFullMembers,
                 onPreflight: onPreflight,
                 onExecutionStarted: onExecutionStarted
             )
@@ -247,15 +261,20 @@ public final class GGMutationCoordinator {
             try await self.applyReserved(
                 prepared.request,
                 confirmedAgainst: prepared.snapshot,
-                confirmedWith: prepared.confirmation
+                confirmedWith: prepared.confirmation,
+                expectedFullMembers: prepared.expectedFullMembers
             )
         }
     }
 
     private func reserve(_ request: GGMutationRequest) -> Bool {
         guard activeRequest == nil,
-              actionState.beginAction(request.actionKind)
-        else { return false }
+              let token = mutationGate.acquire(project: projectID, owner: mutationOwner) else { return false }
+        guard actionState.beginAction(request.actionKind) else {
+            mutationGate.release(project: projectID, owner: mutationOwner, token: token)
+            return false
+        }
+        mutationToken = token
         activeRequest = request
         return true
     }
@@ -265,6 +284,7 @@ public final class GGMutationCoordinator {
         confirmedAgainst identity: GGStackIdentity?,
         confirmedWith confirmation: GGMutationConfirmation?,
         expectedTarget: GGStackTargetIdentity? = nil,
+        expectedFullMembers: [GGStackMemberIdentity]? = nil,
         onPreflight: @escaping @MainActor (GGPreparedMutation) -> Void = { _ in },
         onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
@@ -272,6 +292,10 @@ public final class GGMutationCoordinator {
         func releaseAction() {
             guard !didReleaseAction else { return }
             didReleaseAction = true
+            if let token = mutationToken {
+                mutationGate.release(project: projectID, owner: mutationOwner, token: token)
+                mutationToken = nil
+            }
             activeRequest = nil
             actionState.endAction(request.actionKind)
             if request.actionKind == .sync,
@@ -294,6 +318,18 @@ public final class GGMutationCoordinator {
         } catch {
             guard isRecoveryRequest else { throw error }
             snapshot = nil
+        }
+        if let expectedFullMembers {
+            guard let stack = snapshot?.stack, stack.unintegratedCommits?.isEmpty != false else { throw GGMutationError.staleConfirmation }
+            let fresh = stack.entries.sorted { $0.position < $1.position }
+            guard fresh.count == expectedFullMembers.count else { throw GGMutationError.staleConfirmation }
+            for (expected, entry) in zip(expectedFullMembers, fresh) {
+                try Task.checkCancellation()
+                guard expected.id == entry.id, expected.position == entry.position, expected.number == entry.prNumber,
+                      let fullSHA = try? await context.resolveCommitSHA(entry.sha), fullSHA == expected.sha else {
+                    throw GGMutationError.staleConfirmation
+                }
+            }
         }
         if let expectedTarget {
             let branch = try await context.loadCurrentBranch()
@@ -349,6 +385,11 @@ public final class GGMutationCoordinator {
             ? clientOperationIDGenerator()
             : nil
         let supportsLandJSONL = landJSONLCapability()
+        if expectedFullMembers != nil, case .land = request {
+            guard supportsLandJSONL, clientOperationID != nil else {
+                throw GGServiceError.commandFailed(stderr: "Native stack landing support changed. Refresh and confirm the stack again.")
+            }
+        }
         let isLiveLand: Bool
         if case .land = request { isLiveLand = supportsLandJSONL } else { isLiveLand = false }
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)

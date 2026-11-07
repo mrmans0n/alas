@@ -6,6 +6,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasACP
+import AlasIntegrations
 
 /// What a plugin may ask Alas to do, already scoped to one project.
 @MainActor
@@ -43,6 +44,9 @@ public struct PluginHostActions: Sendable {
     public var worktreeLocation: (_ worktree: String) -> PluginWorktreeLocation? = { _ in nil }
     /// Usage history of every project; requests filter it to this one unless they ask for all (API 12).
     public var usageHistory: UsageHistoryStore? = nil
+    public var stackInventory: (_ refresh: Bool) async -> StackInventory = { _ in .unavailable }
+    /// Presents native UI. It cannot confirm the operation for the user.
+    public var openStack: (_ request: PluginStackOpenParams) async -> String? = { _ in "Native stacks are not available." }
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     public static var inert: PluginHostActions {
@@ -58,7 +62,9 @@ public struct PluginHostActions: Sendable {
 
     public init(snapshot: @escaping () -> PluginWorkspaceSnapshot, switchWorktree: @escaping (String) -> Bool, focusSession: @escaping (String) -> Bool, lastMessage: @escaping (String) -> PluginLastMessage, agents: @escaping () -> [PluginAgent], startTask: @escaping (PluginTaskRequest, @escaping @MainActor (String?) -> Void) -> PluginTaskStart, notify: @escaping (_ title: String, _ body: String) -> Void, runs: @escaping () -> [PluginRunState] = { [] }, reviews: @escaping () -> [PluginReviewState] = { [] }, sendToSession: @escaping (_ session: String, _ text: String) async -> String? = { _, _ in "unknown session" }, startRun: @escaping @MainActor (_ worktree: String, _ script: String) async -> String? = { _, _ in "runs are not available" }, runOutput: @escaping @MainActor (_ run: String) async -> PluginRunOutput = { _ in .unknownRun }, addReviewComment: @escaping @MainActor (_ comment: PluginReviewCommentParams, _ author: String) async -> String? = { _, _ in
         "review comments are not available"
-    }, worktreeLocation: @escaping (_ worktree: String) -> PluginWorktreeLocation? = { _ in nil }, usageHistory: UsageHistoryStore? = nil) {
+    }, worktreeLocation: @escaping (_ worktree: String) -> PluginWorktreeLocation? = { _ in nil }, usageHistory: UsageHistoryStore? = nil,
+        stackInventory: @escaping (_ refresh: Bool) async -> StackInventory = { _ in .unavailable },
+        openStack: @escaping (_ request: PluginStackOpenParams) async -> String? = { _ in "Native stacks are not available." }) {
         self.snapshot = snapshot
         self.switchWorktree = switchWorktree
         self.focusSession = focusSession
@@ -74,6 +80,8 @@ public struct PluginHostActions: Sendable {
         self.addReviewComment = addReviewComment
         self.worktreeLocation = worktreeLocation
         self.usageHistory = usageHistory
+        self.stackInventory = stackInventory
+        self.openStack = openStack
     }
 }
 
@@ -85,6 +93,10 @@ public final class PluginHost {
     /// Every request method, with the capability it needs; nil means none.
     private static let methods: [String: PluginCapability?] = [
         "workspace/snapshot": .workspaceRead,
+        "stacks/list": .workspaceRead,
+        "stacks/open": .workspaceRead,
+        "stacks/acquire": .processExec,
+        "stacks/release": .processExec,
         "worktree/switch": .worktreeSwitch,
         "session/focus": .sessionFocus,
         "session/last_message": .sessionRead,
@@ -121,6 +133,7 @@ public final class PluginHost {
     private static let api9Methods: Set<String> = ["prompts/set"]
     private static let api12Methods: Set<String> = ["web/post", "usage/turns", "usage/limits"]
     private static let api15Methods: Set<String> = ["panel/badge"]
+    private static let api18Methods: Set<String> = ["stacks/list", "stacks/open", "stacks/acquire", "stacks/release"]
     public static let maxBadgeCount = 9999
     /// Messages a web tab's page posted that the plugin has not yet handled, per page (API 12).
     public static let maxWebQueue = 32
@@ -214,6 +227,9 @@ public final class PluginHost {
     @ObservationIgnored private var nextProcess = 0
     /// With the instance, the lease remote processes are owned by: the helper refuses calls about them under any other.
     @ObservationIgnored private let processLease = UUID().uuidString
+    @ObservationIgnored private let mutationGate: GGProjectMutationGate
+    @ObservationIgnored private var lastStackRevision: UInt64?
+    private var mutationOwner: String { "plugin:\(processLease).\(instance)" }
     /// Requests Alas sent to the plugin (`prompt/expand`, `context/provide`), waiting for its response, by id.
     @ObservationIgnored private var hostRequests: [Int: CheckedContinuation<Data?, Never>] = [:]
     @ObservationIgnored private var nextHostRequest = 0
@@ -243,6 +259,7 @@ public final class PluginHost {
         transport: any PluginHTTPTransport = PluginURLSessionTransport(),
         launcher: any PluginProcessLauncher = PluginFoundationLauncher(),
         limits: PluginLimits = PluginLimits(),
+        mutationGate: GGProjectMutationGate? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
@@ -259,6 +276,7 @@ public final class PluginHost {
         self.transport = transport
         self.launcher = launcher
         self.sleep = sleep
+        self.mutationGate = mutationGate ?? .shared
     }
 
     private var isRunning: Bool { state == .activating || state == .active }
@@ -382,6 +400,15 @@ public final class PluginHost {
         guard state == .active, grants.contains(.workspaceRead) else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "workspace/changed", params: PluginSnapshotPayload(snapshot: snapshot))))
+        await stacksChanged(force: true)
+    }
+
+    public func stacksChanged(force: Bool = false) async {
+        guard manifest.api >= 18, state == .active, grants.contains(.workspaceRead) else { return }
+        let revision = mutationGate.revision(project: project.id)
+        guard force || lastStackRevision != revision else { return }
+        lastStackRevision = revision
+        await deliver(encode(JSONRPCEnvelope(id: nil, method: "stacks/changed", params: PluginEmptyPayload())))
     }
 
     /// Runs one of the manifest's commands. Alas builds `target` from the slot the user chose it in.
@@ -666,7 +693,8 @@ public final class PluginHost {
         guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
               manifest.api >= 9 || !Self.api9Methods.contains(method),
               manifest.api >= 12 || !Self.api12Methods.contains(method),
-              manifest.api >= 15 || !Self.api15Methods.contains(method)
+              manifest.api >= 15 || !Self.api15Methods.contains(method),
+              manifest.api >= 18 || !Self.api18Methods.contains(method)
         else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -674,6 +702,48 @@ public final class PluginHost {
             return errorReply(id, code: -32001, "capability not granted: \(capability.rawValue)")
         }
         switch method {
+        case "stacks/list":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginStackListParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for stacks/list")
+            }
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                var inventory = await self.actions.stackInventory(params.refresh)
+                inventory.busy = self.mutationGate.isBusy(project: self.project.id)
+                if let problem = self.mutationGate.problem(project: self.project.id) { inventory.error = problem; inventory.complete = false }
+                return self.encode(PluginResponse(id: id, result: PluginStackInventoryResult(inventory: inventory), error: nil))
+            }
+        case "stacks/open":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginStackOpenParams>.self, from: data).params, params.isValid else {
+                return errorReply(id, code: -32602, "invalid params for stacks/open")
+            }
+            let generation = instance
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                var inventory = await self.actions.stackInventory(true)
+                guard self.instance == generation, self.state == .active else { return Data() }
+                inventory.busy = self.mutationGate.isBusy(project: self.project.id)
+                do { _ = try params.resolve(in: inventory) } catch {
+                    return self.errorReply(id, code: -32003, error.localizedDescription)
+                }
+                if let reason = await self.actions.openStack(params) { return self.errorReply(id, code: -32003, reason) }
+                return self.encode(PluginResponse(id: id, result: PluginStackOpenedResult(), error: nil))
+            }
+        case "stacks/acquire":
+            guard Self.emptyStackParams(data) else { return errorReply(id, code: -32602, "invalid params for stacks/acquire") }
+            guard let token = mutationGate.acquire(project: project.id, owner: mutationOwner) else {
+                return errorReply(id, code: -32003, mutationGate.problem(project: project.id) ?? "A project mutation is already running.")
+            }
+            return encode(PluginResponse(id: id, result: PluginStackAcquireResult(token: token), error: nil))
+        case "stacks/release":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginStackReleaseParams>.self, from: data).params,
+                  (1...128).contains(params.token.utf8.count) else {
+                return errorReply(id, code: -32602, "invalid params for stacks/release")
+            }
+            guard mutationGate.release(project: project.id, owner: mutationOwner, token: params.token) else {
+                return errorReply(id, code: -32003, "Unknown reservation for this plugin instance and project.")
+            }
+            return encode(PluginResponse(id: id, result: PluginStackReleasedResult(), error: nil))
         case "workspace/snapshot":
             return encode(PluginResponse(
                 id: id, result: PluginSnapshotPayload(snapshot: actions.snapshot()), error: nil))
@@ -995,6 +1065,12 @@ public final class PluginHost {
         guard answersAtOnce || requests.count < Self.maxRequestsInFlight else {
             return errorReply(id, code: -32003, "too many requests in flight")
         }
+        let mutationGate = mutationGate
+        let processOwner = mutationOwner
+        let processProject = project.id
+        guard let processTicket = mutationGate.beginProcess(project: processProject, owner: processOwner) else {
+            return errorReply(id, code: -32003, "The project reservation is closing; wait for its process to settle.")
+        }
         let argv = entry.command + args
         // stdout and stderr together, half the message limit, so the reply usually fits as it is; the Run tab keeps
         // the latest output.
@@ -1012,6 +1088,7 @@ public final class PluginHost {
                     argv, in: directory, stdin: stdin,
                     keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
             } catch {
+                mutationGate.endProcess(processTicket)
                 return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
             }
         case .remote(let host, let root):
@@ -1028,7 +1105,9 @@ public final class PluginHost {
                     argv: argv, cwd: root, stdin: stdin, longRunning: longRunning, limit: limit,
                     timeout: longRunning ? nil : Self.processTimeout)
             }
-        case .refused: return nil
+        case .refused:
+            mutationGate.endProcess(processTicket)
+            return nil
         }
         processes[run] = handle
         let instance = instance
@@ -1039,7 +1118,11 @@ public final class PluginHost {
                 processRuns.remove(at: oldest)
             }
             // Not tied to the instance: the Run tab shows the exit even after the plugin stops.
-            Task { [weak self] in await self?.follow(run, handle, instance: instance) }
+            Task { [weak self] in
+                defer { mutationGate.endProcess(processTicket) }
+                if let self { await self.follow(run, handle, instance: instance) }
+                else { for await _ in handle.events {} }
+            }
             return encode(PluginResponse(id: id, result: PluginProcessStartResult(run: run), error: nil))
         }
         if answersAtOnce { return started() }
@@ -1048,15 +1131,32 @@ public final class PluginHost {
             do {
                 try await startRemote?()
             } catch {
+                if case .settlementUnknown(let reason)? = error as? PluginProcessError {
+                    mutationGate.markUnknown(project: processProject, owner: processOwner, reason: reason)
+                }
+                // Startup can fail after the helper launched the command. Do not await cleanup in teardown,
+                // and do not release ownership merely because the start request failed.
+                Task {
+                    for await _ in handle.events {}
+                    mutationGate.endProcess(processTicket)
+                }
                 guard let self else { return Data() }
                 if self.instance == instance { self.processes[run] = nil }
+                if case .settlementUnknown? = error as? PluginProcessError {
+                    return self.errorReply(id, code: -32003, "process \(entry.id) did not confirm startup: \(error)")
+                }
                 return self.errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
             }
             if longRunning {
                 // An instance that ended meanwhile has already stopped it, and hears nothing about it.
-                guard self?.instance == instance else { return Data() }
+                guard self?.instance == instance else {
+                    for await _ in handle.events {}
+                    mutationGate.endProcess(processTicket)
+                    return Data()
+                }
                 return started()
             }
+            defer { mutationGate.endProcess(processTicket) }
             let timeout = Task { () -> Bool in
                 do { try await sleep(Self.processTimeout) } catch { return false }
                 handle.terminate()
@@ -1331,9 +1431,11 @@ public final class PluginHost {
     /// processes, which are stopped. Deferred requests are only forgotten, so work the plugin asked for still
     /// finishes; their replies are discarded.
     private func endInstance() {
+        mutationGate.endOwner(project: project.id, owner: mutationOwner)
         for run in processes.keys { stopProcess(run) }
         processes = [:]
         instance += 1
+        lastStackRevision = nil
         for fetch in fetches.values { fetch.cancel() }
         fetches = [:]
         requests = [:]
@@ -1647,6 +1749,12 @@ public final class PluginHost {
     }
 
     // MARK: - Helpers
+
+    private static func emptyStackParams(_ data: Data) -> Bool {
+        guard let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let params = envelope["params"] as? [String: Any] else { return false }
+        return params.isEmpty
+    }
 
     /// Text a plugin controls is bounded before Alas retains it. Bound by scalars: `String.prefix`
     /// counts grapheme clusters, and one base character followed by many combining marks is a single one.

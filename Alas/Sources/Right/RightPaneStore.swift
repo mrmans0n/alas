@@ -251,7 +251,8 @@ final class RightPaneStore {
             // The review status is the host's, which outlives the pane.
             let new = RightPaneState(
                 worktree: worktree, baseBranch: baseBranch, isFolder: isFolder,
-                reviewLoop: appState?.core.reviewLoop(for: worktree, baseBranch: baseBranch)
+                reviewLoop: appState?.core.reviewLoop(for: worktree, baseBranch: baseBranch),
+                ggProjectMutationGate: .shared
             )
             // The commits comparison starts from the effective default, while
             // the review loop keeps the configured base branch for PR actions.

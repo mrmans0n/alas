@@ -671,6 +671,7 @@ public final class PluginManager {
             && (host.grants.contains(.workspaceRead) || host.receivesEvents) {
             guard let project = projectsByID[key.projectID] else { continue }
             let scoped = actions(project)
+            await host.stacksChanged()
             let subscribed = Set(host.manifest.events)
             let previous = lastSnapshots[key]
             var state = PluginEventState(

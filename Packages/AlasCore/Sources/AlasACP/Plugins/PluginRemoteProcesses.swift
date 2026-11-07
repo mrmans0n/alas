@@ -23,6 +23,8 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
     /// Set once the helper started the process.
     private var client: RemoteHelperClient?
     private var stopRequested = false
+    /// Lost spawn replies can leave a late idempotent retry. Keep the terminal claim so it cannot respawn.
+    private var preserveClaim = false
 
     public init(host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int) {
         self.host = host
@@ -50,6 +52,7 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
 
     public func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws {
         let client: RemoteHelperClient
+        var recoveringUncertainStart = false
         do {
             // The probe tells a host that is down from one without the helper, and is cached per host.
             guard let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host) else {
@@ -64,18 +67,36 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                 outputLimit: limit * 2, leaseMs: Self.leaseMs,
                 timeoutMs: timeout.map { Int($0.components.seconds) * 1000 })
             do {
-                try await Self.spawnRetrying { try await client.spawnPluginProc(params) }
+                try await Self.spawnRetrying { [self] in
+                    do { try await client.spawnPluginProc(params) }
+                    catch {
+                        if Self.isConnectionFailure(error) { lock.withLock { preserveClaim = true } }
+                        throw error
+                    }
+                }
             } catch {
-                // It may have started all the same: stop it if the connection is back, or its lease lapses.
-                if Self.isConnectionFailure(error) {
-                    Task { [procId, lease] in try? await client.killPluginProc(procId: procId, lease: lease) }
+                let mightStart: Bool
+                if case .jsonrpc(let rpc)? = error as? RemoteHelperClientError {
+                    mightStart = rpc.code == -32050
+                } else { mightStart = Self.isConnectionFailure(error) }
+                if mightStart || lock.withLock({ preserveClaim }) {
+                    recoveringUncertainStart = true
+                    lock.withLock { self.client = client; preserveClaim = true }
+                    terminate()
+                    // Teardown may finish while this reconciliation keeps the ownership ticket alive.
+                    Task { await follow(client) }
                 }
                 throw error
             }
         } catch {
             // The helper's own refusals (an unsupported host, a kernel without pidfds, a command it can't find) pass through.
-            throw PluginProcessError.refused(
-                PluginFiles.remoteFailure(error, host: host, need: "run commands there").message)
+            let reason = PluginFiles.remoteFailure(error, host: host, need: "run commands there").message
+            if recoveringUncertainStart {
+                throw PluginProcessError.settlementUnknown(
+                    "Remote process startup is unverified on \(host). The project remains reserved until terminal settlement. \(reason)")
+            }
+            output.finish(exit: -1)
+            throw PluginProcessError.refused(reason)
         }
         let stop = lock.withLock { () -> Bool in
             self.client = client
@@ -125,12 +146,18 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                 attached = try await client.attachPluginProc(procId: procId, lease: lease, offset: next)
                 failures = 0
             } catch {
-                // The helper answered, so the process is gone or not ours: nothing to wait for.
-                // ponytail: a dropped connection is retried for about two minutes; the helper's lease stops the
-                // process once Alas gives up.
                 failures += 1
-                if case .jsonrpc? = error as? RemoteHelperClientError { return finish(exit: -1) }
-                if failures > 60 { return finish(exit: -1) }
+                // A missing claim cannot settle an uncertain spawn: its off-thread launcher may publish later.
+                // A terminal record is retained in that case, fencing late retries without inventing an exit.
+                if case .jsonrpc(let rpc)? = error as? RemoteHelperClientError,
+                   rpc.code == -32051 || rpc.code == -32054,
+                   !lock.withLock({ preserveClaim }) { return finish(exit: -1) }
+                if failures == 61 {
+                    lock.withLock { preserveClaim = true }
+                    renew.cancel()
+                    terminate()
+                    output.append(Data("Remote process settlement is unknown; the project remains reserved until its exit is observed.\n".utf8), stream: 1)
+                }
                 try? await Task.sleep(for: .seconds(2))
                 continue
             }
@@ -172,6 +199,7 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
         if timedOut { output.markTimedOut() }
         output.finish(exit: exit)
         let client = lock.withLock { self.client }
+        guard !lock.withLock({ preserveClaim }) else { return }
         Task { [procId, lease] in try? await client?.releasePluginProc(procId: procId, lease: lease) }
     }
 
