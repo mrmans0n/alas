@@ -81,7 +81,8 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                 } else { mightStart = Self.isConnectionFailure(error) }
                 if mightStart || lock.withLock({ preserveClaim }) {
                     recoveringUncertainStart = true
-                    lock.withLock { self.client = client; preserveClaim = true }
+                    lock.withLock { self.client = client
+                    preserveClaim = true }
                     terminate()
                     // Teardown may finish while this reconciliation keeps the ownership ticket alive.
                     Task { await follow(client) }

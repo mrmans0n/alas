@@ -5,7 +5,9 @@ public struct ReviewIdentity: Codable, Equatable, Hashable, Sendable {
     public let host: String
     public let repo: String
     public let number: Int
-    public init(host: String, repo: String, number: Int) { self.host = host; self.repo = repo; self.number = number }
+    public init(host: String, repo: String, number: Int) { self.host = host
+    self.repo = repo
+    self.number = number }
 }
 
 public enum NativeStackAction: String, Codable, CaseIterable, Sendable {
@@ -20,7 +22,12 @@ public struct NativeStackEntry: Codable, Equatable, Sendable {
     public let title: String
     public let state: String?
     public init(id: String, sha: String, position: Int, number: Int? = nil, title: String, state: String? = nil) {
-        self.id = id; self.sha = sha; self.position = position; self.number = number; self.title = title; self.state = state
+        self.id = id
+        self.sha = sha
+        self.position = position
+        self.number = number
+        self.title = title
+        self.state = state
     }
 }
 
@@ -43,12 +50,28 @@ public struct NativeStack: Codable, Equatable, Sendable {
     public init(id: String, name: String, base: String, host: String, repo: String, worktree: String? = nil,
                 complete: Bool, entries: [NativeStackEntry], actions: [NativeStackAction], unavailableActions: [String: String]? = nil,
                 reviewNumbers: [Int]? = nil) {
-        self.id = id; self.name = name; self.base = base; self.host = host; self.repo = repo; self.worktree = worktree
-        self.complete = complete; self.entries = entries; self.actions = actions; self.unavailableActions = unavailableActions
+        self.id = id
+        self.name = name
+        self.base = base
+        self.host = host
+        self.repo = repo
+        self.worktree = worktree
+        self.complete = complete
+        self.entries = entries
+        self.actions = actions
+        self.unavailableActions = unavailableActions
         self.reviewNumbers = reviewNumbers
         struct Scope: Encodable {
-            struct Member: Encodable { let id: String; let sha: String; let position: Int; let number: Int? }
-            let id: String; let name: String; let base: String; let host: String; let repo: String; let worktree: String?
+            struct Member: Encodable { let id: String
+            let sha: String
+            let position: Int
+            let number: Int? }
+            let id: String
+            let name: String
+            let base: String
+            let host: String
+            let repo: String
+            let worktree: String?
             let members: [Member]
             let reviewNumbers: [Int]?
         }
@@ -68,7 +91,11 @@ public struct StackInventory: Codable, Equatable, Sendable {
     public var fetchedAt: Double?
     public var error: String?
     public init(complete: Bool, busy: Bool, stacks: [NativeStack], fetchedAt: Double? = nil, error: String? = nil) {
-        self.complete = complete; self.busy = busy; self.stacks = stacks; self.fetchedAt = fetchedAt; self.error = error
+        self.complete = complete
+        self.busy = busy
+        self.stacks = stacks
+        self.fetchedAt = fetchedAt
+        self.error = error
     }
     public static var unavailable: Self { .init(complete: false, busy: false, stacks: [], error: "Native stacks are not available.") }
 
@@ -143,11 +170,15 @@ public struct StackInventory: Codable, Equatable, Sendable {
 }
 
 public struct PluginStackListParams: Codable, Sendable { public let refresh: Bool }
-public struct PluginStackInventoryResult: Codable, Sendable { public let inventory: StackInventory; public init(inventory: StackInventory) { self.inventory = inventory } }
-public struct PluginStackOpenedResult: Codable, Sendable { public let opened: Bool; public init() { opened = true } }
-public struct PluginStackAcquireResult: Codable, Sendable { public let token: String; public init(token: String) { self.token = token } }
+public struct PluginStackInventoryResult: Codable, Sendable { public let inventory: StackInventory
+public init(inventory: StackInventory) { self.inventory = inventory } }
+public struct PluginStackOpenedResult: Codable, Sendable { public let opened: Bool
+public init() { opened = true } }
+public struct PluginStackAcquireResult: Codable, Sendable { public let token: String
+public init(token: String) { self.token = token } }
 public struct PluginStackReleaseParams: Codable, Sendable { public let token: String }
-public struct PluginStackReleasedResult: Codable, Sendable { public let released: Bool; public init() { released = true } }
+public struct PluginStackReleasedResult: Codable, Sendable { public let released: Bool
+public init() { released = true } }
 
 public struct PluginStackError: Error, Equatable, LocalizedError, Sendable {
     public let message: String
@@ -161,7 +192,10 @@ public struct PluginStackOpenParams: Codable, Sendable {
     public let action: NativeStackAction
     public let entry: String?
     public init(stack: String, fingerprint: String, action: NativeStackAction, entry: String? = nil) {
-        self.stack = stack; self.fingerprint = fingerprint; self.action = action; self.entry = entry
+        self.stack = stack
+        self.fingerprint = fingerprint
+        self.action = action
+        self.entry = entry
     }
     public var isValid: Bool {
         (1...1024).contains(stack.utf8.count) && (1...256).contains(fingerprint.utf8.count)

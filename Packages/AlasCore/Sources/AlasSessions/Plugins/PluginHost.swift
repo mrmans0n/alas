@@ -710,7 +710,8 @@ public final class PluginHost {
                 guard let self else { return Data() }
                 var inventory = await self.actions.stackInventory(params.refresh)
                 inventory.busy = self.mutationGate.isBusy(project: self.project.id)
-                if let problem = self.mutationGate.problem(project: self.project.id) { inventory.error = problem; inventory.complete = false }
+                if let problem = self.mutationGate.problem(project: self.project.id) { inventory.error = problem
+                inventory.complete = false }
                 return self.encode(PluginResponse(id: id, result: PluginStackInventoryResult(inventory: inventory), error: nil))
             }
         case "stacks/open":

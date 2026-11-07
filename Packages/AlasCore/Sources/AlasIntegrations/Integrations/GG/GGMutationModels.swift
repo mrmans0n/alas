@@ -125,7 +125,10 @@ public struct GGStackMemberIdentity: Equatable, Sendable {
     public let position: Int
     public let number: Int?
     public init(id: String, sha: String, position: Int, number: Int?) {
-        self.id = id; self.sha = sha; self.position = position; self.number = number
+        self.id = id
+        self.sha = sha
+        self.position = position
+        self.number = number
     }
 }
 

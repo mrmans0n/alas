@@ -159,7 +159,8 @@ struct PluginHostTests {
                 },
                 usageHistory: usageHistory,
                 stackInventory: { _ in recorder.inventory },
-                openStack: { request in recorder.stackOpens.append(request.action); return nil }),
+                openStack: { request in recorder.stackOpens.append(request.action)
+                return nil }),
             storage: storage,
             pluginStorage: pluginStorage ?? PluginStorage(
                 file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),

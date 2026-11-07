@@ -28,7 +28,8 @@ extension AppState {
         if !refresh, let cache = pluginStackInventories[projectID] {
             var inventory = cache.inventory
             inventory.busy = busy
-            if let problem = gate.problem(project: projectID) { inventory.error = problem; inventory.complete = false }
+            if let problem = gate.problem(project: projectID) { inventory.error = problem
+            inventory.complete = false }
             if cache.revision != revision || Date().timeIntervalSince1970 * 1000 - (inventory.fetchedAt ?? 0) > 30_000 {
                 inventory.complete = false
                 inventory.error = "Native stack inventory is stale. Refresh before taking an action."
@@ -156,16 +157,19 @@ extension AppState {
             && stack.entries.allSatisfy { $0.ggId?.isEmpty == false }
         var actions: [NativeStackAction] = [.open]
         var reasons: [String: String] = [:]
-        if !unintegrated.isEmpty { reasons["sync"] = unintegratedReason; reasons["rebase"] = unintegratedReason }
+        if !unintegrated.isEmpty { reasons["sync"] = unintegratedReason
+        reasons["rebase"] = unintegratedReason }
         else if actionsAllowed { actions += [.sync, .rebase] }
-        else { reasons["sync"] = "This worktree's native gg policy is inactive."; reasons["rebase"] = reasons["sync"] }
+        else { reasons["sync"] = "This worktree's native gg policy is inactive."
+        reasons["rebase"] = reasons["sync"] }
         if complete, actionsAllowed, GGAvailability.shared.capabilities.landJSONL, GGAvailability.shared.capabilities.clientOperationID {
             actions += [.land, .landThrough]
         } else {
             let reason = !unintegrated.isEmpty ? unintegratedReason
                 : !complete ? "Some stack entries are unpublished or their review identities are unavailable. Sync and refresh before landing."
                 : !actionsAllowed ? "This worktree's native gg policy is inactive." : "Update gg to support streaming landing and native operation identifiers."
-            reasons["land"] = reason; reasons["landThrough"] = reason
+            reasons["land"] = reason
+            reasons["landThrough"] = reason
         }
         return NativeStack(id: pluginStackID(project.id, stack.name), name: stack.name, base: stack.base, host: remote.host,
                            repo: remote.repositorySlug, worktree: worktree.id, complete: complete, entries: entries, actions: actions,
