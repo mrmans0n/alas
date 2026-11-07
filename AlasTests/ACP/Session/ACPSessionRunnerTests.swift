@@ -6138,6 +6138,7 @@ struct ACPSessionRunnerTests {
         ([], [agentChunk("All fixed."), bufferedToolCall], "All fixed."),
         // A chunk with no id continues the message before it, identified or not.
         ([agentChunk("Parser ", id: "m1")], [agentChunk("is ", id: "m1"), agentChunk("fixed.")], "Parser is fixed."),
+        ([agentChunk("Parser ", id: "m1")], [agentChunk("is "), agentChunk("fixed.", id: "m1")], "Parser is fixed."),
         // Going back to an earlier message keeps what it already had.
         ([], [agentChunk("All ", id: "m1"), agentChunk("Other", id: "m2"), agentChunk("fixed.", id: "m1")], "All fixed."),
         // A chunk with no phase stays in the phase before it.

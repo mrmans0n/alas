@@ -2502,6 +2502,7 @@ public final class ACPSessionRunner {
         var row = session.agentRowContinued(byMessageId: nil)
         var currentPhase = phase(ofRow: row)
         var currentId: String?
+        if let row, case .agent(_, let id, _) = session.transcript.messages[row] { currentId = id }
         var text = ""
         var closed = false
         var hasText = false
