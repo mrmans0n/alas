@@ -426,6 +426,28 @@ struct HostSessionsTests {
         try await eventually { await MainActor.run { sessions.agentIssue(id) == nil && sessions.isWriter(id) } }
     }
 
+    /// A paired Mac's other requests keep flowing while an install runs.
+    @Test(.timeLimit(.minutes(1))) func aSlowInstallDoesNotHoldTheConnection() async throws {
+        let fixture = try Fixture(setupEvaluator: { _ in .missing(reason: "the adapter is not installed") })
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" } }
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+        })
+        let gateway = RemoteSessionGateway(host: fixture.host) { _ in }
+        defer { gateway.close() }
+
+        await gateway.handle(.installAdapter(sessionId: id))
+
+        for await _ in started.stream { break }
+        release.continuation.yield()
+    }
+
     /// An SSH worktree's agent runs on its SSH host, so that is where its
     /// missing adapter is installed, as the app's own Install does.
     @Test(.timeLimit(.minutes(1))) func anSSHSessionsAdapterIsInstalledOnItsHost() async throws {

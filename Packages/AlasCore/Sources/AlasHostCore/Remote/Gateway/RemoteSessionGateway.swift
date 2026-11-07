@@ -221,8 +221,10 @@ public final class RemoteSessionGateway {
         case .openSessionTab(let id):
             reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
         case .installAdapter(let id):
-            // The outcome reaches the client as the session's agent issue.
-            try? await sessions?.installAdapter(id, caller: hostCaller)
+            // Off this connection's queue: an install can take minutes, and the
+            // outcome reaches the client as the session's agent issue anyway.
+            let sessions = sessions, caller = hostCaller
+            Task { try? await sessions?.installAdapter(id, caller: caller) }
         case .closeSessionTab(let id):
             reportTabAction(await presenter?.closeSessionTab(for: id) ?? .failure("Closing session tabs is unavailable."), sessionId: id)
         case .sendPrompt(let id, let text, let attachments, let intent, let mentions):
