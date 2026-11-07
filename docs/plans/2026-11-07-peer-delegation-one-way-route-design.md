@@ -1,6 +1,6 @@
 # Delegating to a Mac the source cannot dial
 
-Status: proposed. The last follow-up named in the [agent delegation design](2026-11-05-peer-agent-delegation-design.md#trust-model),
+Status: implemented. The last follow-up named in the [agent delegation design](2026-11-05-peer-agent-delegation-design.md#trust-model),
 after [proven identity and a delegation-only credential](2026-11-07-peer-delegation-credential-design.md). The user asked to work
 through all of them and left the design to the author.
 

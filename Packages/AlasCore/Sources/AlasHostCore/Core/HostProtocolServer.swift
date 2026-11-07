@@ -399,7 +399,7 @@ public final class HostProtocolConnection {
             let peers = try localPeers()
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             guard peers.setAgentAccess(access, peerId: peerID) else {
-                throw HostError.failed(message: "That peer never proved its identity here, or has no device. Pair it again to allow this.")
+                throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
             }
             return .done
         case .readWorktree(let ref, let read):
