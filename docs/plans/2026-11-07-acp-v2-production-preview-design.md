@@ -1,6 +1,6 @@
 # Opt-in fresh ACP v2 sessions in the local app
 
-Status: proposed, awaiting design approval. This document describes the next implementation slice; it does not enable ACP v2 or authorize deployment.
+Status: approved in conversation on 2026-11-07. This document describes the next implementation slice; it does not enable ACP v2 or authorize deployment.
 
 ## Purpose and scope
 
