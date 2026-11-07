@@ -14,7 +14,19 @@ public final class PeerRouteHost {
     private let links: RemotePeerManager
     private let server: HostProtocolServer
     /// By peer id, while its link is up.
-    private var connections: [String: HostProtocolConnection] = [:]
+    private var connections: [String: Route] = [:]
+
+    private struct Route {
+        let connection: HostProtocolConnection
+        let replies: Replies
+    }
+
+    /// Whether a connection's answers may still go out. A request still being
+    /// served when its link drops is never answered over the link that comes
+    /// back: request ids start again there, so it would answer another one.
+    private final class Replies {
+        var open = true
+    }
 
     /// Takes `links`' `onPeerHostRequest` and `onLinkChanged`.
     public init(links: RemotePeerManager, server: HostProtocolServer) {
@@ -44,35 +56,44 @@ public final class PeerRouteHost {
             }
             return
         }
-        let connection = connections[peerId] ?? open(peer)
+        let connection = connections[peerId]?.connection ?? open(peer)
         Task { await connection.receive(request) }
     }
 
     private func open(_ peer: RemotePeer) -> HostProtocolConnection {
         let peerId = peer.id
         let serverId = peer.serverId
+        let replies = Replies()
         let connection = server.connect(
             caller: .remotePeer(deviceID: Self.device(for: peer).id),
             device: { [weak links] in
                 // Read anew on each request, so consent applies at once.
                 links?.servesPeerHost(peerId: peerId).map(Self.device(for:))
             },
-            send: { [weak links] reply in links?.sendToPeer(.peerHost(reply), serverId: serverId) }
+            send: { [weak links] reply in
+                guard replies.open else { return }
+                links?.sendToPeer(.peerHost(reply), serverId: serverId)
+            }
         )
-        connections[peerId] = connection
+        connections[peerId] = Route(connection: connection, replies: replies)
         return connection
     }
 
     private func linkChanged(_ peerId: String) {
-        guard links.servesPeerHost(peerId: peerId) == nil, let connection = connections.removeValue(forKey: peerId) else { return }
-        connection.close()
+        guard links.servesPeerHost(peerId: peerId) == nil, let route = connections.removeValue(forKey: peerId) else { return }
+        Self.end(route)
     }
 
     /// Ends every connection.
     public func stop() {
         links.onPeerHostRequest = nil
         links.onLinkChanged = nil
-        for connection in connections.values { connection.close() }
+        for route in connections.values { Self.end(route) }
         connections = [:]
+    }
+
+    private static func end(_ route: Route) {
+        route.replies.open = false
+        route.connection.close()
     }
 }

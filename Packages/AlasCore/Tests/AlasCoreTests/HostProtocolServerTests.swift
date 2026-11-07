@@ -3779,6 +3779,33 @@ struct HostProtocolServerTests {
         withExtendedLifetime(links) {}
     }
 
+    /// A request still being served when its link drops is not answered over
+    /// the link that comes back, where the host numbers its requests afresh.
+    @Test func aRequestFromALinkThatDroppedIsNotAnsweredOverTheNextOne() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let (link, links, routeHost) = Self.routeLink(RemotePeer(
+            id: "host", serverId: "s1", name: "Host", origins: ["http://host:1"], token: "t", publicKey: "key-s1",
+            addedAt: .distantPast, agentAccess: .ask
+        ), fixture: fixture)
+        defer { routeHost.stop() }
+
+        // In one turn of the main actor, so the first is served only after the
+        // link came back; answers then leave in the order requests arrived.
+        link.emit(.message(.peerHost(HostClientMessage(id: 1, request: .listSessions))))
+        link.emit(.stateChanged(.offline))
+        link.emit(.stateChanged(.online))
+        link.emit(.message(.peerHost(HostClientMessage(id: 2, request: .listSessions))))
+        try await eventually { await MainActor.run { !link.sent.isEmpty } }
+
+        guard case .peerHost(.response(let id, _)) = link.sent.first else {
+            Issue.record("\(link.sent)")
+            return
+        }
+        #expect(id == 2)
+        withExtendedLifetime(links) {}
+    }
+
     private final class RouteLink: RemotePeerConnecting {
         var state: RemotePeerConnection.State = .idle
         private(set) var sent: [RemoteClientMessage] = []
