@@ -52,6 +52,12 @@ public struct RemoteServerIdentity: Equatable, Sendable {
         self.consoleCapabilities = consoleCapabilities
         self.hostCapabilities = hostCapabilities
     }
+
+    /// The same identity naming no other paired Macs.
+    public var withoutPeers: RemoteServerIdentity {
+        RemoteServerIdentity(serverId: serverId, name: name, consoleCapabilities: consoleCapabilities,
+                             hostCapabilities: hostCapabilities)
+    }
 }
 
 /// An `@` mention, offered by the host's `mentionCandidates` and sent back

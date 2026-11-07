@@ -94,8 +94,11 @@ public struct RemoteHTTPResponder: Sendable {
             // proof the paired Mac is still authorized. federationEnabled is
             // always true now; older peers still read it to tell a refused
             // upgrade caused by a disabled flag apart from a revoked token.
+            // `capabilities` lets a pairing peer check, before it spends a
+            // code, that this Mac honours what it will ask for.
             return Self.json(["ok": true, "serverId": diagnostics().serverId,
-                              "federationEnabled": true], extraHeaders: cors)
+                              "federationEnabled": true, "capabilities": [RemoteDeviceScope.pairCapability]],
+                             extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
             let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
@@ -150,6 +153,10 @@ public struct RemoteHTTPResponder: Sendable {
             /// The redeemer's signature over its server id and `code`, with
             /// the key it advertises. Older peers send none.
             let proof: String?
+            /// The narrower token the redeemer asks for, honoured only with
+            /// a valid `proof`. A string, so a value from a newer build reads
+            /// as no request, which that build then sees unechoed.
+            let scope: String?
         }
         struct PairReply: Encodable {
             let token: String
@@ -164,6 +171,10 @@ public struct RemoteHTTPResponder: Sendable {
             /// True when this server will not pair back. Absent otherwise,
             /// which is all an older peer has ever read.
             var inboundOnly: Bool?
+            /// The scope the token was issued with, when the redeemer asked
+            /// for one and got it. A redeemer that asked and finds none
+            /// holds a full token from an older build.
+            var scope: RemoteDeviceScope?
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
                                      body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: hasApproval ? [] : extraHeaders)
@@ -219,6 +230,7 @@ public struct RemoteHTTPResponder: Sendable {
         }
         let token: String
         var inboundOnly = false
+        var grantedScope: RemoteDeviceScope?
         if let peer = pr.peer {
             // Everything in `peer` is attacker-controlled and only the 1 MB
             // body cap bounds it. Reject an implausible advertisement BEFORE
@@ -262,10 +274,13 @@ public struct RemoteHTTPResponder: Sendable {
                     return forbidden(Self.rebindRefusedError)
                 }
             }
+            let requested = pr.scope.flatMap(RemoteDeviceScope.init(rawValue:))
+            let scope: RemoteDeviceScope = pr.proof != nil ? requested ?? .full : .full
             guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId, peerPublicKey: peer.publicKey,
-                                                       proof: pr.proof) else { return unauthorized }
+                                                       proof: pr.proof, scope: scope) else { return unauthorized }
             token = result.token
+            grantedScope = requested == nil ? nil : scope
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
@@ -280,7 +295,8 @@ public struct RemoteHTTPResponder: Sendable {
             name: id.map(\.name),
             publicKey: proof?.publicKey,
             signature: proof?.signature,
-            inboundOnly: inboundOnly ? true : nil)
+            inboundOnly: inboundOnly ? true : nil,
+            scope: grantedScope)
         let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
         return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }

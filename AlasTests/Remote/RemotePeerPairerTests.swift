@@ -258,6 +258,36 @@ struct RemotePeerPairerTests {
         }, timeout: 1)
     }
 
+    /// Asking for a narrower token checks the capability before spending
+    /// the code there, and refuses a broader token if one comes back anyway.
+    @Test(arguments: [
+        (false, "delegation", false, false),
+        (true, "full", true, false),
+        (true, "delegation", true, true),
+    ])
+    func aScopedPairingNeedsTheCapabilityAndTheEcho(advertises: Bool, echoed: String, posts: Bool, pairs: Bool) async throws {
+        let recorder = Recorder()
+        let p = RemotePeerPairer(fetch: { req in
+            recorder.requests.append(req)
+            let body = req.url?.path == "/health"
+                ? (advertises ? #"{"ok":true,"capabilities":["\#(RemoteDeviceScope.pairCapability)"]}"# : #"{"ok":true}"#)
+                : #"{"token":"tok","serverId":"srv-a","name":"Mac A","scope":"\#(echoed)"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad,
+                                   scope: .delegation)
+
+        #expect(outcome == (pairs ? .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil,
+                                             origin: "http://10.0.0.9:8765") : .scopeUnsupported))
+        let posted = recorder.requests.filter { $0.httpMethod == "POST" }
+        #expect(posted.count == (posts ? 1 : 0))
+        if let body = posted.first?.httpBody {
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(object["scope"] as? String == "delegation")
+        }
+    }
+
     @Test func aProvedKeyIsReturnedWithThePairing() async throws {
         let key = Curve25519.Signing.PrivateKey()
         let recorder = Recorder()

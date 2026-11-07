@@ -419,6 +419,32 @@ struct RemotePeerManagerTests {
         }
     }
 
+    /// A host asks for a delegation-only token. A Mac that advertised the
+    /// capability and issued a full one anyway leaves nothing behind here:
+    /// no record, no token, and no counter-code it could still pair back with.
+    @Test func aScopedAddKeepsNothingFromAMacThatIssuedMore() async throws {
+        let requests = Requests()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let store = InMemoryPeerStore()
+        let manager = makeManager(store: store, pairing: pairing, pairer: RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            let body = req.url?.path == "/health"
+                ? #"{"ok":true,"capabilities":["\#(RemoteDeviceScope.pairCapability)"]}"#
+                : #"{"token":"tokA","serverId":"srv-a","name":"Mac A","scope":"full"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1), links: Links())
+        manager.pairingScope = .delegation
+
+        #expect(await manager.addPeer(link: linkFromA) == .scopeUnsupported)
+
+        let posted = try body(of: try #require(requests.seen.last { $0.httpMethod == "POST" }))
+        #expect(posted["scope"] as? String == "delegation")
+        let counterCode = try #require((posted["peer"] as? [String: Any])?["counterCode"] as? String)
+        #expect(manager.peers.isEmpty)
+        #expect(store.saved.isEmpty)
+        #expect((try? pairing.redeemPeer(code: counterCode, deviceName: "Mac A", peerServerId: "srv-a")) == nil)
+    }
+
     @Test func invalidLinkIsRejectedWithoutNetwork() async {
         let requests = Requests()
         let manager = makeManager(pairer: pairer([:], requests: requests), links: Links())

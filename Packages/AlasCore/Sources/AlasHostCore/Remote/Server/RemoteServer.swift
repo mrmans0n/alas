@@ -308,8 +308,11 @@ public final class RemoteServer {
                 // Consoles are served only to paired Alas instances, never
                 // to browsers; revocation closes the socket and the link.
                 let device = self?.pairing.devices.first { $0.id == channel.deviceId }
+                // A device gone since it authenticated is about to be cut
+                // off; until then it gets the least.
+                let scope = device?.scope ?? .delegation
                 let consoleLink = device.flatMap { device -> PeerConsoleLink? in
-                    guard device.kind == .alasInstance else { return nil }
+                    guard device.kind == .alasInstance, device.scope == .full else { return nil }
                     let sendTracked = channel.sendTracked
                     return PeerConsoleLink(peerName: device.name) { event, onWritten in
                         sendTracked(.console(event), onWritten)
@@ -317,14 +320,22 @@ public final class RemoteServer {
                 }
                 let gateway = RemoteSessionGateway(
                     host: host, federation: federation, consoleLink: consoleLink,
-                    caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
+                    caller: .remotePeer(deviceID: channel.deviceId), scope: scope, sendTracked: channel.sendTracked,
                     send: channel.send)
-                gateway.presenter = self?.presenter
+                if scope == .full { gateway.presenter = self?.presenter }
                 gateway.delegationPairing = self?.pairing
                 self?.configureGateway?(gateway)
                 return gateway
             },
-            makeHello: { RemoteServerMessage.hello(identity()) },
+            // A delegation-only device is not told which other Macs are
+            // paired here.
+            makeHello: { [weak self] deviceId in
+                let current = identity()
+                guard self?.pairing.device(id: deviceId)?.scope == .full else {
+                    return .hello(current.withoutPeers)
+                }
+                return .hello(current)
+            },
             identityProof: proveIdentity,
             onAuthenticated: { [weak self] conn, did in
                 Task { @MainActor in

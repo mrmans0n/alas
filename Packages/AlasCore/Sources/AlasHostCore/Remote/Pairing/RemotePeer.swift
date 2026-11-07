@@ -29,6 +29,9 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     public var addedAt: Date
     /// The `ssh` destination this host was set up through, when it was.
     public var sshDestination: String?
+    /// What `token` may do there, when this Mac asked for less than
+    /// everything and was granted it. Nil is a full token.
+    public var tokenScope: RemoteDeviceScope?
 
     /// Whether this record is bound to key material at all.
     ///
@@ -48,7 +51,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// that link still dials, is refused and shows as revoked.
     public var isInboundOnly: Bool { token.isEmpty && publicKey == nil }
 
-    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil) {
+    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
@@ -60,6 +63,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         self.localDeviceId = localDeviceId
         self.addedAt = addedAt
         self.sshDestination = sshDestination
+        self.tokenScope = tokenScope
     }
 }
 

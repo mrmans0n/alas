@@ -187,7 +187,7 @@ needs the host to reach it, for example over Tailscale, because the host pairs
 back to it.
 
 ```bash
-alas-host peers list                  # id, name, serverId, agent access
+alas-host peers list                  # id, name, serverId, agent access, this host's access there
 alas-host peers agents <id|name|serverId> off|ask|auto
 alas-host peers remove <id|name|serverId>
 alas-host peers add <pairing-link>    # let this host's agents delegate to that Mac
@@ -223,6 +223,13 @@ that Mac also gets a link to the host.
   untested. If the add can't reach the Mac, use Tailscale.
 - The Mac must allow it: on the host's row in Settings > Remote > Peers, set
   *Let agents on this Mac use this machine*.
+- The Mac needs a current Alas. The host asks it for a token that only lets the
+  host delegate, and refuses a Mac that can't grant one, saying to update Alas
+  there. That token can't read or drive the Mac's sessions, open terminals or
+  change worktrees, so an agent on the host that reads the host's token file
+  gets no more than delegation. `peers list` shows it as
+  `this host there: delegation only`. The Mac's link back to the host is a full
+  one, since you use it from the Mac.
 
 When Remote serves, the host keeps a link open to each peer it holds a token for.
 That includes tokens written by an app sharing the profile, not only those from
@@ -232,7 +239,9 @@ still refuses them until it allows it.
 If the Mac had paired with the host and had no link back, its `peers agents`
 value stays as it was: access to the host is a separate decision. Running
 `peers add` again for a Mac that already has a link back is an ordinary re-pair,
-and that Mac's access starts at `off`, on its older tokens too.
+and that Mac's access starts at `off`, on its older tokens too. A token from a
+pairing made before delegation-only tokens stays valid on the Mac after a
+re-pair. To drop it, forget the host on the Mac first, then run `peers add`.
 
 Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the

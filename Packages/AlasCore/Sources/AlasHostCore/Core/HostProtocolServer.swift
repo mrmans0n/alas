@@ -44,13 +44,15 @@ public final class HostProtocolServer {
     /// A connection for a client the transport authenticated as `caller`.
     /// `send` returns once the message is on its way, so a client that reads
     /// slowly holds its events back, where they coalesce, rather than
-    /// queueing without bound.
+    /// queueing without bound. A `delegationOnly` client, one whose token
+    /// was scoped to it, is served only `delegationOnlyRequests`.
     public func connect(
         caller: HostCaller,
+        delegationOnly: Bool = false,
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) -> HostProtocolConnection {
         HostProtocolConnection(
-            host: host, caller: caller, discoverScripts: discoverScripts,
+            host: host, caller: caller, delegationOnly: delegationOnly, discoverScripts: discoverScripts,
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
             isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
@@ -70,6 +72,9 @@ public final class HostProtocolServer {
 public final class HostProtocolConnection {
     private let host: AlasHost
     private let caller: HostCaller
+    /// Serves only what a peer needs to delegate, and its snapshot shows
+    /// nothing: see `RemoteDeviceScope.delegation`.
+    private let delegationOnly: Bool
     private let discoverScripts: HostProtocolServer.ScriptDiscovery
     private let isServerClosed: @MainActor () -> Bool
     private let remotePairing: @MainActor () -> RemotePairingService?
@@ -87,6 +92,7 @@ public final class HostProtocolConnection {
     init(
         host: AlasHost,
         caller: HostCaller,
+        delegationOnly: Bool = false,
         discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
         isServerClosed: @escaping @MainActor () -> Bool = { false },
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
@@ -97,6 +103,7 @@ public final class HostProtocolConnection {
     ) {
         self.host = host
         self.caller = caller
+        self.delegationOnly = delegationOnly
         self.discoverScripts = discoverScripts
         self.isServerClosed = isServerClosed
         self.remotePairing = remotePairing
@@ -112,6 +119,11 @@ public final class HostProtocolConnection {
         guard !isServerClosed() else {
             close()
             await enqueue(.response(id: message.id, result: .failure(error: .failed(message: "The host is stopping."))))
+            return
+        }
+        if delegationOnly, !Self.isDelegationOnlyRequest(message.request) {
+            await enqueue(.response(id: message.id, result: .failure(error: .invalidRequest(
+                reason: Self.delegationOnlyRefusal))))
             return
         }
         if message.version == HostProtocolVersion.current {
@@ -178,6 +190,7 @@ public final class HostProtocolConnection {
     private func respond(to request: HostRequest) async throws -> HostResponse {
         switch request {
         case .snapshot:
+            if delegationOnly { return .snapshot(snapshot: host.cursorOnlySnapshot()) }
             return .snapshot(snapshot: try await host.snapshot())
         case .subscribe, .subscribeAccepting:
             // Handled before a response is built; see `subscribe(after:accepting:id:)`.
@@ -491,6 +504,28 @@ public final class HostProtocolConnection {
         case .cancelled: "Cancelled: that peer was forgotten while pairing was in progress."
         case .identityUnproven: "That Mac answered with a key it couldn't prove it holds. Nothing was paired."
         case .identityRebindRefused: "This host is already paired with that Mac under a different key. If the Mac was reinstalled, run alas-host peers remove first, then pair again."
+        case .scopeUnsupported: "That Mac's Alas can't limit this host to delegated work. Update Alas there, then pair again."
+        }
+    }
+
+    static let delegationOnlyRefusal = "This pairing only allows delegated work. Pair again from the app for more."
+
+    /// What a delegation-only client may ask: enough to subscribe for
+    /// outbox changes and to delegate. Anything added to `HostRequest` later
+    /// is refused until someone decides otherwise.
+    static func isDelegationOnlyRequest(_ request: HostRequest) -> Bool {
+        switch request {
+        case .snapshot, .subscribe, .subscribeAccepting, .unsubscribe, .delegation: true
+        default: false
+        }
+    }
+
+    /// Only the news that delegated work waits there, and the resync that
+    /// tells it to subscribe again.
+    static func reachesDelegationOnlyClient(_ event: HostEvent) -> Bool {
+        switch event {
+        case .delegationOutboxChanged, .resync: true
+        default: false
         }
     }
 
@@ -507,7 +542,10 @@ public final class HostProtocolConnection {
                 guard let self else { return }
                 // Events a version 1 client cannot decode go only to the
                 // clients that accepted their kind.
-                let sent = events.filter { event in event.optInKind.map(accepting.contains) ?? true }
+                let sent = events.filter { event in
+                    guard event.optInKind.map(accepting.contains) ?? true else { return false }
+                    return !delegationOnly || Self.reachesDelegationOnlyClient(event)
+                }
                 guard !sent.isEmpty else { continue }
                 await enqueue(.events(events: sent, cursor: next.cursor), from: next)
             }
