@@ -12,6 +12,13 @@ public protocol RemotePeerConnecting: AnyObject {
     func connect()
     func disconnect()
     func send(_ message: RemoteClientMessage)
+    /// What this link serves the peer back, when the peer's `hello` offers
+    /// it; set before `connect()`.
+    func acknowledge(_ capabilities: [String])
+}
+
+extension RemotePeerConnecting {
+    public func acknowledge(_ capabilities: [String]) {}
 }
 
 /// One outbound WebSocket to a paired Mac. Mirrors `hub-links.js`: try the
@@ -99,6 +106,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     private var runner: Task<Void, Never>?
     private var reconnectTimer: Task<Void, Never>?
     private var backoff: TimeInterval
+    private var acknowledged: [String] = []
 
     public init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
          expectedPublicKey: String? = nil,
@@ -124,6 +132,10 @@ public final class RemotePeerConnection: RemotePeerConnecting {
         reconnectTimer?.cancel()
         reconnectTimer = nil
         runner = Task { [weak self] in await self?.run() }
+    }
+
+    public func acknowledge(_ capabilities: [String]) {
+        acknowledged = capabilities
     }
 
     public func disconnect() {
@@ -269,7 +281,10 @@ public final class RemotePeerConnection: RemotePeerConnecting {
             // an unverified claim — before a later origin holding the real
             // peer's key is ever tried. Only a possession-proven endpoint's
             // version may decide that.
-            if !(await proveIdentity(on: candidate, serverId: serverId)) {
+            // Only what this socket's server offered: an older one never
+            // sends the requests, and a browser-facing build never offers.
+            let served = acknowledged.filter(capabilities.contains)
+            if !(await proveIdentity(on: candidate, serverId: serverId, acknowledging: served)) {
                 candidate.cancel(with: .policyViolation, reason: nil)
                 if Task.isCancelled { return }
                 lastIdentityFailure = .identityUnproven
@@ -327,17 +342,18 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     /// The proof is demanded on THIS socket, the one that will carry traffic.
     /// A side-channel check would only tell us that something at this address
     /// holds the key, not that this connection does.
-    private func proveIdentity(on socket: URLSessionWebSocketTask, serverId: String) async -> Bool {
+    private func proveIdentity(on socket: URLSessionWebSocketTask, serverId: String, acknowledging capabilities: [String]) async -> Bool {
         guard let expectedPublicKey else {
             if let ack = try? JSONEncoder().encode(
-                RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion)) {
+                RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, capabilities: capabilities)) {
                 socket.send(.data(ack)) { _ in }
             }
             return true
         }
         let challenge = RemoteIdentityCrypto.randomChallenge()
         guard let ack = try? JSONEncoder().encode(
-            RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, challenge: challenge))
+            RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, challenge: challenge,
+                                         capabilities: capabilities))
         else { return false }
         socket.send(.data(ack)) { _ in }
         // A peer that has nothing else to say answers with the proof and

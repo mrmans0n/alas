@@ -798,8 +798,16 @@ final class AppState {
             self?.remoteIdentityKey.redeemProof(code: code, serverId: serverId)
         }
         core.watchForRevokedPeers(of: manager)
+        core.delegationPeerRecordName = { [weak manager] serverId in
+            manager?.peers.first { $0.serverId == serverId }?.name
+        }
+        // Before any link connects, so each offers the route it serves.
+        peerRouteHost = PeerRouteHost(links: manager, server: HostProtocolServer(host: host))
         return manager
     }()
+    /// Serves the delegation requests a host that paired with this Mac
+    /// inbound-only sends back over this Mac's link to it.
+    @ObservationIgnored private var peerRouteHost: PeerRouteHost?
     /// Nearby Alas instances. Lazy like `remotePeers`; started and stopped by
     /// the Peers section while it is on screen, never app-wide.
     @ObservationIgnored

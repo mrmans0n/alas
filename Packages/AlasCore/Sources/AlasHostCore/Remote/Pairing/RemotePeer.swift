@@ -32,6 +32,10 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// What `token` may do there, when this Mac asked for less than
     /// everything and was granted it. Nil is a full token.
     public var tokenScope: RemoteDeviceScope?
+    /// What this peer's agents may do here when it has no device here, as a
+    /// host that paired with this Mac inbound-only and delegates back over
+    /// this Mac's link: consent then has no device to live on. Nil is off.
+    public var agentAccess: RemoteDeviceAgentAccess?
 
     /// Whether this record is bound to key material at all.
     ///
@@ -51,7 +55,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// that link still dials, is refused and shows as revoked.
     public var isInboundOnly: Bool { token.isEmpty && publicKey == nil }
 
-    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil) {
+    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil, tokenScope: RemoteDeviceScope? = nil, agentAccess: RemoteDeviceAgentAccess? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
@@ -64,11 +68,12 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         self.addedAt = addedAt
         self.sshDestination = sshDestination
         self.tokenScope = tokenScope
+        self.agentAccess = agentAccess
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, serverId, name, origins, lastOrigin, token, publicKey, protocolVersion, localDeviceId, addedAt
-        case sshDestination, tokenScope
+        case sshDestination, tokenScope, agentAccess
     }
 
     // `FilePeerStore` drops every record when one fails to decode, so a value
@@ -92,6 +97,8 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         } else {
             tokenScope = nil
         }
+        // A value only a newer build knows is no consent.
+        agentAccess = (try? c.decodeIfPresent(RemoteDeviceAgentAccess.self, forKey: .agentAccess)) ?? nil
     }
 }
 

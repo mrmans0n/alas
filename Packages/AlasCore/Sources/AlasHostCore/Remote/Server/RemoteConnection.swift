@@ -14,11 +14,17 @@ import os
 /// console output uses as flow-control credit.
 public struct RemoteGatewayChannel {
     public let deviceId: String
+    /// The socket the gateway serves, as the server keys its connections.
+    public let socket: ObjectIdentifier?
     public let send: (RemoteServerMessage) -> Void
     public let sendTracked: @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void
 
-    public init(deviceId: String, send: @escaping (RemoteServerMessage) -> Void, sendTracked: @escaping @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void) {
+    public init(
+        deviceId: String, socket: ObjectIdentifier? = nil, send: @escaping (RemoteServerMessage) -> Void,
+        sendTracked: @escaping @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void
+    ) {
         self.deviceId = deviceId
+        self.socket = socket
         self.send = send
         self.sendTracked = sendTracked
     }
@@ -57,6 +63,10 @@ public final class RemoteConnection: @unchecked Sendable {
     /// unprovable Mac must not carry session traffic.
     private let identityProof: @MainActor (String) -> RemoteIdentityProof?
     private let onAuthenticated: ((RemoteConnection, String) -> Void)?
+    /// Told what each `helloAck` says the client serves back, after the
+    /// identity proof it asked for is on its way: the client reads nothing
+    /// else until that proof, so a request sent sooner would be lost.
+    private let onCapabilitiesAcknowledged: (@MainActor (RemoteConnection, [String]) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
     // Queue-confined state.
@@ -120,6 +130,7 @@ public final class RemoteConnection: @unchecked Sendable {
          makeHello: @escaping @MainActor (_ deviceId: String) -> RemoteServerMessage? = { _ in nil },
          identityProof: @escaping @MainActor (String) -> RemoteIdentityProof? = { _ in nil },
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
+         onCapabilitiesAcknowledged: (@MainActor (RemoteConnection, [String]) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
         self.conn = conn
         self.queue = queue
@@ -131,6 +142,7 @@ public final class RemoteConnection: @unchecked Sendable {
         self.makeHello = makeHello
         self.identityProof = identityProof
         self.onAuthenticated = onAuthenticated
+        self.onCapabilitiesAcknowledged = onCapabilitiesAcknowledged
         self.onClose = onClose
     }
 
@@ -200,6 +212,12 @@ public final class RemoteConnection: @unchecked Sendable {
                 self.sendServerMessage(hello)
             }
         }
+    }
+
+    /// Sends `message` on this socket as it is, past whatever its gateway
+    /// would filter: for frames the server itself originates.
+    public func sendMessage(_ message: RemoteServerMessage) {
+        sendServerMessage(message)
     }
 
     /// Hops a block back onto the connection's serial queue so it can safely
@@ -387,6 +405,7 @@ public final class RemoteConnection: @unchecked Sendable {
             guard let self else { return }
             let gateway = self.makeGateway(RemoteGatewayChannel(
                 deviceId: deviceId,
+                socket: ObjectIdentifier(self),
                 send: { [weak self] msg in self?.sendServerMessage(msg) },
                 sendTracked: { [weak self] msg, onWritten in self?.sendServerMessage(msg, onWritten: onWritten) }
             ))
@@ -480,8 +499,15 @@ public final class RemoteConnection: @unchecked Sendable {
         // per connection — hashing and signing attacker-controlled
         // megabytes while freezing UI work. A malformed challenge is simply
         // dropped, not answered: it could never have verified anyway.
-        if case .helloAck(_, let challenge) = msg, let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
-            answerIdentityChallenge(challenge)
+        if case .helloAck(_, let challenge, let capabilities) = msg {
+            if let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
+                answerIdentityChallenge(challenge, thenAcknowledge: capabilities)
+            } else {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.onCapabilitiesAcknowledged?(self, capabilities)
+                }
+            }
             return
         }
         guard let gateway else { return }
@@ -583,7 +609,7 @@ public final class RemoteConnection: @unchecked Sendable {
     /// dropped frame costs one more.
     private static let maxIdentityProofs = 8
 
-    private func answerIdentityChallenge(_ challenge: String) {
+    private func answerIdentityChallenge(_ challenge: String, thenAcknowledge capabilities: [String]) {
         guard identityProofsSent < Self.maxIdentityProofs else { return }
         identityProofsSent += 1
         Task { @MainActor [weak self] in
@@ -591,6 +617,9 @@ public final class RemoteConnection: @unchecked Sendable {
             self.sendServerMessage(.identityProof(challenge: proof.challenge,
                                                   publicKey: proof.publicKey,
                                                   signature: proof.signature))
+            // Queued behind the proof, so whatever this lets the server send
+            // reaches the client after it.
+            self.onCapabilitiesAcknowledged?(self, capabilities)
         }
     }
 

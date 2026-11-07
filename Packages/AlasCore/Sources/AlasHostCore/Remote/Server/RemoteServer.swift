@@ -24,6 +24,10 @@ public final class RemoteServer {
     /// connection's `onAuthenticated` hop (MainActor), never by reading
     /// queue-confined connection state cross-queue.
     private var connectionDevice: [ObjectIdentifier: String] = [:]
+    /// What each authenticated socket's `helloAck` said its client serves
+    /// back, and when it said so, which orders a device's sockets.
+    private var acknowledged: [ObjectIdentifier: (order: Int, capabilities: Set<String>)] = [:]
+    private var acknowledgements = 0
     /// Cap on simultaneous sockets. An unauthenticated peer can open a socket
     /// (auth only happens at WS upgrade), so bound the count defensively.
     private let maxConnections = 64
@@ -78,6 +82,13 @@ public final class RemoteServer {
     /// Invoked on the main actor whenever authenticated remote socket counts
     /// change. AppState snapshots this so Settings observes live disconnects.
     public var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
+    /// Fired on the main actor when what a device's open sockets acknowledged
+    /// may have changed: one acknowledged something, or one of its sockets closed.
+    public var onAcknowledgedCapabilitiesChange: (@MainActor (_ deviceId: String) -> Void)?
+    /// Takes a device's answers to requests sent it as `RemoteServerMessage.peerHost`,
+    /// with the route `route(toDevice:acknowledging:)` gave the socket it came
+    /// on, nil for one that acknowledged nothing.
+    public var onPeerHostReply: (@MainActor (_ deviceId: String, _ route: Int?, HostServerMessage) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     public var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
     /// See `RemoteHTTPResponder.pairsBackWithPeers`. Off only on alas-host.
@@ -197,9 +208,32 @@ public final class RemoteServer {
         // the queue and is harmless on an already-cancelled connection.
         for conn in connections.values { conn.forceClose() }
         for conn in connections.values { conn.cancel() }
+        let acknowledging = Set(acknowledged.keys.compactMap { connectionDevice[$0] })
         connections.removeAll()
         connectionDevice.removeAll()
+        acknowledged.removeAll()
         onConnectionDeviceCountsChange?([:])
+        for deviceId in acknowledging { onAcknowledgedCapabilitiesChange?(deviceId) }
+    }
+
+    /// The newest open socket of `deviceId` whose `helloAck` acknowledged
+    /// `capability`, as a number that changes whenever a newer one takes
+    /// over; nil when there is none.
+    public func route(toDevice deviceId: String, acknowledging capability: String) -> Int? {
+        acknowledged.filter { connectionDevice[$0.key] == deviceId && $0.value.capabilities.contains(capability) }
+            .map(\.value.order).max()
+    }
+
+    /// Sends `message` on the socket `route(toDevice:acknowledging:)` names,
+    /// past its gateway's filters, which cover what clients ask for and not
+    /// what this server asks of them. False when there is no such socket.
+    @discardableResult
+    public func send(_ message: RemoteServerMessage, toDevice deviceId: String, acknowledging capability: String) -> Bool {
+        guard let order = route(toDevice: deviceId, acknowledging: capability),
+              let oid = acknowledged.first(where: { $0.value.order == order })?.key,
+              let conn = connections[oid] else { return false }
+        conn.sendMessage(message)
+        return true
     }
 
     /// Registers (or, with nil, withdraws) this listener's Bonjour service.
@@ -324,6 +358,12 @@ public final class RemoteServer {
                     send: channel.send)
                 if scope == .full { gateway.presenter = self?.presenter }
                 gateway.delegationPairing = self?.pairing
+                let deviceId = channel.deviceId
+                let socket = channel.socket
+                gateway.onPeerHostReply = { [weak self] reply in
+                    guard let self else { return }
+                    onPeerHostReply?(deviceId, socket.flatMap { self.acknowledged[$0]?.order }, reply)
+                }
                 self?.configureGateway?(gateway)
                 return gateway
             },
@@ -355,13 +395,23 @@ public final class RemoteServer {
                     }
                 }
             },
+            onCapabilitiesAcknowledged: { [weak self] conn, capabilities in
+                let oid = ObjectIdentifier(conn)
+                guard let self, self.connections[oid] != nil, let deviceId = self.connectionDevice[oid] else { return }
+                self.acknowledgements += 1
+                self.acknowledged[oid] = (self.acknowledgements, Set(capabilities))
+                self.onAcknowledgedCapabilitiesChange?(deviceId)
+            },
             onClose: { [weak self] conn in
                 Task { @MainActor in
                     guard let self else { return }
                     let oid = ObjectIdentifier(conn)
+                    let deviceId = self.connectionDevice[oid]
                     self.connections[oid] = nil
                     self.connectionDevice[oid] = nil
+                    let hadAcknowledged = self.acknowledged.removeValue(forKey: oid) != nil
                     self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
+                    if hadAcknowledged, let deviceId { self.onAcknowledgedCapabilitiesChange?(deviceId) }
                 }
             })
         connections[ObjectIdentifier(conn)] = conn

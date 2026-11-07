@@ -211,8 +211,18 @@ sessions and prompts; work already running finishes and reports back.
 
 ### Delegate from the host to a Mac
 
-Pairing a Mac with the host gives the host no way to reach that Mac, so the
-host's agents can't delegate there yet. To allow it, choose **Pair a device** in
+A Mac that paired with the host with no link back keeps its own link to the
+host open, and the host's agents can delegate to it over that link while it is
+up. To allow it, set *Let agents on this Mac use this machine* on the host's
+row in that Mac's Settings > Remote > Peers. A host that paired with another
+host through `peers add` allows it with `alas-host peers agents <host> ask` or
+`auto`. Both sides need this version, and a Mac whose pairing predates it,
+which proved no key to the host, must pair again. The host's agents see the Mac in `agent_list` while its link is up; the
+Mac can't be reached while it sleeps or is off the network, and children there
+wait until it is back.
+
+If the host should reach the Mac on its own, for example while the Mac's link
+is down, pair the two ways instead. Choose **Pair a device** in
 the Mac's Remote settings, copy the pairing link, then run
 `alas-host peers add <pairing-link>` on the host. Unlike the pairing above, this
 is two-way: the host redeems the link, then the Mac pairs back to the host, so

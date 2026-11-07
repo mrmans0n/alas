@@ -169,6 +169,30 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(ack) == ack)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
         #expect(object["challenge"] as? String == "nonce-1")
+        // Older servers read no capabilities, and are sent none.
+        #expect(object["capabilities"] == nil)
+    }
+
+    @Test func helloAckCarriesTheCapabilitiesThePeerServesBack() throws {
+        let ack = RemoteClientMessage.helloAck(
+            protocolVersion: 1, challenge: "nonce-1", capabilities: [HostProtocolCapability.delegationReverseV1])
+        #expect(try roundTrip(ack) == ack)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
+        #expect(object["capabilities"] as? [String] == ["host.delegation.reverse.v1"])
+    }
+
+    /// A request travels from server to client and its answer back, each in
+    /// the other direction's `peerHost`.
+    @Test func peerHostRoundTripsInBothDirections() throws {
+        let request = RemoteServerMessage.peerHost(HostClientMessage(id: 3, request: .delegation(.outbox(after: 5))))
+        #expect(try roundTrip(request) == request)
+        let answer = RemoteClientMessage.peerHost(.response(id: 3, result: .subscribed))
+        #expect(try roundTrip(answer) == answer)
+        let requestType = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])["type"]
+        let answerType = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])["type"]
+        #expect(requestType as? String == "peerHost")
+        #expect(answerType as? String == "peerHost")
+        #expect(request.sessionId == nil && answer.sessionId == nil)
     }
 
     // An older peer's ack has no `challenge` key at all; it must still
