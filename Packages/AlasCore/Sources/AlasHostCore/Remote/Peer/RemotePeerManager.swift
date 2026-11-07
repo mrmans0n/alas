@@ -986,9 +986,12 @@ public final class RemotePeerManager {
     /// Sets the access of the inbound device `peerId` reaches this Mac with,
     /// and of every other device carrying its identity: a re-pair leaves the
     /// earlier ones with live tokens, and the gate reads whichever authenticated.
-    /// False when the peer has no such device (reciprocal pairing never completed).
+    /// False when the peer has no such device (reciprocal pairing never completed),
+    /// or when allowing anything on a device that never proved its identity,
+    /// which the gate would refuse anyway. Turning access off always works.
     public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
         guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
+              access == .off || pairing.device(id: deviceId).map(PeerDelegationGate.isProven) == true,
               pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
         for other in deviceIds(of: peer) where other != deviceId {
             pairing.setAgentAccess(access, deviceId: other)

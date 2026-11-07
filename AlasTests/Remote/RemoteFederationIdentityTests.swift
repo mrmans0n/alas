@@ -81,6 +81,8 @@ struct RemoteFederationIdentityTests {
                                                     publicKey: signer.publicKey)
                 })
             peers.onRevokeDevice = { [weak self] deviceId in self?.server.disconnectDevice(deviceId) }
+            // As the app and the host do, so a redeem proves this Mac's key.
+            peers.signRedeem = { [signer] in signer.redeemProof(code: $0, serverId: $1) }
             server.onPeerPaired = { [weak self] request in
                 guard let self else { return }
                 self.peers.notePeerPairingArrived(serverId: request.peerServerId,

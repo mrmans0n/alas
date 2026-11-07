@@ -1,6 +1,6 @@
 # Proven peer identity and a delegation-only credential
 
-Status: proposed. This is the first follow-up named in the
+Status: proven identity (PR 1) implemented; delegation scope (PR 2) proposed. This is the first follow-up named in the
 [agent delegation design](2026-11-05-peer-agent-delegation-design.md#trust-model). The user asked to work through all of that
 design's follow-ups, starting here, and left the design to the author.
 
@@ -42,7 +42,7 @@ Close two gaps that design accepted:
 | `completeInboundPeer`, two-way | The responder pairs back and requires the reply to prove the claimed server id and key, else it revokes the device | A two-way device is proven after the fact, but nothing records that on the device |
 | Initiator branch | Our counter-code, redeemed by the peer we just proved, is matched to that attempt | Also proven, also unrecorded |
 | `recordInboundOnlyPeer` | A host that never pairs back records the claim, with `publicKey: nil` | Unproven, and stays so |
-| Approval pairing | The envelope binds the requester's advertised key; whether it proves possession is unchecked | See [Verify while building](#verify-while-building) |
+| Approval pairing | `RemotePairingApprovalCoordinator.redeem` verifies the requester's envelope against its advertised key | Already a proof |
 | `RemoteDevice` | `tokenHash`, `kind`, `peerServerId`, `agentAccess`; no key and no scope | Both new fields go here |
 | `RemoteServer` | `validate(token:)` gives a device id; `RemoteSessionGateway` serves every message to it | No place refuses by scope yet |
 | `PeerDelegationGate.allows` | Checks kind and `agentAccess` | Gains the proof check |
@@ -72,8 +72,8 @@ that the code matches a live one, verifies the proof against `peer.publicKey`, a
 fails is refused with the code left unconsumed, like any other implausible advertisement, and counts toward the failed-redeem
 limit. A request with no proof still pairs, because older builds send none, but the device stays unproven.
 
-Approval pairing carries the same proof, over the approval's request id in place of the code, unless the approval exchange
-already proves possession (to verify).
+Approval pairing needs no extra proof: the coordinator already verifies the requester's envelope against the key it
+advertises, so the device records that key.
 
 ### 2. The device records the proven key
 
@@ -101,7 +101,8 @@ forever. On `peerUnverified` the source does what it does when the link becomes 
 children with a wake whose reason says to pair the two Macs again. `discover` and `start` return the same refusal, so `agent_list --peer`
 and `session_new --peer` say why. `agent_list` without `peer` stays cheap and makes no peer calls, so it cannot know.
 
-Settings shows "Pair again to allow this" on the agent access row of an unproven peer, as it does for a peer with no device.
+Settings shows "Pair again to allow this" on the agent access row of an unproven peer, as it does for a peer with no device, and
+`alas-host peers agents` refuses anything but `off` for one.
 
 ### 4. A delegation-only token
 
@@ -137,13 +138,18 @@ The app keeps asking for full tokens.
 
 ### 6. Capability
 
-The responder advertises `pair.redeem-proof.v1` and `pair.delegation-scope.v1` in its diagnostics. A host checks the second before
-starting `peers add`, so it can name the problem before redeeming a code. The proof needs no capability on the redeemer's side, since
-an older responder ignores the field.
+The responder advertises `pair.delegation-scope.v1` in its diagnostics. A host checks it before starting `peers add`, so it can name
+the problem before redeeming a code. The proof needs no capability, since an older responder ignores the field.
 
 ## Trust model, after
 
 - A target attributes children and outbox entries to a Mac only after that Mac proved its key, at redeem or by the pair-back.
+- One server id has one proven key. The first device to prove a key for it holds it, and a device proving another key for that
+  server id is refused (`hasOtherProvenKey`). Forgetting the peer revokes all its devices and is the only way to re-key.
+- So until a Mac re-pairs a host whose pairing predates this, its server id there is unproven, and anyone holding a live pairing code
+  for that host could prove their own key for it first. The real Mac is then refused until the user forgets the peer on the host.
+  This is the same class of exposure as before, since a pairing code is a credential. The mitigation is to re-pair promptly after
+  updating.
 - Someone holding a live pairing code can still pair as themselves and get a full token. That was always so: a code is a credential.
 - An agent on a host that reads the host's token file can delegate to the Mac within the Mac's consent for that host, and nothing
   more.
@@ -164,11 +170,11 @@ Inbound-only pairings made since #2363 need a re-pair before their agents can de
 
 Two PRs, in this order:
 
-1. **Proven identity.** Decisions 1 to 3 and 6's first capability: the proof, `peerPublicKey`, recording it in the three branches,
+1. **Proven identity.** Decisions 1 to 3: the proof, `peerPublicKey`, recording it in the three branches,
    the backfill, the gate, the typed `peerUnverified` refusal and the source failing children on it, the Settings hint. Run the
    two-host suite early: if its fixture pairs inbound-only without a proof, the gate turns it red, which also shows whether the
    fixture pairs the way real hosts do.
-2. **Delegation scope.** Decisions 4, 5 and 6's second capability: `scope`, the gateway allowlist, `peers add`, `peers list`.
+2. **Delegation scope.** Decisions 4 to 6: `scope`, the gateway allowlist, `peers add`, `peers list`.
 
 The first is a precondition for the second: a scoped token is only worth checking if the gate trusts whose it is.
 
@@ -188,8 +194,7 @@ Extend the existing suites:
 
 ## Verify while building
 
-1. **Approval pairing.** Whether the approval envelope already proves the requester holds its key. If it does, record that key and skip
-   the extra proof.
+1. **Approval pairing.** Settled: the envelope is verified against the requester's key, so that key is recorded.
 2. **Where the gateway dispatches.** That one place sees every client message, including consoles and the host-protocol frames, so the
    allowlist cannot be bypassed by a message routed elsewhere.
 3. **The pair-back refusal on a host.** Exactly what each side keeps when a host refuses a full token after redeeming, against the

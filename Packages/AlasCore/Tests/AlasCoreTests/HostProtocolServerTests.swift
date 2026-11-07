@@ -3167,7 +3167,7 @@ struct HostProtocolServerTests {
         )
         let device = RemoteDevice(
             id: "device-1", name: "Laptop", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
-            kind: .alasInstance, peerServerId: "mac-1"
+            kind: .alasInstance, peerServerId: "mac-1", peerPublicKey: "key-mac-1"
         )
         let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [device]))
         fixture.server.remotePeers = RemotePeerManager(
