@@ -75,8 +75,9 @@ struct ChangesPreparationReconciliationPresentation: Equatable {
 struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
-    /// Opens the review target palette (the ⇧⌘R action).
-    let onChooseReviewScope: () -> Void
+    /// Opens the review target palette (the ⇧⌘R action). Nil where there is
+    /// no palette: the card offers `reviewScopeOptions` alone.
+    let onChooseReviewScope: (() -> Void)?
     /// Review targets listed above the palette entry in the split menu.
     let reviewScopeOptions: [ChangesReviewScopeOption]
     let onReviewScopeOption: (ChangesReviewScopeOption) -> Void
@@ -351,8 +352,10 @@ struct ChangesPreparationCard: View {
             }
             Divider()
         }
-        Button(ChangesPreparationCardText.reviewScopeMenuTitle, action: onChooseReviewScope)
-            .keyboardShortcut(reviewScopeShortcut?.asKeyboardShortcut())
+        if let onChooseReviewScope {
+            Button(ChangesPreparationCardText.reviewScopeMenuTitle, action: onChooseReviewScope)
+                .keyboardShortcut(reviewScopeShortcut?.asKeyboardShortcut())
+        }
     }
 
     private func reviewScopeOptionButton(_ option: ChangesReviewScopeOption) -> some View {
@@ -364,7 +367,9 @@ struct ChangesPreparationCard: View {
     /// to review, so the palette stays reachable. Scopes that apply anyway,
     /// such as branch commits or stack requests, sit behind a trailing chevron.
     private var secondaryReviewScopeButton: some View {
-        reviewScopeButton(subtitle: reviewScopeShortcut?.displayString ?? ChangesPreparationCardText.reviewScopeButtonSubtitle)
+        reviewScopeButton(subtitle: onChooseReviewScope == nil
+            ? reviewScopeOptions.first?.title()
+            : reviewScopeShortcut?.displayString ?? ChangesPreparationCardText.reviewScopeButtonSubtitle)
     }
 
     private func reviewScopeButton(subtitle: String?) -> some View {
@@ -376,7 +381,7 @@ struct ChangesPreparationCard: View {
             isEnabled: true,
             help: reviewScopeHelp(ChangesPreparationCardText.reviewScopeButtonTitle),
             trailingAccessoryWidth: reviewScopeOptions.isEmpty ? 0 : 22,
-            action: onChooseReviewScope
+            action: onChooseReviewScope ?? { reviewScopeOptions.first.map(onReviewScopeOption) }
         )
         .accessibilityIdentifier("changes-preparation-review-scope")
         .overlay(alignment: .trailing) {

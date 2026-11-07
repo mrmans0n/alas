@@ -1172,6 +1172,36 @@ struct NativePeerSessionsTests {
         #expect(listChangesCount(links, "s") == initial + 1)
     }
 
+    /// A poll reads the changes alone until they differ; only then does the
+    /// file tree, like an open document, go stale enough to read again.
+    @Test func aPolledChangeReloadsTheFileTreeOnlyWhenTheChangesDiffer() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        let fileTreeReads = { links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count }
+        func reply(staged: [RemoteChangedFile]) {
+            links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                      files: [], staged: staged, unstaged: [], commits: [], truncated: false), from: "B")
+        }
+        reply(staged: [])
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let reads = fileTreeReads()
+
+        client.pollChanges()
+        reply(staged: [])
+        #expect(fileTreeReads() == reads)
+
+        client.pollChanges()
+        reply(staged: [RemoteChangedFile(path: "a", status: "M", add: 1, del: 0, conflict: nil, renameFrom: "")])
+        #expect(fileTreeReads() == reads + 1)
+    }
+
     /// A session whose row carries no worktree summary keeps comparing its
     /// own (absent) summary, not the one its worktree's console lends the row.
     @Test func aSessionWithoutASummaryIsNotReloadedOnEverySessionList() {
