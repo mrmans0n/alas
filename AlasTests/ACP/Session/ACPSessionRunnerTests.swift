@@ -5,6 +5,15 @@ import Testing
 @testable import AlasCore
 @testable import AlasSessions
 
+private func agentChunk(_ text: String, id: String? = nil, phase: String? = nil) -> ACPSessionUpdate {
+    let metadata = phase.map { AnyCodable(["codex": AnyCodable(["phase": AnyCodable($0)])]) }
+    return .agentMessageChunk(.init(messageId: id, content: .text(text), metadata: metadata))
+}
+
+private let bufferedToolCall = ACPSessionUpdate.toolCall(.init(
+    toolCallId: "tc", title: "Run", kind: "execute", status: "completed", content: nil, locations: nil, rawInput: nil, rawOutput: nil
+))
+
 @MainActor
 @Suite("ACPSessionRunner")
 struct ACPSessionRunnerTests {
@@ -6113,17 +6122,20 @@ struct ACPSessionRunnerTests {
     /// An agent that ends its turn right after its last words leaves them in
     /// the coalescing buffer. For a child on another Mac they are its whole report.
     @Test(arguments: [
-        ([], [nil], "fixed."),
-        ([.agentMessageChunk(.text("Parser "))], [nil], "Parser fixed."),
-        ([.agentMessageChunk(.text("Parser ")), .agentThoughtChunk(.text("Hm."))], [nil], "Parser fixed."),
-        ([.agentMessageChunk(.init(messageId: "m1", content: .text("Parser "))),
-          .agentMessageChunk(.init(messageId: "m2", content: .text("Other.")))], ["m1"], "Parser fixed."),
-        ([.agentMessageChunk(.init(messageId: "m1", content: .text("Other.")))], ["m2"], "fixed."),
+        ([], [agentChunk("fixed.")], "fixed."),
+        ([agentChunk("Parser ")], [agentChunk("fixed.")], "Parser fixed."),
+        ([agentChunk("Parser "), .agentThoughtChunk(.text("Hm."))], [agentChunk("fixed.")], "Parser fixed."),
+        ([agentChunk("Parser ", id: "m1"), agentChunk("Other.", id: "m2")], [agentChunk("fixed.", id: "m1")], "Parser fixed."),
+        ([agentChunk("Other.", id: "m1")], [agentChunk("fixed.", id: "m2")], "fixed."),
         // Continuing two messages at once: only the last one is the report.
-        ([.agentMessageChunk(.init(messageId: "m1", content: .text("Note "))),
-          .agentMessageChunk(.init(messageId: "m2", content: .text("Parser ")))], ["m1", "m2"], "Parser fixed."),
-    ] as [([ACPSessionUpdate], [String?], String)])
-    func completionQuotesAgentTextStillBuffered(applied: [ACPSessionUpdate], bufferedIds: [String?], expected: String) async throws {
+        ([agentChunk("Note ", id: "m1"), agentChunk("Parser ", id: "m2")],
+         [agentChunk("more", id: "m1"), agentChunk("fixed.", id: "m2")], "Parser fixed."),
+        // A buffered tool call or new phase divides messages that have no ids.
+        ([agentChunk("Note ")], [agentChunk("more"), bufferedToolCall, agentChunk("fixed.")], "fixed."),
+        ([agentChunk("Note ", phase: "commentary")], [agentChunk("fixed.", phase: "final_answer")], "fixed."),
+        ([], [agentChunk("Note", phase: "commentary"), agentChunk("fixed.", phase: "final_answer")], "fixed."),
+    ] as [([ACPSessionUpdate], [ACPSessionUpdate], String)])
+    func completionQuotesAgentTextStillBuffered(applied: [ACPSessionUpdate], buffered: [ACPSessionUpdate], expected: String) async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         var completions: [ACPTurnCompletion] = []
         // Long enough that the text is still waiting when the turn ends.
@@ -6133,10 +6145,8 @@ struct ACPSessionRunnerTests {
         defer { runner.stop() }
         mock.scriptAsync(method: "session/prompt") { _ in
             await MainActor.run { applied.forEach { session.apply($0) } }
-            for id in bufferedIds {
-                mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.init(messageId: id, content: .text("fixed.")))))
-            }
-            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == bufferedIds.count }
+            for update in buffered { mock.emit(.init(sessionId: "s", update: update)) }
+            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == buffered.count }
             return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 

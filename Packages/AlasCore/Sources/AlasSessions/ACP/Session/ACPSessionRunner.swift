@@ -2479,35 +2479,66 @@ public final class ACPSessionRunner {
     /// What the turn ended on, for its completion. An agent that ends its turn
     /// right after its last message leaves that message in the coalescing
     /// buffer, and it may be the rest of a message already in the transcript.
-    /// The buffer can hold several messages; the last chunk's is the one to quote.
     private func turnFinalAgentText() -> String? {
-        let chunks = bufferedAgentChunks()
-        guard let messageId = chunks.last.map(\.chunk.messageId) else { return currentTurnLastAgentText() }
-        let buffered = chunks.filter { $0.chunk.messageId == messageId }.map(\.text).joined()
+        guard let final = bufferedFinalAgentMessage() else { return currentTurnLastAgentText() }
         let floor = activePromptTranscriptFloor ?? 0
-        let started = session.agentRowContinued(byMessageId: messageId).flatMap { row in
+        let started = final.continuedRow.flatMap { row in
             row >= floor ? ACPSessionTranscriptReader.agentText(session.transcript.messages[row]) : nil
         } ?? ""
-        let tail = ACPDelegatedOutcomeText.tail(started + buffered, limit: ACPTurnCompletion.lastAgentTextLimit)
+        let tail = ACPDelegatedOutcomeText.tail(started + final.text, limit: ACPTurnCompletion.lastAgentTextLimit)
         return tail.isEmpty ? currentTurnLastAgentText() : tail
+    }
+
+    /// The buffer's last agent message, divided where `ACPSession.apply` would
+    /// divide it, and the transcript row it continues if it does.
+    private func bufferedFinalAgentMessage() -> (text: String, continuedRow: Int?)? {
+        let updates = pendingIncomingUpdates.map(\.params).filter { !isSubagentUpdate($0) }.map(\.update)
+        guard let last = updates.reversed().lazy.compactMap(Self.agentTextChunk).first else { return nil }
+        if let id = last.chunk.messageId {
+            let parts = updates.compactMap(Self.agentTextChunk).filter { $0.chunk.messageId == id }
+            return (parts.map(\.text).joined(), session.agentRowContinued(byMessageId: id))
+        }
+        var parts: [String] = []
+        func startsAnotherPhase(_ phase: ACPMessagePhase?) -> Bool {
+            if let phase, let lastPhase = last.chunk.phase { phase != lastPhase } else { false }
+        }
+        for update in updates.reversed() {
+            switch update {
+            case .toolCall:
+                return (parts.reversed().joined(), nil)
+            case .userMessageChunk(let chunk) where chunk.directed == nil:
+                return (parts.reversed().joined(), nil)
+            case .agentMessageChunk:
+                guard let part = Self.agentTextChunk(update) else { continue }
+                guard part.chunk.messageId == nil, !startsAnotherPhase(part.chunk.phase) else {
+                    return (parts.reversed().joined(), nil)
+                }
+                parts.append(part.text)
+            default:
+                continue
+            }
+        }
+        var row = session.agentRowContinued(byMessageId: nil)
+        if let index = row, case .agent(_, _, let text) = session.transcript.messages[index], startsAnotherPhase(text.phase) {
+            row = nil
+        }
+        return (parts.reversed().joined(), row)
+    }
+
+    private static func agentTextChunk(_ update: ACPSessionUpdate) -> (chunk: ACPTextChunk, text: String)? {
+        guard case .agentMessageChunk(let chunk) = update, case .text(let text) = chunk.content else { return nil }
+        return (chunk, text)
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
     /// the transcript. Read-only on purpose: draining the buffer at turn end
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
-        let text = bufferedAgentChunks().map(\.text).joined()
+        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+            guard !isSubagentUpdate(pending.params) else { return nil }
+            return Self.agentTextChunk(pending.params.update)?.text
+        }.joined()
         return text.isEmpty ? nil : text
-    }
-
-    private func bufferedAgentChunks() -> [(chunk: ACPTextChunk, text: String)] {
-        pendingIncomingUpdates.compactMap { pending in
-            guard !isSubagentUpdate(pending.params),
-                  case .agentMessageChunk(let chunk) = pending.params.update,
-                  case .text(let value) = chunk.content
-            else { return nil }
-            return (chunk, value)
-        }
     }
 
     private func waitForPromptUpdateDelivery(promptID: Int) async {
