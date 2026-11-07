@@ -16,7 +16,7 @@ struct NativePeerRightPaneView: View {
     @State private var openPaths: Set<String> = []
     @State private var bookmarkOpenPaths: Set<String> = []
     @State private var railBodyWidth: Double = 0
-    /// Bumped as the changes do, so the Run tab reads its scripts again.
+    /// Bumped on each poll, so the Run tab reads its scripts again.
     @State private var runRefreshGeneration = 0
     /// The git target's review status, as the host reads it.
     @State private var reviewLoop = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/"), baseBranch: "")
@@ -151,7 +151,9 @@ struct NativePeerRightPaneView: View {
                 try? await Task.sleep(for: Self.changesPollInterval)
                 guard !Task.isCancelled, NSApp.isActive else { continue }
                 client.pollChanges()
-                // Either can change on the host while the changes stay the same.
+                // These can change on the host while the changes stay the
+                // same: global run scripts live outside the repository.
+                runRefreshGeneration += 1
                 await readStashes()
                 await readCheckpoints()
             }
@@ -164,7 +166,6 @@ struct NativePeerRightPaneView: View {
         // stash actions read the stashes themselves.
         .onChange(of: client.workspace.changes) { _, changes in
             if case .loaded = changes {
-                runRefreshGeneration += 1
                 Task { await readStashes() }
                 Task { await readCheckpoints() }
             }

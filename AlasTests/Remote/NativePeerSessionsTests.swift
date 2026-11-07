@@ -1129,7 +1129,7 @@ struct NativePeerSessionsTests {
     }
 
     /// A folder project has no git, so a peer never asks it for changes.
-    @Test func folderWorktreeSessionRequestsNoChanges() {
+    @Test func folderWorktreeSessionPollsItsFilesInsteadOfChanges() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
         let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
@@ -1147,6 +1147,14 @@ struct NativePeerSessionsTests {
 
         #expect(listChangesCount(links, "s") == 0)
         #expect(!client.requestChanges())
+
+        // Files created on the host show up without a changes reply.
+        let fileTreeReads = { links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count }
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let reads = fileTreeReads()
+        client.pollChanges()
+        #expect(fileTreeReads() == reads + 1)
+        #expect(listChangesCount(links, "s") == 0)
     }
 
     @Test func worktreeSummaryChangeRefreshesChanges() {
