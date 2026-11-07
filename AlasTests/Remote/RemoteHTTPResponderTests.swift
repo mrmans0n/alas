@@ -235,12 +235,24 @@ struct RemoteHTTPResponderTests {
         #expect(object["publicKey"] == nil)
     }
 
-    // An advertised key that could never be verified is refused while the
-    // code is still unconsumed, rather than stored as an unusable string.
-    @Test func pairWithAMalformedPublicKeyIsRejectedAndLeavesTheCodeRedeemable() {
+    nonisolated static let realKey = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+
+    // A key that could never be verified, or a proof that is not shaped like
+    // a signature or has no key to check it against, is refused before any
+    // signature check runs and while the code is still unconsumed.
+    @Test(arguments: [
+        ("not-a-key", nil),
+        (realKey, "short"),
+        (nil, String(repeating: "A", count: 86) + "=="),
+    ] as [(String?, String?)])
+    func pairWithAMalformedKeyOrProofIsRejectedAndLeavesTheCodeRedeemable(publicKey: String?, proof: String?) throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let code = pairing.beginPairing()
-        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://a:1"],"publicKey":"not-a-key"}}"#.utf8)
+        var peer: [String: Any] = ["serverId": "srv-b", "name": "Mac B", "origins": ["http://a:1"]]
+        peer["publicKey"] = publicKey
+        var fields: [String: Any] = ["code": code, "deviceName": "Mac B", "peer": peer]
+        fields["proof"] = proof
+        let body = try JSONSerialization.data(withJSONObject: fields)
         let out = text(makePeerResponder(pairing: pairing, sink: PeerSink())
             .response(for: request("POST", "/pair"), body: body))
         #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))

@@ -31,6 +31,7 @@ public final class ACPPeerOutboxCollector {
     private let childBlocked: @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void
     private let settleQuietChildren: @MainActor (_ serverId: String) async -> Void
     private let retryStarts: @MainActor (_ serverId: String) async -> Void
+    private let identityUnproven: @MainActor (_ serverId: String, _ peer: String) async -> Void
     private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
@@ -53,6 +54,9 @@ public final class ACPPeerOutboxCollector {
     ///   - childBlocked: Told once per blocked child, by the collector that
     ///     settled the notice, so two sharing a profile do not both announce it.
     ///   - retryStarts: Asks again about children still starting on a peer.
+    ///   - identityUnproven: Told when a peer refuses to collect because this
+    ///     Mac's pairing with it never proved its identity. Asking again
+    ///     changes nothing until the two pair again.
     ///   - schedule: Arranges for work to run after a number of seconds.
     public init(
         peers: ACPDelegationPeers,
@@ -63,6 +67,7 @@ public final class ACPPeerOutboxCollector {
         availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         childBlocked: @escaping @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
+        identityUnproven: @escaping @MainActor (_ serverId: String, _ peer: String) async -> Void = { _, _ in },
         settleQuietChildren: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) {
@@ -74,6 +79,7 @@ public final class ACPPeerOutboxCollector {
         self.availabilityChanged = availabilityChanged
         self.childBlocked = childBlocked
         self.retryStarts = retryStarts
+        self.identityUnproven = identityUnproven
         self.settleQuietChildren = settleQuietChildren
         self.schedule = schedule
     }
@@ -181,6 +187,11 @@ public final class ACPPeerOutboxCollector {
             case .failure(.outdated):
                 // Stays that way until the peer's build changes, which is a
                 // new `hello` and so a new signal. Asking again changes nothing.
+                return true
+            case .failure(.unproven(let peer)):
+                // Nor does asking again here: only pairing again does. The
+                // children it holds are failed, so no parent waits forever.
+                await identityUnproven(serverId, peer)
                 return true
             case .failure(let error):
                 logger.notice("Outbox of peer \(serverId, privacy: .public) not collected after \(after): \(String(describing: error), privacy: .public)")

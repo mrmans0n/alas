@@ -794,6 +794,9 @@ final class AppState {
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)
         }
+        manager.signRedeem = { [weak self] code, serverId in
+            self?.remoteIdentityKey.redeemProof(code: code, serverId: serverId)
+        }
         core.watchForRevokedPeers(of: manager)
         return manager
     }()

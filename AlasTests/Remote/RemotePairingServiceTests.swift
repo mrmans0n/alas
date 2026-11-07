@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 @testable import Alas
 
 /// In-memory `RemoteDeviceStore` for tests across the Remote suite. Lives in the
@@ -12,10 +13,11 @@ final class InMemoryDeviceStore: RemoteDeviceStore {
 
 @MainActor
 struct RemotePairingServiceTests {
-    private func peerDevice(_ access: RemoteDeviceAgentAccess, kind: RemoteDeviceKind = .alasInstance) -> RemoteDevice {
+    private func peerDevice(_ access: RemoteDeviceAgentAccess, kind: RemoteDeviceKind = .alasInstance,
+                            proven: Bool = true) -> RemoteDevice {
         var device = RemoteDevice(
             id: "d1", name: "Studio", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
-            kind: kind, peerServerId: "srv-b"
+            kind: kind, peerServerId: "srv-b", peerPublicKey: proven ? "key" : nil
         )
         device.agentAccess = access
         return device
@@ -31,11 +33,75 @@ struct RemotePairingServiceTests {
         #expect(PeerDelegationGate.allows(verb, device: peerDevice(access)) == allowed)
     }
 
-    @Test func browserDeviceAndMissingDeviceAreRefused() {
+    /// An unproven device gets nothing, not even what works while access is
+    /// off: it could be anyone who held a pairing code.
+    @Test func browserUnprovenAndMissingDevicesAreRefused() {
         for verb in PeerDelegationVerb.allCases {
             #expect(!PeerDelegationGate.allows(verb, device: peerDevice(.autoRun, kind: .browser)))
+            #expect(!PeerDelegationGate.allows(verb, device: peerDevice(.autoRun, proven: false)))
             #expect(!PeerDelegationGate.allows(verb, device: nil))
         }
+    }
+
+    enum RedeemProof: CaseIterable, Sendable { case valid, none, otherKey, otherServer }
+
+    /// Only a proof by the advertised key, over this code and the claimed
+    /// identity, records the key. A failed one leaves the code redeemable.
+    @Test(arguments: RedeemProof.allCases)
+    func redeemRecordsTheKeyOnlyWithAValidProof(_ kind: RedeemProof) throws {
+        let svc = make()
+        let key = Curve25519.Signing.PrivateKey()
+        let advertised = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let code = svc.beginPairing()
+        let proof: String? = switch kind {
+        case .valid: RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: key)
+        case .none: nil
+        case .otherKey: RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: .init())
+        case .otherServer: RemoteIdentityCrypto.signRedeem(serverId: "srv-c", code: code, with: key)
+        }
+        let result = try? svc.redeemPeer(code: code, deviceName: "Studio", peerServerId: "srv-b",
+                                         peerPublicKey: advertised, proof: proof)
+        switch kind {
+        case .valid: #expect(result.flatMap { svc.device(id: $0.deviceId)?.peerPublicKey } == advertised)
+        case .none: #expect(result.map { svc.device(id: $0.deviceId)?.peerPublicKey } == .some(nil))
+        case .otherKey, .otherServer:
+            #expect(result == nil)
+            let retried = try svc.redeemPeer(
+                code: code, deviceName: "Studio", peerServerId: "srv-b", peerPublicKey: advertised,
+                proof: RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: key))
+            #expect(svc.device(id: retried.deviceId)?.peerPublicKey == advertised)
+        }
+    }
+
+    /// One identity has one key: forgetting the peer is what clears it.
+    @Test func aSecondKeyForAProvenIdentityIsRefused() throws {
+        let svc = make()
+        let first = Curve25519.Signing.PrivateKey(), second = Curve25519.Signing.PrivateKey()
+        func redeem(_ key: Curve25519.Signing.PrivateKey) throws -> RemotePeerRedeemResult {
+            let code = svc.beginPairing()
+            return try svc.redeemPeer(code: code, deviceName: "Studio", peerServerId: "srv-b",
+                                      peerPublicKey: RemoteIdentityCrypto.publicKeyString(key.publicKey),
+                                      proof: RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: key))
+        }
+        _ = try redeem(first)
+        #expect(throws: (any Error).self) { try redeem(second) }
+        let unproven = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
+        #expect(!svc.recordPeerPublicKey(RemoteIdentityCrypto.publicKeyString(second.publicKey), deviceId: unproven.deviceId))
+        #expect(svc.recordPeerPublicKey(RemoteIdentityCrypto.publicKeyString(first.publicKey), deviceId: unproven.deviceId))
+    }
+
+    /// The two signatures a Mac makes never stand in for each other.
+    @Test func aRedeemProofIsNotASocketProof() {
+        let key = Curve25519.Signing.PrivateKey()
+        let publicKey = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let code = String(repeating: "a", count: RemoteIdentityCrypto.challengeByteCount * 2)
+        let redeem = RemoteIdentityCrypto.signRedeem(serverId: "srv-b", code: code, with: key)!
+        #expect(!RemoteIdentityCrypto.verify(
+            RemoteIdentityProof(challenge: code, publicKey: publicKey, signature: redeem),
+            serverId: "srv-b", expectedPublicKey: publicKey, challenge: code))
+        let socket = RemoteIdentityCrypto.sign(serverId: "srv-b", challenge: code, with: key)!
+        #expect(!RemoteIdentityCrypto.verifyRedeem(signature: socket.signature, serverId: "srv-b", code: code,
+                                                   publicKey: publicKey))
     }
 
     @Test(arguments: [(true, RemoteDeviceAgentAccess.autoRun, true), (true, .ask, false), (false, .autoRun, false), (true, .off, false)])
