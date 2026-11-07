@@ -627,7 +627,6 @@ private struct NativePeerWorktreeRow: View, Equatable {
                 case .session(let session):
                     NativePeerAgentBadge(
                         session: session,
-                        isSelected: badge.id == selectedTab,
                         onActivate: { onSelectTab(badge.id) }
                     )
                 case .console(let console):
@@ -683,10 +682,7 @@ private struct NativePeerWorktreeRow: View, Equatable {
                 // through the collapsed chip. Unlike the local, active-only
                 // harness collection, a peer's hidden sessions can all be
                 // idle history, which draws no chrome at all.
-                .modifier(OptionalBadgeChrome(
-                    surface: Self.overflowSurface(for: hidden),
-                    isSelected: hiddenBadges.contains { $0.id == selectedTab }
-                ))
+                .modifier(OptionalBadgeChrome(surface: Self.overflowSurface(for: hidden)))
                 .accessibilityLabel("\(hiddenBadges.count) more")
             }
         }
@@ -775,7 +771,6 @@ private struct NativePeerArchivedWorktreeRow: View {
 /// (E1's `.agent.bare`) so only live work carries color.
 private struct NativePeerAgentBadge: View {
     let session: RemoteSessionSummary
-    let isSelected: Bool
     let onActivate: () -> Void
     @Environment(\.theme) private var theme
 
@@ -804,7 +799,7 @@ private struct NativePeerAgentBadge: View {
             }
             .frame(width: HarnessSessionBadge.logoSize, height: HarnessSessionBadge.logoSize)
             .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
-            .modifier(OptionalBadgeChrome(surface: surface, isSelected: isSelected))
+            .modifier(OptionalBadgeChrome(surface: surface))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -819,11 +814,10 @@ private struct NativePeerAgentBadge: View {
 
 private struct OptionalBadgeChrome: ViewModifier {
     let surface: HarnessSessionBadgeSurface?
-    let isSelected: Bool
 
     func body(content: Content) -> some View {
         if let surface {
-            content.modifier(HarnessSessionBadgeChrome(surface: surface, isSelected: isSelected))
+            content.modifier(HarnessSessionBadgeChrome(surface: surface))
         } else {
             content
         }

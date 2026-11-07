@@ -1,3 +1,12 @@
 # Paths that must stay free of type, spacing and radius literals
 # (scripts/design_literals.py --migrated). Each surface adds its files
 # when it moves onto DesignScale.
+Alas/Sources/Sidebar/WorktreeRowView.swift
+Alas/Sources/Sidebar/WorktreeRowPresentation.swift
+Alas/Sources/Sidebar/RepoGroupView.swift
+Alas/Sources/Sidebar/SidebarView.swift
+Alas/Sources/Sidebar/WorkspaceSidebarTree.swift
+Alas/Sources/Sidebar/SidebarHeaderView.swift
+Alas/Sources/Sidebar/SidebarHeaderCountPlusButton.swift
+Alas/Sources/Sidebar/HarnessPill.swift
+Alas/Sources/Sidebar/WorktreeSortMenu.swift
