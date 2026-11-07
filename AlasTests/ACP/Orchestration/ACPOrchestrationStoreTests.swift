@@ -585,7 +585,7 @@ struct ACPOrchestrationStoreTests {
     }
 
     private func lostTurn(_ store: ACPOrchestrationStore) throws -> Bool {
-        try store.claimLostPeerTurn(childSessionId: "child", awaitingSince: nil, outcome: .init(
+        try store.claimLostPeerTurn(childSessionId: "child", awaitingSince: nil, sends: 0, outcome: .init(
             id: "lost", sourceSessionId: "child", targetSessionId: "parent", prompt: "Stopped", createdAt: 1
         ))
     }
@@ -640,6 +640,23 @@ struct ACPOrchestrationStoreTests {
         try store.markPeerAwaiting(childSessionId: "child", since: acceptedAt)
 
         #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
+    }
+
+    /// Counting a send leaves the wait alone: when the peer refuses it, the
+    /// awaited turn still ends the wait, even one that started in the very
+    /// millisecond its prompt was accepted.
+    @Test func aCountedSendLeavesTheWaitToItsTurn() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        var record = newRecord()
+        record.peerServerId = "s1"
+        try store.insert(record)
+        try store.markPeerAwaiting(childSessionId: "child", since: 1000)
+
+        try store.notePeerSendStarting(childSessionId: "child")
+        let outcome = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-1000", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
+        #expect(try store.collectPeerEntry(outcome, peerServerId: "s1", parentSessionId: "parent"))
+
+        #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == false)
     }
 
     @Test("an outbox page respects the byte limit and always returns one entry")
