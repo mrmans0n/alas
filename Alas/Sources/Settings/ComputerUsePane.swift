@@ -32,6 +32,12 @@ struct ComputerUsePane: View {
                     ) {
                         AlasToggle(on: state.bind(\.computerUse.enabled))
                     }
+                    SettingsRow(
+                        name: "Let agents use iOS simulators",
+                        desc: "Agents in a worktree can list, open, read and drive simulators with the device_* tools. You can take over from the Devices tab."
+                    ) {
+                        AlasToggle(on: state.bind(\.deviceAgentsEnabled))
+                    }
                 }
 
                 SettingsGroup(title: "macOS permissions") {

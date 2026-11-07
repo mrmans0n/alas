@@ -899,7 +899,7 @@ const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 /// The buttons `device_button` presses.
 const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
 
-const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Device tab. `device_user_active` means they took over: wait for them to hand it back. `device_disabled` means device control is off in Alas's settings.";
+const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. `device_user_active` means they took over: wait for them to hand it back. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
     let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });
@@ -914,7 +914,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_open",
-            "description": format!("Open an iOS simulator for this session: boot it if it is shut down (this can take a minute), and show it in the Device tab of this worktree. Call it before the other device_* tools. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Open an iOS simulator for this session: boot it if it is shut down (this can take a minute), and show it in the Devices tab of this worktree. Call it before the other device_* tools. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",

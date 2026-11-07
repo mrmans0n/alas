@@ -219,10 +219,7 @@ struct RightPaneView: View {
             case .schedules:
                 SchedulesTabView(state: state, worktree: worktree)
             case .device:
-                DeviceTabView(
-                    model: state.devicePane, client: state.simulatorStreams, control: state.deviceControl,
-                    agentName: { state.computerUseAgentName($0) }
-                )
+                DevicesTabView(state: state, worktree: worktree, rps: rps)
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
@@ -261,7 +258,7 @@ struct RightPaneView: View {
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
                 activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
-                tabs: RightPaneTab.available(isFolder: rps.isFolder, devicePanel: state.config.devicePanelEnabled),
+                tabs: RightPaneTab.available(isFolder: rps.isFolder, devices: state.devicesTabAvailable(in: worktree)),
                 panels: panels,
                 activePanel: panel?.ref,
                 onPanel: { handlePanel($0, active: panel?.ref, rps: rps) },
@@ -274,6 +271,8 @@ struct RightPaneView: View {
                 rps.activeTab = rps.defaultTab // its didSet clears the panel
             }
         }
+        // Whether the Mac has simulator tools decides if the Devices tab shows.
+        .task { await state.devicePane.checkTools() }
     }
 
     private func paneToolbar(rps: RightPaneState, panelTitle: String?) -> some View {
@@ -298,10 +297,27 @@ struct RightPaneView: View {
             pluginCommands: rps.activeTab == .changes ? state.pluginCommands(.changesToolbar, projectID: worktree.projectId) : [],
             onRunPluginCommand: { state.runPluginCommand($0, slot: .changesToolbar, worktreeID: worktree.id) },
             onOpenPreview: { state.openWebPreview(in: worktree) },
-            onOpenVirtualMachine: state.canOpenVirtualMachine(in: worktree)
-                ? { state.openVirtualMachine(in: worktree, guest: $0) } : nil,
-            onNewRunScript: { state.newRunScript(scope: $0, in: worktree) }
+            onNewRunScript: { state.newRunScript(scope: $0, in: worktree) },
+            deviceSwitcher: rps.activeTab == .device ? AnyView(devicesSwitcher(rps: rps)) : nil,
+            deviceActions: rps.activeTab == .device ? devicesActions(rps: rps) : nil
         )
+    }
+
+    private func devicesSwitcher(rps: RightPaneState) -> some View {
+        DevicesSwitcher(
+            state: state.devicesTabState(worktree: worktree, selection: rps.devicesSelection),
+            onSelect: { rps.devicesSelection = $0 }
+        )
+    }
+
+    private func devicesActions(rps: RightPaneState) -> AnyView? {
+        guard case .simulator(let device, let stage) = state.devicesTabState(
+            worktree: worktree, selection: rps.devicesSelection
+        ).stage else { return nil }
+        return AnyView(DevicesActions(
+            device: device, booted: stage == .booted, client: state.simulatorStreams,
+            onShutDown: { Task { await state.devicePane.shutDown(device) } }
+        ))
     }
 
     /// Keyboard equivalent of tapping a rail tab. Handled here rather than in
@@ -313,7 +329,7 @@ struct RightPaneView: View {
         guard let raw = notification.object as? String,
               let tab = RightPaneTab(rawValue: raw),
               state.acceptsRightPaneTabShortcut(tab),
-              RightPaneTab.available(isFolder: rps.isFolder, devicePanel: state.config.devicePanelEnabled).contains(tab)
+              RightPaneTab.available(isFolder: rps.isFolder, devices: state.devicesTabAvailable(in: worktree)).contains(tab)
         else { return }
         let panelShown = PluginPanelItem.selected(rps.activePluginPanel, in: pluginPanels) != nil
         handle(

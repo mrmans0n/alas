@@ -12,8 +12,8 @@ public struct SimulatorControlError: Error, LocalizedError, Equatable {
     public var errorDescription: String? { message }
 }
 
-/// Lists and boots simulators with `xcrun simctl`, which is public API.
-/// Capture and input go through AlasSimService instead.
+/// Lists, boots and shuts down simulators with `xcrun simctl`, which is public
+/// API. Capture and input go through AlasSimService instead.
 public enum SimulatorControl {
     private static let xcrun = "/usr/bin/xcrun"
 
@@ -33,5 +33,37 @@ public enum SimulatorControl {
         }
         let status = try await Process.run(xcrun, args: ["simctl", "bootstatus", udid, "-b"], timeout: 300)
         guard status.exitCode == 0 else { throw SimulatorControlError(status) }
+    }
+
+    public static func shutdown(udid: String) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "shutdown", udid], timeout: 60)
+        // A device that was already shut down answers "… in current state: Shutdown".
+        guard result.exitCode == 0 || result.stderr.contains("current state: Shutdown") else {
+            throw SimulatorControlError(result)
+        }
+    }
+
+    /// Whether Xcode's simulator tools are installed and selected.
+    public static func isAvailable() async -> Bool {
+        (try? await Process.run(xcrun, args: ["--find", "simctl"]))?.exitCode == 0
+    }
+
+    /// Each simulator device type's bundle, by identifier.
+    public static func deviceTypeBundles() async throws -> [String: URL] {
+        struct Listing: Decodable {
+            struct DeviceType: Decodable {
+                let identifier: String
+                let bundlePath: String?
+            }
+            let devicetypes: [DeviceType]
+        }
+        let result = try await Process.run(xcrun, args: ["simctl", "list", "devicetypes", "--json"])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        let listing = try JSONDecoder().decode(Listing.self, from: Data(result.stdout.utf8))
+        var bundles: [String: URL] = [:]
+        for type in listing.devicetypes {
+            if let path = type.bundlePath { bundles[type.identifier] = URL(fileURLWithPath: path) }
+        }
+        return bundles
     }
 }

@@ -331,13 +331,13 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "computer_vm_starting and computer_vm_slot_pending mean try again shortly, and in a VM computer_user_active means the user took it over: wait for them to hand it back. "
                         + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools. "
                         + "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.")
-                    lines.append("Device tools drive an iOS simulator the user also sees in the Device tab: "
+                    lines.append("Device tools drive an iOS simulator the user also sees in the Devices tab: "
                         + builtInToolNames.filter { $0.hasPrefix("device_") }.joined(separator: ", ")
                         + ". Call device_list, then device_open (it boots the simulator if needed). "
                         + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
                         + "x/y are pixels in the latest device_screenshot. "
                         + "device_user_active means the user took over the device: wait for them to hand it back. "
-                        + "device_disabled means the user hasn't turned on device control; ask them instead of retrying.")
+                        + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
                 }
             }
             if !isDelegated {

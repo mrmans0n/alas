@@ -298,7 +298,7 @@ pub enum Command {
     VmStatus {
         vm: Option<VmGuest>,
     },
-    /// MCP-only: drive an iOS simulator the user also sees in the Device tab.
+    /// MCP-only: drive an iOS simulator the user also sees in the Devices tab.
     Device(DeviceCommand),
     Resolve,
 }
