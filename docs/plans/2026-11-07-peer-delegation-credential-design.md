@@ -95,9 +95,9 @@ which are now proven.
 `read`, `status`, `interrupt` and `outbox` are refused too, unlike when access is off. An unproven device could be anyone, so letting
 it drain an outbox is exactly the gap being closed.
 
-The refusal is typed, `peerUnverified`, so the source can tell it from a pull that failed in transit. That matters because the
+The refusal is typed, `peerIdentityUnproven`, so the source can tell it from a pull that failed in transit. That matters because the
 collector skips the quiet-child check after a failed pull (#2370): a parent whose target refuses every pull would otherwise wait
-forever. On `peerUnverified` the source does what it does when the link becomes `.unauthorized`: it fails that peer's unsettled
+forever. On `peerIdentityUnproven` the source does what it does when the link becomes `.unauthorized`: it fails that peer's unsettled
 children with a wake whose reason says to pair the two Macs again. `discover` and `start` return the same refusal, so `agent_list --peer`
 and `session_new --peer` say why. `agent_list` without `peer` stays cheap and makes no peer calls, so it cannot know.
 
@@ -171,7 +171,7 @@ Inbound-only pairings made since #2363 need a re-pair before their agents can de
 Two PRs, in this order:
 
 1. **Proven identity.** Decisions 1 to 3: the proof, `peerPublicKey`, recording it in the three branches,
-   the backfill, the gate, the typed `peerUnverified` refusal and the source failing children on it, the Settings hint. Run the
+   the backfill, the gate, the typed `peerIdentityUnproven` refusal and the source failing children on it, the Settings hint. Run the
    two-host suite early: if its fixture pairs inbound-only without a proof, the gate turns it red, which also shows whether the
    fixture pairs the way real hosts do.
 2. **Delegation scope.** Decisions 4 to 6: `scope`, the gateway allowlist, `peers add`, `peers list`.
@@ -186,7 +186,7 @@ Extend the existing suites:
   no proof leaves the device unproven; a scope request without a proof is not honoured. One parameterized test.
 - `RemotePeerManager`: the pair-back and initiator branches record the proven key; the backfill picks two-way records only.
 - `PeerDelegationGate`: parameterized over proven or not, access and verb.
-- Coordinator against the fake `ACPDelegationPeers`: a `peerUnverified` pull fails the unsettled children with one wake.
+- Coordinator against the fake `ACPDelegationPeers`: a `peerIdentityUnproven` pull fails the unsettled children with one wake.
 - The `/pair` responder: an oversized signature or implausible key is refused before any verification runs.
 - The gateway: a `.delegation` device is refused every kind outside the allowlist, parameterized over the message kinds.
 - `RemoteIdentityCrypto`: a redeem signature does not verify as a socket proof, and the reverse.
