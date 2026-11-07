@@ -324,6 +324,7 @@ final class NativePeerSessions {
     /// dedup would silently drop all but the first.
     @ObservationIgnored private var changesRequestInFlight = false
     @ObservationIgnored private var changesRequestOutdated = false
+    @ObservationIgnored private var changesPollInFlight = false
     /// Documents (by their own identity, not just "the open one") with a
     /// `readFile`/`fileDiff` request currently outstanding. Keyed per
     /// document, not a single flag, because switching away from a document
@@ -789,6 +790,7 @@ final class NativePeerSessions {
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
+        changesPollInFlight = false
         documentRequestsInFlight = []
         documentRequestOutdated = false
         fileTreeRequestInFlight = false
@@ -850,6 +852,7 @@ final class NativePeerSessions {
             // find both still "in flight" and gate its own fresh requests.
             changesRequestInFlight = false
             changesRequestOutdated = false
+            changesPollInFlight = false
             fileTreeRequestInFlight = false
             fileTreeRequestOutdated = false
             documentRequestsInFlight = []
@@ -959,6 +962,7 @@ final class NativePeerSessions {
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
+        changesPollInFlight = false
         documentRequestsInFlight = []
         documentRequestOutdated = false
         fileTreeRequestInFlight = false
@@ -1365,6 +1369,39 @@ final class NativePeerSessions {
         // initial load was still out) skips its send; queue a retry so the
         // eventual reply doesn't stand in as current.
         if !requestChanges() { changesRequestOutdated = true }
+        reloadFileTreeAndDocument()
+    }
+
+    /// Reads the changes again, as the pane does while it shows them. Only
+    /// a reply that differs goes on to read the file tree and open document.
+    // ponytail: polled, as hosts push no working-tree events; a host-side watcher would replace it.
+    func pollChanges() {
+        if requestChanges() {
+            changesPollInFlight = true
+        } else if workspaceSummary?.isFolder == true {
+            // A folder has no changes to compare: its tree is the poll.
+            loadFileTree()
+        }
+        // Equal stats can hide an edit, so an open working-tree diff, or an
+        // image preview (no editor buffer watches it), is read again without
+        // showing it loading; an unchanged reply keeps it as is.
+        if let document = workspace.document, Self.pollsDocument(document),
+           !documentRequestsInFlight.contains(document) {
+            documentRequestsInFlight.insert(document)
+            if !sendDocumentRead(document) { documentRequestsInFlight.remove(document) }
+        }
+    }
+
+    nonisolated static func pollsDocument(_ document: NativePeerWorkspace.Document) -> Bool {
+        switch document {
+        // A checkpoint's diff compares against the working file.
+        case .diff, .checkpointDiff: true
+        case .file(let path): ImageFileType.isSupported(relativePath: path)
+        case .commitDiff, .stashDiff: false
+        }
+    }
+
+    private func reloadFileTreeAndDocument() {
         if !loadFileTree() { fileTreeRequestOutdated = true }
         // An open diff or file is otherwise left showing its old snapshot —
         // neither a summary change nor the toolbar's manual refresh touches
@@ -2081,7 +2118,15 @@ final class NativePeerSessions {
         }
         if let replyDocument { documentRequestsInFlight.remove(replyDocument) }
         let isDocumentReply = replyDocument != nil && replyDocument == workspace.document
+        let changesBefore = workspace.changes
         let handled = workspace.apply(message)
+        if isChangesReply {
+            let polled = changesPollInFlight
+            changesPollInFlight = false
+            if polled, case .loaded = workspace.changes, workspace.changes != changesBefore {
+                reloadFileTreeAndDocument()
+            }
+        }
         let isCommitFilesReply: Bool = switch message {
         case .commitFiles, .commitFilesFailed: true
         default: false

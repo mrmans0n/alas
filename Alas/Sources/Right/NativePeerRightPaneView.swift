@@ -8,6 +8,7 @@ struct NativePeerRightPaneView: View {
     @Bindable var state: AppState
     @Bindable var client: NativePeerSessions
     var collapsed: Bool = false
+    static let changesPollInterval: Duration = .seconds(5)
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -15,6 +16,7 @@ struct NativePeerRightPaneView: View {
     @State private var openPaths: Set<String> = []
     @State private var bookmarkOpenPaths: Set<String> = []
     @State private var railBodyWidth: Double = 0
+    /// Bumped on each poll, so the Run tab reads its scripts again.
     @State private var runRefreshGeneration = 0
     /// The git target's review status, as the host reads it.
     @State private var reviewLoop = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/"), baseBranch: "")
@@ -142,9 +144,26 @@ struct NativePeerRightPaneView: View {
         .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
         .task(id: reviewsKey) { await readReviews() }
         .task(id: stashesKey) { await readStashes() }
+        // There is no refresh button: while shown, the changes are read again.
+        .task(id: collapsed ? nil : gitTargetKey ?? client.selectedSessionId) {
+            guard !collapsed else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.changesPollInterval)
+                guard !Task.isCancelled, NSApp.isActive else { continue }
+                client.pollChanges()
+                // These can change on the host while the changes stay the
+                // same: global run scripts live outside the repository.
+                runRefreshGeneration += 1
+                await readStashes()
+                await readCheckpoints()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if !collapsed { client.pollChanges() }
+        }
         // A pop or apply changes the list as well. A refresh keeps the loaded
         // changes until the new ones land, so an unchanged list fires nothing:
-        // stash actions and the toolbar's refresh read the stashes themselves.
+        // stash actions read the stashes themselves.
         .onChange(of: client.workspace.changes) { _, changes in
             if case .loaded = changes {
                 Task { await readStashes() }
@@ -311,13 +330,6 @@ struct NativePeerRightPaneView: View {
             }
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            ToolbarBtn(icon: "arrow.clockwise", tooltip: "Refresh from peer") {
-                client.reloadWorkspace()
-                runRefreshGeneration += 1
-                Task { await readReviewStatus() }
-                Task { await readStashes() }
-                Task { await readCheckpoints() }
-            }
         }
         .padding(.leading, 10)
         .padding(.trailing, 4)
@@ -366,17 +378,20 @@ struct NativePeerRightPaneView: View {
                     onOpen: { client.open($0) },
                     // A rename's history follows its old path, as locally.
                     onFileHistory: fileHistoryAction.map { history in { history($0.renameFrom ?? $0.path) } },
-                    git: gitActions
+                    git: gitActions,
+                    preparation: preparationCard,
+                    checkpoints: gitTarget.flatMap { target in
+                        checkpoints.flatMap { catalog in
+                            !catalog.summaries.isEmpty || checkpointRestoreInterrupted
+                                ? AnyView(checkpointsSection(target, catalog: catalog)) : nil
+                        }
+                    },
+                    reviews: gitTarget.flatMap { target in
+                        reviewsKey != nil && !reviews.isEmpty ? AnyView(reviewsSection(target)) : nil
+                    }
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
                 .frame(maxHeight: .infinity, alignment: .top)
-                // Outside the changes view, so they show with no changes too.
-                if let gitTarget, reviewsKey != nil {
-                    reviewsSection(gitTarget)
-                }
-                if let gitTarget, let catalog = checkpoints, !catalog.summaries.isEmpty || checkpointRestoreInterrupted {
-                    checkpointsSection(gitTarget, catalog: catalog)
-                }
                 if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
@@ -389,6 +404,49 @@ struct NativePeerRightPaneView: View {
                 }
             }
         }
+    }
+
+    /// The local tab's Prepare card, with what the host serves: its local
+    /// changes and its branch's request as reviews, and the commit.
+    private var preparationCard: AnyView? {
+        guard let gitTarget, reviewsKey != nil, case .loaded(let changes) = client.workspace.changes else { return nil }
+        let worktree = gitTarget.worktree.snapshot.worktree
+        let options = ChangesReviewScopeOption.options(
+            changes: [],
+            commitCount: 0,
+            comparisonRef: nil,
+            hostedReviews: ChangesReviewScopeOption.hostedReviews(
+                stack: nil, stackRemote: nil, branchRequest: unlistedReviewRequest(serverId: gitTarget.serverId)
+            )
+        )
+        guard let model = ChangesTabView.changesPreparationCardModel(
+            preparation: ChangesPreparationModel(
+                changes: changes.staged + changes.unstaged, hasDraft: false, draftNonEmpty: false, readinessActions: []
+            ),
+            hasReviewScopes: !options.isEmpty
+        ) else { return nil }
+        return AnyView(ChangesPreparationCard(
+            model: model,
+            onReviewChanges: {
+                let session = ReviewDraftSessionID.localChanges(
+                    worktreeID: worktree.id, worktreePath: worktree.path, scope: .all
+                ).rawValue
+                client.openReview(session, serverId: gitTarget.serverId, worktree: gitTarget.worktree)
+            },
+            onChooseReviewScope: nil,
+            reviewScopeOptions: options,
+            onReviewScopeOption: { option in
+                if case .hostedReview(let review) = option { startProviderReview(review.number, on: gitTarget) }
+            },
+            reviewScopeShortcut: nil,
+            onDraftCommit: { commitTarget = gitTarget },
+            onPublishCommit: {},
+            onGGAction: { _ in },
+            onGGStackAction: { _ in },
+            onReviewRequestAction: { _ in },
+            onDismissSyncFailure: {},
+            onOpenGGLanding: {}
+        ))
     }
 
     private var gitActions: NativePeerChangesView.Git? {
@@ -627,15 +685,9 @@ struct NativePeerRightPaneView: View {
         return listed ? nil : request
     }
 
-    /// The host's reviews, led by its local changes until they are listed,
-    /// so a review of them can be started from here as in the Changes tab.
+    /// The host's reviews. New ones start from the Prepare card.
     @ViewBuilder
     private func reviewsSection(_ target: (serverId: String, worktree: PeerHostWorktree)) -> some View {
-        let worktree = target.worktree.snapshot.worktree
-        let localChanges = ReviewDraftSessionID.localChanges(
-            worktreeID: worktree.id, worktreePath: worktree.path, scope: .all
-        ).rawValue
-        let listsLocalChanges = reviews.contains { $0.sessionID == localChanges }
         SectionHeader(
             role: .reviews,
             title: "Reviews",
@@ -644,38 +696,15 @@ struct NativePeerRightPaneView: View {
             onToggle: { reviewsExpanded.toggle() }
         ) { EmptyView() }
         if reviewsExpanded {
-            // Bounded, so a long review history scrolls instead of crowding
-            // out the changes.
-            ScrollView {
-                VStack(spacing: 0) { reviewRows(target, localChanges: localChanges, listsLocalChanges: listsLocalChanges) }
-            }
-            .frame(maxHeight: 180)
-        }
-    }
-
-    @ViewBuilder
-    private func reviewRows(
-        _ target: (serverId: String, worktree: PeerHostWorktree), localChanges: String, listsLocalChanges: Bool
-    ) -> some View {
-        if let request = unlistedReviewRequest(serverId: target.serverId) {
-            let title = "Review \(request.provider.reviewRequestLabel) \(request.provider.reviewRequestNumberPrefix)\(request.number)"
-            reviewRow(title: title, subtitle: nil, verdict: nil, openCount: 0) {
-                startProviderReview(request.number, on: target)
-            }
-        }
-        if !listsLocalChanges {
-            reviewRow(title: "Review local changes", subtitle: nil, verdict: nil, openCount: 0) {
-                client.openReview(localChanges, serverId: target.serverId, worktree: target.worktree)
-            }
-        }
-        ForEach(reviews, id: \.sessionID) { review in
-            reviewRow(
-                title: review.record.target.title,
-                subtitle: review.record.target.sourceDescription,
-                verdict: review.record.verdict?.verdict,
-                openCount: review.openCommentCount
-            ) {
-                client.openReview(review.sessionID, serverId: target.serverId, worktree: target.worktree)
+            ForEach(reviews, id: \.sessionID) { review in
+                reviewRow(
+                    title: review.record.target.title,
+                    subtitle: review.record.target.sourceDescription,
+                    verdict: review.record.verdict?.verdict,
+                    openCount: review.openCommentCount
+                ) {
+                    client.openReview(review.sessionID, serverId: target.serverId, worktree: target.worktree)
+                }
             }
         }
     }
@@ -858,14 +887,8 @@ struct NativePeerRightPaneView: View {
             )
         }
         if checkpointsExpanded {
-            // Bounded, as the reviews are.
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(catalog.summaries) { checkpointCard($0, on: target) }
-                    CheckpointFooterRow(storageUsage: catalog.byteCount)
-                }
-            }
-            .frame(maxHeight: 240)
+            ForEach(catalog.summaries) { checkpointCard($0, on: target) }
+            CheckpointFooterRow(storageUsage: catalog.byteCount)
         }
     }
 

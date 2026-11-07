@@ -45,6 +45,11 @@ struct NativePeerChangesView: View {
     /// Nil leaves File History out of, or disabled in, a file row's menu.
     var onFileHistory: ((ChangedFile) -> Void)? = nil
     var git: Git? = nil
+    /// The Prepare card; while there is one it offers the commit.
+    var preparation: AnyView? = nil
+    /// Each scrolls with the changes, in the local tab's order.
+    var checkpoints: AnyView? = nil
+    var reviews: AnyView? = nil
 
     @Environment(\.theme) private var theme
     /// Stashes starts collapsed, as `RightPaneState.stashesExpanded` does locally.
@@ -64,62 +69,60 @@ struct NativePeerChangesView: View {
             let servesOperations = git?.servesOperations == true
             let operation = servesOperations ? changes.operation : nil
             let conflicts = servesOperations ? Self.conflicts(in: changes) : []
-            // Stashes still show, so changes stashed away can be popped back.
-            if unchanged && (git?.stashes ?? []).isEmpty && operation == nil {
-                NativePeerRailMessage(text: "No changes.")
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if unchanged {
-                            NativePeerRailMessage(text: "No changes.")
-                        }
-                        if let git, let operation {
-                            OperationCard(
-                                operation: operation,
-                                hasUnresolvedConflicts: !conflicts.isEmpty,
-                                onContinue: { git.onContinue(operation) },
-                                onSkip: { git.onSkip(operation) },
-                                onAbort: { git.onAbort(operation) }
-                            )
-                        }
-                        // A stash pop's conflicts come with no operation in progress.
-                        if let git, !conflicts.isEmpty {
-                            ConflictsSection(
-                                conflicts: conflicts,
-                                bulkInFlight: false,
-                                hasAgent: false,
-                                showsBulkResolve: false,
-                                onSelect: { onOpen(git.editsFiles ? .file(path: $0.path) : .diff(path: $0.path, stage: .unstaged)) },
-                                onUseOurs: git.onUseOurs,
-                                onUseTheirs: git.onUseTheirs,
-                                onKeepDeleted: git.onKeepDeleted,
-                                onMarkResolved: git.onMarkResolved,
-                                onResolveAllWithAgent: {},
-                                onCancelBulkResolve: {}
-                            )
-                        }
-                        treeSection(
-                            "Working tree",
-                            // As locally, conflicted files show in Conflicts only.
-                            files: (changes.staged + changes.unstaged).filter { conflicts.isEmpty || $0.conflict == nil },
-                            collapsedPaths: $collapsedWorkingTreePaths,
-                            document: { .diff(path: $0.path, stage: $0.stage) },
-                            onSelectStage: { file, stage in
-                                onOpen(.diff(path: file.path, stage: stage))
-                            },
-                            git: git,
-                            truncated: changes.truncated
-                        )
-                        commitSection(changes.commits, truncated: changes.commitsTruncated)
-                        if let git {
-                            stashSection(git)
-                        }
-                        if changes.truncated {
-                            NativePeerRailMessage(text: "The peer shortened these lists.")
-                        }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    preparation
+                    if unchanged {
+                        NativePeerRailMessage(text: "No changes.")
                     }
-                    .padding(.vertical, 4)
+                    if let git, let operation {
+                        OperationCard(
+                            operation: operation,
+                            hasUnresolvedConflicts: !conflicts.isEmpty,
+                            onContinue: { git.onContinue(operation) },
+                            onSkip: { git.onSkip(operation) },
+                            onAbort: { git.onAbort(operation) }
+                        )
+                    }
+                    // A stash pop's conflicts come with no operation in progress.
+                    if let git, !conflicts.isEmpty {
+                        ConflictsSection(
+                            conflicts: conflicts,
+                            bulkInFlight: false,
+                            hasAgent: false,
+                            showsBulkResolve: false,
+                            onSelect: { onOpen(git.editsFiles ? .file(path: $0.path) : .diff(path: $0.path, stage: .unstaged)) },
+                            onUseOurs: git.onUseOurs,
+                            onUseTheirs: git.onUseTheirs,
+                            onKeepDeleted: git.onKeepDeleted,
+                            onMarkResolved: git.onMarkResolved,
+                            onResolveAllWithAgent: {},
+                            onCancelBulkResolve: {}
+                        )
+                    }
+                    treeSection(
+                        "Working tree",
+                        // As locally, conflicted files show in Conflicts only.
+                        files: (changes.staged + changes.unstaged).filter { conflicts.isEmpty || $0.conflict == nil },
+                        collapsedPaths: $collapsedWorkingTreePaths,
+                        document: { .diff(path: $0.path, stage: $0.stage) },
+                        onSelectStage: { file, stage in
+                            onOpen(.diff(path: file.path, stage: stage))
+                        },
+                        git: git,
+                        truncated: changes.truncated
+                    )
+                    commitSection(changes.commits, truncated: changes.commitsTruncated)
+                    checkpoints
+                    if let git {
+                        stashSection(git)
+                    }
+                    reviews
+                    if changes.truncated {
+                        NativePeerRailMessage(text: "The peer shortened these lists.")
+                    }
                 }
+                .padding(.vertical, 4)
             }
         }
     }
@@ -152,7 +155,7 @@ struct NativePeerChangesView: View {
                         del: groups.reduce(0) { $0 + $1.del }
                     )
                 ) {
-                    if let git, files.contains(where: { $0.stage == .staged }) {
+                    if let git, preparation == nil, files.contains(where: { $0.stage == .staged }) {
                         Button("Commit…", action: git.onCommit)
                             .buttonStyle(.plain)
                             .font(.system(size: 10.5))

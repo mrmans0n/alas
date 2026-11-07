@@ -190,11 +190,13 @@ struct NativePeerWorkspace: Equatable {
     /// Lands a host-served diff for `document` if it is still the open one.
     mutating func finishDocument(_ document: Document, with result: Result<HostDiff, NativePeerReviewGitClientError>) {
         guard document == self.document else { return }
-        documentContent = switch result {
+        let content: Load<DocumentContent> = switch result {
         case .success(let diff):
             .loaded(.diff(ParsedDiff(hunks: diff.hunks.map(Self.hunk), metadataSummary: diff.note), truncated: diff.truncated))
         case .failure(let error): .failed(error.message)
         }
+        // A poll's unchanged reply must not redraw the open diff.
+        if content != documentContent { documentContent = content }
     }
 
     /// The sides an image path's diff `document` compares, from its row in the loaded lists or the
@@ -313,7 +315,8 @@ struct NativePeerWorkspace: Equatable {
         case (.modified, _, .missing): .deleted
         default: plan.kind
         }
-        documentContent = .loaded(.imageDiff(before: before, after: after, kind: kind, oldPath: plan.oldPath))
+        let content = Load<DocumentContent>.loaded(.imageDiff(before: before, after: after, kind: kind, oldPath: plan.oldPath))
+        if content != documentContent { documentContent = content }
     }
 
     mutating func closeDocument() {
@@ -431,10 +434,12 @@ struct NativePeerWorkspace: Equatable {
             guard document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:))) else {
                 return true
             }
-            documentContent = .loaded(.diff(
+            // A poll's unchanged reply must not redraw the open diff.
+            let content = Load<DocumentContent>.loaded(.diff(
                 ParsedDiff(hunks: hunks.map(Self.hunk), metadataSummary: metadataNote),
                 truncated: truncated
             ))
+            if content != documentContent { documentContent = content }
         case .fileDiffFailed(_, let path, let stage, let reason, let message):
             guard document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:))) else {
                 return true
@@ -453,7 +458,8 @@ struct NativePeerWorkspace: Equatable {
         case .fileBytes(_, let path, let data, _):
             guard document == .file(path: path) else { return true }
             documentVersion = nil
-            documentContent = .loaded(.image(data))
+            // A poll's unchanged reply must not redraw the open preview.
+            if documentContent != .loaded(.image(data)) { documentContent = .loaded(.image(data)) }
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             guard document == .file(path: path) else { return true }
             documentVersion = nil

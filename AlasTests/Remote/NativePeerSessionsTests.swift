@@ -1129,7 +1129,7 @@ struct NativePeerSessionsTests {
     }
 
     /// A folder project has no git, so a peer never asks it for changes.
-    @Test func folderWorktreeSessionRequestsNoChanges() {
+    @Test func folderWorktreeSessionPollsItsFilesInsteadOfChanges() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
         let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
@@ -1147,6 +1147,14 @@ struct NativePeerSessionsTests {
 
         #expect(listChangesCount(links, "s") == 0)
         #expect(!client.requestChanges())
+
+        // Files created on the host show up without a changes reply.
+        let fileTreeReads = { links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count }
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let reads = fileTreeReads()
+        client.pollChanges()
+        #expect(fileTreeReads() == reads + 1)
+        #expect(listChangesCount(links, "s") == 0)
     }
 
     @Test func worktreeSummaryChangeRefreshesChanges() {
@@ -1170,6 +1178,76 @@ struct NativePeerSessionsTests {
 
         links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
         #expect(listChangesCount(links, "s") == initial + 1)
+    }
+
+    /// A poll reads the changes alone until they differ; only then does the
+    /// file tree, like an open document, go stale enough to read again.
+    @Test func aPolledChangeReloadsTheFileTreeOnlyWhenTheChangesDiffer() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        let fileTreeReads = { links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count }
+        func reply(staged: [RemoteChangedFile]) {
+            links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                      files: [], staged: staged, unstaged: [], commits: [], truncated: false), from: "B")
+        }
+        reply(staged: [])
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let reads = fileTreeReads()
+
+        client.pollChanges()
+        reply(staged: [])
+        #expect(fileTreeReads() == reads)
+
+        client.pollChanges()
+        reply(staged: [RemoteChangedFile(path: "a", status: "M", add: 1, del: 0, conflict: nil, renameFrom: "")])
+        #expect(fileTreeReads() == reads + 1)
+    }
+
+    /// An edit can keep a file's stats, so a poll reads the open diff again,
+    /// keeping it on screen rather than loading.
+    @Test func aPollReadsTheOpenDiffAgainWithoutShowingItLoading() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        let diffReads = { links.sent(to: "B").filter { if case .fileDiff = $0 { true } else { false } }.count }
+        client.open(.diff(path: "a", stage: .unstaged))
+        links.receive(.fileDiffResult(sessionId: "s", path: "a", stage: "unstaged", hunks: [], truncated: false,
+                                      metadataNote: nil), from: "B")
+        let reads = diffReads()
+
+        client.pollChanges()
+
+        #expect(diffReads() == reads + 1)
+        guard case .loaded = client.workspace.documentContent else {
+            Issue.record("the open diff showed loading: \(client.workspace.documentContent)")
+            return
+        }
+    }
+
+    /// What a poll reads again: the documents that can change on the host
+    /// without an editor buffer watching them.
+    @Test(arguments: [
+        (NativePeerWorkspace.Document.diff(path: "a.swift", stage: .unstaged), true),
+        (.file(path: "logo.png"), true),
+        (.file(path: "a.swift"), false),
+        (.commitDiff(path: "a.swift", sha: "abc"), false),
+        (.checkpointDiff(path: "a.swift", checkpointID: CheckpointID()), true),
+    ])
+    func aPollReadsAgainOnlyTheDocumentsThatCanChange(document: NativePeerWorkspace.Document, polled: Bool) {
+        #expect(NativePeerSessions.pollsDocument(document) == polled)
     }
 
     /// A session whose row carries no worktree summary keeps comparing its
