@@ -2478,12 +2478,14 @@ public final class ACPSessionRunner {
 
     /// What the turn ended on, for its completion. An agent that ends its turn
     /// right after its last message leaves that message in the coalescing
-    /// buffer, and it may be the rest of the message the transcript ends on.
+    /// buffer, and it may be the rest of a message already in the transcript.
     private func turnFinalAgentText() -> String? {
-        guard let buffered = bufferedAgentText() else { return currentTurnLastAgentText() }
-        let messages = session.transcript.messages
-        let floor = min(activePromptTranscriptFloor ?? 0, messages.count)
-        let started = messages[floor...].last.flatMap { ACPSessionTranscriptReader.agentText($0) } ?? ""
+        let chunks = bufferedAgentChunks()
+        guard let first = chunks.first, let buffered = bufferedAgentText() else { return currentTurnLastAgentText() }
+        let floor = activePromptTranscriptFloor ?? 0
+        let started = session.agentRowContinued(byMessageId: first.chunk.messageId).flatMap { row in
+            row >= floor ? ACPSessionTranscriptReader.agentText(session.transcript.messages[row]) : nil
+        } ?? ""
         let tail = ACPDelegatedOutcomeText.tail(started + buffered, limit: ACPTurnCompletion.lastAgentTextLimit)
         return tail.isEmpty ? currentTurnLastAgentText() : tail
     }
@@ -2492,14 +2494,18 @@ public final class ACPSessionRunner {
     /// the transcript. Read-only on purpose: draining the buffer at turn end
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
-        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+        let text = bufferedAgentChunks().map(\.text).joined()
+        return text.isEmpty ? nil : text
+    }
+
+    private func bufferedAgentChunks() -> [(chunk: ACPTextChunk, text: String)] {
+        pendingIncomingUpdates.compactMap { pending in
             guard !isSubagentUpdate(pending.params),
                   case .agentMessageChunk(let chunk) = pending.params.update,
                   case .text(let value) = chunk.content
             else { return nil }
-            return value
-        }.joined()
-        return text.isEmpty ? nil : text
+            return (chunk, value)
+        }
     }
 
     private func waitForPromptUpdateDelivery(promptID: Int) async {
