@@ -2479,11 +2479,13 @@ public final class ACPSessionRunner {
     /// What the turn ended on, for its completion. An agent that ends its turn
     /// right after its last message leaves that message in the coalescing
     /// buffer, and it may be the rest of a message already in the transcript.
+    /// The buffer can hold several messages; the last chunk's is the one to quote.
     private func turnFinalAgentText() -> String? {
         let chunks = bufferedAgentChunks()
-        guard let first = chunks.first, let buffered = bufferedAgentText() else { return currentTurnLastAgentText() }
+        guard let messageId = chunks.last.map(\.chunk.messageId) else { return currentTurnLastAgentText() }
+        let buffered = chunks.filter { $0.chunk.messageId == messageId }.map(\.text).joined()
         let floor = activePromptTranscriptFloor ?? 0
-        let started = session.agentRowContinued(byMessageId: first.chunk.messageId).flatMap { row in
+        let started = session.agentRowContinued(byMessageId: messageId).flatMap { row in
             row >= floor ? ACPSessionTranscriptReader.agentText(session.transcript.messages[row]) : nil
         } ?? ""
         let tail = ACPDelegatedOutcomeText.tail(started + buffered, limit: ACPTurnCompletion.lastAgentTextLimit)
