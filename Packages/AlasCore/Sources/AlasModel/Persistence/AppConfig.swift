@@ -59,9 +59,15 @@ public struct DictationMicrophone: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// How tightly the app packs its chrome and chat. Comfortable is the default.
+public enum UIDensity: String, Codable, Sendable, CaseIterable {
+    case comfortable, compact
+}
+
 public struct AppConfig: Codable, Equatable, Sendable {
     public var themeId: String
     public var accent: String
+    public var density: UIDensity
     public var matchSystemTheme: Bool
     public var sidebarMaterial: SidebarMaterialChoice
     public var sidebarWidth: Double
@@ -714,6 +720,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
+        density: .comfortable,
         matchSystemTheme: false,
         sidebarMaterial: .appKitSidebar,
         sidebarWidth: 244,
@@ -803,9 +810,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, deviceAgentsEnabled: Bool = false) {
+    public init(themeId: String, accent: String, density: UIDensity = .comfortable, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, deviceAgentsEnabled: Bool = false) {
         self.themeId = themeId
         self.accent = accent
+        self.density = density
         self.matchSystemTheme = matchSystemTheme
         self.sidebarMaterial = sidebarMaterial
         self.sidebarWidth = sidebarWidth
@@ -918,7 +926,7 @@ extension AppConfig {
 
 extension AppConfig {
     public enum CodingKeys: String, CodingKey, Sendable {
-        case themeId, accent, matchSystemTheme,
+        case themeId, accent, density, matchSystemTheme,
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible, sidebarVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
@@ -958,6 +966,7 @@ extension AppConfig {
         // collapses to the dark default.
         themeId = (rawThemeId == "warm-amber" || rawThemeId == "neutral") ? "cool-slate" : rawThemeId
         accent = (try? c.decode(String.self, forKey: .accent)) ?? d.accent
+        density = (try? c.decode(UIDensity.self, forKey: .density)) ?? d.density
         matchSystemTheme = (try? c.decode(Bool.self, forKey: .matchSystemTheme)) ?? d.matchSystemTheme
         sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitFullScreenUI
         sidebarWidth = (try? c.decode(Double.self, forKey: .sidebarWidth)) ?? d.sidebarWidth

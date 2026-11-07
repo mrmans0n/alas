@@ -110,6 +110,22 @@ struct AppearancePane: View {
                         AlasSlider(value: chromeBinding(\.textContrast), range: 0...1, step: 0.05)
                     }
                 }
+                SettingsGroup(title: "Density") {
+                    SettingsRow(name: "Density",
+                                desc: "How tightly the sidebar and agent chat are packed.") {
+                        AlasSegmentedControl(
+                            selection: state.config.density,
+                            options: [
+                                AlasSegmentedOption(id: UIDensity.comfortable, label: "Comfortable"),
+                                AlasSegmentedOption(id: UIDensity.compact, label: "Compact"),
+                            ],
+                            onSelect: {
+                                state.config.density = $0
+                                state.saveConfig()
+                            }
+                        )
+                    }
+                }
                 SettingsGroup(title: "Chat") {
                     SettingsRow(name: "Chat material",
                                 desc: "Behind agent chat transcripts and the composer.") {

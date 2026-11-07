@@ -10,6 +10,15 @@ struct ACPChatTypographyTests {
         #expect(ACPChatTypography(fontFamily: "", fontSize: 200).baseSize == 64)
     }
 
+    @Test(arguments: [(13, UIDensity.comfortable, 14.0), (13, UIDensity.compact, 13.5)])
+    func paragraphSizeFollowsDensity(size: Int, density: UIDensity, expected: CGFloat) {
+        #expect(ACPChatTypography(fontFamily: "", fontSize: size, density: density).paragraphSize == expected)
+    }
+
+    @Test func densityOffsetStaysWithinTheFontSizeCeiling() {
+        #expect(ACPChatTypography(fontFamily: "", fontSize: 64, density: .comfortable).baseSize == 64)
+    }
+
     @Test func derivesReadableSizesFromBaseSize() {
         let typography = ACPChatTypography(fontFamily: "SF Mono", fontSize: 14)
 
