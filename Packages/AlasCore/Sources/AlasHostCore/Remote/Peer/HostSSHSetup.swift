@@ -3,6 +3,7 @@ import AlasFoundation
 import AlasPlatform
 import AlasFeatures
 import AlasModel
+import AlasACP
 import AlasAgentKit
 
 public struct HostSSHAgent: Equatable, Sendable {
@@ -334,6 +335,30 @@ public struct HostSSHSetup: Sendable {
         for command in commands {
             _ = try await step("Configure", command, timeout: 30)
         }
+    }
+
+    /// Installs, with the host Mac's npm, the adapter each enabled agent
+    /// needs when its CLI is there and the adapter is not. The host still
+    /// works without an adapter, so a failure is a warning, not a failed setup.
+    public func installAdapters(agents: [String: Bool]) async -> [String] {
+        var warnings: [String] = []
+        for agent in AgentBuiltins.catalog where agents[agent.id] == true {
+            guard let adapter = ACPManagedAdapterDescriptor.descriptor(for: agent.id) else { continue }
+            let script = "if command -v \(SSHCommand.shellQuote(agent.binary)) >/dev/null 2>&1 "
+                + "&& ! command -v \(SSHCommand.shellQuote(adapter.binaryName)) >/dev/null 2>&1; then "
+                + "npm install -g --no-fund --no-audit \(SSHCommand.shellQuote(adapter.packageName)); fi"
+            // As the host reads its PATH: `npm` often comes from `.zshrc`.
+            let command = "\"${SHELL:-/bin/zsh}\" -lic \(SSHCommand.shellQuote(script)) </dev/null"
+            do {
+                let result = try await run(command, 300)
+                if result.exitCode != 0 {
+                    warnings.append("Agent \(agent.id): couldn't install \(adapter.packageName): \(Self.message(result))")
+                }
+            } catch {
+                warnings.append("Agent \(agent.id): couldn't install \(adapter.packageName): \(error.localizedDescription)")
+            }
+        }
+        return warnings
     }
 
     /// Installs and (re)starts the launchd agent that runs the host.

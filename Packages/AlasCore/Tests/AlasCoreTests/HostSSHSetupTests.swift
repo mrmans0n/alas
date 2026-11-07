@@ -115,6 +115,23 @@ struct HostSSHSetupTests {
         #expect((result.exitCode == 0) == found)
     }
 
+    @Test func installsTheAdaptersOfEnabledManagedAgentsOnly() async {
+        let remote = FakeRemote()
+        let warnings = await remote.setup().installAdapters(agents: ["claude": true, "codex": false, "gemini": true])
+        let commands = remote.commands.withLock { $0 }
+        #expect(warnings.isEmpty)
+        #expect(commands.count == 1)
+        #expect(commands[0].contains("@alas-ide/claude-agent-acp"))
+    }
+
+    @Test func aFailedAdapterInstallIsAWarning() async {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 127, stdout: "", stderr: "zsh: command not found: npm") }
+        let warnings = await remote.setup().installAdapters(agents: ["codex": true])
+        #expect(warnings.count == 1)
+        #expect(warnings[0].contains("@alas-ide/codex-acp"))
+        #expect(warnings[0].contains("command not found: npm"))
+    }
+
     @Test func homebrewRunsWithoutItsCleanup() async throws {
         let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "\(Self.brewHost)\n", stderr: "") }
         let probe = HostSSHProbe(os: "Darwin", arch: "arm64", brew: Self.brew)
