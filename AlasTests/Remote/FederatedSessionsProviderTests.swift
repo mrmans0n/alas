@@ -225,6 +225,21 @@ struct FederatedSessionsProviderTests {
         #expect(client.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "kept")])
     }
 
+    /// An adapter install reaches a peer that serves it, with the peer's
+    /// own session id; an older peer, which can't decode it, gets nothing.
+    @Test(arguments: [false, true])
+    func anAdapterInstallReachesOnlyAPeerThatServesIt(olderPeer: Bool) {
+        let links = FakeLinks()
+        if olderPeer { links.olderPeers = ["srv-b"] }
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        #expect(provider.route(.installAdapter(sessionId: "srv-b:s1"), from: client.downstream))
+        #expect(links.sent(to: "srv-b") == (olderPeer ? [] : [.installAdapter(sessionId: "s1")]))
+    }
+
     @Test func tabActionsForAPeerWithoutTheCapabilityFailWithoutBeingSent() {
         let links = FakeLinks()
         links.olderPeers = ["srv-b"]

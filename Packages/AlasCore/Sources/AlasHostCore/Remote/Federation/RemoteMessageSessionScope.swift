@@ -21,7 +21,7 @@ extension RemoteClientMessage {
              .createWorktreeSession, .createSession, .console, .portForward, .host:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
-             .openSessionTab(let id), .closeSessionTab(let id):
+             .openSessionTab(let id), .closeSessionTab(let id), .installAdapter(let id):
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _, _), .searchMentions(let id, _), .setModel(let id, _),
@@ -54,6 +54,7 @@ extension RemoteClientMessage {
         case .takeOver: return .takeOver(sessionId: new)
         case .openSessionTab: return .openSessionTab(sessionId: new)
         case .closeSessionTab: return .closeSessionTab(sessionId: new)
+        case .installAdapter: return .installAdapter(sessionId: new)
         case .sendPrompt(_, let text, let attachments, let intent, let mentions):
             return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent, mentions: mentions)
         case .searchMentions(_, let query): return .searchMentions(sessionId: new, query: query)
