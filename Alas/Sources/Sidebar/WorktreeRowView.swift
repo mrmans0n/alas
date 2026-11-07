@@ -103,12 +103,13 @@ struct WorktreeRowView: View {
         min(sessionCount, 3)
     }
 
-    /// What line 2's status chip shows for a row. The dot and its label are one
-    /// unit — a presentation always carries a label, so there is no way to
-    /// render a bare, unexplained dot.
+    private nonisolated static let agentBadgeSpacing: CGFloat = 4
+
+    /// What a row says about its state: the note on line 2 and, unless it is a
+    /// plain file count, the dot in the glyph slot.
     struct StatusPresentation: Equatable {
         let note: String
-        /// Theme token for both the dot and the note text.
+        /// Theme token for the note text and the dot.
         let colorToken: String
         let pulses: Bool
     }
@@ -153,7 +154,8 @@ struct WorktreeRowView: View {
             }
             return StatusPresentation(
                 note: "\(fileCount) file\(fileCount == 1 ? "" : "s")",
-                colorToken: "mod",
+                // Modified files are normal work, so they don't get a status colour.
+                colorToken: "fg-dim",
                 pulses: false
             )
         }
@@ -219,15 +221,16 @@ struct WorktreeRowView: View {
     /// Keyboard cursor from the sidebar filter; drawn like hover.
     var isHighlighted = false
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
     @State private var loadedCommitQuery: CommitQuery?
     @State private var branchCommits: GitService.BranchCommitCount?
     /// Last count loaded for each query identity. Rows unmount as the lazy
     /// sidebar scrolls them away; one coming back draws its count at once
     /// and, while its revision is unchanged, skips git entirely.
-    @MainActor private static var loadedCommitCounts: [CommitQuery.Identity: LoadedCommitCount] = [:]
+    @MainActor static var loadedCommitCounts: [CommitQuery.Identity: LoadedCommitCount] = [:]
 
-    private struct LoadedCommitCount {
+    struct LoadedCommitCount {
         let query: CommitQuery
         let commits: GitService.BranchCommitCount?
     }
@@ -383,41 +386,43 @@ struct WorktreeRowView: View {
             worktreeStatus: worktreeStatus
         )
 
-        ZStack(alignment: .leading) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(theme.color("accent-soft"))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9)
-                            .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
-                    )
-            } else if hovering || isHighlighted {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(theme.color("bg-3").opacity(0.55))
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
+        VStack(alignment: .leading, spacing: scale.space[0]) {
+            firstLine(status: status, worktreeStatus: worktreeStatus)
+            if operationState != nil {
+                operationLine
+            } else if let landingStatus {
+                landingLine(status: landingStatus)
+            } else {
+                secondLine(
+                    status: status,
+                    worktreeStatus: worktreeStatus,
+                    showsExplanation: explanationEvidence != nil
+                )
             }
-            VStack(alignment: .leading, spacing: 2) {
-                firstLine()
-                if operationState != nil {
-                    operationLine
-                } else if let landingStatus {
-                    landingLine(status: landingStatus)
-                } else {
-                    secondLine(
-                        status: status,
-                        showsExplanation: explanationEvidence != nil
-                    )
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
-            .padding(.bottom, 7)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .aiBeam(isActive: isNamingBranch, cornerRadius: 9)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
+        .frame(maxWidth: .infinity, minHeight: scale.sidebarRowMinHeight, alignment: .leading)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .fill(theme.color("accent-soft"))
+            } else if hovering || isHighlighted {
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .fill(theme.color("bg-3").opacity(0.55))
+            }
+        }
+        .aiBeam(isActive: isNamingBranch, cornerRadius: scale.radius.medium)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityLabel(status: status, worktreeStatus: worktreeStatus, showsExplanation: explanationEvidence != nil))
+        // The tiles are not mounted at rest, so each session stays reachable.
+        .accessibilityActions {
+            ForEach(harnessSummary?.sessions ?? []) { session in
+                Button("Open \(session.agent.displayName) session") { onActivateHarness(session.id) }
+            }
+        }
         .sidebarHover { hovering = $0 }
         .onTapGesture {
             if !isPending {
@@ -462,73 +467,109 @@ struct WorktreeRowView: View {
         }
     }
 
-    private func firstLine() -> some View {
-        HStack(spacing: 7) {
-            Icon(
-                name: isMain ? "home" : "branch",
-                size: 12,
-                color: theme.color(iconColorToken(harnessState: harnessSummary?.state))
-            )
+    /// Width of the slot that holds a row's icon or status dot; the second
+    /// line starts where the name does.
+    private static let glyphSlotWidth: CGFloat = 12
+
+    private var textInset: CGFloat { Self.glyphSlotWidth + scale.space[2] }
+
+    private func firstLine(status: StatusPresentation?, worktreeStatus: WorktreeDirtyState) -> some View {
+        HStack(spacing: scale.space[2]) {
+            leadingGlyph(status: status, worktreeStatus: worktreeStatus)
+                .frame(width: Self.glyphSlotWidth)
             Text(worktree.title)
-                // Pre-E1 metrics, restored: E1 shrank this to 11.5pt, muted it
-                // until hover, and tightened it with negative tracking. Those
-                // compounded into a branch name that was harder to read, and a
-                // monospace face at this size suffers most from the tracking.
-                // Selection and hover are carried by the row's fill and outline,
-                // so the label does not need to dim to stay out of their way.
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(isSelected ? scale.emphasisFont : scale.bodyFont)
                 .foregroundColor(theme.color(branchColorToken))
                 .lineLimit(1)
-                .truncationMode(.tail)
+                // Sibling branches differ at the end, so that is what survives.
+                .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if isBranchNamePending, !isNamingBranch {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 10))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-faint"))
                     .help("The branch will be named from your first chat message.")
             }
             if worktree.isDetached {
                 DetachedTag()
             }
-            if let summary = harnessSummary {
+            // A pull action is waiting, so this stays through every state.
+            ForEach(WorktreeRowPresentation.upstreamItemsAtRest(Self.upstreamStatusItems(upstreamStatus, isMain: isMain)), id: \.text) {
+                upstreamView($0)
+            }
+            // An operation or landing takes line 2, so the agents move up.
+            if operationState != nil || landingStatus != nil, let summary = harnessSummary {
                 agentBadges(summary: summary)
             }
         }
         .frame(minHeight: HarnessSessionBadge.diameter)
     }
 
-    /// E1 tints the branch glyph green while a session runs, so activity
-    /// reads from line 1 without the row having to be scanned twice.
-    ///
-    /// Keyed off the harness state directly rather than `StatusPresentation.pulses`:
-    /// `pulses` is a presentation detail (whether the dot animates), not the
-    /// state itself, so a future state that also pulses should not turn the
-    /// icon green by accident.
-    private func iconColorToken(harnessState: HarnessService.AggregatedState?) -> String {
-        if harnessState == .running { return "add" }
-        return isMain ? "fg-muted" : "fg-faint"
+    /// A row's branch or home icon, unless agent state or a conflict takes over.
+    /// The dot replaces a linked worktree's icon so state reads down one
+    /// column. Main keeps its icon, with the dot as a badge, so telling it apart
+    /// never depends on its position in the group.
+    @ViewBuilder
+    private func leadingGlyph(status: StatusPresentation?, worktreeStatus: WorktreeDirtyState) -> some View {
+        let dotStatus = WorktreeRowPresentation.isStatusLoud(
+            harnessState: harnessSummary?.state,
+            worktreeStatus: worktreeStatus
+        ) ? status : nil
+        if isMain {
+            Icon(name: "home", size: Self.glyphSlotWidth, color: theme.color("fg-dim"))
+                .overlay(alignment: .bottomTrailing) {
+                    if let dotStatus {
+                        StatusDot(color: theme.color(dotStatus.colorToken), pulses: dotStatus.pulses)
+                            .offset(x: scale.space[0], y: scale.space[0])
+                    }
+                }
+        } else if let dotStatus {
+            StatusDot(color: theme.color(dotStatus.colorToken), pulses: dotStatus.pulses)
+        } else {
+            Icon(name: "branch", size: Self.glyphSlotWidth, color: theme.color("fg-dim"))
+        }
+    }
+
+    private var timeLabel: some View {
+        Text(WorktreeRowPresentation.compactAge(since: worktree.lastActivity, now: Date()))
+            .monospacedDigit()
+            .fixedSize()
+            .help(relative(worktree.lastActivity))
     }
 
     /// Full-strength `fg` at rest. There is no brighter token to move to on
     /// hover, which is the point — the name stays legible in every state and
-    /// the row's fill and outline carry selection instead.
+    /// the row's fill carries selection instead.
     private var branchColorToken: String {
         isPending ? "fg-faint" : "fg"
     }
 
-    private func secondLine(status: StatusPresentation?, showsExplanation: Bool) -> some View {
-        ViewThatFits(in: .horizontal) {
-            subtitleContents(status: status, showsDiffBar: true, showsExplanation: showsExplanation)
-            subtitleContents(status: status, showsDiffBar: false, showsExplanation: showsExplanation)
+    private func secondLine(
+        status: StatusPresentation?,
+        worktreeStatus: WorktreeDirtyState,
+        showsExplanation: Bool
+    ) -> some View {
+        // Everything a row knows stays on screen: it is what a scan of the
+        // list reads. Narrow sidebars drop the diff bar, then the time.
+        HStack(spacing: scale.space[2]) {
+            ViewThatFits(in: .horizontal) {
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: true, showsTime: true, showsExplanation: showsExplanation)
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: true, showsExplanation: showsExplanation)
+                subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: false, showsExplanation: showsExplanation)
+            }
+            // Here rather than beside the name, so the name keeps the width.
+            if let summary = harnessSummary {
+                agentBadges(summary: summary)
+            }
         }
-        .font(.system(size: 10))
-        .foregroundColor(theme.color("fg-dim"))
-        .padding(.leading, 19)
+        .font(scale.metaFont)
+        .foregroundColor(rowColor("fg-dim"))
+        .padding(.leading, textInset)
     }
 
     private func landingLine(status: GGLandingPresentation.SidebarStatus) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 7) {
+            HStack(spacing: scale.space[2]) {
                 landingButton(status: status)
                     .fixedSize()
                 workspaceCheckoutButton
@@ -536,9 +577,9 @@ struct WorktreeRowView: View {
             }
             landingButton(status: status)
         }
-        .font(.system(size: 10))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-dim"))
-        .padding(.leading, 19)
+        .padding(.leading, textInset)
     }
 
     private func landingButton(status: GGLandingPresentation.SidebarStatus) -> some View {
@@ -617,98 +658,152 @@ struct WorktreeRowView: View {
         return worktreeExplainerEvidence
     }
 
+    /// Agent state and conflicts lead, since they are what needs you.
     private func subtitleContents(
         status: StatusPresentation?,
+        worktreeStatus: WorktreeDirtyState,
         showsDiffBar: Bool,
+        showsTime: Bool,
         showsExplanation: Bool
     ) -> some View {
-        HStack(spacing: 7) {
+        let noteLeads = WorktreeRowPresentation.isStatusLoud(
+            harnessState: harnessSummary?.state,
+            worktreeStatus: worktreeStatus
+        )
+        let upstreamItems = Self.upstreamStatusItems(upstreamStatus, isMain: isMain)
+        let upstreamOnNameLine = WorktreeRowPresentation.upstreamItemsAtRest(upstreamItems)
+        return HStack(spacing: scale.space[2]) {
+            if let status, noteLeads {
+                statusNote(status)
+            }
+            PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
+            stackSummaryView
             workspaceCheckoutButton
             if let status {
-                HStack(spacing: 5) {
-                    StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
-                    Text(status.note)
-                        .foregroundColor(theme.color(status.colorToken))
-                }
-                .fixedSize()
+                if !noteLeads { statusNote(status) }
             } else if let commits = visibleBranchCommits {
-                HStack(spacing: 4) {
-                    Icon(name: "commit", size: 10, color: theme.color("fg-dim"))
-                        .accessibilityHidden(true)
-                    Text("\(commits.count) commit\(commits.count == 1 ? "" : "s")")
-                }
-                .fixedSize()
-                .help("\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)")
+                commitCount(commits, label: "\(commits.count) commit\(commits.count == 1 ? "" : "s")")
             }
-            ForEach(Self.upstreamStatusItems(upstreamStatus, isMain: isMain), id: \.text) { item in
-                let label = Text(item.text)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(theme.color(item.text.hasPrefix("↓") ? "caution" : "accent"))
-                if item.text.hasPrefix("↓"), let onPullUpstream, let upstreamStatus {
-                    let count = upstreamStatus.behind
-                    Button(action: onPullUpstream) {
-                        HStack(spacing: 3) {
-                            if isPullUpstreamInFlight {
-                                // Matches the changes-tab chip: the count
-                                // keeps reading, the spinner replaces only the
-                                // arrow's spot in the eye.
-                                Spinner(lineWidth: 1.2, duration: 0.7)
-                                    .frame(width: 9, height: 9)
-                                    .accessibilityHidden(true)
-                            }
-                            label
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .help(isPullUpstreamInFlight
-                        ? "Pulling from \(upstreamStatus.upstreamRef)…"
-                        : "Pull \(count) commit\(count == 1 ? "" : "s") from \(upstreamStatus.upstreamRef) (rebase)")
-                    .accessibilityLabel(item.accessibilityLabel)
-                } else {
-                    label
-                        .help(item.accessibilityLabel)
-                        .accessibilityLabel(item.accessibilityLabel)
-                }
+            ForEach(upstreamItems.filter { !upstreamOnNameLine.contains($0) }, id: \.text) { upstreamView($0) }
+            if Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) != nil {
+                diffCounts(showsDiffBar: showsDiffBar)
             }
-            if let additionTicks = Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) {
-                HStack(spacing: 5) {
-                    if showsDiffBar {
-                        HStack(spacing: 1.5) {
-                            ForEach(0..<5) { tick in
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(theme.color(tick < additionTicks ? "add" : "del"))
-                                    .frame(width: 2, height: 7)
-                            }
-                        }
-                        .accessibilityHidden(true)
-                    }
-                    if diffStats.added > 0 {
-                        Text("+\(diffStats.added)").foregroundColor(theme.color("add"))
-                    }
-                    if diffStats.deleted > 0 {
-                        Text("−\(diffStats.deleted)").foregroundColor(theme.color("del"))
-                    }
-                }
-                .font(.system(size: 10, design: .monospaced))
-                .fixedSize()
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
-            }
-            stackSummaryView
             if showsExplanation, let worktreeExplanation {
                 Text(worktreeExplanation)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
             Spacer(minLength: 0)
-            Text(relative(worktree.lastActivity))
-                .monospacedDigit()
-                .fixedSize()
+            if showsTime {
+                timeLabel
+            }
         }
+    }
+
+    private func commitCount(_ commits: GitService.BranchCommitCount, label: String) -> some View {
+        HStack(spacing: scale.space[1]) {
+            Icon(name: "commit", size: 10, color: rowColor("fg-dim"))
+                .accessibilityHidden(true)
+            Text(label)
+        }
+        .fixedSize()
+        .help(Self.commitsLabel(commits))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.commitsLabel(commits))
+    }
+
+    private func diffCounts(showsDiffBar: Bool) -> some View {
+        HStack(spacing: scale.space[1]) {
+            if showsDiffBar, let additionTicks = Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) {
+                HStack(spacing: 1.5) {
+                    ForEach(0..<5) { tick in
+                        RoundedRectangle(cornerRadius: 1) // design-literal: 2pt-wide diff tick
+                            .fill(theme.color(tick < additionTicks ? "add" : "del"))
+                            .frame(width: 2, height: 7)
+                    }
+                }
+                .accessibilityHidden(true)
+            }
+            if diffStats.added > 0 {
+                Text("+\(diffStats.added)").foregroundColor(rowColor("add"))
+            }
+            if diffStats.deleted > 0 {
+                Text("−\(diffStats.deleted)").foregroundColor(rowColor("del"))
+            }
+        }
+        .monospacedDigit()
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
+    }
+
+    private func statusNote(_ status: StatusPresentation) -> some View {
+        Text(status.note)
+            .foregroundColor(rowColor(status.colorToken))
+            .fixedSize()
+    }
+
+    /// A status token as text on this row's fill. The selected fill is strong
+    /// enough to wash some tokens out, so there they are adjusted to stay legible.
+    private func rowColor(_ token: String) -> Color {
+        isSelected ? theme.legibleOnSelection(token, over: Self.sidebarFillToken) : theme.color(token)
+    }
+
+    /// What the selected fill is composited over.
+    nonisolated static let sidebarFillToken = "bg-1"
+
+    @ViewBuilder
+    private func upstreamView(_ item: WorktreeUpstreamStatus.SubtitleItem) -> some View {
+        let label = Text(item.text)
+            .font(scale.metaFont)
+            .monospacedDigit()
+            .foregroundColor(rowColor(item.text.hasPrefix("↓") ? "caution" : "accent"))
+        if item.text.hasPrefix("↓"), let onPullUpstream, let upstreamStatus {
+            let count = upstreamStatus.behind
+            Button(action: onPullUpstream) {
+                HStack(spacing: 3) {
+                    if isPullUpstreamInFlight {
+                        // Matches the changes-tab chip: the count
+                        // keeps reading, the spinner replaces only the
+                        // arrow's spot in the eye.
+                        Spinner(lineWidth: 1.2, duration: 0.7)
+                            .frame(width: 9, height: 9)
+                            .accessibilityHidden(true)
+                    }
+                    label
+                }
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(isPullUpstreamInFlight
+                ? "Pulling from \(upstreamStatus.upstreamRef)…"
+                : "Pull \(count) commit\(count == 1 ? "" : "s") from \(upstreamStatus.upstreamRef) (rebase)")
+            .accessibilityLabel(item.accessibilityLabel)
+        } else {
+            label
+                .help(item.accessibilityLabel)
+                .accessibilityLabel(item.accessibilityLabel)
+        }
+    }
+
+    private static func commitsLabel(_ commits: GitService.BranchCommitCount) -> String {
+        "\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)"
+    }
+
+    private func accessibilityLabel(status: StatusPresentation?, worktreeStatus: WorktreeDirtyState, showsExplanation: Bool) -> String {
+        WorktreeRowPresentation.accessibilityLabel(WorktreeRowAccessibilityContent(
+            name: worktree.title,
+            statusNote: status?.note,
+            added: diffStats.added,
+            deleted: diffStats.deleted,
+            workspaceCheckout: workspaceCheckout?.accessibilityLabel,
+            commits: visibleBranchCommits.map(Self.commitsLabel),
+            upstream: Self.upstreamStatusItems(upstreamStatus, isMain: isMain).map(\.accessibilityLabel),
+            stack: stackAccessibilityText,
+            agents: harnessSummary?.sessions.map { "\($0.agent.displayName) · \($0.state.statusNote)" } ?? [],
+            explanation: showsExplanation ? worktreeExplanation : nil,
+            lastActivity: relative(worktree.lastActivity)
+        ))
     }
 
     private var operationLine: some View {
@@ -719,30 +814,36 @@ struct WorktreeRowView: View {
                     .accessibilityHidden(true)
             }
             Text(Self.statusText(for: operationState))
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("warn"))
                 .lineLimit(2)
                 .truncationMode(.tail)
         }
-        .padding(.leading, 19)
+        .padding(.leading, textInset)
+    }
+
+    private var stackAccessibilityText: String? {
+        if let stack = stackSummary {
+            return stack.isRemoteStateKnown
+                ? Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
+                : "gg stack · \(stack.total) commits · merge status pending"
+        }
+        return ggMenuModel.showsStatusIndicator ? "gg is active for this worktree." : nil
     }
 
     @ViewBuilder
     private var stackSummaryView: some View {
         if let stack = stackSummary {
-            let summaryText = stack.isRemoteStateKnown
-                ? Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
-                : "gg stack · \(stack.total) commits · merge status pending"
             HStack(spacing: 3) {
                 GGStackIcon(size: 9, color: theme.color("fg-faint"))
                     .accessibilityHidden(true)
                 Text(stack.isRemoteStateKnown ? "\(stack.merged)/\(stack.total)" : "\(stack.total)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .monospacedDigit()
                     .foregroundColor(theme.color("fg-faint"))
             }
-            .help(summaryText)
+            .help(stackAccessibilityText ?? "")
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(summaryText)
+            .accessibilityLabel(stackAccessibilityText ?? "")
         } else if ggMenuModel.showsStatusIndicator {
             GGStackIcon(size: 9, color: theme.color(Self.pendingStackIndicatorColorToken()))
                 .help("gg is active for this worktree.")
@@ -753,21 +854,19 @@ struct WorktreeRowView: View {
     private func agentBadges(
         summary: HarnessService.WorktreeHarnessSummary
     ) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Self.agentBadgeSpacing) {
             let visibleSessionCount = Self.visibleHarnessSessionCount(for: summary.sessions.count)
             ForEach(summary.sessions.prefix(visibleSessionCount)) { session in
                 HarnessSessionBadge(
                     session: session,
-                    onActivate: { onActivateHarness(session.id) },
-                    isSelected: isSelected
+                    onActivate: { onActivateHarness(session.id) }
                 )
             }
             if summary.sessions.count > visibleSessionCount {
                 let hiddenSessions = Array(summary.sessions.dropFirst(visibleSessionCount))
                 HarnessSessionOverflowBadge(
                     sessions: hiddenSessions,
-                    onActivate: onActivateHarness,
-                    isSelected: isSelected
+                    onActivate: onActivateHarness
                 )
             }
         }
@@ -811,6 +910,14 @@ struct WorktreeRowView: View {
 
     @ViewBuilder
     private var availableWorktreeContextMenuContent: some View {
+        // The session tiles are not mounted at rest, so the menu, which Full
+        // Keyboard Access reaches, offers each session too.
+        if let sessions = harnessSummary?.sessions, !sessions.isEmpty {
+            ForEach(sessions) { session in
+                Button("Open \(session.agent.displayName) Session") { onActivateHarness(session.id) }
+            }
+            Divider()
+        }
         if let workspaceCheckout {
             Button("Go to Workspace") { onOpenWorkspaceCheckout(workspaceCheckout) }
         }
@@ -876,9 +983,19 @@ struct WorktreeRowView: View {
         }
     }
 
+    /// Asked for on every body, by the accessibility label and the age's help,
+    /// so a string is reused within the second it was formatted in.
     private func relative(_ date: Date) -> String {
-        Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
+        let now = Date()
+        let second = Int(now.timeIntervalSinceReferenceDate)
+        if let cached = Self.relativeCache[date], cached.second == second { return cached.text }
+        let text = Self.relativeDateFormatter.localizedString(for: date, relativeTo: now)
+        if Self.relativeCache.count >= 512 { Self.relativeCache.removeAll() }
+        Self.relativeCache[date] = (second, text)
+        return text
     }
+
+    @MainActor private static var relativeCache: [Date: (second: Int, text: String)] = [:]
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -987,14 +1104,15 @@ private final class StatusDotPulseView: NSView {
 /// row still says HEAD is detached without spending the title on it.
 struct DetachedTag: View {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text("detached")
-            .font(.system(size: 9.5, weight: .medium))
+            .font(scale.captionFont)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, 1) // design-literal: fits the tag inside a name line
+            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: scale.radius.small))
             .fixedSize()
             .help("HEAD is detached")
     }

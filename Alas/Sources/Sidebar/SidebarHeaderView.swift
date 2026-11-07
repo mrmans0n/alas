@@ -78,6 +78,7 @@ struct SidebarHeaderView: View {
         self.attentionRollUpSummarizer = attentionRollUpSummarizer
     }
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var addMenuHovered = false
     /// `Menu` does not expose press state to its label, so both menu-backed
     /// header controls track it with a simultaneous gesture, as the tab bar does.
@@ -96,7 +97,7 @@ struct SidebarHeaderView: View {
             expandedHeader
             compactHeader
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, 11) // design-literal: lines up the traffic lights with the window corner
         .frame(height: 38)
     }
 
@@ -195,7 +196,7 @@ struct SidebarHeaderView: View {
                     Button("Hide sidebar", systemImage: "sidebar.left", action: onHideSidebar)
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundStyle(theme.color(addMenuHovered ? "fg" : "fg-muted"))
                         // Compact keeps `.standard` metrics: this row's controls
                         // are sized for narrow sidebars, not E1's header band.
@@ -228,6 +229,7 @@ private struct AttentionToolbarButton<Content: View>: View {
     var metrics: ToolbarControlMetrics = .standard
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
@@ -235,7 +237,7 @@ private struct AttentionToolbarButton<Content: View>: View {
             isOpen.toggle()
         } label: {
             Image(systemName: "tray")
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundStyle(theme.color(hovering || isOpen ? "fg" : "fg-muted"))
                 .frame(width: metrics.width, height: metrics.height)
                 .contentShape(Rectangle())
@@ -244,10 +246,10 @@ private struct AttentionToolbarButton<Content: View>: View {
                 .overlay(alignment: .topTrailing) {
                     if SidebarHeaderView.showsAttentionBadge(count: count) {
                         Text(count > 999 ? "999+" : "\(count)")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.system(size: 8, weight: .bold)) // design-literal: count inside a 12pt notification badge
                             .monospacedDigit()
                             .foregroundStyle(theme.color("bg-0"))
-                            .padding(.horizontal, 3)
+                            .padding(.horizontal, 3) // design-literal: count inside a 12pt notification badge
                             .frame(minWidth: 12, minHeight: 12)
                             .background(theme.color("warn"), in: Capsule())
                             .fixedSize()

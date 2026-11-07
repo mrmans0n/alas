@@ -23,6 +23,7 @@ struct SidebarView: View {
     let onCleanupWorktrees: (_ projectId: String) -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var spaceTitleVisible = false
     @State private var hideTitleTask: Task<Void, Never>?
     @State private var showingNewWorkspace = false
@@ -342,10 +343,10 @@ struct SidebarView: View {
                                     }
                                     .padding(.top, SidebarFilterRowMetrics.slotSpacing)
                             }
-                            .padding(.top, 6)
-                            .padding(.horizontal, 8)
+                            .padding(.top, SidebarFilterRowMetrics.restY)
+                            .padding(.horizontal, scale.space[2])
                             // Leaves room below the last repo for the drop target.
-                            .padding(.bottom, 20)
+                            .padding(.bottom, scale.space[5])
                         }
                     }
                 }
@@ -724,6 +725,7 @@ final class SidebarScrollOffsets {
 /// while filtering. Owns the offset read so it does not re-render the sidebar
 /// tree.
 private struct SidebarWorktreeFilterRow: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let scrollOffsets: SidebarScrollOffsets
     let spaceID: String
@@ -767,8 +769,8 @@ private struct SidebarWorktreeFilterRow: View {
             )
         }
         .frame(height: SidebarFilterRowMetrics.slotHeight)
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
+        .padding(.leading, scale.space[3])
+        .padding(.trailing, scale.space[2])
         .padding(.vertical, inset)
         // Hides the content that scrolls beneath the row while a filter is
         // applied; fades in and out as the text appears and clears.
@@ -792,16 +794,17 @@ private struct SidebarWorktreeFilterField: View {
     var focused: FocusState<Bool>.Binding
     let placeholder: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-dim"))
                 .accessibilityHidden(true)
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg"))
                 .autocorrectionDisabled(true)
                 .focused(focused)
@@ -813,18 +816,18 @@ private struct SidebarWorktreeFilterField: View {
                     text = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear worktree filter")
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 24)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color(focused.wrappedValue ? "accent" : "line"), lineWidth: 0.5)
         )
     }
