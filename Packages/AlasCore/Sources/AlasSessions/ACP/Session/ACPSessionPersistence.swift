@@ -189,6 +189,11 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
+    public func createV2PreviewSession(row: ACPSessionRow, ownerInstance: String, pid: Int64,
+        now: Int64, leaseToken: String) throws -> ACPSessionLeaseFence {
+        try openedStore().createV2PreviewSession(row: row, ownerInstance: ownerInstance, pid: pid, now: now, leaseToken: leaseToken)
+    }
+
     public func bindV2FreshBroker(state: ACPBrokerDurableState, fence: ACPSessionLeaseFence,
         authorize: @Sendable () -> Bool = { true }) throws -> Bool {
         try openedStore().bindV2FreshBroker(state: state, fence: fence, authorize: authorize)

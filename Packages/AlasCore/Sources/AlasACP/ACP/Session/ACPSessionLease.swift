@@ -42,6 +42,7 @@ public enum ACPSessionOrigin: String, Codable, Equatable, Sendable {
 }
 
 public struct ACPSessionRow: Equatable, Sendable {
+    public var runtimeKind: ACPSessionRuntimeKind
     public let id: String
     public let agentId: String
     public var title: String
@@ -100,8 +101,9 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, sessionHooks: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerWireContextJSON: String? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, runtimeKind: ACPSessionRuntimeKind = .v1, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, sessionHooks: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerWireContextJSON: String? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
+        self.runtimeKind = runtimeKind
         self.agentId = agentId
         self.title = title
         self.titleSource = titleSource

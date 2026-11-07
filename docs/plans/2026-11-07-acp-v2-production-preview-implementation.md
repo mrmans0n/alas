@@ -83,12 +83,12 @@ Assertion contract: every false gate yields `.refused`, changed dependency bytes
 
 **Interfaces:** `public enum ACPSessionRuntimeKind: Equatable, Sendable` has `.v1`, `.v2FreshPreview`, `.unsupported(String)`; persist raw strings `v1` and `v2FreshPreview`, preserving unknown strings. Add `runtimeKind` to row and in-memory session, default `.v1`. Store and actor expose `createV2PreviewSession(row: ACPSessionRow, ownerInstance: String, pid: Int64, now: Int64, leaseToken: String) throws -> ACPSessionLeaseFence`. It atomically inserts a genuinely new marked row and its initial writer lease; it does not upgrade an existing row. Task 5 uses the returned fence.
 
-- [ ] **Step 1: Add RED storage cases.** `newPreviewKindSurvivesReopenBeforeBrokerBinding` reopens the real temporary database before any broker call and observes `.v2FreshPreview`. `runtimeKindCannotBeChangedByBroadUpsert` pins both directions and unknown-string preservation. `previewCreationDoesNotUpgradeAnExistingRow` parameterizes empty/history/lease-owned existing rows and asserts no mutation. `legacyRowsMigrateAsV1` exercises the existing migration fixture.
+- [x] **Step 1: Add RED storage cases.** `newPreviewKindSurvivesReopenBeforeBrokerBinding` reopens the real temporary database before any broker call and observes `.v2FreshPreview`. `runtimeKindCannotBeChangedByBroadUpsert` pins both directions and unknown-string preservation. `previewCreationDoesNotUpgradeAnExistingRow` parameterizes empty/history/lease-owned existing rows and asserts no mutation. `legacyRowsMigrateAsV1` exercises the existing migration fixture.
 Assertion contract: `#expect(reopened.runtimeKind == .v2FreshPreview)`, `#expect(afterRejectedCreation == before)`, and `#expect(migrated.runtimeKind == .v1)`.
 
-- [ ] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter PersistenceStoreTests`; expect RED.
-- [ ] **Step 3: Implement** the additive `sessions.runtime_kind TEXT NOT NULL DEFAULT 'v1'` migration and checked decoding. Preserve stored kind on broad updates. The fresh-create transaction must roll back row and lease together on collision/failure; use lower-level transaction helpers rather than nesting incompatible transactions. Ordinary creation keeps its source-compatible defaults. Unknown kinds expose no live command authority.
-- [ ] **Step 4: Run GREEN**, inspect the migration against existing stores, and commit `feat(acp): persist fresh preview runtime identity`.
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter PersistenceStoreTests`; expect RED.
+- [x] **Step 3: Implement** the additive `sessions.runtime_kind TEXT NOT NULL DEFAULT 'v1'` migration and checked decoding. Preserve stored kind on broad updates. The fresh-create transaction must roll back row and lease together on collision/failure; use lower-level transaction helpers rather than nesting incompatible transactions. Ordinary creation keeps its source-compatible defaults. Unknown kinds expose no live command authority.
+- [x] **Step 4: Run GREEN**, inspect the migration against existing stores, and commit `feat(acp): persist fresh preview runtime identity`.
 
 ### Task 4: Persist view-only projected display with stable identities
 
