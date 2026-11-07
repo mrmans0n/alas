@@ -405,6 +405,28 @@ struct HostSessionsTests {
         await #expect(throws: SessionRefusal.notPending) { try await sessions.installAdapter(id, caller: .app) }
     }
 
+    /// An SSH worktree's agent runs on its SSH host, so that is where its
+    /// missing adapter is installed, as the app's own Install does.
+    @Test(.timeLimit(.minutes(1))) func anSSHSessionsAdapterIsInstalledOnItsHost() async throws {
+        let fixture = try Fixture(remoteHost: "box", remoteAdapterResolver: { _, _, _ in .missing(reason: "not on box") })
+        defer { fixture.tearDown() }
+        let targets = Mutex<[String]>([])
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(
+            localInstall: { _ in targets.withLock { $0.append("local") } },
+            remoteInstall: { host, _ in targets.withLock { $0.append(host) } }
+        )
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "codex", caller: .app).id
+        // The fixture's SSH attach never gets as far as its setup check: set
+        // the outcome the check reports.
+        let live = try #require(fixture.core.sessionManagers.values.compactMap { $0.liveSession(for: id) }.first)
+        live.setupState = .needsSetup(reason: "not on box")
+
+        try await sessions.installAdapter(id, caller: .app)
+
+        #expect(targets.withLock { $0 } == ["box"])
+    }
+
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
     @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
@@ -1003,7 +1025,9 @@ struct HostSessionsTests {
             environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
             projectHost: String? = nil,
             otherProjects: [ProjectConfig] = [],
-            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready }
+            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready },
+            remoteHost: String? = nil,
+            remoteAdapterResolver: ACPSessionManager.ACPRemoteAdapterResolver? = nil
         ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1032,7 +1056,9 @@ struct HostSessionsTests {
                         worktreePath: worktree.path.path,
                         owner: owner,
                         persistence: ACPSessionPersistence(path: database.path),
+                        remoteHost: remoteHost,
                         setupEvaluator: setupEvaluator,
+                        remoteAdapterResolver: remoteAdapterResolver,
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },

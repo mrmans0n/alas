@@ -7,6 +7,7 @@ import AlasCode
 import AlasAgents
 import AlasACP
 import AlasSessions
+import AlasAgentKit
 
 /// Where a new session runs.
 public enum SessionTarget: Codable, Hashable, Sendable {
@@ -298,7 +299,9 @@ extension SessionsAPI {
         // Clears the issue while it installs: a second request is refused.
         session.setupState = .checking
         do {
-            try await core.adapterInstalls.install(target: .local, agentID: session.agentId)
+            // Where the agent runs: an SSH worktree's agent runs on its host.
+            let target: ACPAdapterTarget = manager.executionRemoteHost.map { .ssh(host: $0) } ?? .local
+            try await core.adapterInstalls.install(target: target, agentID: session.agentId)
         } catch {
             session.setupState = .setupError(reason: "Couldn't install the adapter: \(error.localizedDescription)")
             throw SessionRefusal.agentUnavailable

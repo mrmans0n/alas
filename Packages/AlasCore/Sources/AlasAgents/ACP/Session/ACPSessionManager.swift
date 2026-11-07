@@ -10401,6 +10401,10 @@ extension ACPSessionManager {
         }
     }
 
+    /// The SSH host this manager's agents run on, if not this Mac: where
+    /// their adapters are checked and installed.
+    public var executionRemoteHost: String? { effectiveRemoteHost() }
+
     private func effectiveRemoteHost() -> String? {
         remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: worktreePath) : nil)
     }
