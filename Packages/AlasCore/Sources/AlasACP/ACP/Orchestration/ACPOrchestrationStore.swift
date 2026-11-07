@@ -332,10 +332,13 @@ public final class ACPOrchestrationStore {
     /// parent in one transaction. An outcome, of any kind, also ends the wait
     /// for its child. Returns true only for the caller that advanced the
     /// cursor, so concurrent collectors wake the parent once.
+    /// `store` is the store the entry's page came from: once the cursor counts
+    /// in another, that page is stale and moves nothing.
     public func collectPeerEntry(
         _ entry: ACPPeerOutboxEntry,
         peerServerId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        store: String?
     ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -344,8 +347,8 @@ public final class ACPOrchestrationStore {
                 bindings: [peerServerId]
             )
             let advanced = try db.execChanges(
-                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
-                bindings: [entry.seq, peerServerId, entry.seq]
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ? AND store_id IS ?",
+                bindings: [entry.seq, peerServerId, entry.seq, store]
             ) == 1
             if advanced {
                 try enqueue(.init(
@@ -427,9 +430,12 @@ public final class ACPOrchestrationStore {
     /// Moves a peer's cursor forward to `seq` without enqueuing anything, for
     /// an entry nobody here can be woken for. Never moves it back. `settling`
     /// is an entry for one of the peer's children whose parent is gone, which
-    /// still ends the wait if it is an outcome.
+    /// still ends the wait if it is an outcome. `store` fences it as in
+    /// `collectPeerEntry`.
     @discardableResult
-    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
+    public func advancePeerCursor(
+        peerServerId: String, to seq: Int64, store: String?, settling entry: ACPPeerOutboxEntry? = nil
+    ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
             try db.exec(
@@ -437,8 +443,8 @@ public final class ACPOrchestrationStore {
                 bindings: [peerServerId]
             )
             let advanced = try db.execChanges(
-                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ?",
-                bindings: [seq, peerServerId, seq]
+                "UPDATE peer_delegation_cursors SET seq = ? WHERE peer_server_id = ? AND seq < ? AND store_id IS ?",
+                bindings: [seq, peerServerId, seq, store]
             ) == 1
             if advanced, let entry { try endWait(for: entry, peerServerId: peerServerId) }
             try db.exec("COMMIT")
@@ -458,13 +464,15 @@ public final class ACPOrchestrationStore {
         return id
     }
 
-    /// The store of `peerServerId`'s that the cursor counts in; nil until a
-    /// peer that reports one answered.
-    public func peerStore(peerServerId: String) throws -> String? {
-        try db.query(
-            "SELECT store_id FROM peer_delegation_cursors WHERE peer_server_id = ?",
+    /// `peerServerId`'s cursor and the store of the peer's it counts in, read
+    /// together so a cursor is never paired with a store adopted after it was
+    /// read. The store is nil until a peer that reports one answered.
+    public func peerPosition(peerServerId: String) throws -> ACPPeerCursorPosition {
+        let row = try db.query(
+            "SELECT seq, store_id FROM peer_delegation_cursors WHERE peer_server_id = ?",
             bindings: [peerServerId]
-        ).first?["store_id"] as? String
+        ).first
+        return .init(seq: row?["seq"] as? Int64 ?? 0, store: row?["store_id"] as? String)
     }
 
     /// Counts `peerServerId`'s cursor in `storeId` from now on. A cursor that

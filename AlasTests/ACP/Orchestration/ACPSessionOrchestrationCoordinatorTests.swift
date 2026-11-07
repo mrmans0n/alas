@@ -2453,7 +2453,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
     @Test func availabilityTriggersCollectFromStoredCursor() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let fixture = try remoteFixture(peers: peers)
-        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 5)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 5, store: nil)
         let collector = makeCollector(fixture, peers: peers)
         let (calls, continuation) = AsyncStream<Int64>.makeStream()
         peers.onOutboxCall = { continuation.yield($0) }
@@ -2550,7 +2550,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let fixture = try remoteFixture(peers: peers)
         try await insertRemoteChild(fixture.persistence)
-        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 57)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 57, store: nil)
         try await fixture.persistence.adoptPeerStore(peerServerId: "srv-1", storeId: "old")
         let entries = [Self.outcome(1)]
         peers.storedOutboxAnswer = { after, store in
@@ -3206,7 +3206,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         _ = await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More"))
         let entry = ACPPeerOutboxEntry(seq: 1, messageId: messageId, childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
 
-        #expect(try await fixture.persistence.collectPeerEntry(entry, peerServerId: "srv-1", parentSessionId: Self.peerOrigin.sessionId))
+        #expect(try await fixture.persistence.collectPeerEntry(entry, peerServerId: "srv-1", parentSessionId: Self.peerOrigin.sessionId, store: nil))
 
         #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
     }
@@ -3693,7 +3693,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try remoteFixture(peers: peers)
         let persistence = fixture.persistence
         for server in ["srv-1", "srv-2"] {
-            try await persistence.advancePeerCursor(peerServerId: server, to: 5)
+            try await persistence.advancePeerCursor(peerServerId: server, to: 5, store: nil)
             try await persistence.enqueue(.init(
                 id: "to-\(server)", sourceSessionId: "local", targetSessionId: ACPPeerParent.sentinel(serverId: server),
                 prompt: "done", createdAt: 1, kind: .prompt

@@ -170,16 +170,17 @@ public final class ACPPeerOutboxCollector {
     /// False when it stopped on something a retry could get past.
     /// `restarted` is set on the pull that follows the peer's store changing.
     private func pull(_ serverId: String, restarted: Bool = false) async -> Bool {
-        let cursor: Int64
-        var store: String?
+        let position: ACPPeerCursorPosition
         do {
-            cursor = try await persistence.peerCursor(peerServerId: serverId)
-            store = try await persistence.peerStore(peerServerId: serverId)
+            // One read: another collector may adopt a new store meanwhile, and
+            // this cursor sent with that store would acknowledge unread entries.
+            position = try await persistence.peerPosition(peerServerId: serverId)
         } catch {
             logger.error("Could not read the cursor for peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
             return false
         }
-        var after = cursor
+        var store = position.store
+        var after = position.seq
         var gone: [String: Bool] = [:]
         while true {
             // Asking also acknowledges everything through `after`, which is
@@ -230,7 +231,7 @@ public final class ACPPeerOutboxCollector {
                     stopped = true
                     break
                 }
-                guard let child = await settle(entry, from: serverId, gone: &gone) else {
+                guard let child = await settle(entry, from: serverId, store: store, gone: &gone) else {
                     stopped = true
                     settled = false
                     break
@@ -249,8 +250,10 @@ public final class ACPPeerOutboxCollector {
 
     /// Commits one entry. The outer nil means it could not be settled, which
     /// ends the pull; the inner nil means there is nobody to wake for it.
+    /// `store` is the one its page came from, so a page another collector's
+    /// adoption made stale moves no cursor.
     private func settle(
-        _ entry: ACPPeerOutboxEntry, from serverId: String, gone: inout [String: Bool]
+        _ entry: ACPPeerOutboxEntry, from serverId: String, store: String?, gone: inout [String: Bool]
     ) async -> ACPDelegationRecord?? {
         do {
             guard let child = try await persistence.delegation(childSessionId: entry.childSessionId),
@@ -258,7 +261,7 @@ public final class ACPPeerOutboxCollector {
             else {
                 // Not one of this peer's children: do not let it block the
                 // ones behind it, and never address anyone else's session.
-                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq)
+                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, store: store)
                 return .some(nil)
             }
             let isGone: Bool
@@ -270,7 +273,7 @@ public final class ACPPeerOutboxCollector {
                 if isGone { gone[child.parentSessionId] = true }
             }
             if isGone {
-                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, settling: entry)
+                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, store: store, settling: entry)
                 return .some(nil)
             }
             // The parent was already woken about a failed child. Its real
@@ -279,7 +282,9 @@ public final class ACPPeerOutboxCollector {
                 seq: entry.seq, messageId: entry.messageId, childSessionId: entry.childSessionId,
                 prompt: entry.prompt, kind: .notice, createdAt: entry.createdAt
             ) : entry
-            let won = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
+            let won = try await persistence.collectPeerEntry(
+                kept, peerServerId: serverId, parentSessionId: child.parentSessionId, store: store
+            )
             // Decided from the original entry: a failed child's wake was rewritten
             // to a notice above, and it has nothing left to be blocked on.
             if won, child.phase != .failed, entry.isBlockedNotice { childBlocked(serverId, child, entry) }
