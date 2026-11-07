@@ -1382,12 +1382,21 @@ final class NativePeerSessions {
             // A folder has no changes to compare: its tree is the poll.
             loadFileTree()
         }
-        // Equal stats can hide an edit, so an open working-tree diff is read
-        // again without showing it loading; an unchanged reply keeps it as is.
-        if case .diff? = workspace.document, let document = workspace.document,
+        // Equal stats can hide an edit, so an open working-tree diff, or an
+        // image preview (no editor buffer watches it), is read again without
+        // showing it loading; an unchanged reply keeps it as is.
+        if let document = workspace.document, Self.pollsDocument(document),
            !documentRequestsInFlight.contains(document) {
             documentRequestsInFlight.insert(document)
             if !sendDocumentRead(document) { documentRequestsInFlight.remove(document) }
+        }
+    }
+
+    nonisolated static func pollsDocument(_ document: NativePeerWorkspace.Document) -> Bool {
+        switch document {
+        case .diff: true
+        case .file(let path): ImageFileType.isSupported(relativePath: path)
+        case .commitDiff, .stashDiff, .checkpointDiff: false
         }
     }
 

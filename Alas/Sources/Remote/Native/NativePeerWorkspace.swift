@@ -456,7 +456,8 @@ struct NativePeerWorkspace: Equatable {
         case .fileBytes(_, let path, let data, _):
             guard document == .file(path: path) else { return true }
             documentVersion = nil
-            documentContent = .loaded(.image(data))
+            // A poll's unchanged reply must not redraw the open preview.
+            if documentContent != .loaded(.image(data)) { documentContent = .loaded(.image(data)) }
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             guard document == .file(path: path) else { return true }
             documentVersion = nil

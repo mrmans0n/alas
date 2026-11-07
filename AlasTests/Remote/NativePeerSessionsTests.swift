@@ -1237,6 +1237,18 @@ struct NativePeerSessionsTests {
         }
     }
 
+    /// What a poll reads again: the documents that can change on the host
+    /// without an editor buffer watching them.
+    @Test(arguments: [
+        (NativePeerWorkspace.Document.diff(path: "a.swift", stage: .unstaged), true),
+        (.file(path: "logo.png"), true),
+        (.file(path: "a.swift"), false),
+        (.commitDiff(path: "a.swift", sha: "abc"), false),
+    ])
+    func aPollReadsAgainOnlyTheDocumentsThatCanChange(document: NativePeerWorkspace.Document, polled: Bool) {
+        #expect(NativePeerSessions.pollsDocument(document) == polled)
+    }
+
     /// A session whose row carries no worktree summary keeps comparing its
     /// own (absent) summary, not the one its worktree's console lends the row.
     @Test func aSessionWithoutASummaryIsNotReloadedOnEverySessionList() {
