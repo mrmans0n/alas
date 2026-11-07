@@ -137,7 +137,8 @@ public enum RemoteSessionConfigProjection: Sendable {
             options: spec.options.map {
                 RemoteChipOption(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind?.rawValue)
             },
-            currentId: spec.currentId)
+            currentId: spec.currentId,
+            recommendedId: spec.recommendedId)
     }
 
     nonisolated private static func presentation(_ value: ACPParameterChipPresentation) -> String {

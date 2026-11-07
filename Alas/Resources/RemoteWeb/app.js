@@ -4492,7 +4492,8 @@ function renderChipSections(chips) {
     box.appendChild(el("p", "sheet-title", title));
     const list = el("div", "");
     chip.options.forEach(opt => {
-      const btn = el("button", "option-btn", opt.name);
+      const label = opt.id === chip.recommendedId ? `${opt.name} · Recommended` : opt.name;
+      const btn = el("button", "option-btn", label);
       if (opt.id === chip.currentId) btn.classList.add("is-selected");
       btn.onclick = () => sendChip(chip, opt.id);
       list.appendChild(btn);

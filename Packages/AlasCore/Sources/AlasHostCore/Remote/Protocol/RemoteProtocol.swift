@@ -234,12 +234,16 @@ public struct RemoteChip: Codable, Equatable, Sendable {
     public var configId: String?
     public var options: [RemoteChipOption]
     public var currentId: String?
+    /// Absent from older hosts. Display only.
+    public var recommendedId: String?
 
-    public init(source: String, configId: String? = nil, options: [RemoteChipOption], currentId: String? = nil) {
+    public init(source: String, configId: String? = nil, options: [RemoteChipOption], currentId: String? = nil,
+                recommendedId: String? = nil) {
         self.source = source
         self.configId = configId
         self.options = options
         self.currentId = currentId
+        self.recommendedId = recommendedId
     }
 }
 
