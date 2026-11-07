@@ -1,3 +1,6 @@
+# Paths that must stay free of type, spacing and radius literals
+# (scripts/design_literals.py --migrated). Each surface adds its files
+# when it moves onto DesignScale.
 Alas/Sources/Sidebar/WorktreeRowView.swift
 Alas/Sources/Sidebar/WorktreeRowPresentation.swift
 Alas/Sources/Sidebar/RepoGroupView.swift
@@ -7,18 +10,3 @@ Alas/Sources/Sidebar/SidebarHeaderView.swift
 Alas/Sources/Sidebar/SidebarHeaderCountPlusButton.swift
 Alas/Sources/Sidebar/HarnessPill.swift
 Alas/Sources/Sidebar/WorktreeSortMenu.swift
-Alas/Sources/ACP/UI/ACPChatLayout.swift
-Alas/Sources/ACP/UI/ACPTranscriptMessageRows.swift
-Alas/Sources/ACP/UI/ACPTranscriptRowContent.swift
-Alas/Sources/ACP/UI/ACPToolCallCard.swift
-Alas/Sources/ACP/UI/ACPFileEditCard.swift
-Alas/Sources/ACP/UI/ACPMarkdownText.swift
-Alas/Sources/ACP/UI/ACPComposerShell.swift
-Alas/Sources/ACP/UI/ACPComposerChips.swift
-Alas/Sources/ACP/UI/ACPComposerActionButton.swift
-Alas/Sources/ACP/UI/ACPSelectChip.swift
-Alas/Sources/ACP/UI/ACPTabView.swift
-Alas/Sources/ACP/UI/Scroller/ACPTranscriptNativeRows.swift
-Alas/Sources/ACP/UI/Scroller/ACPTranscriptMarkdownLayout.swift
-Alas/Sources/ACP/UI/Scroller/ACPTranscriptScroller.swift
-Alas/Sources/ACP/UI/Scroller/ACPTranscriptCoreTextRowView+Drawing.swift
