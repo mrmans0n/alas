@@ -375,8 +375,17 @@ fn argv_valid(argv: &[String]) -> bool {
 }
 
 fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
-    let exe = std::env::current_exe()
-        .map_err(|error| jsonrpc_error(-32050, format!("helper path failed: {error}")))?;
+    start_supervisor_with(dir, std::env::current_exe())
+}
+
+fn start_supervisor_with(
+    dir: &Path,
+    executable: std::io::Result<PathBuf>,
+) -> Result<(), HelperError> {
+    // -32055 proves this RPC created no supervisor. After Command::spawn succeeds,
+    // keep startup failures unverified (-32050): a slow supervisor may still launch.
+    let exe = executable
+        .map_err(|error| jsonrpc_error(-32055, format!("helper path failed: {error}")))?;
     let mut command = Command::new(exe);
     command
         .arg("plugin-proc-supervise")
@@ -391,7 +400,7 @@ fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
     }
     let mut supervisor = command
         .spawn()
-        .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+        .map_err(|error| jsonrpc_error(-32055, format!("supervisor spawn failed: {error}")))?;
     // Provisional and pid-only, in a file of its own: the supervisor writes its full identity to `supervisor`, and
     // a late write here must never replace it.
     let _ = write_atomic(
@@ -1160,6 +1169,33 @@ pub(crate) struct Stat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supervisor_prelaunch_failures_are_definitive() {
+        let dir = std::env::temp_dir().join(format!(
+            "alas-no-supervisor-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let failures = [
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "helper path unavailable",
+            )),
+            Ok(dir.join("missing-executable")),
+        ];
+        for executable in failures {
+            let error =
+                start_supervisor_with(&dir, executable).expect_err("no supervisor can start");
+            assert_eq!(
+                error.code, -32055,
+                "prelaunch refusal must not be startup-unknown: {}",
+                error.message
+            );
+            assert!(!dir.join("supervisor.launch").exists());
+            assert!(!dir.join("started").exists());
+        }
+    }
 
     fn journal_with(keep_tail: bool, limit: usize, writes: &[(u8, &str)]) -> Journal {
         let mut journal = Journal::new(keep_tail, limit);

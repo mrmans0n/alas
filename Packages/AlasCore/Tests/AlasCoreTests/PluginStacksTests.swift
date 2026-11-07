@@ -3,6 +3,37 @@ import Testing
 import AlasCore
 
 struct PluginStacksTests {
+    @Test(arguments: [GGWorktreeMode.on, .off])
+    func verifiedDetachedOwnerRecoversActionsOnlyWhenPolicyPermits(mode: GGWorktreeMode) {
+        let detached = GGWorktreeContextResolver.resolve(masterEnabled: true, ggInstalled: true, isRemoteProject: false,
+                                                         projectMode: .on, worktreeOverride: mode, isMainWorktree: false,
+                                                         repoHasGGConfig: true, branchUsername: "nacho", branch: "HEAD")
+        #expect(!detached.isActive)
+        #expect(detached.resolvingCurrentStack(named: "verified-stack").isActive == (mode == .on))
+        #expect(detached.resolvingCurrentStack(named: nil) == detached)
+        #expect(GGWorktreeContext.inactive(reason: .masterDisabled).resolvingCurrentStack(named: "verified-stack") == .inactive(reason: .masterDisabled))
+    }
+
+    @Test(arguments: [false, true])
+    func startupSettlementKeepsPriorLostRepliesReserved(afterLostReply: Bool) {
+        let refusal = RemoteHelperClientError.jsonrpc(JSONRPCError(code: -32055, message: "supervisor spawn failed", data: nil))
+        #expect(RemotePluginProcess.requiresStartupReconciliation(refusal, afterLostReply: afterLostReply) == afterLostReply)
+        let legacy = RemoteHelperClientError.jsonrpc(JSONRPCError(code: -32050, message: "startup failed", data: nil))
+        #expect(RemotePluginProcess.requiresStartupReconciliation(legacy, afterLostReply: afterLostReply))
+        #expect(RemotePluginProcess.requiresStartupReconciliation(RemoteHelperClientError.notRunning, afterLostReply: afterLostReply))
+    }
+
+    @Test func nonapplicableInventoryRetainsItsExplicitScopeAndKnownReadOnlyStacks() throws {
+        let unsupported = try JSONDecoder().decode(StackInventory.self, from: Data(#"{"complete":false,"busy":false,"stacks":[],"applicable":false,"error":"SSH project"}"#.utf8))
+        let retained = unsupported.retainingKnownStacks(from: .init(complete: true, busy: false, stacks: [fixture()]))
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(retained)) as? [String: Any])
+        #expect(encoded["applicable"] as? Bool == false)
+        #expect(retained.stacks.count == 1 && retained.stacks.allSatisfy { !$0.complete && $0.actions.isEmpty })
+        let unknown = try JSONDecoder().decode(StackInventory.self, from: Data(#"{"complete":false,"busy":false,"stacks":[],"error":"Read failed"}"#.utf8))
+        let unknownJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(unknown)) as? [String: Any])
+        #expect(unknownJSON["applicable"] == nil)
+    }
+
     @Test func api18IsAccepted() throws {
         let data = Data(#"{"id":"io.test.stacks","name":"Stacks","version":"1","api":18,"entry":"p.js"}"#.utf8)
         #expect(try PluginManifest.parse(data).api == 18)

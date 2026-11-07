@@ -14,7 +14,12 @@ All fields use camelCase. Requests and notifications use JSON-RPC 2.0.
 | `stacks/release` | `process.exec` | `{ token: string }` | `{ released: true }` |
 
 `StackInventory` has `complete`, `busy`, `stacks`, optional `fetchedAt` in epoch
-milliseconds, and optional `error`. Failures preserve previously known stacks
+milliseconds, optional `error`, and optional `applicable`. `applicable: false`
+means the host explicitly rules native workflows out for this execution context
+(SSH/folder projects or a disabled/unavailable gg integration); it does not mean
+discovery succeeded. Incomplete inventory with no applicability flag remains
+unknown and cannot authorize generic writes. Non-applicability still retains
+known native stacks as read-only dependencies. Failures preserve previously known stacks
 as incomplete data. Cached inventory becomes stale after native changes or 30
 seconds. Mutation decisions require a successful refresh.
 
@@ -71,6 +76,9 @@ reconciliation. The gate keeps the reservation until a terminal process result
 is observed; no timeout clears it. An uncertain remote spawn's terminal helper
 claim is retained so a delayed retry cannot launch that command again. A remote
 outage can therefore leave this project busy until reconciliation succeeds.
+A helper refusal before creating a supervisor (`-32055`) settles that launch
+attempt. It cannot settle an earlier lost spawn reply; those reservations still
+require terminal reconciliation. Legacy `-32050` startup failures remain unknown.
 
 Alas sends `stacks/changed {}` to active API 18 plugins with `workspace.read`
 when native operation ownership or project/worktree state changes. The SDK

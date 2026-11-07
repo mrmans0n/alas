@@ -90,12 +90,15 @@ public struct StackInventory: Codable, Equatable, Sendable {
     public var stacks: [NativeStack]
     public var fetchedAt: Double?
     public var error: String?
-    public init(complete: Bool, busy: Bool, stacks: [NativeStack], fetchedAt: Double? = nil, error: String? = nil) {
+    /// False only when the host explicitly rules native workflows out for this execution context.
+    public var applicable: Bool?
+    public init(complete: Bool, busy: Bool, stacks: [NativeStack], fetchedAt: Double? = nil, error: String? = nil, applicable: Bool? = nil) {
         self.complete = complete
         self.busy = busy
         self.stacks = stacks
         self.fetchedAt = fetchedAt
         self.error = error
+        self.applicable = applicable
     }
     public static var unavailable: Self { .init(complete: false, busy: false, stacks: [], error: "Native stacks are not available.") }
 
@@ -165,7 +168,7 @@ public struct StackInventory: Codable, Equatable, Sendable {
             retained.append(stale(previous, id: id))
         }
         return Self(complete: false, busy: busy, stacks: retained.sorted { $0.id < $1.id },
-                    fetchedAt: cached?.fetchedAt ?? fetchedAt, error: reason)
+                    fetchedAt: cached?.fetchedAt ?? fetchedAt, error: reason, applicable: applicable)
     }
 }
 

@@ -21,6 +21,12 @@ public enum GGWorktreeContext: Equatable, Sendable {
         return false
     }
 
+    /// Resolve a freshly queried native stack without overriding policy refusals.
+    public func resolvingCurrentStack(named name: String?) -> Self {
+        guard !isActive, permitsCurrentStackQuery, let name, !name.isEmpty else { return self }
+        return .active(stackName: name)
+    }
+
     /// Branch naming determines the immediate stack identity, but a detached
     /// HEAD can still belong to a GG stack. Policy failures must stay closed;
     /// a branch-prefix mismatch may ask `gg ls --json` for the authoritative

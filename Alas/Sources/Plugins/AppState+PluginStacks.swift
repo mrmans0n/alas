@@ -12,18 +12,18 @@ extension AppState {
         let gate = GGProjectMutationGate.shared
         let revision = gate.revision(project: projectID)
         let busy = gate.isBusy(project: projectID)
-        func unavailable(_ reason: String) -> StackInventory {
-            StackInventory(complete: false, busy: busy, stacks: [], error: reason)
+        func unavailable(_ reason: String, applicable: Bool? = nil) -> StackInventory {
+            StackInventory(complete: false, busy: busy, stacks: [], error: reason, applicable: applicable)
                 .retainingKnownStacks(from: pluginStackInventories[projectID]?.inventory)
         }
         guard let project = projects.first(where: { $0.id == projectID }) else {
             return unavailable("This project is no longer available.")
         }
         guard project.host == nil, RemotePath.split(project.path) == nil, !project.isFolder else {
-            return unavailable("Native gg stacks are unavailable for SSH and folder projects.")
+            return unavailable("Native gg stacks are unavailable for SSH and folder projects.", applicable: false)
         }
         guard ggInboxAvailable(projectId: projectID) else {
-            return unavailable("Enable stacked diffs and install gg for this project.")
+            return unavailable("Enable stacked diffs and install gg for this project.", applicable: false)
         }
         if !refresh, let cache = pluginStackInventories[projectID] {
             var inventory = cache.inventory
@@ -68,7 +68,7 @@ extension AppState {
                 let candidates = owners.removeValue(forKey: summary.name) ?? []
                 if candidates.count == 1, let (worktree, snapshot) = candidates.first, let stack = snapshot.stack {
                     stacks.append(try await pluginNativeStack(stack, project: project, remote: remote, worktree: worktree,
-                                                              actionsAllowed: ggWorktreeContext(project: project, worktree: worktree, branch: worktree.branch).isActive))
+                                                              actionsAllowed: ggWorktreeContext(project: project, worktree: worktree, branch: worktree.branch).resolvingCurrentStack(named: stack.name).isActive))
                 } else {
                     let knownOwnerID = candidates.isEmpty ? GGInboxWorktreeResolver.worktreeId(
                         stackName: summary.name, username: branchUsername,
@@ -108,7 +108,7 @@ extension AppState {
                     continue
                 }
                 stacks.append(try await pluginNativeStack(stack, project: project, remote: remote, worktree: worktree,
-                                                          actionsAllowed: ggWorktreeContext(project: project, worktree: worktree, branch: worktree.branch).isActive))
+                                                          actionsAllowed: ggWorktreeContext(project: project, worktree: worktree, branch: worktree.branch).resolvingCurrentStack(named: stack.name).isActive))
             }
             do {
                 let remoteDirectory = try await service.remoteStackDirectory(repoPath: project.path)
@@ -133,7 +133,7 @@ extension AppState {
             errors.append("The project changed while native stacks were refreshing. Refresh and try again.")
         }
         let inventory = StackInventory(complete: errors.isEmpty, busy: gate.isBusy(project: projectID), stacks: stacks.sorted { $0.id < $1.id },
-                                       fetchedAt: Date().timeIntervalSince1970 * 1000, error: errors.isEmpty ? nil : errors.joined(separator: "\n"))
+                                       fetchedAt: Date().timeIntervalSince1970 * 1000, error: errors.isEmpty ? nil : errors.joined(separator: "\n"), applicable: true)
             .retainingKnownStacks(from: pluginStackInventories[projectID]?.inventory)
         pluginStackInventories[projectID] = .init(inventory: inventory, revision: revision)
         return inventory

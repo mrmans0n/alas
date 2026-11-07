@@ -75,11 +75,7 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                     }
                 }
             } catch {
-                let mightStart: Bool
-                if case .jsonrpc(let rpc)? = error as? RemoteHelperClientError {
-                    mightStart = rpc.code == -32050
-                } else { mightStart = Self.isConnectionFailure(error) }
-                if mightStart || lock.withLock({ preserveClaim }) {
+                if Self.requiresStartupReconciliation(error, afterLostReply: lock.withLock({ preserveClaim })) {
                     recoveringUncertainStart = true
                     lock.withLock { self.client = client
                     preserveClaim = true }
@@ -119,6 +115,13 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                 try? await Task.sleep(for: pause)
             }
         }
+    }
+
+    /// A refusal settles only this RPC; a previous lost reply can still publish a late claim.
+    public static func requiresStartupReconciliation(_ error: Error, afterLostReply: Bool) -> Bool {
+        if afterLostReply { return true }
+        if case .jsonrpc(let rpc)? = error as? RemoteHelperClientError { return rpc.code == -32050 }
+        return isConnectionFailure(error)
     }
 
     public static func isConnectionFailure(_ error: Error) -> Bool {
