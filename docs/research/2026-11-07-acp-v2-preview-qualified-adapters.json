@@ -7,6 +7,148 @@
       "packageName": "@alas-ide/codex-acp",
       "packageVersion": "2.5.0-alas.6",
       "packageDigest": "5fb254c30b9e96a515f25d88e7cc57f75d4c1fb69f502947ac492b2793de569e",
+      "helperDigest": "8940ee45dbad35040bfad2e7eee77a7c722b2a051a12ceb218bd8d64b33a4719",
+      "approvalMode": "read-only",
+      "nodeVersion": "v26.13.0",
+      "nodeDigest": "64e4f47aef084a288c443ebe9a0091a34acba03ad176fb612b6e7d90784ff93d",
+      "sourceRepository": "https://github.com/mrmans0n/codex-acp",
+      "sourceCommit": "7c99c083270255f2960fa4cd2da93f72bdf402ad",
+      "packageIntegrity": "sha512-smgQD4uSJY3GUbeNEsC6u7vOEeZx+WN6t4fJYuVRn2BxHwomdA4FgLidwh1fzUCnwVv/A3ybBstS5pY7e7fQGQ==",
+      "providerID": "openai-chatgpt",
+      "packageDigestAlgorithm": "alas-package-tree-v1",
+      "supportedCapabilities": [
+        "freshSessionV2",
+        "textPrompt",
+        "permissionAllowOnce",
+        "permissionCancel"
+      ],
+      "observedAt": "2026-11-07",
+      "evidence": {
+        "allowOnce": {
+          "activeRawBrokerCount": 1,
+          "attemptCount": 1,
+          "finalBrokerCount": 0,
+          "finalLegacyBrokerCount": 0,
+          "finalRawBrokerCount": 0,
+          "formatVersion": 3,
+          "intentCount": 1,
+          "journalBarrier": 60,
+          "observationCount": 1,
+          "passed": true,
+          "permissionMode": "allow-once",
+          "permissionOfferCount": 1,
+          "permissionOffered": true,
+          "persistedAcknowledgedCursor": 60,
+          "persistedReplyMatches": true,
+          "promptCompleted": true,
+          "promptMarker": true,
+          "refusals": [],
+          "rejections": [],
+          "replyWritten": true,
+          "runnerReady": true,
+          "selectedAllowOnce": true,
+          "sentinelAbsent": false,
+          "sentinelMatches": true,
+          "terminalReason": "completed",
+          "writtenObservationCount": 1
+        },
+        "cancel": {
+          "activeRawBrokerCount": 1,
+          "attemptCount": 1,
+          "finalBrokerCount": 0,
+          "finalLegacyBrokerCount": 0,
+          "finalRawBrokerCount": 0,
+          "formatVersion": 3,
+          "intentCount": 1,
+          "journalBarrier": 57,
+          "observationCount": 1,
+          "passed": true,
+          "permissionMode": "cancel",
+          "permissionOfferCount": 1,
+          "permissionOffered": true,
+          "persistedAcknowledgedCursor": 57,
+          "persistedReplyMatches": true,
+          "promptCompleted": true,
+          "promptMarker": true,
+          "refusals": [],
+          "rejections": [],
+          "replyWritten": true,
+          "runnerReady": true,
+          "selectedAllowOnce": false,
+          "sentinelAbsent": true,
+          "sentinelMatches": false,
+          "terminalReason": "cancelled",
+          "writtenObservationCount": 1
+        }
+      }
+    }
+  ],
+  "candidateProvenance": [
+    {
+      "packageName": "@alas-ide/codex-acp",
+      "packageVersion": "2.5.0-alas.6",
+      "sourceRepository": "https://github.com/mrmans0n/codex-acp",
+      "sourceCommit": "7c99c083270255f2960fa4cd2da93f72bdf402ad",
+      "packageIntegrity": "sha512-smgQD4uSJY3GUbeNEsC6u7vOEeZx+WN6t4fJYuVRn2BxHwomdA4FgLidwh1fzUCnwVv/A3ybBstS5pY7e7fQGQ==",
+      "tarballSHA512": "b268100f8b92258dc651b78d12c0babbbbce11e671f9637ab787c962e5519f60711f0a26740e0580b89dc21d5fcd40a7c15bff037c9b06cb52e6963b7bb7d019",
+      "signatureVerified": true,
+      "workflow": {
+        "ref": "refs/heads/alas",
+        "repository": "https://github.com/mrmans0n/codex-acp",
+        "path": ".github/workflows/publish-alas.yml"
+      },
+      "invocation": "https://github.com/mrmans0n/codex-acp/actions/runs/42083581726/attempts/1",
+      "publishedFilesCompared": 4,
+      "installedPublishedFilesMatch": true,
+      "v2RouterSourceInspected": true,
+      "providerID": "openai-chatgpt",
+      "authenticationRouteVerified": true,
+      "approvalMode": "read-only"
+    },
+    {
+      "packageName": "@alas-ide/claude-agent-acp",
+      "packageVersion": "0.101.0-alas.1",
+      "sourceRepository": "https://github.com/mrmans0n/claude-agent-acp",
+      "sourceCommit": "863c0ac5b3d588a605185117f14338fb9f57f230",
+      "packageIntegrity": "sha512-LQbIYOes0J0SAl7FHc7c9JaAUv6irtOz0NKjrkLWpmJ3LDY78aGnC1GmoA438NbvVagZXfoe0Ch+aKgEwzhxEA==",
+      "tarballSHA512": "2d06c860e7acd09d12025ec51dcedcf4968052fea2aed3b3d0d2a3ae42d6a662772c363bf1a1a70b51a6a00e37f0d6ef55a8195dfa1ed0287e68a804c3387110",
+      "signatureVerified": true,
+      "workflow": {
+        "ref": "refs/heads/alas",
+        "repository": "https://github.com/mrmans0n/claude-agent-acp",
+        "path": ".github/workflows/publish-alas.yml"
+      },
+      "invocation": "https://github.com/mrmans0n/claude-agent-acp/actions/runs/42154616176/attempts/1",
+      "publishedFilesCompared": 312,
+      "installedPublishedFilesMatch": true,
+      "v2RouterSourceInspected": true,
+      "providerID": "anthropic-claude-ai",
+      "authenticationRouteVerified": true,
+      "approvalMode": "default"
+    }
+  ],
+  "pendingGates": [
+    "Whole-branch review",
+    "Integrated Debug app smoke test"
+  ],
+  "qualificationScope": "Fresh local package runner with text prompts, one-time permission selection and permission cancellation. No replay, resume, ownership transfer, SSH or app integration qualification.",
+  "rolloutEnabled": false,
+  "driver": {
+    "snapshotCommit": "7018557d7850f4bdd968dd1cb0373eaf00eff4ea",
+    "coreBaseCommit": "1d7aca095b8e0d90892a75254b783c85b4eed598",
+    "sourceSHA256": {
+      "Tools/ACP2Qualification/Package.swift": "5fda445797d3fb4d27a21e922ad4535ba1033fe55b7013ff95e7f5116dcf87f9",
+      "Tools/ACP2Qualification/Sources/ACP2Qualification/Main.swift": "8d173efd50b6bfc820106699c47e285c8aa25b493e8b6c4d396ae2e6c794619b",
+      "Tools/ACP2Qualification/Sources/ACP2Qualification/Qualification.swift": "c0f656ecaeb4f43233b7d8dd227058def154e2128daf9590ab372a56332ee021",
+      "Tools/ACP2Qualification/Tests/ACP2QualificationTests/QualificationTests.swift": "4b6d7ca20768c116dfad5304a8cfe82705d16ed25e95de686c5362f6c7db7a4e"
+    }
+  },
+  "historicalQualifiedAdapters": [
+    {
+      "agentID": "codex",
+      "packageName": "@alas-ide/codex-acp",
+      "packageVersion": "2.5.0-alas.6",
+      "packageDigest": "5fb254c30b9e96a515f25d88e7cc57f75d4c1fb69f502947ac492b2793de569e",
       "helperDigest": "f7769029f4e7f51ab1c3373f33ce6625964f93da05e68219c465994115a975ef",
       "approvalMode": "read-only",
       "nodeVersion": "v26.13.0",
@@ -163,66 +305,21 @@
       }
     }
   ],
-  "candidateProvenance": [
+  "excludedInstalledAdapters": [
     {
-      "packageName": "@alas-ide/codex-acp",
-      "packageVersion": "2.5.0-alas.6",
-      "sourceRepository": "https://github.com/mrmans0n/codex-acp",
-      "sourceCommit": "7c99c083270255f2960fa4cd2da93f72bdf402ad",
-      "packageIntegrity": "sha512-smgQD4uSJY3GUbeNEsC6u7vOEeZx+WN6t4fJYuVRn2BxHwomdA4FgLidwh1fzUCnwVv/A3ybBstS5pY7e7fQGQ==",
-      "tarballSHA512": "b268100f8b92258dc651b78d12c0babbbbce11e671f9637ab787c962e5519f60711f0a26740e0580b89dc21d5fcd40a7c15bff037c9b06cb52e6963b7bb7d019",
-      "signatureVerified": true,
-      "workflow": {
-        "ref": "refs/heads/alas",
-        "repository": "https://github.com/mrmans0n/codex-acp",
-        "path": ".github/workflows/publish-alas.yml"
-      },
-      "invocation": "https://github.com/mrmans0n/codex-acp/actions/runs/42083581726/attempts/1",
-      "publishedFilesCompared": 4,
-      "installedPublishedFilesMatch": true,
-      "v2RouterSourceInspected": true,
-      "providerID": "openai-chatgpt",
-      "authenticationRouteVerified": true,
-      "approvalMode": "read-only"
-    },
-    {
-      "packageName": "@alas-ide/claude-agent-acp",
-      "packageVersion": "0.101.0-alas.1",
-      "sourceRepository": "https://github.com/mrmans0n/claude-agent-acp",
-      "sourceCommit": "863c0ac5b3d588a605185117f14338fb9f57f230",
-      "packageIntegrity": "sha512-LQbIYOes0J0SAl7FHc7c9JaAUv6irtOz0NKjrkLWpmJ3LDY78aGnC1GmoA438NbvVagZXfoe0Ch+aKgEwzhxEA==",
-      "tarballSHA512": "2d06c860e7acd09d12025ec51dcedcf4968052fea2aed3b3d0d2a3ae42d6a662772c363bf1a1a70b51a6a00e37f0d6ef55a8195dfa1ed0287e68a804c3387110",
-      "signatureVerified": true,
-      "workflow": {
-        "ref": "refs/heads/alas",
-        "repository": "https://github.com/mrmans0n/claude-agent-acp",
-        "path": ".github/workflows/publish-alas.yml"
-      },
-      "invocation": "https://github.com/mrmans0n/claude-agent-acp/actions/runs/42154616176/attempts/1",
-      "publishedFilesCompared": 312,
-      "installedPublishedFilesMatch": true,
-      "v2RouterSourceInspected": true,
-      "providerID": "anthropic-claude-ai",
-      "authenticationRouteVerified": true,
-      "approvalMode": "default"
+      "agentID": "claude",
+      "observedPackageVersion": "0.101.0-alas.3",
+      "reason": "Installed package changed after the historical 0.101.0-alas.1 qualification; no new source or live evidence is inferred."
     }
   ],
-  "pendingGates": [
-    "Preview admission and launch revalidation",
-    "Persisted runtime identity and saved display",
-    "Owned preview lifecycle and app commands",
-    "Integrated Debug app smoke test"
-  ],
-  "qualificationScope": "Fresh local package runner with text prompts, one-time permission selection and permission cancellation. No replay, resume, ownership transfer, SSH or app integration qualification.",
-  "rolloutEnabled": false,
-  "driver": {
-    "snapshotCommit": "7018557d7850f4bdd968dd1cb0373eaf00eff4ea",
-    "coreBaseCommit": "1d7aca095b8e0d90892a75254b783c85b4eed598",
+  "currentHelperQualificationDriver": {
+    "binarySHA256": "c8a134ca6849df0849fd3d837d67c509b1f44e35b6938665848763e911d8d49d",
+    "buildMethod": "Unchanged qualification sources linked against the verified AlasCore debug library, with generated TreeSitter module map. Same public runner, helper, and SQLite route; preview owner and app require separate validation.",
     "sourceSHA256": {
-      "Tools/ACP2Qualification/Package.swift": "5fda445797d3fb4d27a21e922ad4535ba1033fe55b7013ff95e7f5116dcf87f9",
       "Tools/ACP2Qualification/Sources/ACP2Qualification/Main.swift": "8d173efd50b6bfc820106699c47e285c8aa25b493e8b6c4d396ae2e6c794619b",
-      "Tools/ACP2Qualification/Sources/ACP2Qualification/Qualification.swift": "c0f656ecaeb4f43233b7d8dd227058def154e2128daf9590ab372a56332ee021",
-      "Tools/ACP2Qualification/Tests/ACP2QualificationTests/QualificationTests.swift": "4b6d7ca20768c116dfad5304a8cfe82705d16ed25e95de686c5362f6c7db7a4e"
+      "Tools/ACP2Qualification/Sources/ACP2Qualification/Qualification.swift": "28e19697c362c6170f6525c053d587f7d91fe4b34593f723214c4492bead7c24",
+      "Packages/AlasCore/Sources/AlasSessions/ACP/Session/ACPV2SessionRunner.swift": "1529cf28e2f87ff41c558e236745e91cb09feda34d9cc7c2ec8701c3e9855711",
+      "Packages/AlasCore/Sources/AlasACP/ACP/Broker/ACPRawBrokerTransport.swift": "1840e45d5372eefe34c93e59fccc39fb92759334c2a445f5b2849242b4f9d64f"
     }
   }
 }

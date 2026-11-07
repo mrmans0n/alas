@@ -244,8 +244,16 @@ private final class PreviewOwnerFixture {
                 try await gate.write(snapshot, fence: fence, persistence: storage, authorize: authorize)
             }
         } else { writer = nil }
+        // This suite exercises the owner after admission. Real launch identity
+        // admission is covered by the eligibility and manager suites.
+        let qualification = ACPV2PreviewQualifiedAdapter(agentID: agent, packageName: "fixture", packageVersion: "test",
+            packageDigest: "fixture", helperDigest: "fixture",
+            providerID: agent == "claude" ? "anthropic-claude-ai" : "openai-chatgpt",
+            approvalMode: agent == "claude" ? "default" : "read-only", nodeDigest: "fixture", nodeVersion: "fixture",
+            sourceRepository: "fixture", sourceCommit: "fixture", packageIntegrity: "fixture",
+            supportedCapabilities: ["freshSessionV2", "textPrompt", "permissionAllowOnce", "permissionCancel"])
         owner = ACPV2PreviewOwner(session: session, client: client, persistence: persistence, fence: fence,
-            qualification: try #require(ACPV2PreviewEligibility.qualifiedAdapters.first { $0.agentID == agent }),
+            qualification: qualification,
             installationID: UUID(), isCurrent: { true }, onChange: {}, displayWriter: writer)
     }
     @discardableResult

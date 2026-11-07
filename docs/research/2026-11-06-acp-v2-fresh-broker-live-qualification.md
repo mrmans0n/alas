@@ -80,7 +80,7 @@ Both installed top-level packages match every file in their exact npm tarball: 4
 
 The immutable sources contain dual v1/v2 routers and v2 initialize/new/prompt implementations. This audit did not install, update or publish any adapter. Dependency execution bytes are a separate identity from the top-level npm tarball. The reusable tool hashes the entire installed package tree, including dependencies and native executables, and rejects links escaping that tree. Its evidence uses Alas client identity and records the requested default CLI login route; authenticated provider identity must be verified separately before a record can enter eligibility.
 
-The machine-readable provenance audit and pending qualification gates are in `2026-11-07-acp-v2-preview-qualified-adapters.json`. Its `qualifiedAdapters` list now contains the two exact local launch identities verified below. This evidence does not enable app rollout.
+The machine-readable provenance audit and pending qualification gates are in `2026-11-07-acp-v2-preview-qualified-adapters.json`. Its historical records preserve the two exact release-helper launch identities verified below. The current `qualifiedAdapters` list is limited to the fresh helper pairing described in the integration follow-up. This evidence does not enable general app rollout.
 
 The reusable-driver work found two probe defects before admission: URL identity retained a pre-creation file/directory hint and refused an actual matching scratch cwd; a failing regression now pins canonical path comparison. The temporary driver's context-free broker list also queried v1, so its earlier empty-list cleanup assertions are downgraded above. Fresh format-3 runs require one matching active raw-v2 source, a drained captured journal tail, and zero raw-v2 and v1 brokers after closure. Positive writes observed before these audit corrections remain partial evidence.
 
@@ -111,3 +111,18 @@ rtk swift run --package-path Tools/ACP2Qualification acp2-qualify \
 ```
 
 Use a new output directory for each run. Repeat with `--permission cancel` and the verified Claude executable. The tool refuses to overwrite an existing `result.json`. Ordinary Alas sessions still use v1; production admission, app integration and manual Debug validation are later plan tasks.
+
+## Preview integration follow-up, 2026-11-07
+
+The Debug bundle built from the pinned dependency checkout contains helper SHA256 `8940ee45dbad35040bfad2e7eee77a7c722b2a051a12ceb218bd8d64b33a4719`. The helper copied into the live driver has identical bytes. Fresh Codex `2.5.0-alas.6` cases passed with the previously verified package, Node and standard ChatGPT login identities:
+
+| Mode | Foreground | Sentinel | Captured tail / persisted ACK | Intents / attempts / written observations | Final raw / legacy brokers |
+|---|---|---|---|---|---|
+| Allow once | completed | Exact bytes | 60 / 60 | 1 / 1 / 1 | 0 / 0 |
+| Cancel | cancelled | Absent | 57 / 57 | 1 / 1 / 1 | 0 / 0 |
+
+The installed Claude adapter changed independently to `0.101.0-alas.3` during implementation. Its earlier `0.101.0-alas.1` source and live evidence remain historical. No evidence is inferred for the new package, and Claude is excluded from current preview admission. No installed adapter was changed by this work.
+
+The owner and manager checks include exact offered permission origins, held response observation, same-wire-ID replacement, lease loss, delayed fresh versus adopted open, fenced display rollback, canonical turn errors and saved-display-only reopening. Task 7 passed 43 package tests across five suites. The app result bundle confirms 295 test definitions and 365 parameter-inclusive executions across the four requested manager suites, with no failures or skips. A standalone app build and edited-file lint also passed. These checks used a temporary checkout with the pinned Ghostty revision; unrelated working Ghostty changes were preserved.
+
+Whole-branch review and the interactive Debug app smoke gate remain pending. The global setting remains off by default, ordinary sessions remain v1, and Release builds contain no eligible records. Package/helper probe success alone does not satisfy app integration qualification.
