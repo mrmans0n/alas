@@ -46,6 +46,11 @@ extension AppState {
                 throw PluginStackError("The project's provider repository identity is unavailable.")
             }
             let directory = try await service.stackDirectory(repoPath: project.path)
+            var savedReviewMembership: [String: [Int]]?
+            if !directory.stacks.isEmpty {
+                do { savedReviewMembership = try GGConfigReader.stackReviewMembership(repoPath: project.path) }
+                catch { errors.append("Saved review membership: \(GGErrorPresentation.message(for: error))") }
+            }
             let branchUsername = GGConfigReader.branchUsername(repoPath: project.path)
             var owners: [String: [(Worktree, GGStackSnapshot)]] = [:]
             for worktree in worktrees where !worktree.path.isRemoteAlasPath {
@@ -90,7 +95,8 @@ extension AppState {
                     }
                     stacks.append(NativeStack(id: pluginStackID(projectID, summary.name), name: summary.name, base: summary.base,
                                               host: remote.host, repo: remote.repositorySlug, worktree: knownOwnerID, complete: false, entries: entries,
-                                              actions: reasons["open"] == nil ? [.open] : [], unavailableActions: reasons))
+                                              actions: reasons["open"] == nil ? [.open] : [], unavailableActions: reasons,
+                                              reviewNumbers: savedReviewMembership.map { $0[summary.name] ?? [] }))
                 }
             }
             // A detached/followed worktree can identify a stack absent from gg's username-scoped directory.
@@ -105,14 +111,15 @@ extension AppState {
             }
             do {
                 let remoteDirectory = try await service.remoteStackDirectory(repoPath: project.path)
-                let localIDs = Set(stacks.map(\.id))
-                for discovered in remoteDirectory.stacks where !localIDs.contains(pluginStackID(projectID, discovered.name)) {
+                var discoveredInventory = StackInventory(complete: true, busy: false, stacks: stacks)
+                for discovered in remoteDirectory.stacks {
                     let reason = "Remote gg discovery cannot verify fresh heads, final base, or entry order. Check out this stack in native gg first."
-                    stacks.append(NativeStack(id: pluginStackID(projectID, discovered.name), name: discovered.name, base: "",
+                    discoveredInventory.includeDiscoveredStack(NativeStack(id: pluginStackID(projectID, discovered.name), name: discovered.name, base: "",
                                               host: remote.host, repo: remote.repositorySlug, complete: false, entries: [], actions: [],
                                               unavailableActions: Dictionary(uniqueKeysWithValues: NativeStackAction.allCases.map { ($0.rawValue, reason) }),
                                               reviewNumbers: discovered.prNumbers))
                 }
+                stacks = discoveredInventory.stacks
             } catch {
                 errors.append("Remote stacks: \(GGErrorPresentation.message(for: error))")
             }

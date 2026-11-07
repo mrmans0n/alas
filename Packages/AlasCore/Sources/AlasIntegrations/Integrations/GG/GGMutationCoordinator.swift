@@ -986,6 +986,25 @@ private struct GGClientOperationRunner: GGCommandRunning {
         )
     }
 
+    func runStreaming(args: [String], cwd: URL?, timeout: TimeInterval?) -> AsyncThrowingStream<String, Error> {
+        base.runStreaming(
+            args: ["--client-operation-id", clientOperationID] + args,
+            cwd: cwd,
+            timeout: timeout
+        )
+    }
+
+    func runStreaming(
+        args: [String], cwd: URL?, timeout: TimeInterval?, interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        base.runStreaming(
+            args: ["--client-operation-id", clientOperationID] + args,
+            cwd: cwd,
+            timeout: timeout,
+            interruption: interruption
+        )
+    }
+
     public init(base: any GGCommandRunning, clientOperationID: String) {
         self.base = base
         self.clientOperationID = clientOperationID

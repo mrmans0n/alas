@@ -36,7 +36,8 @@ public struct NativeStack: Codable, Equatable, Sendable {
     public let entries: [NativeStackEntry]
     public let actions: [NativeStackAction]
     public let unavailableActions: [String: String]?
-    /// Unordered membership only, used when remote discovery cannot prove order or heads.
+    /// Saved local or remote membership only; never proves order or heads.
+    /// For unmapped local entries, nil means unknown and [] confirms no saved review mapping.
     public let reviewNumbers: [Int]?
 
     public init(id: String, name: String, base: String, host: String, repo: String, worktree: String? = nil,
@@ -70,6 +71,31 @@ public struct StackInventory: Codable, Equatable, Sendable {
         self.complete = complete; self.busy = busy; self.stacks = stacks; self.fetchedAt = fetchedAt; self.error = error
     }
     public static var unavailable: Self { .init(complete: false, busy: false, stacks: [], error: "Native stacks are not available.") }
+
+    /// Incorporates a membership-only discovery row without asserting entry order or heads.
+    public mutating func includeDiscoveredStack(_ discovered: NativeStack) {
+        guard let index = stacks.firstIndex(where: { $0.id == discovered.id }) else {
+            stacks.append(discovered)
+            return
+        }
+        let local = stacks[index]
+        guard local.name == discovered.name, local.host == discovered.host, local.repo == discovered.repo else { return }
+        let discoveredNumbers = Set(discovered.reviewNumbers ?? [])
+        let localNumbers = Set(local.entries.compactMap(\.number)).union(local.reviewNumbers ?? [])
+        let contradicted = local.complete && localNumbers != discoveredNumbers
+        // A fully mapped owning worktree remains the authority for order, heads, and base.
+        guard !local.complete || contradicted else { return }
+        var reasons = local.unavailableActions ?? [:]
+        if contradicted {
+            let reason = "Remote review membership differs from the owning worktree. Refresh native gg before using inbox mutation actions."
+            for action in NativeStackAction.allCases where action != .open { reasons[action.rawValue] = reason }
+        }
+        stacks[index] = NativeStack(id: local.id, name: local.name, base: local.base, host: local.host, repo: local.repo,
+                                    worktree: local.worktree, complete: false, entries: local.entries,
+                                    actions: contradicted ? local.actions.filter { $0 == .open } : local.actions,
+                                    unavailableActions: reasons.isEmpty ? nil : reasons,
+                                    reviewNumbers: localNumbers.union(discoveredNumbers).sorted())
+    }
 
     /// Applies the failure-path cache policy after a project-scoped inventory read.
     public func retainingKnownStacks(from cached: StackInventory?) -> Self {

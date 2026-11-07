@@ -21,7 +21,10 @@ seconds. Mutation decisions require a successful refresh.
 Each stack has opaque `id`, `name`, `base`, provider `host` and `repo`, optional
 `worktree`, `fingerprint`, `complete`, ordered `entries`, supported `actions`, and
 optional `unavailableActions`. The latter maps action names to refusal reasons.
-Remote-only discovery may supply `reviewNumbers`, an unordered membership list.
+Saved local metadata or remote-only discovery may supply `reviewNumbers`, an
+unordered membership list. For local stacks without numbered entries, an omitted
+list means the published mapping is unknown; an explicit empty list confirms no
+saved published mapping. Unknown local mapping prevents generic provider writes.
 Those placeholders have empty entries and base, `complete: false`, and no native
 actions because this gg schema cannot verify order, heads, base, or fetch success.
 They remain visible dependencies and cannot become executable ordered chains.

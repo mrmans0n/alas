@@ -61,6 +61,84 @@ struct PluginStacksTests {
         }
     }
 
+    @Test func coldLocalStackUsesSavedReviewMembershipWhenRemoteDirectoryExcludesIt() throws {
+        let repo = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let config = repo.appendingPathComponent(".git/gg/config.json")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"stacks":{"feature":{"base":"custom","mrs":{"c-a":9,"c-b":3,"old":9}}}}"#.utf8).write(to: config)
+        let directory = try GGStackDirectorySnapshot.decode(fromJSON: Data(#"{"version":1,"stacks":[{"name":"feature","base":"main","commit_count":1,"commits":[{"position":1,"sha":"abc","title":"Unmapped"}]}]}"#.utf8))
+        let remote = try GGRemoteStackDirectorySnapshot.decode(fromJSON: Data(#"{"version":1,"stacks":[]}"#.utf8))
+        #expect(remote.stacks.isEmpty)
+        let membership = try GGConfigReader.stackReviewMembership(repoPath: repo.path)
+        let summary = try #require(directory.stacks.first)
+        let local = NativeStack(id: "p:feature", name: summary.name, base: summary.base, host: "github.com", repo: "owner/repo",
+                                complete: false, entries: summary.commits.map { .init(id: $0.sha, sha: $0.sha, position: $0.position, title: $0.title) }, actions: [.open])
+        var inventory = StackInventory(complete: true, busy: false, stacks: [local])
+        inventory.includeDiscoveredStack(.init(id: local.id, name: local.name, base: "", host: local.host, repo: local.repo,
+                                               complete: false, entries: [], actions: [], reviewNumbers: membership[local.name]))
+        let followed = try #require(inventory.stacks.first)
+        #expect(followed.reviewNumbers == [3, 9])
+        #expect(followed.entries == local.entries && followed.entries.allSatisfy { $0.number == nil })
+        #expect(!followed.complete && followed.actions == [.open] && followed.worktree == nil)
+        #expect(try PluginStackOpenParams(stack: followed.id, fingerprint: followed.fingerprint, action: .open).resolve(in: inventory).stack == followed)
+        for emptyConfig in [#"{}"#, #"{"stacks":{"other":{"mrs":{"c-a":7}}}}"#, #"{"stacks":{"feature":{}}}"#] {
+            try Data(emptyConfig.utf8).write(to: config)
+            let verified = try GGConfigReader.stackReviewMembership(repoPath: repo.path)
+            var empty = StackInventory(complete: true, busy: false, stacks: [local])
+            empty.includeDiscoveredStack(.init(id: local.id, name: local.name, base: "", host: local.host, repo: local.repo,
+                                                complete: false, entries: [], actions: [], reviewNumbers: verified[local.name] ?? []))
+            #expect(empty.stacks.first?.reviewNumbers == [])
+        }
+        for invalidConfig in [#"{"stacks":{"feature":{"mrs":{"c-a":"9"}}}}"#,
+                              #"{"stacks":{"feature":{"mrs":{"c-a":true}}}}"#,
+                              #"{"stacks":{"feature":{"mrs":{"c-a":0}}}}"#, #"{"stacks":null}"#,
+                              #"{"stacks":{"feature":{"mrs":null}}}"#, "invalid"] {
+            try Data(invalidConfig.utf8).write(to: config)
+            #expect(throws: GGServiceError.self) { try GGConfigReader.stackReviewMembership(repoPath: repo.path) }
+        }
+        try FileManager.default.removeItem(at: config)
+        #expect(throws: GGServiceError.self) { try GGConfigReader.stackReviewMembership(repoPath: repo.path) }
+    }
+
+    @Test func remoteMembershipAssociatesNumberlessLocalStackWithoutInventingEntryMapping() throws {
+        let local = NativeStack(id: "p:feature", name: "feature", base: "custom-base", host: "github.com", repo: "owner/repo",
+                                complete: false, entries: [.init(id: "sha", sha: "sha", position: 1, title: "Unmapped")], actions: [.open],
+                                unavailableActions: ["land": "Refresh the owner worktree"], reviewNumbers: [7])
+        let remote = NativeStack(id: local.id, name: local.name, base: "", host: local.host, repo: local.repo,
+                                 complete: false, entries: [], actions: [], reviewNumbers: [9, 3])
+        var inventory = StackInventory(complete: true, busy: false, stacks: [local])
+        inventory.includeDiscoveredStack(remote)
+        let merged = try #require(inventory.stacks.first)
+        #expect(inventory.stacks.count == 1)
+        #expect(merged.reviewNumbers == [3, 7, 9])
+        #expect(merged.entries == local.entries && merged.base == local.base && merged.worktree == nil)
+        #expect(!merged.complete && merged.actions == [.open] && merged.unavailableActions == local.unavailableActions)
+        #expect(merged.fingerprint != local.fingerprint)
+        #expect(try PluginStackOpenParams(stack: merged.id, fingerprint: merged.fingerprint, action: .open)
+            .resolve(in: inventory).stack == merged)
+    }
+
+    @Test func remoteMembershipPreservesAuthoritativeOwnerUnlessItContradictsKnownReviews() throws {
+        let owner = fixture()
+        func remote(numbers: [Int], host: String? = nil, repo: String? = nil, name: String? = nil) -> NativeStack {
+            NativeStack(id: owner.id, name: name ?? owner.name, base: "", host: host ?? owner.host, repo: repo ?? owner.repo,
+                        complete: false, entries: [], actions: [], reviewNumbers: numbers)
+        }
+        var inventory = StackInventory(complete: true, busy: false, stacks: [owner])
+        inventory.includeDiscoveredStack(remote(numbers: [2, 1]))
+        #expect(inventory.stacks == [owner])
+        inventory.includeDiscoveredStack(remote(numbers: [1, 2, 9], host: "other.host"))
+        inventory.includeDiscoveredStack(remote(numbers: [1, 2, 9], repo: "other/repo"))
+        inventory.includeDiscoveredStack(remote(numbers: [1, 2, 9], name: "other"))
+        #expect(inventory.stacks == [owner])
+        inventory.includeDiscoveredStack(remote(numbers: [1, 2, 9]))
+        let contradicted = try #require(inventory.stacks.first)
+        #expect(!contradicted.complete && contradicted.actions == [.open])
+        #expect(contradicted.reviewNumbers == [1, 2, 9] && contradicted.entries == owner.entries)
+        #expect(contradicted.unavailableActions?["land"] != nil)
+    }
+
     @Test func failedOwnerRefreshKeepsKnownReviewMappingWhenDirectoryReusesTheStackID() throws {
         let known = fixture()
         let directory = NativeStack(id: known.id, name: known.name, base: known.base, host: known.host, repo: known.repo,
