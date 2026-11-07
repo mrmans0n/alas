@@ -1455,7 +1455,17 @@ struct ACPBrokerRawClientTests {
     }
 }
 
-private actor RawBrokerFixture: ACPBrokerServicing {
+actor RawBrokerFixture: ACPBrokerServicing {
+    private var previewModeResponse: String?
+    func setPreviewModeResponse(_ value: String) { previewModeResponse = value }
+    func publishPreviewState(_ update: String) {
+        let cursor = max(completionCursor, extraEvents.last?.cursor.rawValue ?? 0) + 1
+        let frame = Data(("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"upstream\",\"update\":" + update + "}}").utf8)
+        extraEvents.append(.init(cursor: .init(rawValue: cursor), kind: .rawFrame(.init(bytes: frame))))
+    }
+    private var metadataGeneration: UInt64 = 7
+    func changeGeneration() { metadataGeneration += 1 }
+    var closedGenerations: [UInt64] = []
     private var initialPendingEvent: ACPBrokerPendingRequest?
     func setInitialPendingEvent(_ pending: ACPBrokerPendingRequest) { initialPendingEvent = pending }
     private var scriptedPages: [ACPBrokerAttachResult] = []
@@ -1486,12 +1496,18 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func holdNextAttach() { shouldHoldAttach = true }
     func waitForHeldAttach() async { var events = capturedAttach.stream.makeAsyncIterator()
     _ = await events.next() }
-    func releaseHeldAttach() { releaseAttach.continuation.yield(()) }
+    private var attachWaiter: CheckedContinuation<Void, Never>?
+    func releaseHeldAttach() {
+        attachWaiter?.resume()
+        attachWaiter = nil
+        releaseAttach.continuation.yield(())
+    }
     let acceptedMessageID: String?
     let replaceHookDuringSend: Bool
     let rawBytes: Data
     let cached: Bool
     let delayOpen: Bool
+    let holdRPCsAcrossCancellation: Bool
     var exactReplies: [ACPBrokerRespondExactParams] = []
     private var shouldHoldReply = false
     private let replyRelease = AsyncStream<Void>.makeStream()
@@ -1518,7 +1534,14 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     private var lastOperationKey = ACPBrokerOperationKey(rawValue: "key")
     var openCount = 0
     private let openGate = AsyncStream<Void>.makeStream()
-    func releaseOpen() { openGate.continuation.yield(()) }
+    private var openReleased = false
+    private var openWaiter: CheckedContinuation<Void, Never>?
+    func releaseOpen() {
+        openReleased = true
+        openWaiter?.resume()
+        openWaiter = nil
+        openGate.continuation.yield(())
+    }
     let pending: Bool
     private var pendingOverride: [ACPBrokerPendingRequest]?
     private var extraEvents: [ACPBrokerEvent] = []
@@ -1544,7 +1567,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     var acks: [UInt64] = []
     var closeCount = 0
     var detachCount = 0
-    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil, adapterError: Data? = nil) {
+    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil, adapterError: Data? = nil, holdRPCsAcrossCancellation: Bool = false) {
         self.acceptedMessageID = acceptedMessageID
         self.adapterError = adapterError
         self.context = context
@@ -1552,6 +1575,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         self.pending = pending
         self.cached = cached
         self.delayOpen = delayOpen
+        self.holdRPCsAcrossCancellation = holdRPCsAcrossCancellation
         self.rawBytes = rawBytes
         self.replaceHookDuringSend = replaceHookDuringSend
     }
@@ -1595,7 +1619,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return request
     }
     func snapshot() -> ACPBrokerSnapshot {
-        var metadata = ACPBrokerMetadata(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7),
+        var metadata = ACPBrokerMetadata(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: metadataGeneration),
             alasSessionId: localSessionID, adapterProgram: "fixture", adapterArgs: [], cwd: "/tmp", envKeys: [], createdAtMillis: 0)
         metadata.wireContext = context
         var snapshot = ACPBrokerSnapshot(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
@@ -1615,8 +1639,17 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     }
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         openCount += 1
-        if delayOpen { var gate = openGate.stream.makeAsyncIterator()
-        _ = await gate.next() }
+        if delayOpen {
+            if holdRPCsAcrossCancellation {
+                await withCheckedContinuation { continuation in
+                    if openReleased { continuation.resume() }
+                    else { openWaiter = continuation }
+                }
+            } else {
+                var gate = openGate.stream.makeAsyncIterator()
+                _ = await gate.next()
+            }
+        }
         #expect(params.wireContext == .rawV2 || params.wireContext == nil)
         return .init(snapshot: snapshot(), adopted: !freshBootstrap)
     }
@@ -1654,8 +1687,12 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         if shouldHoldAttach {
             shouldHoldAttach = false
             capturedAttach.continuation.yield(())
-            var release = releaseAttach.stream.makeAsyncIterator()
-            _ = await release.next()
+            if holdRPCsAcrossCancellation {
+                await withCheckedContinuation { attachWaiter = $0 }
+            } else {
+                var release = releaseAttach.stream.makeAsyncIterator()
+                _ = await release.next()
+            }
         }
         return result
     }
@@ -1678,7 +1715,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
                     operationKey: params.operationKey, adapterRequestId: .init(rawValue: 9), method: params.method)))
             }
             let result = params.method == "initialize" ? #"{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{}}}"# : (params.method == "session/prompt" && acceptedMessageID != nil ? #"{"messageId":"u"}"# : #"{"sessionId":"upstream"}"#)
-            value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\(result)}".utf8))
+            let response = params.method == "session/set_config_option" ? previewModeResponse ?? result : result
+            value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\(response)}".utf8))
         }
         if let adapterError {
             // The legacy helper forwards the adapter's whole error; the raw
@@ -1713,8 +1751,12 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     return .init(ok: true) }
     func detach(_ params: ACPBrokerDetachParams) -> ACPBrokerSimpleOK { detachCount += 1
     return .init(ok: true) }
-    func close(_ params: ACPBrokerCloseParams) -> ACPBrokerSimpleOK { closeCount += 1
-    return .init(ok: true) }
+    func close(_ params: ACPBrokerCloseParams) -> ACPBrokerSimpleOK {
+        closedGenerations.append(params.generation.rawValue)
+        guard params.generation.rawValue == metadataGeneration else { return .init(ok: false) }
+        closeCount += 1
+        return .init(ok: true)
+    }
 }
 
 struct ACPBrokerRawHelperTests {
