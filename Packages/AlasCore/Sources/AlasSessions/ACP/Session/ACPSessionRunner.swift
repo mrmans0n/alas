@@ -2498,31 +2498,31 @@ public final class ACPSessionRunner {
             let parts = updates.compactMap(Self.agentTextChunk).filter { $0.chunk.messageId == id }
             return (parts.map(\.text).joined(), session.agentRowContinued(byMessageId: id))
         }
-        var parts: [String] = []
-        func startsAnotherPhase(_ phase: ACPMessagePhase?) -> Bool {
-            if let phase, let lastPhase = last.chunk.phase { phase != lastPhase } else { false }
-        }
-        for update in updates.reversed() {
+        // In update order: a continuation may leave its phase out, inheriting
+        // the one before it.
+        var row = session.agentRowContinued(byMessageId: nil)
+        var phase: ACPMessagePhase?
+        if let row, case .agent(_, _, let text) = session.transcript.messages[row] { phase = text.phase }
+        var text = ""
+        for update in updates {
             switch update {
-            case .toolCall:
-                return (parts.reversed().joined(), nil)
-            case .userMessageChunk(let chunk) where chunk.directed == nil:
-                return (parts.reversed().joined(), nil)
+            case .userMessageChunk(let chunk) where chunk.directed != nil:
+                continue
+            case .toolCall, .userMessageChunk:
+                (text, row, phase) = ("", nil, nil)
             case .agentMessageChunk:
                 guard let part = Self.agentTextChunk(update) else { continue }
-                guard part.chunk.messageId == nil, !startsAnotherPhase(part.chunk.phase) else {
-                    return (parts.reversed().joined(), nil)
+                let newPhase = part.chunk.phase
+                if part.chunk.messageId != nil || (newPhase != nil && phase != nil && newPhase != phase) {
+                    (text, row) = ("", nil)
                 }
-                parts.append(part.text)
+                phase = newPhase ?? phase
+                if part.chunk.messageId == nil { text += part.text }
             default:
                 continue
             }
         }
-        var row = session.agentRowContinued(byMessageId: nil)
-        if let index = row, case .agent(_, _, let text) = session.transcript.messages[index], startsAnotherPhase(text.phase) {
-            row = nil
-        }
-        return (parts.reversed().joined(), row)
+        return (text, row)
     }
 
     private static func agentTextChunk(_ update: ACPSessionUpdate) -> (chunk: ACPTextChunk, text: String)? {

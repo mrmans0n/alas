@@ -6134,6 +6134,8 @@ struct ACPSessionRunnerTests {
         ([agentChunk("Note ")], [agentChunk("more"), bufferedToolCall, agentChunk("fixed.")], "fixed."),
         ([agentChunk("Note ", phase: "commentary")], [agentChunk("fixed.", phase: "final_answer")], "fixed."),
         ([], [agentChunk("Note", phase: "commentary"), agentChunk("fixed.", phase: "final_answer")], "fixed."),
+        // A chunk with no phase stays in the phase before it.
+        ([], [agentChunk("Note ", phase: "commentary"), agentChunk("more"), agentChunk("All ", phase: "final_answer"), agentChunk("fixed.")], "All fixed."),
     ] as [([ACPSessionUpdate], [ACPSessionUpdate], String)])
     func completionQuotesAgentTextStillBuffered(applied: [ACPSessionUpdate], buffered: [ACPSessionUpdate], expected: String) async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
