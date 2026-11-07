@@ -112,10 +112,10 @@ public final class PeerDelegationClient: ACPDelegationPeers {
         }
     }
 
-    public func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
-        await ask(serverId, .outbox(after: after)) { response in
-            guard case .outbox(let entries, let hasMore) = response else { return nil }
-            return ACPPeerOutboxPage(entries: entries, hasMore: hasMore)
+    public func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+        await ask(serverId, .outbox(after: after, store: store)) { response in
+            guard case .outbox(let entries, let hasMore, let answered) = response else { return nil }
+            return ACPPeerOutboxPage(entries: entries, hasMore: hasMore, store: answered)
         }
     }
 
@@ -166,6 +166,7 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     static func map(_ error: HostError, peer: String) -> ACPPeerError {
         switch error {
         case .session(.notFound): .notFound
+        case .peerIdentityUnproven: .unproven(peer: peer)
         case .failed(let message) where message == PeerHostChannel.unansweredMessage
             || message == FederatedSessionsProvider.peerUnavailableMessage:
             .unreachable(peer: peer)

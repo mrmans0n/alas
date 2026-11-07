@@ -21,6 +21,20 @@ public enum RemoteDeviceAgentAccess: String, Codable, Sendable {
     case autoRun
 }
 
+/// What a device's token may do here.
+public enum RemoteDeviceScope: String, Codable, Equatable, Sendable {
+    /// Everything this Mac serves a paired device.
+    case full
+    /// Only the delegation verbs, and the events that say delegated work
+    /// waits to be collected. A headless host asks for this: its token sits
+    /// in a file its own agents can read.
+    case delegation
+
+    /// The capability a responder advertises in `/health` once it honours
+    /// a `scope` in `POST /pair`.
+    public static let pairCapability = "pair.delegation-scope.v1"
+}
+
 public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public let id: String          // UUID
     public var name: String
@@ -32,13 +46,20 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public var kind: RemoteDeviceKind
     /// For `.alasInstance` devices, the peer's advertised `serverId`.
     public var peerServerId: String?
+    /// The identity key that peer proved it holds, at redeem or by the
+    /// pair-back. Nil when nothing proved it, and then `peerServerId` is only
+    /// a claim: anyone holding a live pairing code could have sent it.
+    public var peerPublicKey: String?
     /// Whether agents on that peer may delegate work here. Consent is per
     /// device, so re-pairing starts again at `.off`.
     public var agentAccess: RemoteDeviceAgentAccess
+    /// What the token may do. Only a redeemer that proved its key gets
+    /// anything but `.full`.
+    public var scope: RemoteDeviceScope
 
     public init(id: String, name: String, tokenHash: String, createdAt: Date, lastSeenAt: Date?,
          kind: RemoteDeviceKind = .browser, peerServerId: String? = nil,
-         agentAccess: RemoteDeviceAgentAccess = .off) {
+         agentAccess: RemoteDeviceAgentAccess = .off, peerPublicKey: String? = nil, scope: RemoteDeviceScope = .full) {
         self.id = id
         self.name = name
         self.tokenHash = tokenHash
@@ -47,10 +68,12 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
         self.kind = kind
         self.peerServerId = peerServerId
         self.agentAccess = agentAccess
+        self.peerPublicKey = peerPublicKey
+        self.scope = scope
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess
+        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess, peerPublicKey, scope
     }
 
     // Records written before federation have no `kind`; treat them as browsers
@@ -66,6 +89,14 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
         peerServerId = try c.decodeIfPresent(String.self, forKey: .peerServerId)
         // A missing or unrecognised value is no consent.
         agentAccess = (try? c.decodeIfPresent(RemoteDeviceAgentAccess.self, forKey: .agentAccess)) ?? .off
+        peerPublicKey = (try? c.decodeIfPresent(String.self, forKey: .peerPublicKey)) ?? nil
+        // Records from before scopes were all full. An unrecognised value
+        // comes from a newer build, which only ever narrows a token.
+        if c.contains(.scope) {
+            scope = (try? c.decode(RemoteDeviceScope.self, forKey: .scope)) ?? .delegation
+        } else {
+            scope = .full
+        }
     }
 }
 

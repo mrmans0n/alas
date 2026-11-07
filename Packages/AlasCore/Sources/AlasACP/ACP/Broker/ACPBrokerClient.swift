@@ -8,6 +8,7 @@ import AlasCode
 
 public protocol ACPBrokerServicing: Sendable {
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult
+    func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK
@@ -19,6 +20,10 @@ public protocol ACPBrokerServicing: Sendable {
 }
 
 extension ACPBrokerServicing {
+    public func open(_ params: ACPBrokerOpenParams, authorizeBeforeSend: @escaping @Sendable () async throws -> Void) async throws -> ACPBrokerOpenResult {
+        throw ACPClientError.notRunning
+    }
+
     public func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
         throw ACPBrokerRawReplyError.rejected(.unavailable)
     }
@@ -106,6 +111,11 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     public func claimV2OrderedIntake() async throws -> ACPV2OrderedIntake {
         guard let rawTransport else { throw ACPClientError.notRunning }
         return try await rawTransport.claimOrderedIntake()
+    }
+
+    public func authorizeV2PreviewOpen(_ authorize: @escaping @Sendable () async throws -> Void) async throws {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        try await rawTransport.authorizeOpen(authorize)
     }
 
     public func validateV2OrderedIntake(_ intake: ACPV2OrderedIntake?) throws {
@@ -749,6 +759,30 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         stateLock.lock()
         defer { stateLock.unlock() }
         return pendingOutboundRequestIds.contains(id)
+    }
+
+    /// Checks immutable constructor inputs before a preview can open its adapter.
+    public func validateV2PreviewLaunch(sessionId: String, agentId: String, approvalMode: String) throws {
+        guard rawTransport != nil, self.sessionId.utf8.elementsEqual(sessionId.utf8), args.isEmpty else {
+            throw ACPClientError.decoding("Preview requires a fresh raw-v2 launch")
+        }
+        switch agentId {
+        case "codex":
+            guard approvalMode == "read-only", env["INITIAL_AGENT_MODE"] == approvalMode else {
+                throw ACPClientError.decoding("Preview requires the qualified Codex approval mode")
+            }
+        case "claude":
+            guard approvalMode == "default" else { throw ACPClientError.decoding("Preview requires the qualified Claude approval mode") }
+        default: throw ACPClientError.decoding("Preview adapter has not been qualified")
+        }
+    }
+
+    /// Closes only a source this raw client freshly opened and still owns.
+    /// Returns false when cleanup detaches or cannot establish current authority.
+    public func endFreshV2Preview(authorize: @escaping @Sendable () async -> Bool,
+        handoffAuthorized: @escaping @Sendable () -> Bool) async -> Bool {
+        guard let rawTransport else { return false }
+        return await rawTransport.stopFreshPreview(authorize: authorize, handoffAuthorized: handoffAuthorized)
     }
 
     public func shutdown() async {

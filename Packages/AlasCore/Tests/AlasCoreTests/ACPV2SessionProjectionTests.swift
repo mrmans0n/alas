@@ -5,7 +5,7 @@ import AlasCore
 
 @MainActor
 struct ACPV2SessionProjectionTests {
-    @Test func projectionKeepsCanonicalOrderAndStableRows() throws {
+    @Test func displaySnapshotPreservesRowIdentityAndFinalText() throws {
         let fixture = try ProjectionFixture()
         try fixture.update(#"{"sessionUpdate":"agent_message","messageId":"m","content":[{"type":"text","text":"one"}]}"#)
         let first = try #require(fixture.session.transcript.messages.first)
@@ -16,9 +16,29 @@ struct ACPV2SessionProjectionTests {
         #expect(fixture.session.transcript.messages.first?.stableId == first.stableId)
         if case .agent(_, _, let text) = fixture.session.transcript.messages[0] { #expect(text.value == "one two") }
         else { Issue.record("Missing agent row") }
+        let original = fixture.session.transcript.messages + [.user(id: UUID(), text: "local", attachments: [])]
+        let snapshot = try ACPV2PreviewDisplaySnapshot(sessionId: "local", installationID: UUID(), sequence: 1,
+            status: .observing, messages: original)
+        let decoded = try JSONDecoder().decode(ACPV2PreviewDisplaySnapshot.self, from: JSONEncoder().encode(snapshot))
+        try fixture.update(#"{"sessionUpdate":"agent_message_chunk","messageId":"m","content":{"type":"text","text":"!"}}"#)
+        let restored = try decoded.decodeMessages()
+        #expect(restored.map(\.stableIdentityKey) == original.map(\.stableIdentityKey))
+        if case .agent(_, _, let text) = restored[0] { #expect(text.value == "one two") }
+        else { Issue.record("Missing saved text") }
+        #expect(decoded.reopenedStatus == .interrupted)
         try fixture.update(#"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p","entries":[]}}"#)
         #expect(fixture.session.transcript.messages.count == 3)
         #expect(fixture.session.v2Projection?.canonical.order.count == 3)
+    }
+
+    @Test(arguments: ["format", "identity", "payload"])
+    func malformedPreviewDisplayCannotRestoreRows(reason: String) throws {
+        let row = ACPMessage.user(id: UUID(), text: "saved", attachments: [])
+        let encoded = try ACPMessageCodec.encode(row)
+        let snapshot = ACPV2PreviewDisplaySnapshot(sessionId: "local", installationID: UUID(), sequence: 1,
+            status: .ended, rows: [.init(identity: reason == "identity" ? .agentUUID(UUID()) : row.stableIdentityKey,
+                kind: row.kind, payload: reason == "payload" ? Data([255]) : encoded)], formatVersion: reason == "format" ? 2 : 1)
+        #expect(throws: (any Error).self) { try snapshot.decodeMessages() }
     }
 
     @Test func markdownPlanProjectsAsDocument() throws {

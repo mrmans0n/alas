@@ -31,6 +31,7 @@ public final class ACPPeerOutboxCollector {
     private let childBlocked: @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void
     private let settleQuietChildren: @MainActor (_ serverId: String) async -> Void
     private let retryStarts: @MainActor (_ serverId: String) async -> Void
+    private let identityUnproven: @MainActor (_ serverId: String, _ peer: String) async -> Void
     private let schedule: (Int, @escaping @Sendable () async -> Void) -> Void
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
@@ -53,6 +54,9 @@ public final class ACPPeerOutboxCollector {
     ///   - childBlocked: Told once per blocked child, by the collector that
     ///     settled the notice, so two sharing a profile do not both announce it.
     ///   - retryStarts: Asks again about children still starting on a peer.
+    ///   - identityUnproven: Told when a peer refuses to collect because this
+    ///     Mac's pairing with it never proved its identity. Asking again
+    ///     changes nothing until the two pair again.
     ///   - schedule: Arranges for work to run after a number of seconds.
     public init(
         peers: ACPDelegationPeers,
@@ -63,6 +67,7 @@ public final class ACPPeerOutboxCollector {
         availabilityChanged: @escaping @MainActor (_ serverId: String) -> Void = { _ in },
         childBlocked: @escaping @MainActor (_ serverId: String, _ child: ACPDelegationRecord, _ entry: ACPPeerOutboxEntry) -> Void = { _, _, _ in },
         retryStarts: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
+        identityUnproven: @escaping @MainActor (_ serverId: String, _ peer: String) async -> Void = { _, _ in },
         settleQuietChildren: @escaping @MainActor (_ serverId: String) async -> Void = { _ in },
         schedule: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
     ) {
@@ -74,6 +79,7 @@ public final class ACPPeerOutboxCollector {
         self.availabilityChanged = availabilityChanged
         self.childBlocked = childBlocked
         self.retryStarts = retryStarts
+        self.identityUnproven = identityUnproven
         self.settleQuietChildren = settleQuietChildren
         self.schedule = schedule
     }
@@ -162,29 +168,61 @@ public final class ACPPeerOutboxCollector {
     }
 
     /// False when it stopped on something a retry could get past.
-    private func pull(_ serverId: String) async -> Bool {
-        let cursor: Int64
+    /// `restarted` is set on the pull that follows the peer's store changing.
+    private func pull(_ serverId: String, restarted: Bool = false) async -> Bool {
+        let position: ACPPeerCursorPosition
         do {
-            cursor = try await persistence.peerCursor(peerServerId: serverId)
+            // One read: another collector may adopt a new store meanwhile, and
+            // this cursor sent with that store would acknowledge unread entries.
+            position = try await persistence.peerPosition(peerServerId: serverId)
         } catch {
             logger.error("Could not read the cursor for peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
             return false
         }
-        var after = cursor
+        var store = position.store
+        var after = position.seq
         var gone: [String: Bool] = [:]
         while true {
             // Asking also acknowledges everything through `after`, which is
             // only ever a cursor that is already committed.
             let page: ACPPeerOutboxPage
-            switch await peers.outbox(serverId: serverId, after: after) {
+            switch await peers.outbox(serverId: serverId, after: after, store: store) {
             case .success(let answer): page = answer
             case .failure(.outdated):
                 // Stays that way until the peer's build changes, which is a
                 // new `hello` and so a new signal. Asking again changes nothing.
                 return true
+            case .failure(.unproven(let peer)):
+                // Nor does asking again here: only pairing again does. The
+                // children it holds are failed, so no parent waits forever.
+                await identityUnproven(serverId, peer)
+                return true
             case .failure(let error):
                 logger.notice("Outbox of peer \(serverId, privacy: .public) not collected after \(after): \(String(describing: error), privacy: .public)")
                 return false
+            }
+            if let answered = page.store, answered != store {
+                // The peer's database was made afresh, so its sequence started
+                // again and this cursor means nothing there: it answered from
+                // the start. Counted from 0 in the new store, the pull starts
+                // over. A cursor that knew no store keeps its place.
+                let known = store
+                let adopted: Bool
+                do {
+                    adopted = try await persistence.adoptPeerStore(peerServerId: serverId, from: known, to: answered)
+                } catch {
+                    logger.error("Could not record the store of peer \(serverId, privacy: .public): \(String(describing: error), privacy: .public)")
+                    return false
+                }
+                // Not adopted: another collector changed the store since this
+                // one read it, so this answer may come from a store already
+                // replaced. The pull starts over from what the cursor holds now.
+                if known != nil || !adopted {
+                    logger.notice("Peer \(serverId, privacy: .public) has a new store; collecting its outbox from the start")
+                    // Once: the store just read is the one it reported.
+                    return restarted ? false : await pull(serverId, restarted: true)
+                }
+                store = answered
             }
             // The whole page is committed before anyone is woken, so a slow
             // parent holds up neither another parent nor the next page.
@@ -197,7 +235,7 @@ public final class ACPPeerOutboxCollector {
                     stopped = true
                     break
                 }
-                guard let child = await settle(entry, from: serverId, gone: &gone) else {
+                guard let child = await settle(entry, from: serverId, store: store, gone: &gone) else {
                     stopped = true
                     settled = false
                     break
@@ -216,8 +254,10 @@ public final class ACPPeerOutboxCollector {
 
     /// Commits one entry. The outer nil means it could not be settled, which
     /// ends the pull; the inner nil means there is nobody to wake for it.
+    /// `store` is the one its page came from, so a page another collector's
+    /// adoption made stale moves no cursor.
     private func settle(
-        _ entry: ACPPeerOutboxEntry, from serverId: String, gone: inout [String: Bool]
+        _ entry: ACPPeerOutboxEntry, from serverId: String, store: String?, gone: inout [String: Bool]
     ) async -> ACPDelegationRecord?? {
         do {
             guard let child = try await persistence.delegation(childSessionId: entry.childSessionId),
@@ -225,7 +265,7 @@ public final class ACPPeerOutboxCollector {
             else {
                 // Not one of this peer's children: do not let it block the
                 // ones behind it, and never address anyone else's session.
-                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq)
+                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, store: store)
                 return .some(nil)
             }
             let isGone: Bool
@@ -237,7 +277,7 @@ public final class ACPPeerOutboxCollector {
                 if isGone { gone[child.parentSessionId] = true }
             }
             if isGone {
-                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, settling: entry)
+                try await persistence.advancePeerCursor(peerServerId: serverId, to: entry.seq, store: store, settling: entry)
                 return .some(nil)
             }
             // The parent was already woken about a failed child. Its real
@@ -246,7 +286,9 @@ public final class ACPPeerOutboxCollector {
                 seq: entry.seq, messageId: entry.messageId, childSessionId: entry.childSessionId,
                 prompt: entry.prompt, kind: .notice, createdAt: entry.createdAt
             ) : entry
-            let won = try await persistence.collectPeerEntry(kept, peerServerId: serverId, parentSessionId: child.parentSessionId)
+            let won = try await persistence.collectPeerEntry(
+                kept, peerServerId: serverId, parentSessionId: child.parentSessionId, store: store
+            )
             // Decided from the original entry: a failed child's wake was rewritten
             // to a notice above, and it has nothing left to be blocked on.
             if won, child.phase != .failed, entry.isBlockedNotice { childBlocked(serverId, child, entry) }

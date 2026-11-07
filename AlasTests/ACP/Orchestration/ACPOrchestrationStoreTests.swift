@@ -560,21 +560,24 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.peerChildren(peerServerId: "s1") == [try #require(try store.delegation(childSessionId: "child"))])
     }
 
-    /// Earlier builds of this schema version wrote stores without the column.
+    /// Earlier builds of version 5 wrote stores without the column. Such a
+    /// store still moves to the current version, gaining a store identity.
     @Test func aVersion5StoreWithoutTheAwaitedColumnGainsIt() throws {
         let path = temporaryPath()
-        do {
-            let store = try ACPOrchestrationStore(path: path)
-            #expect(try store.currentSchemaVersion() == 5)
-        }
+        _ = try ACPOrchestrationStore(path: path)
         var db: OpaquePointer?
         #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "UPDATE schema_version SET version = 5", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "DROP TABLE store_identity", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "ALTER TABLE peer_delegation_cursors DROP COLUMN store_id", nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting", nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_awaiting_since", nil, nil, nil) == SQLITE_OK)
         #expect(sqlite3_exec(db, "ALTER TABLE delegations DROP COLUMN peer_settled_turn", nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
 
         let store = try ACPOrchestrationStore(path: path)
+        #expect(try store.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
+        #expect(try !store.storeIdentity().isEmpty)
         var record = newRecord()
         record.peerAwaiting = true
         try store.insert(record)
@@ -635,7 +638,7 @@ struct ACPOrchestrationStoreTests {
         record.peerAwaiting = true
         try store.insert(record)
         let entry = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-1100", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
-        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "parent"))
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "parent", store: nil))
 
         try store.markPeerAwaiting(childSessionId: "child", since: acceptedAt)
 
@@ -654,7 +657,7 @@ struct ACPOrchestrationStoreTests {
 
         try store.notePeerSendStarting(childSessionId: "child")
         let outcome = ACPPeerOutboxEntry(seq: 1, messageId: "outcome-child-1000", childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
-        #expect(try store.collectPeerEntry(outcome, peerServerId: "s1", parentSessionId: "parent"))
+        #expect(try store.collectPeerEntry(outcome, peerServerId: "s1", parentSessionId: "parent", store: nil))
 
         #expect(try store.delegation(childSessionId: "child")?.peerAwaiting == false)
     }
@@ -695,21 +698,77 @@ struct ACPOrchestrationStoreTests {
         let store = try ACPOrchestrationStore(path: temporaryPath())
         #expect(try store.peerCursor(peerServerId: "s1") == 0)
         let entry = outboxEntry(seq: 1)
-        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p"))
-        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p", store: nil))
+        #expect(try store.collectPeerEntry(entry, peerServerId: "s1", parentSessionId: "p", store: nil) == false)
         #expect(try store.pendingMessages(targetSessionId: "p").map(\.id) == ["outcome-1"])
         #expect(try store.peerCursor(peerServerId: "s1") == 1)
-        #expect(try store.collectPeerEntry(outboxEntry(seq: 2), peerServerId: "s1", parentSessionId: "p"))
-        #expect(try store.collectPeerEntry(outboxEntry(seq: 1), peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 2), peerServerId: "s1", parentSessionId: "p", store: nil))
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 1), peerServerId: "s1", parentSessionId: "p", store: nil) == false)
+    }
+
+    /// The cursor counts in the store the peer reports. Learning one keeps
+    /// it; a new one, from a database made afresh, starts it again, once.
+    @Test func aPeerStoreChangeRestartsTheCursorOnce() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 57, store: nil))
+
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "first"))
+        #expect(try store.peerCursor(peerServerId: "s1") == 57)
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "first") == false)
+
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: "first", to: "recreated"))
+        #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 0, store: "recreated"))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2, store: "recreated"))
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: "first", to: "recreated") == false)
+        #expect(try store.peerCursor(peerServerId: "s1") == 2)
+    }
+
+    /// A late answer from a database already replaced, to a collector that
+    /// asked knowing no store, must not undo the store another adopted.
+    @Test func aStoreIsAdoptedOnlyOverTheOneTheCollectorAskedWith() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "new"))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 1, store: "new"))
+
+        #expect(try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "old") == false)
+
+        #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 1, store: "new"))
+    }
+
+    /// A page read before another collector adopted the peer's new store
+    /// counts in the old sequence: settling it must not move the new cursor.
+    @Test(arguments: [true, false])
+    func aPageFromAReplacedStoreMovesNoCursor(collecting: Bool) throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.adoptPeerStore(peerServerId: "s1", from: nil, to: "old")
+        try store.advancePeerCursor(peerServerId: "s1", to: 57, store: "old")
+        try store.adoptPeerStore(peerServerId: "s1", from: "old", to: "new")
+
+        let stale = outboxEntry(seq: 58)
+        let moved = collecting
+            ? try store.collectPeerEntry(stale, peerServerId: "s1", parentSessionId: "p", store: "old")
+            : try store.advancePeerCursor(peerServerId: "s1", to: stale.seq, store: "old")
+
+        #expect(moved == false)
+        #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 0, store: "new"))
+        #expect(try store.pendingMessages(targetSessionId: "p").isEmpty)
+    }
+
+    /// The id is the file's: it survives reopening and differs in a new file.
+    @Test func theStoreIdentityBelongsToTheFile() throws {
+        let path = temporaryPath()
+        let id = try ACPOrchestrationStore(path: path).storeIdentity()
+        #expect(try ACPOrchestrationStore(path: path).storeIdentity() == id)
+        #expect(try ACPOrchestrationStore(path: temporaryPath()).storeIdentity() != id)
     }
 
     @Test("advancing the cursor without an entry moves it forward only")
     func advancingCursorMovesForwardOnly() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())
-        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 3))
-        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2) == false)
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 3, store: nil))
+        #expect(try store.advancePeerCursor(peerServerId: "s1", to: 2, store: nil) == false)
         #expect(try store.peerCursor(peerServerId: "s1") == 3)
-        #expect(try store.collectPeerEntry(outboxEntry(seq: 3), peerServerId: "s1", parentSessionId: "p") == false)
+        #expect(try store.collectPeerEntry(outboxEntry(seq: 3), peerServerId: "s1", parentSessionId: "p", store: nil) == false)
         #expect(try store.pendingMessages(targetSessionId: "p").isEmpty)
     }
 
@@ -751,13 +810,13 @@ struct ACPOrchestrationStoreTests {
         }
 
         let store = try ACPOrchestrationStore(path: path)
-        #expect(ACPOrchestrationStore.targetSchemaVersion == 5)
-        #expect(try store.currentSchemaVersion() == 5)
+        #expect(ACPOrchestrationStore.targetSchemaVersion == 6)
+        #expect(try store.currentSchemaVersion() == 6)
         let record = try #require(try store.delegation(childSessionId: "child"))
         #expect(record.peerServerId == nil)
         #expect(record.peerAwaiting == false)
         #expect(record.role == "reviewer")
         #expect(try store.pendingMessages(targetSessionId: "parent").map(\.id) == ["m1"])
-        #expect(try store.peerCursor(peerServerId: "s1") == 0)
+        #expect(try store.peerPosition(peerServerId: "s1") == .init(seq: 0, store: nil))
     }
 }

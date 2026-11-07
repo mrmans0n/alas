@@ -20,6 +20,22 @@ struct AppConfigDecodingTests {
         #expect(selection.requestedVersion == .v1)
     }
 
+    /// A missing or unknown density reads as comfortable without losing the
+    /// settings beside it.
+    @Test(arguments: [#"{"accent":"coral"}"#, #"{"accent":"coral","density":"huge"}"#])
+    func missingOrUnknownDensityFallsBackToComfortable(json: String) throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.density == .comfortable)
+        #expect(config.accent == "coral")
+    }
+
+    @Test func compactDensitySurvivesConfigurationRoundTrip() throws {
+        var config = AppConfig.defaults
+        config.density = .compact
+        let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(reloaded.density == .compact)
+    }
+
     @Test func computerUseSectionDefaultsOffAndRoundTrips() throws {
         let absent = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"remote":{"enabled":true}}"#.utf8))
         #expect(absent.computerUse.enabled == false)

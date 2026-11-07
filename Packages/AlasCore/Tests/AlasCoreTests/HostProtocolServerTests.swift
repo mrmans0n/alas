@@ -3011,7 +3011,7 @@ struct HostProtocolServerTests {
             let server = HostProtocolServer(host: host)
             server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
                 id: "s1", name: "s1", tokenHash: "s1", createdAt: .distantPast, lastSeenAt: nil, kind: .alasInstance,
-                peerServerId: "s1", agentAccess: access
+                peerServerId: "s1", agentAccess: access, peerPublicKey: "key-s1"
             )]))
             let client = Client()
             return (server.connect(caller: .remotePeer(deviceID: "s1"), send: client.receive), client)
@@ -3167,7 +3167,7 @@ struct HostProtocolServerTests {
         )
         let device = RemoteDevice(
             id: "device-1", name: "Laptop", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
-            kind: .alasInstance, peerServerId: "mac-1"
+            kind: .alasInstance, peerServerId: "mac-1", peerPublicKey: "key-mac-1"
         )
         let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [device]))
         fixture.server.remotePeers = RemotePeerManager(
@@ -3277,13 +3277,19 @@ struct HostProtocolServerTests {
         #expect(GitRemoteIdentity.normalized(url) == expected)
     }
 
+    /// A device that never proved its identity is refused in a type the source
+    /// can act on, even for a child its claimed identity owns.
     @Test(arguments: [
-        (HostCaller.app, DelegationAPI.notAPeerRefusal), (.cli, DelegationAPI.notAPeerRefusal),
-        (.session(id: "child"), DelegationAPI.notAPeerRefusal), (.localUser(uid: 501), DelegationAPI.notAPeerRefusal),
-        (.remotePeer(deviceID: "browser"), DelegationAPI.notAPeerRefusal), (.remotePeer(deviceID: "unknown"), DelegationAPI.notAPeerRefusal),
-        (.remotePeer(deviceID: "no-server-id"), DelegationAPI.unknownPeerRefusal),
+        (HostCaller.app, HostError.failed(message: DelegationAPI.notAPeerRefusal)),
+        (.cli, .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.session(id: "child"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.localUser(uid: 501), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "browser"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "unknown"), .failed(message: DelegationAPI.notAPeerRefusal)),
+        (.remotePeer(deviceID: "no-server-id"), .peerIdentityUnproven),
+        (.remotePeer(deviceID: "s1-unproven"), .peerIdentityUnproven),
     ])
-    func delegationIsRefusedForEveryCallerExceptAPeerInstance(caller: HostCaller, refusal: String) async throws {
+    func delegationIsRefusedForEveryCallerExceptAProvenPeerInstance(caller: HostCaller, refusal: HostError) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
@@ -3294,7 +3300,7 @@ struct HostProtocolServerTests {
             .read(sessionID: "child", offset: nil, limit: nil, maxChars: nil), .status(sessionIDs: ["child"]),
             .interrupt(sessionID: "child"), .outbox(after: 0),
         ] {
-            #expect(await fixture.ask(request, as: caller) == .failure(error: .failed(message: refusal)), "\(request)")
+            #expect(await fixture.ask(request, as: caller) == .failure(error: refusal), "\(request)")
         }
         #expect(try await fixture.persistence.delegation(childSessionId: "new") == nil)
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
@@ -3450,7 +3456,8 @@ struct HostProtocolServerTests {
         }
         #expect(try JSONDecoder().decode(ACPOrchestrationReadResponse.self, from: page).sessionId == "child")
         #expect(await fixture.ask(.interrupt(sessionID: "child"), as: rePaired) == .delegation(.interrupted(cancelRequested: false)))
-        #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false)))
+        let own = try await fixture.persistence.storeIdentity()
+        #expect(await fixture.ask(.outbox(after: 0), as: rePaired) == .delegation(.outbox(entries: [], hasMore: false, store: own)))
 
         let send = HostDelegationRequest.send(sessionID: "child", prompt: "Go")
         #expect(await fixture.ask(send, as: rePaired) == .failure(error: .failed(message: DelegationAPI.accessOffRefusal)))
@@ -3493,7 +3500,7 @@ struct HostProtocolServerTests {
         for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: prompt) }
 
         let first = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
-        guard case .delegation(.outbox(let page, let hasMore)) = first else {
+        guard case .delegation(.outbox(let page, let hasMore, _)) = first else {
             Issue.record("expected a page")
             return
         }
@@ -3503,7 +3510,7 @@ struct HostProtocolServerTests {
         #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: first))).count <= RemoteServerMessage.sendBudget)
 
         let next = await fixture.ask(.outbox(after: try #require(page.last?.seq)), as: fixture.peer1)
-        guard case .delegation(.outbox(let rest, let more)) = next else {
+        guard case .delegation(.outbox(let rest, let more, _)) = next else {
             Issue.record("expected a page")
             return
         }
@@ -3520,7 +3527,7 @@ struct HostProtocolServerTests {
 
         let response = await fixture.ask(.outbox(after: 0), as: fixture.peer1)
 
-        guard case .delegation(.outbox(let page, let hasMore)) = response else {
+        guard case .delegation(.outbox(let page, let hasMore, _)) = response else {
             Issue.record("expected a page")
             return
         }
@@ -3530,20 +3537,33 @@ struct HostProtocolServerTests {
         #expect(try JSONEncoder().encode(RemoteServerMessage.host(.response(id: 1, result: response))).count <= RemoteServerMessage.sendBudget)
     }
 
-    @Test func outboxAcknowledgesEntriesThroughAfter() async throws {
+    enum AskedStore: CaseIterable, Sendable { case none, this, another }
+
+    /// Asking acknowledges through `after`, unless the cursor counts in a
+    /// store this host no longer has: its database was made afresh, so that
+    /// `after` would delete entries nobody read.
+    @Test(arguments: AskedStore.allCases)
+    func outboxAcknowledgesEntriesThroughAfterInThisStoreOnly(_ asked: AskedStore) async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         for index in 1...3 { try await fixture.enqueueOutcome(id: "m\(index)", peer: "s1", prompt: "Done") }
         try await fixture.enqueueOutcome(id: "other", peer: "s2", prompt: "Done")
+        let own = try await fixture.persistence.storeIdentity()
+        let store: String? = switch asked {
+        case .none: nil
+        case .this: own
+        case .another: "a-store-since-deleted"
+        }
 
-        let response = await fixture.ask(.outbox(after: 2), as: fixture.peer1)
+        let response = await fixture.ask(.outbox(after: 2, store: store), as: fixture.peer1)
 
-        guard case .delegation(.outbox(let page, false)) = response else {
+        guard case .delegation(.outbox(let page, false, own)) = response else {
             Issue.record("\(response)")
             return
         }
-        #expect(page.map(\.messageId) == ["m3"])
-        #expect(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["m3"])
+        let kept = asked == .another ? ["m1", "m2", "m3"] : ["m3"]
+        #expect(page.map(\.messageId) == kept)
+        #expect(try await fixture.persistence.outbox(peerServerId: "s1", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == kept)
         #expect(try await fixture.persistence.outbox(peerServerId: "s2", after: 0, maxBytes: 1 << 20).entries.map(\.messageId) == ["other"])
     }
 
@@ -3600,6 +3620,79 @@ struct HostProtocolServerTests {
                 return
             }
             #expect(discovery.access == .ask)
+            return
+        }
+        Issue.record("No answer")
+    }
+
+    /// A host's token is limited to delegation: anything else is refused,
+    /// including what a later change adds to the protocol.
+    @Test(arguments: [HostRequest.listSessions, .capabilities, .listWorkspaceCheckouts, .remotePairingCode, .listPeers])
+    func aDelegationOnlyClientIsRefusedEverythingButDelegation(request: HostRequest) async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+
+        let response = await fixture.respond(request, as: fixture.peer1, delegationOnly: true)
+
+        #expect(response == .failure(error: .invalidRequest(reason: HostProtocolConnection.delegationOnlyRefusal)))
+    }
+
+    /// It still delegates, and subscribes from a snapshot that shows nothing.
+    @Test func aDelegationOnlyClientDelegatesFromASnapshotThatShowsNothing() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+
+        guard case .snapshot(let snapshot) = await fixture.respond(.snapshot, as: fixture.peer1, delegationOnly: true),
+              case .delegation(.discovered) = await fixture.respond(.delegation(.discover(repository: nil)), as: fixture.peer1,
+                                                                    delegationOnly: true)
+        else {
+            Issue.record("A delegation-only client was refused a snapshot or delegation")
+            return
+        }
+        #expect(snapshot.projects.isEmpty && snapshot.worktrees.isEmpty && snapshot.sessions.isEmpty)
+    }
+
+    /// Its subscription carries only the news that outcomes wait there.
+    @Test func aDelegationOnlySubscriptionHearsOnlyOfItsOutbox() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
+        let owner = try await fixture.subscribed(as: fixture.peer1, accepting: ["delegationOutboxChanged"], delegationOnly: true)
+        defer { owner.connection.close() }
+
+        // Earlier in the log than the outbox change, so it would arrive first.
+        fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
+        await fixture.core.orchestration.markChildFailed(childSessionId: "child", message: "No such agent")
+
+        try await owner.client.waitFor { Self.events(in: $0).contains(.delegationOutboxChanged) }
+        #expect(Self.events(in: owner.client.messages) == [.delegationOutboxChanged])
+    }
+
+    /// Whatever a delegation-only socket sends, it hears back host replies
+    /// only: no lists, sessions or consoles.
+    @Test func aDelegationOnlyGatewayAnswersOnlyTheHostProtocol() async throws {
+        let fixture = try DelegationFixture()
+        defer { fixture.tearDown() }
+        let replies = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host, caller: fixture.peer1, scope: .delegation) {
+            replies.continuation.yield($0)
+        }
+        gateway.delegationPairing = fixture.pairing
+        defer {
+            gateway.close()
+            replies.continuation.finish()
+        }
+
+        for message in [RemoteClientMessage.listSessions, .listAgents, .listWorktrees, .listProjects, .subscribe(sessionId: "child")] {
+            await gateway.handle(message)
+        }
+        await gateway.handle(.host(HostClientMessage(id: 9, request: .delegation(.discover(repository: nil)))))
+
+        for await reply in replies.stream {
+            guard case .host(.response(9, .delegation(.discovered))) = reply else {
+                Issue.record("A delegation-only socket was sent \(reply)")
+                return
+            }
             return
         }
         Issue.record("No answer")
@@ -3746,12 +3839,15 @@ struct HostProtocolServerTests {
             )
             core.delegatedSessionsDB = { _ in database }
             host = AlasHost(core: core)
-            func device(_ id: String, _ server: String?, _ access: RemoteDeviceAgentAccess, _ kind: RemoteDeviceKind = .alasInstance) -> RemoteDevice {
-                RemoteDevice(id: id, name: id, tokenHash: id, createdAt: .distantPast, lastSeenAt: nil, kind: kind, peerServerId: server, agentAccess: access)
+            func device(_ id: String, _ server: String?, _ access: RemoteDeviceAgentAccess, _ kind: RemoteDeviceKind = .alasInstance,
+                        proven: Bool = true) -> RemoteDevice {
+                RemoteDevice(id: id, name: id, tokenHash: id, createdAt: .distantPast, lastSeenAt: nil, kind: kind, peerServerId: server,
+                             agentAccess: access, peerPublicKey: proven ? server.map { "key-\($0)" } : nil)
             }
             pairing = RemotePairingService(store: MemoryDeviceStore(devices: [
                 device("s1", "s1", .ask), device("s2", "s2", .ask), device("s1-repaired", "s1", .off),
                 device("browser", nil, .autoRun, .browser), device("no-server-id", nil, .autoRun),
+                device("s1-unproven", "s1", .autoRun, proven: false),
             ]))
             server = HostProtocolServer(host: host)
             server.delegationPairing = pairing
@@ -3794,9 +3890,9 @@ struct HostProtocolServerTests {
             await respond(.delegation(request), as: caller)
         }
 
-        func respond(_ request: HostRequest, as caller: HostCaller) async -> HostResponse {
+        func respond(_ request: HostRequest, as caller: HostCaller, delegationOnly: Bool = false) async -> HostResponse {
             let client = Client()
-            let connection = server.connect(caller: caller, send: client.receive)
+            let connection = server.connect(caller: caller, delegationOnly: delegationOnly, send: client.receive)
             defer { connection.close() }
             await connection.receive(HostClientMessage(id: 1, request: request))
             guard case .response(1, let result) = client.messages.first else {
@@ -3807,10 +3903,12 @@ struct HostProtocolServerTests {
             return result
         }
 
-        func subscribed(as caller: HostCaller, accepting: [String]) async throws -> (connection: HostProtocolConnection, client: Client) {
+        func subscribed(as caller: HostCaller, accepting: [String],
+                        delegationOnly: Bool = false) async throws -> (connection: HostProtocolConnection, client: Client) {
             let client = Client()
-            let connection = server.connect(caller: caller, send: client.receive)
-            guard case .snapshot(let snapshot) = await respond(.snapshot, as: caller) else { throw CancellationError() }
+            let connection = server.connect(caller: caller, delegationOnly: delegationOnly, send: client.receive)
+            guard case .snapshot(let snapshot) = await respond(.snapshot, as: caller, delegationOnly: delegationOnly)
+            else { throw CancellationError() }
             await connection.receive(HostClientMessage(id: 1, request: .subscribeAccepting(after: snapshot.cursor, events: accepting)))
             return (connection, client)
         }

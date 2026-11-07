@@ -33,9 +33,26 @@ struct RemotePeerStoreTests {
                               origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"],
                               lastOrigin: "http://100.64.1.5:8765", token: "tok",
                               publicKey: "pk", protocolVersion: 1,
-                              localDeviceId: "d9", addedAt: Date(timeIntervalSince1970: 1_700_000_000))
+                              localDeviceId: "d9", addedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                              sshDestination: "me@studio", tokenScope: .delegation)
         FilePeerStore(url: url, secrets: vault).save([peer])
         #expect(FilePeerStore(url: url, secrets: vault).load() == [peer])
+    }
+
+    /// One unreadable record would cost every peer, so a scope only a newer
+    /// build knows reads as the narrowest instead.
+    @Test func aScopeOnlyANewerBuildKnowsKeepsEveryPeer() throws {
+        let url = tempFile()
+        let vault = secrets()
+        let scoped = RemotePeer(id: "p1", serverId: "srv-b", name: "Studio", origins: ["http://a:1"], token: "t1",
+                                addedAt: Date(timeIntervalSince1970: 1), tokenScope: .delegation)
+        let other = RemotePeer(id: "p2", serverId: "srv-c", name: "Mini", origins: ["http://b:1"], token: "t2",
+                               addedAt: Date(timeIntervalSince1970: 2))
+        FilePeerStore(url: url, secrets: vault).save([scoped, other])
+        let written = try String(contentsOf: url, encoding: .utf8)
+        try written.replacingOccurrences(of: #""delegation""#, with: #""readOnly""#).write(to: url, atomically: true, encoding: .utf8)
+
+        #expect(FilePeerStore(url: url, secrets: vault).load() == [scoped, other])
     }
 
     // A peer's token is an outbound credential: what this Mac presents to

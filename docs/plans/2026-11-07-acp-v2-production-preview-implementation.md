@@ -1,0 +1,228 @@
+# ACP v2 local production preview implementation plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Preserve the previously chosen inline/native execution method unless the user changes it.
+
+**Goal:** Add an explicitly created, Debug-only fresh local ACP v2 preview with text sends, canonical display, durable permission choices and safe view-only reopening, while ordinary sessions remain v1.
+
+**Architecture:** A manager-owned preview object embeds the existing v2 runner and broker behind a separate admission path. A persisted runtime discriminator prevents legacy recovery; a separate display snapshot is view-only and never grants delivery authority. The app reuses permission visuals with opaque origin-bound actions rather than v1 policy continuations.
+
+**Tech stack:** Swift 6 package targets, Swift Testing, SQLite, SwiftUI macOS app, existing local helper raw-v2 broker contract.
+
+**Spec:** `docs/plans/2026-11-07-acp-v2-production-preview-design.md`, approved in conversation on 2026-11-07. Read that document and `AGENTS.md` before execution.
+
+## Global constraints
+
+- “Keep `ACPProtocolVersion.current` and the ordinary `ACPProtocolSelection` v1 behavior unchanged.”
+- “The global setting alone never upgrades an ordinary session.”
+- “Keep SwiftUI/AppKit code outside AlasCore.”
+- “No default-positive, automatic approval, remembered Alas rule, bypass-permissions flag or freeform reply is introduced.”
+- “Keep elicitation support absent, so forms/URLs are not advertised.”
+- “Never retry an uncertain handoff automatically.”
+- “Never auto-reattach, adopt, resume or execute its pending decisions, even when the helper still has the adapter.”
+- Local fresh sessions only; no attachments, queues, steering, delegation, automation, SSH/peer driving, protocol cancellation, resume or ownership transfer.
+- Use Alas identity. Do not change, spoof or advertise AIR metadata.
+- Qualify package/source identity and positive one-time approval before adding an adapter to eligibility. The eligibility set is empty until evidence exists.
+- Preserve unrelated `ThirdParty/ghostty` and `docs/research/2026-10-25-acp-v2-adapter-support.md` changes. Commit exact related paths only. Never force-push or rewrite published history.
+- Use Conventional Commits without agent attribution. Do not create a PR, merge or deploy without the user's publication instruction.
+- `docs/superpowers` is ignored here; keep reviewed plans in the existing `docs/plans` directory.
+
+## Review focus
+
+1. The adapter executable, dependency files or provider changes during asynchronous startup: Task 2/5 tests must refuse before broker open, rather than trusting an earlier version check.
+2. The app exits after creating a preview row but before broker binding: Task 3/7 tests must reopen a marked view-only row without entering any v1 factory.
+3. A queued display write returns after a newer snapshot or owner withdrawal: Task 4 tests must prevent stale overwrite without claiming a complete transcript.
+4. An old permission button survives same-wire-ID reuse or a selected reply's observation is held: Task 6 tests must prevent duplicate/foreign replies and keep a genuinely current successor usable.
+5. End, shutdown or a late broker open races with lease loss or an adopted source: Task 5/7 tests must withdraw actions first and avoid closing a broker the installation does not own.
+
+## Execution baseline and file boundaries
+
+Begin in the existing isolated worktree. Inspect branch ownership and local changes, refresh `origin/main`, and merge the base when needed without touching unrelated work. Confirm the setup ACK barrier from PR #2369 is present before relying on fresh startup. Run only affected suites; CI owns the full plan. For package commands prefix `swift` with `rtk`; use isolated scratch/module caches if the default environment is restricted. Verify a nonzero `Test run with N tests in M suites` summary.
+
+New code is divided by responsibility, not by test scenario:
+
+- `Tools/ACP2Qualification/`: opt-in live runner qualification, outside the default AlasCore/app test plan.
+- `AlasAgents/ACP/Session/ACPV2PreviewEligibility.swift`: immutable identity records and pure admission policy.
+- `AlasACP/ACP/Session/ACPSessionRuntimeKind.swift`: persisted runtime discriminator shared by row and manager.
+- `AlasSessions/ACP/Session/ACPSessionStore+V2Preview.swift`, `ACPV2PreviewDisplaySnapshot.swift`: fenced marker/display storage and display encoding.
+- `AlasAgents/ACP/Session/ACPV2PreviewOwner.swift`: one installation's runner, lifecycle and commands.
+- `AlasSessions/ACP/Permissions/ACPV2PreviewPermissionPresentation.swift`: plain presentation values. Live handles remain private in the preview owner.
+- Existing manager and app views: explicit creation and runtime dispatch; do not refactor unrelated v1 machinery.
+
+All paths below starting with `AlasACP/`, `AlasAgents/`, or `AlasSessions/` are relative to `Packages/AlasCore/Sources/`. Test paths are repository-relative. Exact new type names and cross-task interfaces below are decisions of this plan; private implementation details remain with the implementer.
+
+### Task 1: Qualify immutable packages and positive permission selection
+
+**Files:** Create `Tools/ACP2Qualification/Package.swift`, `Tools/ACP2Qualification/Sources/ACP2Qualification/Main.swift`, `Tools/ACP2Qualification/Sources/ACP2Qualification/Qualification.swift`, `Tools/ACP2Qualification/Tests/ACP2QualificationTests/QualificationTests.swift`. Update the existing live report and add `docs/research/2026-11-07-acp-v2-preview-qualified-adapters.json`.
+
+**Interfaces:** The tool depends on the local AlasCore product and invokes the actual `LocalACPBrokerService`, `ACPBrokerClient`, `ACPV2SessionRunner` and SQLite persistence. Produce versioned evidence records with `agentID`, `packageName`, `packageVersion`, `sourceRepository`, `sourceCommit`, `packageIntegrity`, `packageDigest`, `helperDigest`, `providerID`, `approvalMode`, `nodeVersion`, `supportedCapabilities`, and evidence for successful prompt, one-time approval, cancellation and cleanup. These are the input to Task 2, not an automatic runtime allowlist.
+
+- [x] **Step 1: Audit exact installed/public identities.** Start from the installed Claude `0.101.0-alas.1` and Codex `2.5.0-alas.6` manifests and resolved package-owned executables. Obtain exact npm version metadata, tarball integrity and corresponding immutable fork/tag commits. Compare installed package contents with the published artifact; verify the claimed source actually contains the v2 router. Record each failed/unavailable check without inventing provenance. Do not install latest, update user packages or publish adapters.
+- [x] **Step 2: Add a failing safety test for the qualification driver.** `allowsOnlyTheExpectedOneTimeScratchAction` must select only an offered `allow_once` option for the explicitly requested disposable command, refuse an unrecognized subject/option, and never choose `allow_always` or fall back to another option. `cancelModeNeverSelectsAnAllowOption` must produce cancellation even when positive options exist. Test only this decision logic, not CLI wiring.
+Assertion contract: `#expect(selected?.kind == "allow_once")` only for the exact scratch action; `#expect(selected == nil)` for unknown subjects, all-always options and cancel mode. Fixture construction belongs to the tool test suite.
+
+- [x] **Step 3: Verify RED, then implement the tool.** Use a separate SwiftPM executable `acp2-qualify`, with arguments `--adapter <absolute-path> --helper <absolute-path> --permission allow-once|cancel --output <directory>`. Create short scratch paths, one fresh lease/SQLite database and broker namespace per run, startup deadline 60 seconds and turn deadline 120 seconds. Supply explicit standard account/session launch variables, not arbitrary secret environment values. Use the normal CLI login. Scope the allowed action to a fixed `printf` writing one sentinel file in the scratch cwd; keep typed handles private and call `runner.decide`. Emit sanitized summaries/hashes and final helper broker count. Always attempt exact owned-source cleanup on success, failure and timeout. No model or credential content belongs in the report.
+- [x] **Step 4: Verify the tool and run live cases.** Run `rtk swift test --package-path Tools/ACP2Qualification`; expect nonzero passing tests. Run `rtk swift run --package-path Tools/ACP2Qualification acp2-qualify --adapter <verified-path> --helper <verified-helper> --permission allow-once --output <scratch-output>`, then repeat with `cancel`, for each candidate. Assert the positive file's exact sentinel content; assert cancellation leaves it absent. Inspect SQLite intent/attempt/observation facts, canonical terminal reason, persisted ACK and empty broker list. A prompt acceptance or a completion with an auth error is not a pass.
+- [x] **Step 5: Record and commit.** Store only sanitized identity/evidence summaries. Runtime package identity must include the adapter's executable dependency closure, not just its small entry script; Claude imports sibling files and dependencies. If provenance or live approval fails, omit that adapter from qualified records and state the blocker. Commit `test(acp): qualify fresh v2 preview adapters`. Remaining work may stay dormant with an empty registry, but the preview is not complete or enabled without a qualified adapter.
+
+### Task 2: Add explicit preview admission and launch revalidation
+
+**Files:** Create `AlasAgents/ACP/Session/ACPV2PreviewEligibility.swift`; test in `Packages/AlasCore/Tests/AlasCoreTests/ACPV2PreviewEligibilityTests.swift`. Preserve `AlasACP/ACP/Protocol/ACPProtocolVersion.swift`; extend `ACPProtocolNegotiationTests.swift` only if needed for the unchanged-v1 invariant.
+
+**Interfaces:** Produce `public struct ACPV2PreviewQualifiedAdapter: Equatable, Sendable` matching Task 1 evidence identities. Produce `ACPV2PreviewLaunchIdentity: Equatable, Sendable` with agent/package/version/content digest/helper/provider/mode/node identity. Produce `public enum ACPV2PreviewAdmission` with `case allowed(ACPV2PreviewQualifiedAdapter)` and `case refused(Reason)`. Define its nested Reason cases `.disabled`, `.missingIntent`, `.remote`, `.notFresh`, `.staleLease`, `.unqualifiedIdentity`, `.unsupportedProvider`, `.unsupportedMode`. `ACPV2PreviewEligibility.evaluate(identity: ACPV2PreviewLaunchIdentity, records: [ACPV2PreviewQualifiedAdapter], debugBuild: Bool, experimentalEnabled: Bool, explicitPreview: Bool, local: Bool, fresh: Bool, writerLeaseCurrent: Bool) -> ACPV2PreviewAdmission` is pure. Provide an async off-main `resolveIdentity(launchSpec: ACPLaunchSpec, helperURL: URL) async throws -> ACPV2PreviewLaunchIdentity` for Task 5; never infer identity from command basename.
+
+- [x] **Step 1: Add RED cases.** `previewAdmissionRequiresEveryExplicitGate` parameterizes each false gate and unknown version/provider/mode/helper. `changedPackageContentInvalidatesTheSameVersion` modifies a real temporary package's sibling/dependency file and expects a changed identity/refusal. `normalProtocolSelectionStaysV1WhenPreviewIsEnabled` pins `.v1` and `[.v1]`. Include absolute-package ownership, unsupported custom commands and symlink escape cases in this suite, not scenario sibling files.
+Assertion contract: every false gate yields `.refused`, changed dependency bytes produce `oldIdentity != newIdentity`, and `#expect(ACPProtocolSelection(experimentalV2Enabled: true).requestedVersion == .v1)`.
+
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter 'ACPV2PreviewEligibilityTests|ACPProtocolNegotiationTests'`; expect RED for missing policy/identity validation.
+- [x] **Step 3: Implement** the pure policy, immutable records copied only from successful Task 1 evidence, and deterministic package/dependency content hashing. Hash sorted relative paths and file bytes within the resolved execution closure; reject unaccounted executable/symlink targets. Resolve interpreter/helper identities too. Cache work only by a revalidated identity; mutable version strings alone are insufficient. Registry contents must be unavailable in Release builds, and an empty registry must refuse cleanly.
+- [x] **Step 4: Run the same selection GREEN**, check no production protocol constant changed, and commit `feat(acp): gate fresh v2 previews on qualified launch identities`.
+
+### Task 3: Persist immutable preview identity before I/O
+
+**Files:** Create `AlasACP/ACP/Session/ACPSessionRuntimeKind.swift`, `AlasSessions/ACP/Session/ACPSessionStore+V2Preview.swift`. Modify `AlasACP/ACP/Session/ACPSessionLease.swift`, `AlasSessions/ACP/Session/ACPSessionStore.swift`, `ACPSessionPersistence.swift`, `ACPSession.swift`. Extend `Packages/AlasCore/Tests/AlasCoreTests/PersistenceStoreTests.swift`.
+
+**Interfaces:** `public enum ACPSessionRuntimeKind: Equatable, Sendable` has `.v1`, `.v2FreshPreview`, `.unsupported(String)`; persist raw strings `v1` and `v2FreshPreview`, preserving unknown strings. Add `runtimeKind` to row and in-memory session, default `.v1`. Store and actor expose `createV2PreviewSession(row: ACPSessionRow, ownerInstance: String, pid: Int64, now: Int64, leaseToken: String) throws -> ACPSessionLeaseFence`. It atomically inserts a genuinely new marked row and its initial writer lease; it does not upgrade an existing row. Task 5 uses the returned fence.
+
+- [x] **Step 1: Add RED storage cases.** `newPreviewKindSurvivesReopenBeforeBrokerBinding` reopens the real temporary database before any broker call and observes `.v2FreshPreview`. `runtimeKindCannotBeChangedByBroadUpsert` pins both directions and unknown-string preservation. `previewCreationDoesNotUpgradeAnExistingRow` parameterizes empty/history/lease-owned existing rows and asserts no mutation. `legacyRowsMigrateAsV1` exercises the existing migration fixture.
+Assertion contract: `#expect(reopened.runtimeKind == .v2FreshPreview)`, `#expect(afterRejectedCreation == before)`, and `#expect(migrated.runtimeKind == .v1)`.
+
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter PersistenceStoreTests`; expect RED.
+- [x] **Step 3: Implement** the additive `sessions.runtime_kind TEXT NOT NULL DEFAULT 'v1'` migration and checked decoding. Preserve stored kind on broad updates. The fresh-create transaction must roll back row and lease together on collision/failure; use lower-level transaction helpers rather than nesting incompatible transactions. Ordinary creation keeps its source-compatible defaults. Unknown kinds expose no live command authority.
+- [x] **Step 4: Run GREEN**, inspect the migration against existing stores, and commit `feat(acp): persist fresh preview runtime identity`.
+
+### Task 4: Persist view-only projected display with stable identities
+
+**Files:** Create `AlasSessions/ACP/Session/ACPV2PreviewDisplaySnapshot.swift`; extend `ACPSessionStore+V2Preview.swift`, `ACPSessionPersistence.swift`, `ACPMessage.swift`, `ACPV2SessionRunner.swift`. Test in `PersistenceStoreTests.swift` and `ACPV2SessionProjectionTests.swift`.
+
+**Interfaces:** `ACPV2PreviewDisplaySnapshot: Codable, Sendable` carries format version 1, session ID, installation UUID, monotonic sequence, terminal/display status and ordered rows. Its nested Codable Status is `.observing`, `.interrupted`, `.ended`, `.failed`; reopening an observing snapshot presents interruption, never live readiness. Each row carries `ACPMessage.StableIdentityKey`, message kind and `ACPMessageCodec` payload. Add Codable conformance to the stable-identity enum and `@MainActor ACPMessageCodec.decode(kind: String, payload: Data, identity: ACPMessage.StableIdentityKey) throws -> ACPMessage`; reject conflicting identity/payload pairs and keep the existing overload unchanged. Expose `persistV2PreviewDisplay(_ snapshot: ACPV2PreviewDisplaySnapshot, fence: ACPSessionLeaseFence, authorize: @Sendable () -> Bool) throws -> Bool` and `loadV2PreviewDisplay(sessionId: String) throws -> ACPV2PreviewDisplaySnapshot?` on store/actor. Add optional `onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)? = nil` to runner construction, forwarding its existing canonical projection notification after application with current-owner checks.
+
+- [x] **Step 1: Add RED cases.** `displaySnapshotPreservesRowIdentityAndFinalText` round-trips text/tool/plan rows and updated streaming content. `displaySnapshotCannotBeOverwrittenByAnOlderOrWithdrawnWriter` parameterizes old sequence, old installation, stale fence and authorization withdrawal after SQL; expect no overwrite/transaction rollback. `previewDisplayDoesNotGrantReplayAuthority` loads a snapshot and asserts no journal consumption, ACK or executable permission state. Unknown format/corrupt payload remains view-only/unavailable, not a v1 fallback.
+Assertion contract: `#expect(restored.map(\.stableIdentityKey) == original.map(\.stableIdentityKey))`, final text matches the last captured value, stale/withdrawn writes return false with `after == before`, and source ACK/consumption counters remain unchanged by display loads.
+
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter 'PersistenceStoreTests|ACPV2SessionProjectionTests|ACPV2SessionRunnerTests'`; expect RED.
+- [x] **Step 3: Implement** one separate display table keyed by session, rather than v1 index-keyed message writes. Bind an installation's writer identity under the live session fence. Atomically compare installation and sequence before replacement, and check authorization at transaction entry and before COMMIT. Encode snapshots on the main actor, perform SQLite work off it. The owner in Task 5 coalesces ordinary updates; terminal snapshots are attempted explicitly. Do not persist handles/continuations or infer canonical completeness from a saved display. Fresh-owner installation must not load these rows into the runner's empty destination.
+- [x] **Step 4: Run GREEN**, verify existing projection/reply tests remain valid, and commit `feat(acp): save view-only v2 preview transcripts`.
+
+### Task 5: Own one live preview and its lifecycle in the package
+
+**Files:** Create `AlasAgents/ACP/Session/ACPV2PreviewOwner.swift`, `AlasSessions/ACP/Session/ACPV2PreviewPresentation.swift`. Extend runner seams only where required. Create `Packages/AlasCore/Tests/AlasCoreTests/ACPV2PreviewOwnerTests.swift` for the new owner, reusing existing fixture patterns rather than duplicating runner behavior.
+
+**Interfaces:** `@MainActor public final class ACPV2PreviewOwner` has initializer `(session: ACPSession, client: ACPBrokerClient, persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence, qualification: ACPV2PreviewQualifiedAdapter, installationID: UUID, isCurrent: @escaping @MainActor () -> Bool, onChange: @escaping @MainActor () -> Void)`. It exposes `start(params: ACPV2SessionNewParams, deadline: ContinuousClock.Instant) async throws`, `send(text: String) async throws -> ACPV2SubmissionRecord`, `end() async throws`, `withdraw()`, `flushDisplay() async`, and observable `status` and `foreground`. Define shared `ACPV2PreviewStatus` in the AlasSessions presentation file with `.idle`, `.starting`, `.ready`, `.ending`, `.ended`, `.interrupted`, `.failed(String)`; the owner stores this type. Task 6 adds `permissions`, so Task 5 compiles independently. `ACPV2PreviewPresentation` computes canSend/canEnd/viewOnly and unsupported-action reasons from runtime kind, shared preview status, foreground, writer authority and a pending-decision Boolean. Do not make AlasSessions depend on the upper AlasAgents module. `send` is manual text-only, and performs no queueing.
+
+- [x] **Step 1: Add RED boundary cases.** `previewRefusesBusyOrWithdrawnSendsWithoutRegistering` pins no second optimistic row/submission. `previewDoesNotCompleteOnPromptAcceptance` pins success/error/observation-loss mapping. `withdrawalPreventsHeldDisplayAndReplyWorkFromRestoringAuthority` holds storage while withdrawing. `endingLateStartupClosesOnlyItsFreshSource` covers shutdown/End versus delayed open, adopted open, changed generation and lease loss; repeated teardown closes at most once. The underlying runner's existing tests already cover decoder and exact response mechanics; do not duplicate them.
+Assertion contract: refused sends leave submission and optimistic-row counts unchanged; `#expect(completionCount == 0)` after acceptance alone; `#expect(foreignCloseCount == 0)` and owned close count at most one after teardown races.
+
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter 'ACPV2PreviewOwnerTests|ACPV2SessionRunnerTests|ACPBrokerRawClientTests'`; expect RED.
+- [x] **Step 3: Implement** runner creation/observation before start and source-aware cleanup. Match the qualified non-bypass approval mode before making the composer available. Codex uses its documented `INITIAL_AGENT_MODE` in the resolved launch environment. For Claude, after runner startup send the documented v2 `session/set_config_option` with `configId: mode`, `type: id` and the qualified mode using one installation-specific operation key; validate the returned current mode and current ownership before consuming its response. This configures the qualified setup contract only, not a general mode-changing UI. Refuse unknown mode values or capability/result shapes, and never fall back to bypass. Task 1 must exercise exactly these setup choices. Use Task 4 notifications for versioned display snapshots; snapshot authority is distinct from runner reply authority so one final non-executable interrupted display can be written under the still-current manager lease after runner withdrawal. Never let an older queued write replace that final state. Recheck current lease/epoch/source at each awaited boundary and immediately before cleanup handoff; do not claim cross-process atomicity between SQLite and helper pipe writes. On lease loss, stop actions and detach rather than taking over for cleanup. The owner must know whether open created or adopted a source; add a source-checked cleanup seam if the current client's `adoptedRunningAgent`/generation facts cannot establish that safely.
+- [x] **Step 4: Run GREEN**, verify explicit End stops local authority before close and no protocol session/cancel is sent, then commit `feat(acp): own fresh preview lifecycle and manual submissions`.
+
+### Task 6: Bind permission presentation to durable current handles
+
+**Files:** Create `AlasSessions/ACP/Permissions/ACPV2PreviewPermissionPresentation.swift`; extend `ACPV2PreviewOwner.swift`; add a v2 presentation initializer in `Alas/Sources/ACP/UI/ACPPermissionPrompt.swift`. Extend `ACPV2PreviewOwnerTests.swift`; existing decision-coordinator tests remain the lower-layer contract.
+
+**Interfaces:** `ACPV2PreviewPermissionItem: Identifiable, Sendable` contains an opaque UUID, installation UUID, ledger ordinal, typed `ACPV2InteractiveRequest.Permission` and presentation phase `.awaitingDecision`, `.sending`, `.unavailable`, `.uncertain`. It contains no raw response closure. Add the owner's observable `permissions: [ACPV2PreviewPermissionItem]` in this task. Owner exposes `decide(itemID: UUID, optionID: String?) async throws -> ACPV2ResponseOwner.Receipt`, where nil means cancellation. Its private map holds exact coordinator handles. `ACPPermissionCardContent.init(permission: ACPV2InteractiveRequest.Permission, existingToolCall: ACPMessage.ToolCall?, worktreeRoot: String?)` derives display only; card actions call the manager's Task 7 v2 route.
+
+- [x] **Step 1: Add RED cases.** `permissionButtonsLoseAuthorityBeforeAwaitingTheReply` double-clicks while observation is held and asserts one durable attempt. `retiredPermissionCannotAnswerAReusedWireID` replaces an origin, clicks the old item, then answers the current successor. `leaseLossAndRemoteCancellationRetireOnlyCurrentItems` pins synchronous action withdrawal and multiple-offer ledger ordering. `unknownOrUnadvertisedRequestsNeverBecomePermissionOffers` exercises owner routing, not duplicate decoder coverage.
+Assertion contract: `#expect(attemptCount == 1)` while a duplicate click is held; an old item throws and adds no reply; the successor has a different item ID and replies using only its own origin cursor.
+
+- [x] **Step 2: Run** `rtk swift test --package-path Packages/AlasCore --filter 'ACPV2PreviewOwnerTests|ACPV2RequestDecisionCoordinatorTests'`; expect RED.
+- [x] **Step 3: Implement** stable item IDs and private origin mapping; no lookup by wire ID alone. Change the item's phase before the first await. Dispatch only offered option IDs through `runner.decide`; never create a v1 pending permission or policy continuation. Retire terminal handles and show unavailable/uncertain facts without re-enabling buttons. A current successor receives a different item even while the old observation is held. Unsupported/malformed rejections stay with the existing coordinator; keep form/URL handlers absent. Add the UI initializer without adding automatic/default approval or remembered-rule actions.
+- [x] **Step 4: Run GREEN**, lint edited Swift files, and commit `feat(acp): present origin-bound v2 preview permissions`.
+
+### Task 7: Connect explicit app creation, commands and view-only reopening
+
+**Files:** Modify `AlasAgents/ACP/Session/ACPSessionManager.swift`, `AlasSessions/ACP/Session/ACPSession.swift`; app `Alas/Sources/ACP/UI/ACPNewChatEmptyStateView.swift`, `ACPNewChatEmptyStatePolicy.swift`, `ACPTabView.swift`, `ACPComposer.swift`, `ACPComposerActions.swift`, `ACPToolbar.swift`, `Scroller/ACPTranscriptScroller.swift`, and `Alas/Sources/Settings/AdvancedPane.swift` as needed. Extend existing `AlasTests/ACP/Session/ACPSessionManagerTests.swift`, `ACPSessionManagerAttachRestoreTests.swift`, `ACPSessionManagerDisposalTests.swift`, and `AlasTests/ACP/ACPSessionManagerLeaseTests.swift`; put new plain command-admission cases in the owner/presentation suite, not view-composition tests.
+
+**Interfaces:** Add manager APIs `createV2PreviewSession(agentId: String) async throws -> ACPSession`, `sendV2PreviewText(for id: ACPSession.ID, text: String) async throws -> ACPV2SubmissionRecord`, `respondToV2PreviewPermission(for id: ACPSession.ID, itemID: UUID, optionID: String?) async throws -> ACPV2ResponseOwner.Receipt`, `endV2PreviewSession(for id: ACPSession.ID) async throws`, and `endRemainingV2PreviewProcess(for id: ACPSession.ID) async throws`. Expose a read-only `v2PreviewPresentation(for id: ACPSession.ID) -> ACPV2PreviewPresentation` plus pending presentation items. Keep existing v1 signatures source-compatible. Exactly one runtime discriminator dispatches new creation/manual commands and guards all existing legacy paths.
+
+- [x] **Step 1: Add RED manager regressions.** `explicitPreviewNeverFallsThroughTheLegacyFactories` covers admission failure, startup failure and restart before binding. `gateChangesAffectOnlyFuturePreviewCreation` keeps a live owner usable while refusing new creation when disabled. `previewRowsRejectLegacyResumeQueueAndProgrammaticDrive` parameterizes attach/reconnect/fork/delegation/peer/programmatic send, plus unknown runtime kind. `previewReopeningLoadsOnlySavedDisplay` asserts zero broker/initialize calls and noninteractive old permission state. `orphanCleanupRequiresAnUnchangedSourceAndCurrentLease` refuses adopted/foreign/changed-generation sources. Pin ordinary v1 create/send/restore with the gate on and off.
+Assertion contract: `#expect(legacyFactoryCalls == 0)` for every marked/unknown preview restore path; disabled creation adds no broker open; loaded history has no actionable items; source/lease mismatches add no close. Ordinary v1 fixture results remain unchanged.
+
+- [x] **Step 2: Run** focused Xcode suites with `rtk xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -skipPackagePluginValidation -skipMacroValidation -only-testing AlasTests/ACPSessionManagerTests -only-testing AlasTests/ACPSessionManagerAttachRestoreTests -only-testing AlasTests/ACPSessionManagerDisposalTests -only-testing AlasTests/ACPSessionManagerLeaseTests test`, using an isolated DerivedData directory. Expect RED for missing dispatch/marker handling. Confirm suite discovery, not just process exit.
+- [x] **Step 3: Implement** explicit creation only in Debug with gate and admission. Flush row/fence persistence and re-resolve Task 2 identity immediately before open. Use the normal resolved environment, an absolute package-owned command and the local helper; never the v1 `makeBrokerConnection` restore path. Reserve manager membership/epoch before asynchronous startup. Persist the row's selected kind before I/O, and retain failures without silent v1 fallback. Retain the same live owner across ordinary same-process tab switches.
+- [x] **Step 4: Route UI commands and lifecycle.** Manual preview sends use the new API; preserve draft content until accepted and disable attachments/paste expansion/queue controls. Show canonical foreground and permission state. Replace Stop with a confirmation for “End preview session”; Escape must not kill the process or call v1 cancellation. Route positive/cancel card actions only through opaque items. Guard existing restore, reconnect, hooks, title prompts, automation, remote drive and queue entry points by persisted/runtime kind. On restart or missing owner, load only Task 4 display and show “Conversation may be incomplete”; never synthesize live completion. Add explicit orphan cleanup only after a current-lease and exact-source check. App/session shutdown awaits the owner's bounded display flush and exact cleanup without altering another writer.
+- [x] **Step 5: Run GREEN**, package owner/policy/persistence suites first, then the focused app suites. Build the app for wiring without focused tests. Keep all UI-free decisions in the package; do not test which SwiftUI subview exists. If `project.yml` changes, regenerate and commit the Xcode project. Commit `feat(acp): expose explicit local v2 preview sessions`.
+
+### Task 8: Verify the integrated Debug flow and finish evidence
+
+**Files:** Update the existing qualification report and this plan's completion evidence. Fix only reproduced defects in the owning task's paths; do not expand deferred features.
+
+- [x] **Step 1: Review spec coverage and the actual diff.** Map all eight acceptance items in the approved design to passing tests or named manual evidence. Check no adapter is admitted without Task 1 records and no broad protocol version change or v1 handler reuse slipped in. Run the execution workflow's whole-branch review and address material findings.
+- [x] **Step 2: Run the final affected package selection.** Include `ACPV2PreviewEligibilityTests|ACPV2PreviewOwnerTests|PersistenceStoreTests|ACPProtocolNegotiationTests|ACPV2SessionRunnerTests|ACPV2SessionProjectionTests|ACPV2RequestDecisionCoordinatorTests|ACPBrokerRawClientTests`, adding a suite only for changed dependencies or a reproduced interaction. Run the focused manager Xcode selection from Task 7 and the edited-file SwiftFormat lint/whitespace checks. Record actual counts, exits and logs.
+- [ ] **Step 3: Run a Debug app smoke pass.** Attempted; the interactive qualification gate remains incomplete and app admission is empty. With each qualified adapter, verify explicit new preview creation, expected text completion, positive one-time approval and cancellation, then End/empty broker list. Turn the setting off and confirm ordinary v1 creation still works and an existing live preview does not change protocol. Reopen a saved preview without a live owner and confirm incomplete/view-only display, no session restore/old answer/resend and exact explicit orphan cleanup. Confirm unrelated sessions and brokers remain alive. If the app or a live adapter cannot be exercised, mark the manual gate incomplete and leave eligibility/rollout disabled rather than claiming success.
+- [x] **Step 4: Record final evidence and commit** `docs(acp): record local v2 preview integration validation`. Keep v1 default, Release eligibility absent and deferred features unsupported. Report what is verified, any blocker, current head and remaining rollout gates. Publication is a separate user action.
+
+## Self-review and handoff
+
+Spec coverage: Task 1 owns provenance/positive live approval; Task 2 admission/default-v1; Task 3 pre-I/O identity; Task 4 saved display; Task 5 live startup/submissions/cleanup; Task 6 durable permissions; Task 7 app dispatch/reopening; Task 8 integrated manual evidence. Every Review Focus item has a named regression in its owning task. Tests for existing lower-level mechanics are reused, not copied.
+
+Private manager storage layout, notification coalescing interval, and native card arrangement remain builder choices within the spec. Do not weaken reply/lease/identity checks to accommodate a UI shortcut. If an exact package, helper identity or app test dependency is unavailable, report that evidence separately from a code failure.
+
+This plan preserves inline/native execution from the existing workstream. Approved in conversation on 2026-11-07. Implementation and material review fixes are complete. Integrated app qualification remains incomplete and production admission stays empty. Publication remains a separate user action.
+
+## Acceptance evidence and rollout status
+
+The implementation is dormant. Both Debug and Release runtime admission lists are empty. The retained Codex record is package qualification evidence only. No PR, push, merge or deployment is part of this execution.
+
+| Design acceptance item | Evidence | Limit |
+|---|---|---|
+| 1. Ordinary v1 remains v1 | Negotiation tests; manager create/restore/send cases with gate on/off; isolated app creation persisted `runtime_kind=v1` with gate on | Full repository CI has not run for this local branch |
+| 2. Strict admission and immutable marker | Eligibility byte/symlink/provider cases; persistence migration/upsert/collision cases; held preparation refuses dependency/provider changes before open | Filesystem, SQLite and helper writes are not one atomic transaction |
+| 3. Ordered fresh startup | Existing broker bootstrap/setup ACK and runtime tests; helper preparation authorization regression | No integrated app preview startup pass yet |
+| 4. Manual submissions | Owner busy/withdrawn/acceptance/canonical completion tests; RPC failure regression pins one row/one request and saved error | No live app text completion pass yet |
+| 5. Durable permissions | Private origin-handle owner tests, duplicate click and successor/lease cases; real package allow-once/cancel evidence | No live app card interaction pass yet |
+| 6. Source-safe End | Late fresh/adopted/foreign/generation/lease cases and held display/response tests | No live app End/cleanup pass yet |
+| 7. Saved display only | Fenced display round trips/rollback and manager reopening/orphan refusal tests | No interactive restart/orphan cleanup pass yet |
+| 8. Immutable qualification | Published package/source/integrity proofs and matching bundled-helper live Codex positive/cancel runs | Installed Claude changed independently; app qualification incomplete; no adapter admitted |
+
+The isolated app smoke used a disposable Git repository and documented `ALAS_APP_SUPPORT_DIR` profile. It confirmed the off-by-default gate, ordinary v1 creation with the gate on and the explicit preview confirmation. Preview preflight refused a relative entry in the normal app/login-shell PATH before creating a preview row or opening a broker. An explicit `/bin/sh` login environment retained the same problem. User configuration and the conservative identity policy were preserved. The isolated app exited and the everyday released app remained running.
+
+Whole-branch review found no critical issues and three important issues. The one combined fix pass reproduced and fixed each: package-owned npm-bin symlinks now canonicalize consistently; final identity validation follows helper preparation immediately before pipe handoff; and prompt RPC failure withdraws send authority with a saved unconfirmed-handoff error. No second review substitutes for the regression evidence.
+
+Deferred minors: unsupported-request diagnostics are durably rejected but not shown/saved as display facts; identity refusals can expose internal Swift error codes rather than actionable environment context.
+
+## Execution decisions
+
+These decisions are ordered by when they were made. Each cost describes the limitation retained by that decision.
+
+1. Run affected suites under repository policy; CI owns the full plan. Cost: unrelated regressions depend on CI.
+2. Add one parameterized execution-closure regression beyond permission policy cases. Cost: two inexpensive identity cases.
+3. Join observed content evidence with separately verified npm provenance and authentication route. Cost: incomplete identities remain unqualified.
+4. Use Darwin `lstat` metadata for hashing instead of owner-name attribute lookups that stalled. Cost: this qualification path is Mac-specific.
+5. Collect optional failure facts before cleanup and recheck the captured journal barrier. Cost: bounded extra reads; no broader approval.
+6. Query raw-v2 and legacy broker namespaces explicitly. Cost: qualification fails closed on unavailable counts.
+7. Share the existing fingerprint implementation between the tool and runtime. Cost: one public lower-level utility beyond the original file list.
+8. Resolve identity with the actual environment and cwd. Cost: callers must pass the exact prepared launch context.
+9. Refuse unqualified provider and execution environment overrides conservatively. Cost: otherwise harmless configured environments can be unavailable.
+10. Reserve raw-v2 context with the preview marker before binding. Cost: older app readers refuse the incomplete descriptor instead of restoring v1.
+11. Inject an optional display writer for held-write tests. Cost: one extra owner initializer dependency.
+12. Add a source-checked cleanup API and preserve generic shutdown. Cost: unproven sources remain alive rather than being closed.
+13. Bound End to 15 seconds while retaining source-safe late cleanup. Cost: interruption can remain visible until later confirmed cleanup.
+14. Permit End after detach only through the source-checked API. Cost: an extra snapshot/lease check, with no repeated close request.
+15. Put UI-free manager regressions in the package's type-owned suite. Cost: app and package have separate manager suites; app integration still requires its gate.
+16. Return a preserved failed preview session after startup errors; preflight/persistence errors throw. Cost: callers must inspect the returned status.
+17. Preflight before row creation, then revalidate full launch identity under the actual writer fence. Cost: repeated immutable hash/auth checks.
+18. Use a separate text-only preview composer with shared transcript/card visuals. Cost: two composer implementations until capabilities converge.
+19. Validate the exact diff in a temporary pinned-dependency checkout. Cost: another checkout and dependency build; unrelated working Ghostty is preserved.
+20. Save an optional failure message in display format 1. Cost: one optional field; older records still decode and older readers ignore it.
+21. Read structured xcresult summary/tree after console truncation. Cost: definition and parameter execution counts must be reported separately.
+22. Exclude independently changed Claude content from current admission. Cost: that version needs new provenance/live qualification.
+23. Use explicit post-admission owner fixture records independent of the live registry. Cost: owner tests do not prove provenance; policy/live gates do.
+24. Review the frozen committed product before the final manual/evidence steps, with one material fix pass. Cost: readiness depends on later regression/manual evidence; no second review substitutes for it.
+25. Keep Release/default rollout and additional adapter/helper/Node combinations out of scope. Cost: each unavailable combination needs separate qualification.
+26. Keep resume, takeover, SSH, queues, steering, delegation, automation, attachments, forms and URLs deferred. Cost: those capabilities require another runtime/session.
+27. Do not claim full v1 client-tool/MCP/adapter parity. Cost: qualified adapter-owned tools do not imply every existing integration works.
+28. Do not claim filesystem/SQLite/helper atomicity. Remove avoidable waits before handoff. Cost: the final syscall interval cannot be atomically fenced by app-only checks.
+29. Preserve unrelated Ghostty, older research and merged ancestry. Cost: the user's unrelated Ghostty checkout still needs compatible build work.
+30. Keep production admission empty until the interactive app gate passes. Cost: the package-qualified Codex preview remains unavailable in the app for now.
+
+## Final local validation
+
+- Affected package selection passed 128 test definitions in 10 suites. Selection: `ACPV2PreviewEligibilityTests|ACPV2PreviewOwnerTests|PersistenceStoreTests|ACPProtocolNegotiationTests|ACPV2SessionRunnerTests|ACPV2SessionProjectionTests|ACPV2RequestDecisionCoordinatorTests|ACPBrokerRawClientTests|ACPSessionManagerTests|ACPBrokerRawHelperTests`.
+- The four Task 7 app manager suites passed 295 definitions and 365 parameter-inclusive executions, with no failures or skips. Counts and suite names were read from xcresulttool's structured summary and tree, not inferred from truncated console output.
+- SwiftFormat lint passed with 0 of 2885 files requiring formatting and 1 skipped file. `git diff --check` passed.
+- Validation used Xcode 26.6, Zig 0.17.1 and pinned Ghostty `83fb95624b0439ee660c2679b43b38c8b63769cd` in `/private/tmp/alas-preview-validation`. All 38 changed app/package/test/project files were byte-equal to this branch. The final bundled helper SHA256 remained `8940ee45dbad35040bfad2e7eee77a7c722b2a051a12ceb218bd8d64b33a4719`, matching the recorded live package probes.
+- The disposable smoke broker was closed only after matching its ID, generation and repository and confirming its lease owner exited. Both isolated broker namespaces then listed zero entries. This helper cleanup is not evidence of interactive preview End.
+- No repository-wide local test plan or CI run is claimed. The app qualification gate remains incomplete; ordinary protocol selection remains v1 and production preview admission remains empty.
+
+The combined material fix commit is `e56547e78`. The standalone app build also passed after the final app test run. Remaining integration status is an incomplete manual gate with disabled admission, not a failed automated check.

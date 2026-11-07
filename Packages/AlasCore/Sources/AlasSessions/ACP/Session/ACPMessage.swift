@@ -33,7 +33,7 @@ public enum ACPMessage: Equatable, Sendable {
         .thought(id: id, messageId: nil, text)
     }
 
-    public enum StableIdentityKey: Hashable, Sendable {
+    public enum StableIdentityKey: Hashable, Codable, Sendable {
         case userMessageId(String)
         case agentMessageId(String)
         case thoughtMessageId(String)
@@ -781,6 +781,30 @@ public enum ACPMessageCodec: Sendable {
         default:
             return .systemNotice(id: UUID(), text: "(unknown message kind: \(kind))")
         }
+    }
+
+    public enum DisplayDecodingError: Error { case conflictingIdentity }
+
+    /// Saved display carries its own stable identity; it never installs live state.
+    @MainActor
+    public static func decode(kind: String, payload: Data, identity: ACPMessage.StableIdentityKey) throws -> ACPMessage {
+        let message = try decode(kind: kind, payload: payload)
+        guard message.kind == kind else { throw DisplayDecodingError.conflictingIdentity }
+        let restored: ACPMessage
+        switch (message, identity) {
+        case (.user(_, nil, let text, let attachments, let source, let spans), .userUUID(let id)):
+            restored = .user(id: id, messageId: nil, text: text, attachments: attachments, delegatedSource: source, pastedSpans: spans)
+        case (.agent(_, nil, let text), .agentUUID(let id)): restored = .agent(id: id, messageId: nil, text)
+        case (.thought(_, nil, let text), .thoughtUUID(let id)): restored = .thought(id: id, messageId: nil, text)
+        case (.fileEdit(_, let edit), .fileEdit(let id)): restored = .fileEdit(id: id, edit)
+        case (.plan(_, let items), .plan(let id)): restored = .plan(id: id, items)
+        case (.planDocument(_, let document), .plan(let id)): restored = .planDocument(id: id, document)
+        case (.systemNotice(_, let text), .systemNotice(let id)): restored = .systemNotice(id: id, text: text)
+        case (.failureIncident(_, let incident), .failureIncident(let id)): restored = .failureIncident(id: id, incident)
+        default: restored = message
+        }
+        guard restored.stableIdentityKey == identity else { throw DisplayDecodingError.conflictingIdentity }
+        return restored
     }
 
     private struct TextPayload: Codable {

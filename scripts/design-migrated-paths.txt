@@ -1,0 +1,3 @@
+# Paths that must stay free of type, spacing and radius literals
+# (scripts/design_literals.py --migrated). Each surface adds its files
+# when it moves onto DesignScale.

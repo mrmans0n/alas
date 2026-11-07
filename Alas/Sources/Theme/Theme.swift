@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 import SwiftUI
 
 struct Theme: Codable, Equatable, Hashable {
@@ -133,7 +134,97 @@ struct Theme: Codable, Equatable, Hashable {
     }
 }
 
+extension Color {
+    private var sRGBComponents: (red: Double, green: Double, blue: Double, alpha: Double) {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)
+        return (Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent), Double(color.alphaComponent))
+    }
+
+    /// `color`, at `alpha` on top of any alpha of its own, over an opaque `background`.
+    static func composited(_ color: Color, alpha: Double = 1, over background: Color) -> Color {
+        let fg = color.sRGBComponents
+        let bg = background.sRGBComponents
+        let a = max(0, min(1, alpha * fg.alpha))
+        return Color(
+            .sRGB,
+            red: fg.red * a + bg.red * (1 - a),
+            green: fg.green * a + bg.green * (1 - a),
+            blue: fg.blue * a + bg.blue * (1 - a),
+            opacity: 1
+        )
+    }
+
+    /// WCAG contrast between two opaque colors.
+    static func contrastRatio(_ lhs: Color, _ rhs: Color) -> Double {
+        let l1 = lhs.relativeLuminance
+        let l2 = rhs.relativeLuminance
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    private var relativeLuminance: Double {
+        let c = sRGBComponents
+        func channel(_ value: Double) -> Double {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
+    }
+}
+
 extension Theme {
+    /// The opaque color a selected sidebar row's `accent-soft` fill comes to over `fill`.
+    func selectionFill(over fill: String) -> Color {
+        Color.composited(color("accent-soft"), over: color(fill))
+    }
+
+    /// `token`'s color for text on a selected row: unchanged if it already
+    /// reaches the contrast on the fill, otherwise shaded toward black (or
+    /// tinted toward white on a dark theme) only as far as that takes. Shading
+    /// keeps the hue; moving toward the grey `fg` made amber and green muddy.
+    /// Aims well over 4.5:1, because the sidebar's material only approximates
+    /// `fill` and small text loses contrast to antialiasing.
+    func legibleOnSelection(_ token: String, over fill: String) -> Color {
+        // Cached on the colors that decide it, not the theme id: sidebar
+        // contrast and a custom accent change them under the same id.
+        let key = LegibleOnSelectionKey(
+            original: color(token), accentSoft: color("accent-soft"), fill: color(fill), darkMode: darkMode
+        )
+        if let cached = Self.legibleOnSelectionCache.withLock({ $0[key] }) { return cached }
+        let result = computeLegibleOnSelection(original: key.original, background: selectionFill(over: fill))
+        Self.legibleOnSelectionCache.withLock { cache in
+            if cache.count >= 256 { cache.removeAll() }
+            cache[key] = result
+        }
+        return result
+    }
+
+    private struct LegibleOnSelectionKey: Hashable {
+        let original: Color
+        let accentSoft: Color
+        let fill: Color
+        let darkMode: Bool
+    }
+
+    /// A selected row asks for each of its status colors on every body, and
+    /// each answer is a bisection over NSColor conversions.
+    private static let legibleOnSelectionCache = OSAllocatedUnfairLock(initialState: [LegibleOnSelectionKey: Color]())
+
+    private func computeLegibleOnSelection(original: Color, background: Color) -> Color {
+        let minimumContrast = 5.5
+        if Color.contrastRatio(original, background) >= minimumContrast { return original }
+        let target: Color = darkMode ? .white : .black
+        var lower = 0.0
+        var upper = 1.0
+        for _ in 0..<8 {
+            let midpoint = (lower + upper) / 2
+            if Color.contrastRatio(Color.blend(original, target, t: midpoint), background) >= minimumContrast {
+                upper = midpoint
+            } else {
+                lower = midpoint
+            }
+        }
+        return Color.blend(original, target, t: upper)
+    }
+
     static let sidebarTextContrastTokens: [String] = [
         "fg", "fg-muted", "fg-dim", "fg-faint",
     ]
