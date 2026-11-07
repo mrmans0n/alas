@@ -59,6 +59,12 @@ public final class ACPV2SessionBootstrap {
             localSessionId = opened.snapshot.metadata.alasSessionId
         }
         @MainActor
+        fileprivate func completeInstallation() async throws {
+            if case .broker(let client) = client, runtime.usesOrderedIntake {
+                try await client.completeV2BootstrapInstallation(claim: claim)
+            }
+        }
+        @MainActor
         fileprivate func send(_ request: ACPV2BootstrapRequest, operationKey: String?,
             token: Cancellation) async throws -> ACPResponse {
             switch client {
@@ -214,6 +220,8 @@ public final class ACPV2SessionBootstrap {
             }
             try self.requireCurrent(token)
             guard runtime.status == .ready else { throw Failure.unavailable }
+            try await self.attachment.completeInstallation()
+            try self.requireCurrent(token)
             self.setStatus(.ready)
             self.monitor(runtime)
             return Installed(result: result, response: response, binding: binding, runtime: runtime)

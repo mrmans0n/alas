@@ -90,6 +90,7 @@ actor ACPRawBrokerTransport {
     private var awaiting: [ACPBrokerOperationKey: Int] = [:]
     private let bootstrapClaims = ACPV2BootstrapClaims()
     private var bootstrapOpened: ACPBrokerOpenResult?
+    private var bootstrapAcknowledgementsHeld = false
     private var initializeCache: ACPBrokerRawJSONPayload?
     private var sessionCache: ACPBrokerRawJSONPayload?
     private var terminated = false
@@ -431,7 +432,7 @@ actor ACPRawBrokerTransport {
 
     private func flushAcknowledgements() async throws {
         pruneConsumedCompletions()
-        guard !terminated, let generation, !acknowledging else { return }
+        guard !terminated, !bootstrapAcknowledgementsHeld, let generation, !acknowledging else { return }
         acknowledging = true
         defer { acknowledging = false }
         while !terminated {
@@ -476,8 +477,18 @@ actor ACPRawBrokerTransport {
               actual.snapshot.remoteSessionRawResponse == nil, actual.snapshot.operations.isEmpty,
               actual.snapshot.acknowledgedCursor.rawValue == 0 else { throw ACPV2BootstrapClaimError.unavailable }
         let claim = try bootstrapClaims.claim()
+        // Setup controls may be consumed before the session owners exist.
+        // Keep their ACKs from becoming a false missing-history baseline.
+        bootstrapAcknowledgementsHeld = orderedIntake != nil
         bootstrapOpened = nil
         return claim
+    }
+
+    func completeBootstrapInstallation(_ claim: ACPV2BootstrapClaim) async throws {
+        guard !terminated, orderedIntake?.isValid == true else { throw ACPV2BootstrapClaimError.invalidated }
+        try bootstrapClaims.completeInstallation(claim)
+        bootstrapAcknowledgementsHeld = false
+        try await flushAcknowledgements()
     }
 
     func send(method: String, params: ACPBrokerJSONValue, operationKey: String?, bootstrapClaim: ACPV2BootstrapClaim? = nil,

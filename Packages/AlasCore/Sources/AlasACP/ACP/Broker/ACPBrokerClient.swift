@@ -538,6 +538,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         return try await raw.claimBootstrap(opened: opened)
     }
 
+    /// Release the fresh ordered setup prefix after both durable owners are installed.
+    public func completeV2BootstrapInstallation(claim: ACPV2BootstrapClaim) async throws {
+        guard let raw = rawTransport else { throw ACPV2BootstrapClaimError.unavailable }
+        try await raw.completeBootstrapInstallation(claim)
+    }
+
     public func sendV2Bootstrap(_ value: ACPV2BootstrapRequest, claim: ACPV2BootstrapClaim,
         operationKey: String?, authorize: @escaping @Sendable () -> Bool) async throws -> ACPResponse {
         guard let raw = rawTransport, let operationKey, !operationKey.isEmpty else { throw ACPV2BootstrapClaimError.unavailable }

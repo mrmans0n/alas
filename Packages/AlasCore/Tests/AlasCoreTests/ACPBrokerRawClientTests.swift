@@ -238,6 +238,34 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
+    @Test func freshBrokerSetupConsumptionWaitsForBothJournals() async throws {
+        let service = RawBrokerFixture()
+        await service.setFreshBootstrapWithoutTraffic()
+        let client = makeClient(service)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("setup-prefix-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Setup", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        await service.beforeNextAck {
+            #expect(try await persistence.loadV2UpdateJournalStream(sessionId: "s") != nil)
+            #expect(try await persistence.loadV2InboundLedgerStream(sessionId: "s") != nil)
+            // Force the durable mirror ahead of any later registration.
+            let store = try ACPSessionStore(path: persistence.path)
+            try store.db.exec("UPDATE sessions SET acp_broker_acknowledged_cursor=1 WHERE id='s'")
+        }
+        let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "Setup")
+        let runner = try await ACPV2SessionRunner.makeBroker(session: session, client: client, persistence: persistence,
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), info: .init(name: "alas", version: "test"),
+            isCurrent: { true }, onEvent: { _ in })
+        defer { runner.stop()
+        Task { await client.detach() } }
+        _ = try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60)))
+        #expect(runner.status == .ready)
+        try await client.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 4 }
+        #expect(try await persistence.loadV2UpdateJournalStream(sessionId: "s")?.initialBrokerCursor?.rawValue == 0)
+    }
+
+    @MainActor
     @Test(arguments: [false, true])
     func freshBrokerRunnerBindsBeforeSetupAndWithdrawsOnDetach(loseLeaseOnAck: Bool) async throws {
         let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
@@ -1440,6 +1468,10 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     }
     private var localSessionID = "s"
     func setLocalSessionID(_ id: String) { localSessionID = id }
+    private var bootstrapWithoutTraffic = false
+    func setFreshBootstrapWithoutTraffic() { freshBootstrap = true
+    bootstrapWithoutTraffic = true
+    completionCursor = 2 }
     private var freshBootstrap = false
     func setFreshBootstrap(_ value: Bool) { freshBootstrap = value }
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
@@ -1568,7 +1600,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         metadata.wireContext = context
         var snapshot = ACPBrokerSnapshot(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
             turnState: .unknown("unknown"), acknowledgedCursor: .init(rawValue: acks.last ?? 0),
-            journalTail: .init(rawValue: max(outcome == nil ? 2 : completionCursor, extraEvents.last?.cursor.rawValue ?? 0)), pendingRequests: pendingOverride ?? (pending ? [pendingRequest()] : []), operations: [])
+            journalTail: .init(rawValue: max(outcome == nil ? (bootstrapWithoutTraffic ? 0 : 2) : completionCursor, extraEvents.last?.cursor.rawValue ?? 0)), pendingRequests: pendingOverride ?? (pending ? [pendingRequest()] : []), operations: [])
         if let outcome {
             var op = ACPBrokerOperationSnapshot(operationKey: lastOperationKey, adapterRequestId: .init(rawValue: 9), method: "session/prompt", terminalOutcome: outcome)
             op.completedCursor = .init(rawValue: completionCursor)
@@ -1606,6 +1638,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         throw ACPClientError.notRunning }
         var events = (1...2).map { ACPBrokerEvent(cursor: .init(rawValue: UInt64($0)), kind: .rawFrame(.init(bytes: rawBytes))) }
             .filter { $0.cursor > (params.replayAfterCursor ?? params.acknowledgedCursor) }
+        if bootstrapWithoutTraffic { events = [] }
         if let initialPendingEvent, let index = events.firstIndex(where: { $0.cursor == initialPendingEvent.originCursor }) {
             events[index] = .init(cursor: events[index].cursor, kind: .pendingRequest(initialPendingEvent))
         }
@@ -1616,6 +1649,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
             events.append(.init(cursor: .init(rawValue: completionCursor), kind: .operationCompleted(operationKey: lastOperationKey, outcome: outcome)))
         }
         events += extraEvents.filter { $0.cursor > (params.replayAfterCursor ?? params.acknowledgedCursor) }
+        if bootstrapWithoutTraffic { events.sort { $0.cursor < $1.cursor } }
         let result = ACPBrokerAttachResult(snapshot: snapshot(), events: events)
         if shouldHoldAttach {
             shouldHoldAttach = false
@@ -1638,7 +1672,11 @@ private actor RawBrokerFixture: ACPBrokerServicing {
             value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"messageId\":\"\(acceptedMessageID)\"}}".utf8))
         }
         if freshBootstrap {
-            if outcome != nil { completionCursor += 1 }
+            if outcome != nil { completionCursor += bootstrapWithoutTraffic ? 2 : 1 }
+            if bootstrapWithoutTraffic {
+                extraEvents.append(.init(cursor: .init(rawValue: completionCursor - 1), kind: .operationStarted(
+                    operationKey: params.operationKey, adapterRequestId: .init(rawValue: 9), method: params.method)))
+            }
             let result = params.method == "initialize" ? #"{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{}}}"# : (params.method == "session/prompt" && acceptedMessageID != nil ? #"{"messageId":"u"}"# : #"{"sessionId":"upstream"}"#)
             value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\(result)}".utf8))
         }
