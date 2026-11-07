@@ -315,7 +315,7 @@ public struct PluginRequirements: Equatable, Sendable {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 public struct PluginManifest: Equatable, Sendable {
-    public static let supportedAPIVersions = 4...17
+    public static let supportedAPIVersions = 4...18
     public static let maxTabs = 4
     public static let maxTabTitleLength = 40
     public static let maxCommands = 16
