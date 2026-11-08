@@ -306,9 +306,16 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    enum LoadAfterReplayEnd: CaseIterable {
+        case succeeds
+        case failsLater
+        /// The error arrives while the end event may still be queued.
+        case failsAtOnce
+    }
+
     @Test("a strict load shows its history at the replay's end, before the session is ready, and keeps it",
-          arguments: [false, true])
-    func strictLoadShowsHistoryAtReplayEnd(loadFailsAfterEnd: Bool) async throws {
+          arguments: LoadAfterReplayEnd.allCases)
+    func strictLoadShowsHistoryAtReplayEnd(outcome: LoadAfterReplayEnd) async throws {
         let (manager, store, client, session) = try await fixture(origin: .agentImported)
         scriptInitialize(client, canLoad: true, canResume: true, loadReplayEnd: true)
         let gate = LoadResponseGate()
@@ -316,8 +323,8 @@ struct ACPSessionManagerRemoteRestoreTests {
             let loadID = (request.params as? ACPSessionLoadParams)?.meta?.loadReplayEnd?.id
             client.emit(.init(sessionId: "remote-id", update: .agentMessageChunk(.text("restored history"))))
             client.emit(.init(sessionId: "remote-id", update: .loadReplayEnd(id: loadID)))
-            await gate.wait()
-            if loadFailsAfterEnd {
+            if outcome != .failsAtOnce { await gate.wait() }
+            if outcome != .succeeds {
                 throw JSONRPCError(code: -32603, message: "Claude Code process exited", data: nil)
             }
             return try JSONEncoder().encode(ACPSessionNewResult(
@@ -327,9 +334,11 @@ struct ACPSessionManagerRemoteRestoreTests {
         client.script(method: "session/resume") { _ in Data("{}".utf8) }
 
         let attaching = Task { await manager.attach(to: session.id, freshlyCreated: false) }
-        try await waitUntil { session.transcript.messages.count == 1 }
-        #expect(manager.runners[session.id] == nil)
-        #expect(session.agentState != .ready)
+        if outcome != .failsAtOnce {
+            try await waitUntil { session.transcript.messages.count == 1 }
+            #expect(manager.runners[session.id] == nil)
+            #expect(session.agentState != .ready)
+        }
 
         await gate.open()
         await attaching.value
@@ -337,7 +346,7 @@ struct ACPSessionManagerRemoteRestoreTests {
 
         #expect(manager.runners[session.id] != nil)
         #expect(client.sent.map(\.method)
-            == ["initialize", "session/load"] + (loadFailsAfterEnd ? ["session/resume"] : []))
+            == ["initialize", "session/load"] + (outcome == .succeeds ? [] : ["session/resume"]))
         #expect(session.contextRestoreWarning == nil)
         #expect(session.transcript.messages.count == 1)
         #expect(try store.messageCount(sessionId: session.id) == 1)

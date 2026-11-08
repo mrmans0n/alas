@@ -2045,6 +2045,18 @@ public final class ACPSessionRunner {
         flushPendingIncomingUpdates()
     }
 
+    /// Takes every update the client had yielded when this was called off
+    /// the stream while a load replay is held. A failed load's response and
+    /// its updates arrive on separate streams, so its end event can still be
+    /// queued when the error is seen; call this before deciding to discard.
+    public func awaitHeldLoadReplayDelivery() async {
+        let watermark = connection.client.yieldedUpdateCount
+        while loadReplayHold != nil, dequeuedUpdateCount < watermark, !stopped, !Task.isCancelled,
+              updatesTask?.isCancelled == false, isConnectionCurrent() {
+            await Task.yield()
+        }
+    }
+
     /// Drops a held load replay that never ended, so a partial history is
     /// not shown. It goes through load replay suppression, as a failed load's
     /// replay did before the hold existed: reconciled, counted, and

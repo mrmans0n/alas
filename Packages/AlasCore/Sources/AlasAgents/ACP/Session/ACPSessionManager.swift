@@ -8114,8 +8114,12 @@ extension ACPSessionManager {
                         }
                         return resumed
                     }
-                    func suppressFailedLoadReplayIfNeeded() {
+                    func suppressFailedLoadReplayIfNeeded() async throws {
                         guard !shouldSuppressLoadReplay else { return }
+                        await runner.awaitHeldLoadReplayDelivery()
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            throw CancellationError()
+                        }
                         // A replay the adapter said is whole stays: it is
                         // the session's history even when the load fails.
                         guard !runner.loadReplayEndReceived else { return }
@@ -8144,7 +8148,7 @@ extension ACPSessionManager {
                             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                                 throw CancellationError()
                             }
-                            suppressFailedLoadReplayIfNeeded()
+                            try await suppressFailedLoadReplayIfNeeded()
                             guard error is ACPBrokerDurableCompletionReplayError else {
                                 return (try await resumeAfterLoadFailure(error), true)
                             }
@@ -8169,7 +8173,7 @@ extension ACPSessionManager {
                             guard !(error is ACPBrokerDurableCompletionReplayError) else {
                                 throw error
                             }
-                            suppressFailedLoadReplayIfNeeded()
+                            try await suppressFailedLoadReplayIfNeeded()
                             return (try await resumeAfterLoadFailure(error), true)
                         }
                     }
@@ -8241,6 +8245,11 @@ extension ACPSessionManager {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
+                        await runner.awaitHeldLoadReplayDelivery()
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         // A partial replay is not shown; a whole one stays as
                         // the history the recovery below sends on.
                         if !runner.loadReplayEndReceived {
