@@ -62,3 +62,8 @@ Alas/Sources/Dialogs/ProjectMCPServerEditor.swift
 Alas/Sources/Dialogs/RepoSelector/RepoSelectorDialog.swift
 Alas/Sources/Dialogs/RepoSelector/RepoSelectorRowView.swift
 Alas/Sources/Dialogs/ReviewTarget/ReviewTargetDialog.swift
+Alas/Sources/Dialogs/Workspace/WorkspaceDialogs.swift
+Alas/Sources/Dialogs/WorktreeCleanupSheet.swift
+Alas/Sources/Dialogs/RenameBranchDialog.swift
+Alas/Sources/Dialogs/EmptyState.swift
+Alas/Sources/Dialogs/WelcomeSky.swift
