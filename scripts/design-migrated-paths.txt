@@ -145,3 +145,9 @@ Alas/Sources/Center/DeletingWorktreeView.swift
 Alas/Sources/Center/DeleteFailedWorktreeView.swift
 Alas/Sources/Center/DiffReview/DiffReviewRail.swift
 Alas/Sources/Center/DiffReview/DiffReviewLoadingSkeleton.swift
+Alas/Sources/Center/Review/CIStatusStrip.swift
+Alas/Sources/Center/Review/OutdatedThreadsDrawer.swift
+Alas/Sources/Center/Review/PendingReviewTray.swift
+Alas/Sources/Center/Review/ReviewTabView.swift
+Alas/Sources/Center/Review/ReviewThreadMutations.swift
+Alas/Sources/Center/Review/VerdictSheet.swift

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct VerdictSheet: View {
+    @Environment(\.designScale) private var scale
     let pendingCount: Int
     var onSubmit: (ReviewVerdict, String) -> Void = { _, _ in }
     var onCancel: () -> Void = {}
@@ -31,21 +32,21 @@ struct VerdictSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: scale.space[4]) {
             Text("Finish your review")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                 .foregroundColor(theme.color("fg"))
             if pendingCount > 0 {
                 Text("\(pendingCount) pending comment\(pendingCount == 1 ? "" : "s")")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
 
             verdictPicker
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 Text(verdict == .requestChanges ? "Summary (required)" : "Summary (optional)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-dim"))
                 PairedTextEditor(
                     text: $summaryBody,
@@ -61,12 +62,12 @@ struct VerdictSheet: View {
                     .frame(minHeight: 80)
                     .background(theme.color("bg-1"))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .stroke(theme.color("line"), lineWidth: 0.75)
                     )
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: scale.space[3]) {
                 Button("Submit review") {
                     onSubmit(verdict, summaryBody)
                 }
@@ -82,7 +83,7 @@ struct VerdictSheet: View {
                 .foregroundColor(theme.color("fg-muted"))
             }
         }
-        .padding(20)
+        .padding(scale.space[5])
         .frame(width: 380)
         .background(theme.color("bg-2"))
         .presentationBackground(theme.color("bg-2"))
@@ -94,11 +95,11 @@ struct VerdictSheet: View {
             verdictButton(.requestChanges, label: "Request changes", systemName: "exclamationmark.circle")
             verdictButton(.comment, label: "Comment", systemName: "bubble.left")
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
     }
@@ -108,17 +109,17 @@ struct VerdictSheet: View {
         return Button {
             verdict = v
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: systemName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                 Text(label)
-                    .font(.system(size: 11, weight: active ? .semibold : .regular))
+                    .font(scale.meta.font(weight: active ? .semibold : .regular))
             }
             .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .background(active ? theme.color("bg-1") : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(label)
