@@ -562,8 +562,13 @@ enum DesignCaptureBridge {
         DistributedNotificationCenter.default().addObserver(
             forName: notification, object: nil, queue: .main
         ) { note in
-            guard let target = note.object as? String, let name = localNotification(for: target) else { return }
-            NotificationCenter.default.post(name: name, object: nil)
+            guard let target = note.object as? String else { return }
+            if target.hasPrefix("settings:") {
+                let section = SettingsSection(rawValue: String(target.dropFirst("settings:".count)))
+                NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+            } else if let name = localNotification(for: target) {
+                NotificationCenter.default.post(name: name, object: nil)
+            }
         }
     }
 
