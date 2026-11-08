@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsWindow: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @State private var section: SettingsSection = .agents
     @State private var showsDebug = AdvancedSettingsVisibility.isEnabled()
@@ -18,9 +19,9 @@ struct SettingsWindow: View {
                     TrafficLights()
                     Spacer()
                 }
-                .padding(.leading, 16)
+                .padding(.leading, scale.space[4])
                 Text("Settings")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
             }
             .frame(height: 44)
@@ -59,7 +60,7 @@ struct SettingsWindow: View {
                 AlasButton(title: "Cancel", style: .subtle, action: closeWindow)
                 AlasButton(title: "Done", style: .primary, action: closeWindow)
             }
-            .padding(.horizontal, 32).padding(.vertical, 12)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[3])
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
         }
@@ -71,7 +72,7 @@ struct SettingsWindow: View {
         .overlay(alignment: .bottomTrailing) {
             RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
                 .frame(maxWidth: 380)
-                .padding(16)
+                .padding(scale.space[4])
         }
         .environment(\.theme, theme)
         .ignoresSafeArea()

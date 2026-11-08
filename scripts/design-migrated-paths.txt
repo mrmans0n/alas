@@ -90,3 +90,10 @@ Alas/Sources/Right/Commit/InlineErrorStrip.swift
 Alas/Sources/Right/Commit/AiSplitButton.swift
 Alas/Sources/Right/Commit/StageChip.swift
 Alas/Sources/Integrations/CodeHost/ReviewShepherdBlock.swift
+Alas/Sources/Settings/SettingsWindow.swift
+Alas/Sources/Settings/SettingsNavView.swift
+Alas/Sources/Settings/SettingsGroup.swift
+Alas/Sources/Settings/SettingsRow.swift
+Alas/Sources/Settings/ShortcutChip.swift
+Alas/Sources/Settings/FontFamilyPicker.swift
+Alas/Sources/Settings/PromptEditorBody.swift
