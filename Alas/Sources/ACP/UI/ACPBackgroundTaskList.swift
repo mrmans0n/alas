@@ -108,6 +108,10 @@ enum ACPBackgroundTaskPresentation {
         return paused > 0 ? "\(base) · \(paused) paused" : base
     }
 
+    static func tooltip(_ task: ACPBackgroundTask) -> String {
+        [task.name, transcriptDetail(task)].compactMap { $0 }.joined(separator: "\n")
+    }
+
     /// Text shown under the command when a transcript row is expanded: the
     /// summary, else the description. Either is skipped when it only repeats
     /// the task name, which adapters commonly send for shell commands.
@@ -255,7 +259,7 @@ struct ACPBackgroundTaskTray: View {
         .acpTrackingHover { inside in
             if inside { hoveredId = task.id } else if hoveredId == task.id { hoveredId = nil }
         }
-        .help([task.name, task.summary ?? task.description].compactMap { $0 }.joined(separator: "\n"))
+        .help(ACPBackgroundTaskPresentation.tooltip(task))
     }
 
     @ViewBuilder
