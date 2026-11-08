@@ -434,6 +434,7 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     /// Exists only while `config.pluginsEnabled` is on.
     var pluginManager: PluginManager?
+    @ObservationIgnored var pluginStackInventories: [String: PluginStackInventoryCache] = [:]
     /// For each project a plugin listens for `review.changed` in, the host
     /// subscription that follows its worktrees' review status.
     @ObservationIgnored var pluginReviewFollows: [String: HostSubscription] = [:]
@@ -5858,6 +5859,7 @@ final class AppState {
     /// has actually landed gives any follower that raced ahead a second,
     /// guaranteed-fresh reload instead of sticking to a stale entry.
     private func invalidateGGStackCacheAndRebumpGeneration(projectId: String) {
+        GGProjectMutationGate.shared.invalidate(project: projectId)
         Task { @MainActor in
             await ggStackCache.invalidate()
             self.bumpRevisionGenerationForProject(projectId: projectId)
@@ -6407,6 +6409,7 @@ final class AppState {
             .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
         let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        if changed { GGProjectMutationGate.shared.invalidate(project: projectId) }
         let completedCreateFailure = await completeReconciledCreateFailures(
             projectId: projectId,
             previousOperationStates: previousOperationStates

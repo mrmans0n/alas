@@ -50,7 +50,8 @@ extension PluginProcessLauncher {
 /// A process on an SSH host. It can be stopped before it started: `start` then stops it at once.
 public protocol PluginRemoteProcessHandle: PluginProcessHandle {
     /// Asks the helper to start it and follows it. Throws why the host refused it; afterwards, everything comes as
-    /// events.
+    /// events. After a failed start, events still settle cleanup. An uncertain spawn must not end that stream
+    /// until a terminal result is observed; callers may drain it independently of plugin teardown.
     func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws
 }
 
@@ -58,11 +59,13 @@ public enum PluginProcessError: Error, CustomStringConvertible, Sendable {
     case notFound(String)
     /// Said as it is.
     case refused(String)
+    case settlementUnknown(String)
 
     public var description: String {
         switch self {
         case .notFound(let name): "command not found: \(name)"
         case .refused(let reason): reason
+        case .settlementUnknown(let reason): reason
         }
     }
 }

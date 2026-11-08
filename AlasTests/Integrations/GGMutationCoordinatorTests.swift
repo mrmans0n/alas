@@ -247,13 +247,17 @@ private final class GGMutationHarness {
     var currentHeadSHA = "committed"
     var finishPendingStaging: () async -> Bool = { true }
     var onRefreshStack: (() async -> Void)?
+    var fullMemberSHAs: [String: String] = [:]
     private(set) var coordinator: GGMutationCoordinator!
 
     init(
         stacks: [GGStackSnapshot],
         supportsClientOperationID: Bool = false,
         supportsSyncJSONL: Bool = false,
-        landJSONL: Bool = false
+        landJSONL: Bool = false,
+        mutationGate: GGProjectMutationGate? = nil,
+        projectID: String = "p",
+        worktreeID: String = "wt"
     ) {
         self.stacks = stacks
         let capability = GGClientOperationCapabilityBox(supportsClientOperationID)
@@ -265,7 +269,7 @@ private final class GGMutationHarness {
         let generator = GGClientOperationTokenGenerator()
         tokenGenerator = generator
         coordinator = GGMutationCoordinator(
-            worktreeId: "wt",
+            worktreeId: worktreeID,
             worktreePath: "/repo/wt",
             service: service,
             actionState: actionState,
@@ -274,6 +278,8 @@ private final class GGMutationHarness {
             syncJSONLCapability: { syncCapability.isSupported },
             landJSONLCapability: { landCapability.isSupported },
             clientOperationIDGenerator: { generator.next() },
+            mutationGate: mutationGate,
+            projectID: projectID,
             context: GGMutationContext(
                 loadFreshStack: { [unowned self] in
                     if let loadError { throw loadError }
@@ -300,7 +306,8 @@ private final class GGMutationHarness {
                 publishLandEvent: { [unowned self] event in
                     publishedLandEvents.append(event)
                     return true
-                }
+                },
+                resolveCommitSHA: { [unowned self] sha in fullMemberSHAs[sha] ?? sha }
             )
         )
     }
@@ -334,6 +341,59 @@ private func stack(
 
 @MainActor
 struct GGMutationCoordinatorTests {
+    @Test func nativePluginConfirmationRejectsNewOrphansWithUnchangedKnownMembers() async throws {
+        let entries = [GGStackEntry(position: 1, sha: "aaaaaaa", title: "One", ggId: "one", prNumber: 1)]
+        let after = try GGStackSnapshot.decode(fromJSON: Data(#"{"version":1,"stack":{"name":"feature","base":"main","total_commits":1,"synced_commits":1,"entries":[{"position":1,"sha":"aaaaaaa","title":"One","gg_id":"one","pr_number":1,"approved":true,"is_current":false}],"unintegrated_commits":[{"sha":"bbbbbbb","subject":"Unintegrated edit","sits_on_position":1,"count":1}]}}"#.utf8))
+        let harness = GGMutationHarness(stacks: [stack(head: "aaaaaaa", entries: entries), after])
+        let fullSHA = "aaaaaaa" + String(repeating: "a", count: 33)
+        harness.fullMemberSHAs["aaaaaaa"] = fullSHA
+        var prepared = try await harness.coordinator.prepare(.sync)
+        prepared.expectedFullMembers = [.init(id: "one", sha: fullSHA, position: 1, number: 1)]
+        await #expect(throws: GGMutationError.staleConfirmation) { try await harness.coordinator.apply(prepared) }
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func nativePluginConfirmationPinsFullSHAsWhenAbbreviationsStillMatch(rewritten: Bool) async throws {
+        let entries = [GGStackEntry(position: 1, sha: "aaaaaaa", title: "One", ggId: "one", prNumber: 1),
+                       GGStackEntry(position: 2, sha: "bbbbbbb", title: "Tip", ggId: "two", prNumber: 2)]
+        let harness = GGMutationHarness(stacks: [stack(head: "bbbbbbb", entries: entries)])
+        let original = "aaaaaaa" + String(repeating: "a", count: 33)
+        harness.fullMemberSHAs["aaaaaaa"] = rewritten ? "aaaaaaa" + String(repeating: "b", count: 33) : original
+        let tip = "bbbbbbb" + String(repeating: "b", count: 33)
+        harness.fullMemberSHAs["bbbbbbb"] = tip
+        var prepared = try await harness.coordinator.prepare(.sync)
+        prepared.expectedFullMembers = [.init(id: "one", sha: original, position: 1, number: 1),
+                                        .init(id: "two", sha: tip, position: 2, number: 2)]
+        if rewritten {
+            await #expect(throws: GGMutationError.staleConfirmation) { try await harness.coordinator.apply(prepared) }
+            #expect(harness.service.requests.isEmpty)
+        } else {
+            try await harness.coordinator.apply(prepared)
+            #expect(harness.service.requests == [.sync])
+        }
+    }
+
+    @Test func projectReservationExcludesNativeActionsAcrossWorktreesUntilExecutionSettles() async throws {
+        let gate = GGProjectMutationGate()
+        let first = GGMutationHarness(stacks: [stack(head: "head")], mutationGate: gate, worktreeID: "one")
+        let second = GGMutationHarness(stacks: [stack(head: "head")], mutationGate: gate, worktreeID: "two")
+        first.service.blockExecution = true
+        let operation = try #require(first.coordinator.startApplying(.sync, confirmedAgainst: nil))
+        try await waitUntil { !first.service.requests.isEmpty }
+        #expect(second.coordinator.startApplying(.sync, confirmedAgainst: nil) == nil)
+        #expect(gate.acquire(project: "p", owner: "plugin") == nil)
+        operation.cancel()
+        #expect(gate.acquire(project: "p", owner: "plugin") == nil)
+        first.service.resumeExecution()
+        _ = await operation.result
+        let token = try #require(gate.acquire(project: "p", owner: "plugin"))
+        #expect(second.coordinator.startApplying(.sync, confirmedAgainst: nil) == nil)
+        #expect(gate.release(project: "p", owner: "plugin", token: token))
+        let next = try #require(second.coordinator.startApplying(.sync, confirmedAgainst: nil))
+        try await next.value
+    }
+
     @Test func protocolFailureAfterSummaryFailsSessionAndKeepsOutcomes() async {
         let store = GGLandingStore()
         store.begin(.init(

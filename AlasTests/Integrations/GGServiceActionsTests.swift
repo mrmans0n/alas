@@ -78,6 +78,10 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
         }
     }
 
+    func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
+        runStreaming(args: args, cwd: cwd, timeout: 600, interruption: nil)
+    }
+
     func cancellationObserved() async -> Bool {
         for await _ in termination.stream { return true }
         return false
@@ -134,6 +138,48 @@ struct GGServiceActionsTests {
         #expect(runner.lastArgs == ["land", "--until", "c-abc", "--wait", "--jsonl", "--no-clean"])
         #expect(runner.requestedStreamingTimeout)
         #expect(runner.lastTimeout == nil)
+    }
+
+    @Test func landWithClientOperationPreservesUnlimitedWaitAndSingleOperationID() async throws {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
+        ]
+        runner.stdout = (runner.streamingLines ?? []).joined(separator: "\n")
+        _ = try await GGService(runner: runner).execute(
+            .land(target: "c-abc"), worktreePath: "/tmp/wt", clientOperationID: "inbox-land",
+            supportsSyncJSONL: false, supportsLandJSONL: true,
+            onSyncEvent: { _ in }, onLandEvent: { _ in true }
+        )
+        #expect(runner.requestedStreamingTimeout)
+        #expect(runner.lastTimeout == nil)
+        #expect(runner.lastArgs == ["--client-operation-id", "inbox-land", "land", "--until", "c-abc", "--wait", "--jsonl", "--no-clean"])
+    }
+
+    @Test func landWithClientOperationInterruptsAndDrainsTerminalEntry() async {
+        let runner = CancellableLandGGRunner()
+        let started = AsyncStream<Void>.makeStream()
+        let entries = AsyncStream<GGLandedEntry>.makeStream()
+        let task = Task {
+            try await GGService(runner: runner).execute(
+                .land(target: "c-abc"), worktreePath: "/tmp/wt", clientOperationID: "inbox-cancel",
+                supportsSyncJSONL: false, supportsLandJSONL: true,
+                onSyncEvent: { _ in }, onLandEvent: { event in
+                    if case .start = event { started.continuation.yield() }
+                    if case .entry(let entry) = event { entries.continuation.yield(entry) }
+                    return true
+                }
+            )
+        }
+        for await _ in started.stream { break }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        entries.continuation.finish()
+        var drained: [GGLandedEntry] = []
+        for await entry in entries.stream { drained.append(entry) }
+        #expect(drained == [.init(position: 1, prNumber: 5, action: "merged")])
+        #expect(await runner.cancellationObserved())
     }
 
     @Test func landJSONLStopsWhenConsumerRejectsEvent() async {

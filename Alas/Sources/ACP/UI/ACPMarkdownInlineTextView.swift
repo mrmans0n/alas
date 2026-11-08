@@ -445,7 +445,8 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         if hasCommandChips, let hit = ACPTranscriptCommandChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
             commandHover.scheduleShow(
                 range: hit.range, suggestion: hit.suggestion, in: self,
-                context: commandHoverContext?.card, theme: commandHoverContext?.theme
+                context: commandHoverContext?.card, theme: commandHoverContext?.theme,
+                opensSkill: commandHoverContext?.card?.openSkill != nil
             )
         } else {
             commandHover.hide()
@@ -480,6 +481,13 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             if let url = ACPSymbolReference.openURL(for: hit.mention.target, snapshot: hit.mention.snapshot) {
                 openURL?(url)
             }
+            return
+        }
+        if hasCommandChips, let openSkill = commandHoverContext?.card?.openSkill,
+           let hit = ACPTranscriptCommandChip.hit(at: convert(event.locationInWindow, from: nil), in: self),
+           hit.suggestion.presentation?.skillPath != nil {
+            commandHover.hide()
+            openSkill(hit.suggestion)
             return
         }
         if let chip = ACPPathChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {

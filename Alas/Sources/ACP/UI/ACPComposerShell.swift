@@ -252,6 +252,8 @@ struct ACPComposer: View {
     let tailSpacerHeight: CGFloat
     /// Reports the height of the bottom placement's stack (banner, tray, pill).
     let onStackHeightChange: (CGFloat) -> Void
+    /// Opens a skill command's `SKILL.md`; nil where the host cannot.
+    let openSkill: ((ACPPromptSuggestion) -> Void)?
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -288,6 +290,7 @@ struct ACPComposer: View {
         recapCoordinator: SessionSummaryCoordinator? = nil,
         tailSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight,
         onStackHeightChange: @escaping (CGFloat) -> Void = { _ in },
+        openSkill: ((ACPPromptSuggestion) -> Void)? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self.tailSpacerHeight = tailSpacerHeight
@@ -319,6 +322,7 @@ struct ACPComposer: View {
         self.pluginPrompts = pluginPrompts
         self.contextProviders = contextProviders
         self.recapCoordinator = recapCoordinator
+        self.openSkill = openSkill
     }
 
     var body: some View {
@@ -521,7 +525,12 @@ struct ACPComposer: View {
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion]
                         + (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
-                        + pluginPrompts
+                        + pluginPrompts,
+                configOptions: session.availableConfigOptions,
+                onCommandAction: { configId, value in
+                    apply(configOptionId: configId, value: .string(value))
+                },
+                onOpenSkill: openSkill
             )
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)

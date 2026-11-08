@@ -245,8 +245,14 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerOutboxSignals: [String: Int] = [:]
     /// Counts each prompt a child's peer accepted, for waits already under way.
     private var peerChildSends: [String: Int] = [:]
-    /// Awaited children a peer last said were idle, with the wait they were on.
-    private var quietPeerChildren: [String: Int64] = [:]
+    /// Awaited children a peer last said were idle, with the wait they were
+    /// on and the sends counted by then: a send since may start another turn.
+    private var quietPeerChildren: [String: QuietPeerWait] = [:]
+
+    private struct QuietPeerWait: Equatable {
+        let since: Int64
+        let sends: Int64
+    }
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -908,7 +914,7 @@ public final class ACPSessionOrchestrationCoordinator {
                     continue
                 }
                 guard let child = waiting.first(where: { $0.childSessionId == id }) else { continue }
-                let wait = child.peerAwaitingSince ?? 0
+                let wait = QuietPeerWait(since: child.peerAwaitingSince ?? 0, sends: child.peerSends)
                 guard quietPeerChildren[id] == wait else {
                     quietPeerChildren[id] = wait
                     continue
@@ -925,7 +931,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 // prompt started another wait, or another instance on the store
                 // got here first. A throw leaves it awaited, for a later poll.
                 guard (try? await environment.persistence.claimLostPeerTurn(
-                    childSessionId: id, awaitingSince: child.peerAwaitingSince, outcome: outcome
+                    childSessionId: id, awaitingSince: child.peerAwaitingSince, sends: child.peerSends, outcome: outcome
                 )) == true else { continue }
                 environment.notifyChanged()
                 await deliverPendingMessages(to: child.parentSessionId, callerParent: child)
@@ -970,6 +976,14 @@ public final class ACPSessionOrchestrationCoordinator {
         let serverId = child.peerServerId ?? ""
         guard let peers = environment.delegationPeers() else {
             return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
+        }
+        // Before sending: a quiet check whose status predates the peer
+        // accepting this prompt must not end the wait it starts.
+        do {
+            try await environment.persistence.notePeerSendStarting(childSessionId: child.childSessionId)
+        } catch {
+            Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                .error("Could not note a send to session \(child.childSessionId, privacy: .public): \(String(describing: error), privacy: .public)")
         }
         switch await peers.send(serverId: serverId, sessionID: child.childSessionId, prompt: prompt) {
         case .success(let acceptedAt):

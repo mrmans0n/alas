@@ -298,6 +298,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let questionCustomAnswer: ACPPresentationContractDeclaration
     /// Asks our Claude and Codex adapter forks to name the recommended model and effort.
     public let recommendedConfigValue: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks to mark skill commands with their
+    /// `SKILL.md` path and to name the command actions Alas can run.
+    public let commandPresentation: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -316,7 +319,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init(),
         permissionPresentation: ACPPresentationContractDeclaration = .init(),
         questionCustomAnswer: ACPPresentationContractDeclaration = .init(),
-        recommendedConfigValue: ACPPresentationContractDeclaration = .init()
+        recommendedConfigValue: ACPPresentationContractDeclaration = .init(),
+        commandPresentation: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -335,11 +339,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.permissionPresentation = permissionPresentation
         self.questionCustomAnswer = questionCustomAnswer
         self.recommendedConfigValue = recommendedConfigValue
+        self.commandPresentation = commandPresentation
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
         case agentFileChangeReport, permissionPresentation, questionCustomAnswer, recommendedConfigValue
+        case commandPresentation
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -370,6 +376,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
             ACPPresentationContractDeclaration.self, forKey: .questionCustomAnswer)) ?? .init()
         recommendedConfigValue = (try? c.decodeIfPresent(
             ACPPresentationContractDeclaration.self, forKey: .recommendedConfigValue)) ?? .init()
+        commandPresentation = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .commandPresentation)) ?? .init()
     }
 }
 
@@ -967,11 +975,21 @@ public struct ACPPromptSuggestion: Codable, Equatable, Hashable, Sendable {
     public let command: String
     public let description: String?
     public let hint: String?
+    /// The adapter's `_meta.commandPresentation` record. Optional, so command
+    /// lists stored before it existed still decode; the next
+    /// `available_commands_update` replaces it.
+    public let presentation: ACPCommandPresentation?
 
-    public init(command: String, description: String?, hint: String? = nil) {
+    public init(
+        command: String,
+        description: String?,
+        hint: String? = nil,
+        presentation: ACPCommandPresentation? = nil
+    ) {
         self.command = command
         self.description = description
         self.hint = hint
+        self.presentation = presentation
     }
 }
 

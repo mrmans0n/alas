@@ -2344,8 +2344,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
             guard !startResults.isEmpty else { return .success(.init(sessionID: start.childID, state: "starting")) }
             return startResults.removeFirst()
         }
+        /// Holds `send` before it answers while set.
+        var sendGate: AsyncStream<Void>?
         func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError> {
             sendCalls.append((sessionID, prompt))
+            if let sendGate { for await _ in sendGate { break } }
             return sendResult
         }
         func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> {
@@ -3941,6 +3944,32 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
         await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    /// The peer answered idle before it accepted a prompt still on its way:
+    /// the wait that prompt starts is not ended as lost.
+    @Test(.timeLimit(.minutes(1))) func aQuietCheckDuringASendInFlightKeepsTheChildAwaited() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+
+        let (statusGate, releaseStatus) = AsyncStream<Void>.makeStream()
+        peers.statusGate = statusGate
+        let asking = Task { await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1") }
+        try await waitUntil { peers.statusCalls.count == 2 }
+        let (sendGate, releaseSend) = AsyncStream<Void>.makeStream()
+        peers.sendGate = sendGate
+        let sending = Task { await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")) }
+        try await waitUntil { peers.sendCalls.count == 1 }
+        releaseStatus.finish()
+        await asking.value
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == true)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        releaseSend.finish()
+        _ = await sending.value
     }
 
     /// An idle child may still have its result in the outbox until a pull finishes.

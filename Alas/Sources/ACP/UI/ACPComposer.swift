@@ -71,6 +71,13 @@ struct ACPInputField: NSViewRepresentable {
     var symbolMentions: ACPSymbolMentionSource? = nil
     /// Slash commands Alas handles itself, offered ahead of the agent's.
     var alasCommands: [ACPPromptSuggestion] = []
+    /// The session's live config options, for commands whose negotiated
+    /// action sets one.
+    var configOptions: [ACPConfigOption] = []
+    /// Sets a config option for a picked command action (config id, value).
+    var onCommandAction: (String, String) -> Void = { _, _ in }
+    /// Opens a skill command's `SKILL.md`; nil where the host cannot.
+    var onOpenSkill: ((ACPPromptSuggestion) -> Void)? = nil
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -94,6 +101,9 @@ struct ACPInputField: NSViewRepresentable {
         textView.registerForDraggedTypes([.fileURL, .URL, .png, .tiff])
         context.coordinator.sessionMentions = sessionMentions
         context.coordinator.symbolMentions = symbolMentions
+        context.coordinator.configOptions = configOptions
+        context.coordinator.onCommandAction = onCommandAction
+        context.coordinator.onOpenSkill = onOpenSkill
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
@@ -163,6 +173,9 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.typography = typography
         context.coordinator.sessionMentions = sessionMentions
         context.coordinator.symbolMentions = symbolMentions
+        context.coordinator.configOptions = configOptions
+        context.coordinator.onCommandAction = onCommandAction
+        context.coordinator.onOpenSkill = onOpenSkill
         if context.coordinator.upstreamReferences !== upstreamReferences {
             context.coordinator.attachUpstreamReferences(upstreamReferences)
         }
@@ -334,6 +347,9 @@ struct ACPInputField: NSViewRepresentable {
         var symbolMentions: ACPSymbolMentionSource?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
+        var configOptions: [ACPConfigOption] = []
+        var onCommandAction: (String, String) -> Void = { _, _ in }
+        var onOpenSkill: ((ACPPromptSuggestion) -> Void)?
         var onSelectionChange: () -> Void = {}
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
         private var upstreamObservations: Set<AnyCancellable> = []
@@ -1824,6 +1840,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
             return
         }
         if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
+        // A skill chip opens its `SKILL.md`, like a link; every other chip
+        // keeps the text view's own click handling.
+        if event.clickCount == 1, !event.modifierFlags.contains(.shift),
+           let chip = commandChipHit(at: convert(event.locationInWindow, from: nil)),
+           chip.suggestion.presentation?.skillPath != nil,
+           let openSkill = coordinator?.onOpenSkill {
+            commandChipHover.hide()
+            openSkill(chip.suggestion)
+            return
+        }
         if let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
             window?.makeFirstResponder(self)
             if event.clickCount >= 2 {
@@ -1894,6 +1920,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             presentSlashPanel()
         } else {
             slashPanel?.model.updateSuggestions(coord.promptSuggestions)
+            slashPanel?.model.configOptions = coord.configOptions
         }
         slashStart = tok.start
         slashPanel?.model.setQuery(tok.query)
@@ -1912,6 +1939,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
               let theme = coord.theme else { return }
         let panel = ACPSlashPickerPanel(
             suggestions: coord.promptSuggestions,
+            configOptions: coord.configOptions,
             theme: theme
         ) { [weak self] s in self?.insertSlash(s) }
         slashPanel = panel
@@ -2062,7 +2090,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
             fileMentionHover.hide()
         }
         if let chip = commandChipHit(at: point) {
-            commandChipHover.scheduleShow(range: chip.range, suggestion: chip.suggestion, in: self)
+            commandChipHover.scheduleShow(
+                range: chip.range, suggestion: chip.suggestion, in: self,
+                opensSkill: coordinator?.onOpenSkill != nil)
         } else {
             commandChipHover.hide()
         }
@@ -3236,8 +3266,23 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         let range = NSRange(location: slashStart, length: caret - slashStart)
         closeSlashPanel()
+        let inCode = ACPSlashCommand.isInCode(range.location, in: ts.string as NSString)
+        // A command whose negotiated action sets a config option (Codex
+        // `/plan`) runs it with the session control instead of inserting
+        // text: the typed `/query` goes away in one undoable edit. An action
+        // the live config cannot take falls through to the ordinary chip.
+        if !inCode, let action = suggestion.presentation?.action {
+            let resolution = action.resolve(in: coordinator?.configOptions ?? [])
+            if resolution != .unsupported {
+                replaceUndoably(range: range, with: NSAttributedString())
+                if case .apply(let configId, let value) = resolution {
+                    coordinator?.onCommandAction(configId, value)
+                }
+                return
+            }
+        }
         // A pick inside code stays plain text, like a typed command there.
-        if ACPSlashCommand.isInCode(range.location, in: ts.string as NSString) {
+        if inCode {
             ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
             // `range.location`, not `slashStart` — `closeSlashPanel()` above
             // already reset `slashStart` to -1.

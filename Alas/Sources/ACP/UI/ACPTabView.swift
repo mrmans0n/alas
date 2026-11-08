@@ -1030,7 +1030,8 @@ private struct ACPSessionView: View {
                     }
                     let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
                     return ACPShipStatus(presentation: context.presentation, branch: worktree.branch)
-                }
+                },
+                openSkill: { openSkillFile($0) }
             ),
             visualAidActions: .driven(by: manager, session: session, popOut: { visual in
                 let resolvedOwner = owner ?? .worktree(worktree.id)
@@ -1115,6 +1116,36 @@ private struct ACPSessionView: View {
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             }
         )
+    }
+
+    /// Opens a skill command's `SKILL.md` on the session's host: an editor
+    /// tab when it lives in the worktree, a read-only one otherwise. A local
+    /// file that is gone gets a notice instead of an empty tab.
+    private func openSkillFile(_ suggestion: ACPPromptSuggestion) {
+        guard let skillPath = suggestion.presentation?.skillPath else { return }
+        let root = worktree.path.path
+        let route = ACPSkillFileRoute.route(skillPath: skillPath, worktreeRoot: root)
+        if !worktree.path.isRemoteAlasPath {
+            let localPath: String
+            switch route {
+            case .worktreeFile(let relativePath): localPath = root + "/" + relativePath
+            case .external(let path): localPath = path
+            }
+            guard FileManager.default.fileExists(atPath: localPath) else {
+                state.inAppNotifications.post(
+                    "\(suggestion.command): SKILL.md not found", severity: .error,
+                    worktreeID: worktree.id, detail: skillPath)
+                return
+            }
+        }
+        switch route {
+        case .worktreeFile(let relativePath):
+            state.openFile(relativePath: relativePath, worktreeId: worktree.id)
+        case .external(let path):
+            state.tabs.openExternalEditor(
+                worktreeId: worktree.id, absoluteURL: URL(fileURLWithPath: path),
+                revealLine: nil, revealCharacter: nil, editable: false)
+        }
     }
 
     private func introStateAndComposer<Intro: View>(
@@ -1236,7 +1267,8 @@ private struct ACPSessionView: View {
             tailSpacerHeight: transcriptTailSpacerHeight,
             onStackHeightChange: { height in
                 if composerStackHeight != height { composerStackHeight = height }
-            }
+            },
+            openSkill: { openSkillFile($0) }
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard

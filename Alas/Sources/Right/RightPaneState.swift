@@ -329,6 +329,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
     @ObservationIgnored
     private var ggMutationCoordinatorStorage: GGMutationCoordinator? = nil
+    @ObservationIgnored private let ggProjectMutationGate: GGProjectMutationGate
     @ObservationIgnored let ggLandingStore: GGLandingStore
     @ObservationIgnored var didAttemptGGUndoRestore = false
     /// Backing store for the stack drawer's mutation UI (in-flight action,
@@ -471,6 +472,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var mergeError: String? = nil
     var mergeQueuedMessage: String? = nil
     var pendingGGLand: GGLandRequest? = nil
+    var pendingGGPluginLandScope: String? = nil
     @ObservationIgnored var pendingGGLandPrepared: GGPreparedMutation? = nil
     var pendingGGDrop: GGDropPresentation? = nil
     @ObservationIgnored var pendingGGDropPrepared: GGPreparedMutation? = nil
@@ -613,12 +615,14 @@ final class RightPaneState: GGSplitCommitServicing {
         isFolder: Bool = false,
         ggLandingStore: GGLandingStore = .shared,
         checkpointService: any WorktreeCheckpointServicing = WorktreeCheckpointService(),
-        reviewLoop: ReviewLoopState? = nil
+        reviewLoop: ReviewLoopState? = nil,
+        ggProjectMutationGate: GGProjectMutationGate? = nil
     ) {
         self.worktree = worktree
         self.isFolder = isFolder
         self.checkpointService = checkpointService
         self.ggLandingStore = ggLandingStore
+        self.ggProjectMutationGate = ggProjectMutationGate ?? GGProjectMutationGate()
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
         self.reviewLoop = reviewLoop ?? ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
@@ -648,6 +652,8 @@ final class RightPaneState: GGSplitCommitServicing {
             actionState: ggActionState,
             syncJSONLCapability: { [weak self] in self?.ggCapabilities().syncJSONL ?? false },
             landJSONLCapability: { [weak self] in self?.ggCapabilities().landJSONL ?? false },
+            mutationGate: ggProjectMutationGate,
+            projectID: worktree.projectId,
             context: GGMutationContext(
                 loadFreshStack: { [weak self] in
                     guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
@@ -686,6 +692,10 @@ final class RightPaneState: GGSplitCommitServicing {
                 currentBranch: { [weak self] in self?.currentBranch },
                 publishLandEvent: { [ggLandingStore, projectId = worktree.projectId] event in
                     ggLandingStore.receive(event, projectId: projectId)
+                },
+                resolveCommitSHA: { [weak self] sha in
+                    guard let self else { throw GGMutationError.staleConfirmation }
+                    return try await self.git.resolveRevision(at: self.worktree.path, ref: sha)
                 }
             )
         )

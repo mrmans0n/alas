@@ -381,19 +381,34 @@ public final class ACPOrchestrationStore {
         """, bindings: [since, childSessionId, since])
     }
 
+    /// A prompt is on its way to `childSessionId`'s peer. Counting it makes a
+    /// lost-turn claim judged from a status the peer gave before it accepted
+    /// this prompt find nothing to end. The wait itself is left alone: a send
+    /// the peer refuses starts no turn, and the turn awaited still ends it.
+    public func notePeerSendStarting(childSessionId: String) throws {
+        try db.exec(
+            "UPDATE delegations SET peer_sends = peer_sends + 1 WHERE child_session_id = ?",
+            bindings: [childSessionId]
+        )
+    }
+
     /// Ends the wait for a child that stopped without a result and enqueues
     /// `outcome`, together, so a crash or a failed insert cannot end the wait
     /// with nothing to wake the parent. True only for the caller that ended it:
     /// any instance sharing the store may be asking.
     /// `awaitingSince` is the wait the caller saw go quiet: a prompt accepted
-    /// since starts another, which this must not end.
-    public func claimLostPeerTurn(childSessionId: String, awaitingSince: Int64?, outcome: ACPDelegatedMessage) throws -> Bool {
+    /// since starts another, which this must not end. `sends` is the count
+    /// it read with that wait: a prompt sent since may not be accepted yet.
+    public func claimLostPeerTurn(
+        childSessionId: String, awaitingSince: Int64?, sends: Int64, outcome: ACPDelegatedMessage
+    ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
             let claimed = try db.execChanges("""
             UPDATE delegations SET peer_awaiting = 0
-            WHERE child_session_id = ? AND peer_awaiting = 1 AND phase = ? AND COALESCE(peer_awaiting_since, 0) = ?
-            """, bindings: [childSessionId, ACPDelegationPhase.ready.rawValue, awaitingSince ?? 0]) == 1
+            WHERE child_session_id = ? AND peer_awaiting = 1 AND phase = ?
+              AND COALESCE(peer_awaiting_since, 0) = ? AND peer_sends = ?
+            """, bindings: [childSessionId, ACPDelegationPhase.ready.rawValue, awaitingSince ?? 0, sends]) == 1
             if claimed { try enqueue(outcome) }
             try db.exec("COMMIT")
             return claimed
@@ -807,9 +822,14 @@ public final class ACPOrchestrationStore {
         if !columns.contains("peer_awaiting_since") {
             try db.exec("ALTER TABLE delegations ADD COLUMN peer_awaiting_since INTEGER")
         }
-        let settled = try db.query("SELECT name FROM pragma_table_info('delegations') WHERE name = 'peer_settled_turn'")
-        if settled.isEmpty {
+        let later = try db.query(
+            "SELECT name FROM pragma_table_info('delegations') WHERE name IN ('peer_settled_turn', 'peer_sends')"
+        ).compactMap { $0["name"] as? String }
+        if !later.contains("peer_settled_turn") {
             try db.exec("ALTER TABLE delegations ADD COLUMN peer_settled_turn INTEGER")
+        }
+        if !later.contains("peer_sends") {
+            try db.exec("ALTER TABLE delegations ADD COLUMN peer_sends INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -840,7 +860,8 @@ public final class ACPOrchestrationStore {
             role: row["role"] as? String,
             peerServerId: row["peer_server_id"] as? String,
             peerAwaiting: (row["peer_awaiting"] as? Int64 ?? 0) != 0,
-            peerAwaitingSince: row["peer_awaiting_since"] as? Int64
+            peerAwaitingSince: row["peer_awaiting_since"] as? Int64,
+            peerSends: row["peer_sends"] as? Int64 ?? 0
         )
     }
 
