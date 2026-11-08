@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=4
+fixture_version=5
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -64,6 +64,48 @@ build_fixture() {
     tests/InvoiceTests.swift tests/UsageMeterTests.swift Package.swift .gitignore; do
     printf '// %s\n' "$file" > "$tmp/lantern/$file"
   done
+  # Real code for the editor captures.
+  cat > "$tmp/lantern/src/billing/Invoice.swift" <<'SWIFT'
+import Foundation
+
+/// One customer's charges for a billing period.
+struct Invoice: Identifiable, Hashable {
+    let id: UUID
+    var customer: String
+    var lines: [Line]
+    var issuedAt: Date
+
+    struct Line: Hashable {
+        var description: String
+        var quantity: Int
+        var unitPrice: Decimal
+    }
+
+    /// Sum of every line, before tax.
+    var subtotal: Decimal {
+        lines.reduce(0) { $0 + Decimal($1.quantity) * $1.unitPrice }
+    }
+
+    func total(applying rules: TaxRules) -> Decimal {
+        subtotal + rules.tax(on: subtotal, for: customer)
+    }
+}
+SWIFT
+  # An image for the preview tab.
+  /usr/bin/python3 - "$tmp/lantern/docs/usage-chart.png" <<'PY'
+import struct, sys, zlib
+w, h = 480, 270
+rows = []
+for y in range(h):
+    row = bytearray([0])
+    for x in range(w):
+        bar = (x // 60) % 2 == 0 and y > h - (40 + (x // 60) * 25)
+        row += bytes((95, 183, 196) if bar else (30, 36, 42))
+    rows.append(bytes(row))
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+PY
   # Run tab scripts, read from each worktree's .alas/scripts.
   mkdir -p "$tmp/lantern/.alas/scripts"
   printf '#!/bin/sh\n# alas-name: Dev server\n# alas-url: http://localhost:4173\nexec sleep 3600\n' \
