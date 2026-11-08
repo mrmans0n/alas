@@ -42,6 +42,7 @@ struct DiffReviewRailThreadCounts: Equatable {
 }
 
 struct DiffReviewRail: View {
+    @Environment(\.designScale) private var scale
     let session: DiffReviewSessionModel
     @Binding var selectedFileID: DiffReviewFileID
     @Binding var collapsed: Bool
@@ -96,13 +97,13 @@ struct DiffReviewRail: View {
             expandedHeader
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 2) {
+                    LazyVStack(alignment: .leading, spacing: scale.space[0]) {
                         if DiffReviewRailFilter.isActive(filterQuery), visibleSession.files.isEmpty {
                             Text("No matching files")
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-faint"))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 18)
+                                .padding(.vertical, scale.space[4])
                                 .background(
                                     DiffReviewAccessibilityMarker(
                                         identifier: "diff-review-rail-filter-empty",
@@ -115,8 +116,8 @@ struct DiffReviewRail: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[2])
                 }
                 .onAppear {
                     proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
@@ -132,17 +133,17 @@ struct DiffReviewRail: View {
     }
 
     private func threadSummaryStrip(_ counts: DiffReviewRailThreadCounts) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             Image(systemName: "bubble.left")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-faint"))
             Text(Self.threadSummaryLabel(counts))
                 .font(.caption)
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .top)
     }
@@ -160,22 +161,22 @@ struct DiffReviewRail: View {
 
     private var collapsedBody: some View {
         let visibleFiles = filteredSession.files
-        return VStack(spacing: 8) {
+        return VStack(spacing: scale.space[2]) {
             collapseButton
-                .padding(.top, 8)
+                .padding(.top, scale.space[2])
             Divider()
                 .overlay(theme.color("line"))
-                .padding(.horizontal, 8)
+                .padding(.horizontal, scale.space[2])
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: scale.space[2]) {
                         ForEach(visibleFiles) { file in
                             collapsedMarker(for: file)
                                 .id(file.id.rawValue)
                                 .trackingRailVisibility(of: file.id, in: onScreenFiles)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
                 .onAppear {
                     proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
@@ -197,20 +198,20 @@ struct DiffReviewRail: View {
     }
 
     private var expandedHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
+            HStack(spacing: scale.space[3]) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text("\(session.fileCount) changed \(session.fileCount == 1 ? "file" : "files")")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         Text("+\(session.totalAdditions)")
                             .foregroundColor(theme.color("add"))
                         Text("-\(session.totalDeletions)")
                             .foregroundColor(theme.color("del"))
                     }
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(scale.meta.font(weight: .medium, design: .monospaced))
                 }
                 Spacer(minLength: 8)
                 collapseButton
@@ -222,8 +223,8 @@ struct DiffReviewRail: View {
 
             DiffReviewRailFilterField(text: $filterQuery)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -233,11 +234,11 @@ struct DiffReviewRail: View {
             collapsed.toggle()
         } label: {
             Image(systemName: collapsed ? "sidebar.left" : "sidebar.leading")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 26, height: 24)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(collapsed ? "Expand file rail" : "Collapse file rail")
@@ -259,23 +260,23 @@ struct DiffReviewRail: View {
         case .divider:
             Divider()
                 .overlay(theme.color("line"))
-                .padding(.vertical, 6)
+                .padding(.vertical, scale.space[2])
         }
     }
 
     private func sourceHeader(id: String, title: String, fileCount: Int) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
             Text("\(fileCount)")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(scale.caption.font(weight: .semibold, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
         }
-        .padding(.horizontal, 5)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.horizontal, scale.space[1])
+        .padding(.top, scale.space[2])
+        .padding(.bottom, scale.space[1])
         .accessibilityIdentifier("diff-review-rail-source-\(id)")
         .background(
             DiffReviewAccessibilityMarker(
@@ -286,13 +287,13 @@ struct DiffReviewRail: View {
     }
 
     private func directoryRow(name: String, depth: Int) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: scale.space[1]) {
             Image(systemName: "folder")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .frame(width: 13)
             Text(name)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -333,7 +334,7 @@ struct DiffReviewRail: View {
             onSelectFile(file.id)
         } label: {
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(selected ? theme.color(DiffReviewRailSelectedRowStyle.backgroundToken) : theme.color("bg-3"))
                     .frame(width: 28, height: 26)
                 Rectangle()
@@ -345,7 +346,7 @@ struct DiffReviewRail: View {
                     .cornerRadius(DiffReviewRailSelectedRowStyle.accentRailCornerRadius)
                     .offset(x: DiffReviewRailSelectedRowStyle.accentRailXOffset)
                 Text(file.status.glyph)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
                     .foregroundColor(selected ? theme.color("fg") : statusColor(file.status))
                     .frame(width: 28, height: 26)
             }
@@ -412,6 +413,7 @@ private extension View {
 }
 
 private struct DiffReviewRailFileRow: View, Equatable {
+    @Environment(\.designScale) private var scale
     let file: DiffReviewFileSummary
     let depth: Int
     let name: String
@@ -428,7 +430,7 @@ private struct DiffReviewRailFileRow: View, Equatable {
 
     var body: some View {
         Button(action: select) {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 FileTypeIconView(filename: name, size: 16)
                     .frame(width: 16, height: 16)
                     .background(
@@ -443,15 +445,15 @@ private struct DiffReviewRailFileRow: View, Equatable {
                     action: select
                 )
                 .frame(width: 1, height: 1)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(name)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let directory = file.directory {
                         Text(directory)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-faint"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -468,7 +470,7 @@ private struct DiffReviewRailFileRow: View, Equatable {
                 CGFloat(depth) * DiffReviewRailSelectedRowStyle.fileDepthIndent
                     + DiffReviewRailSelectedRowStyle.contentLeadingPadding
             )
-            .padding(.trailing, 6)
+            .padding(.trailing, scale.space[2])
             .frame(height: 34)
             .background(alignment: .leading) {
                 if isSelected {
@@ -513,13 +515,13 @@ private struct DiffReviewRailFileRow: View, Equatable {
 
     private func threadBadge(_ count: Int) -> some View {
         Label("\(count)", systemImage: "bubble.left")
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundColor(theme.color("fg-muted"))
             .labelStyle(ThreadBadgeLabelStyle())
     }
 
     private func changeSummary(_ file: DiffReviewFileSummary) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: scale.space[1]) {
             if file.additions > 0 {
                 Text("+\(file.additions)")
                     .foregroundColor(theme.color("add"))
@@ -529,24 +531,25 @@ private struct DiffReviewRailFileRow: View, Equatable {
                     .foregroundColor(theme.color("del"))
             }
         }
-        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .font(scale.caption.font(design: .monospaced))
     }
 }
 
 private struct DiffReviewRailFilterField: View {
+    @Environment(\.designScale) private var scale
     @Binding var text: String
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-dim"))
                 .accessibilityHidden(true)
             TextField("Filter files…", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg"))
                 .autocorrectionDisabled(true)
                 .accessibilityIdentifier("diff-review-rail-filter-field")
@@ -555,7 +558,7 @@ private struct DiffReviewRailFilterField: View {
                     text = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
@@ -568,21 +571,22 @@ private struct DiffReviewRailFilterField: View {
                 )
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 26)
         .background(theme.color("bg-1"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .compositingGroup()
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 
 struct ThreadBadgeLabelStyle: LabelStyle {
+    @Environment(\.designScale) private var scale
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: scale.space[0]) {
             configuration.icon
             configuration.title
         }
@@ -607,12 +611,13 @@ struct DiffReviewDisplayControlBindings {
 }
 
 struct DiffReviewDisplayControls: View {
+    @Environment(\.designScale) private var scale
     let bindings: DiffReviewDisplayControlBindings
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             layoutSwitcher
             controlButton(
                 identifier: "diff-review-wrap-toggle",
@@ -645,11 +650,11 @@ struct DiffReviewDisplayControls: View {
             layoutButton(.split, systemName: "rectangle.split.2x1")
             layoutButton(.stacked, systemName: "rectangle.split.1x2")
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
     }
@@ -660,11 +665,11 @@ struct DiffReviewDisplayControls: View {
             bindings.layoutMode.wrappedValue = mode
         } label: {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
                 .background(active ? theme.color("bg-1") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(mode.title)
@@ -685,11 +690,11 @@ struct DiffReviewDisplayControls: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
                 .frame(width: 26, height: 24)
                 .background(isActive ? theme.color("accent-soft") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(tooltip)

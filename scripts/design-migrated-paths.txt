@@ -143,3 +143,5 @@ Alas/Sources/Center/MergeConflictResolvedEmptyView.swift
 Alas/Sources/Center/MergeConflictMinimap.swift
 Alas/Sources/Center/DeletingWorktreeView.swift
 Alas/Sources/Center/DeleteFailedWorktreeView.swift
+Alas/Sources/Center/DiffReview/DiffReviewRail.swift
+Alas/Sources/Center/DiffReview/DiffReviewLoadingSkeleton.swift
