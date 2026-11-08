@@ -34,3 +34,9 @@ Alas/Sources/Right/RightPaneToolbar.swift
 Alas/Sources/Integrations/CodeHost/ReviewLoopDrawer.swift
 Alas/Sources/Integrations/GG/GGStackDrawer.swift
 Alas/Sources/Right/ChangesPreparationCard.swift
+Alas/Sources/Right/WorkingTreeSectionView.swift
+Alas/Sources/Right/ChangedRow.swift
+Alas/Sources/Right/FileTreeListView.swift
+Alas/Sources/Right/CommitsSectionView.swift
+Alas/Sources/Right/CommitRow.swift
+Alas/Sources/Right/ChangesTabView.swift

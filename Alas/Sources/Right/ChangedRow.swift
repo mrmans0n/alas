@@ -33,6 +33,7 @@ struct ChangedRow: View {
     var pluginDecorations: [PluginDecorationItem] = []
     var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
         12 + CGFloat(depth * 14)
@@ -51,7 +52,7 @@ struct ChangedRow: View {
                 HStack(spacing: 6) {
                     FileTypeIconView(filename: basename, size: 18)
                     Text(basename)
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(scale.body.font(design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
@@ -62,10 +63,10 @@ struct ChangedRow: View {
                 if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
                 StatusBadge(status: file.status)
             }
-            .font(.system(size: 11, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .padding(.leading, Self.rowLeadingPadding(depth: depth))
-            .padding(.trailing, 12)
-            .padding(.vertical, 4)
+            .padding(.trailing, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -158,13 +159,14 @@ extension ChangedRow {
 struct StatusBadge: View {
     let status: String
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     var body: some View {
         Text(status)
-            .font(.system(size: 10, weight: .bold))
-            .padding(.horizontal, 4)
+            .font(scale.caption.font(weight: .bold))
+            .padding(.horizontal, scale.space[1])
             .background(badgeBg)
             .foregroundColor(badgeFg)
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
     private var badgeBg: Color {
         switch status {

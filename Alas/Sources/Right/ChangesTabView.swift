@@ -20,6 +20,7 @@ struct ChangesTabView: View {
     /// When review feedback last went to an agent from this worktree.
     @State private var lastReviewSnapshot: ReviewedWorkingTreeSnapshot?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private var conflicts: [ChangedFile] {
         rps.changes.filter { $0.conflict != nil }
@@ -140,8 +141,8 @@ struct ChangesTabView: View {
                     .buttonStyle(.plain)
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
             }
             if isGGDrawerActive, !isRevealingAttentionReview {
                 GGStackDrawer(rps: rps, appState: appState)
@@ -518,8 +519,8 @@ struct ChangesTabView: View {
         if let error = rps.sidebarError {
             rows.append(appKitRow(id: "changes-error", token: error, estimatedHeight: 38) {
                 InlineErrorStrip(message: error, onDismiss: { rps.sidebarError = nil })
-                    .padding(.horizontal, 12)
-                    .padding(.top, 6)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.top, scale.space[2])
             })
         }
 
@@ -759,9 +760,9 @@ struct ChangesTabView: View {
                 estimatedHeight: 32
             ) {
                 Text(status)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("add"))
-                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             })
         }
 
@@ -769,9 +770,9 @@ struct ChangesTabView: View {
         if let error = rps.checkpointLoadError {
             rows.append(appKitRow(id: "checkpoints-error", token: error, estimatedHeight: 32) {
                 Text(error)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             })
         } else if summaries.isEmpty {
             rows.append(appKitRow(id: "checkpoints-empty", token: 0, estimatedHeight: 32) {
@@ -1132,12 +1133,12 @@ struct ChangesTabView: View {
         AppKitDiffRowSpec(
             id: id,
             ownerID: nil,
-            equalityToken: .init(ChangesAppKitRowToken(value: token, theme: theme)),
+            equalityToken: .init(ChangesAppKitRowToken(value: token, theme: theme, scale: scale)),
             contentSignature: id.hashValue,
             estimatedHeight: estimatedHeight,
             retention: retention
         ) {
-            AnyView(content().environment(\.theme, theme))
+            AnyView(content().environment(\.theme, theme).environment(\.designScale, scale))
         }
     }
 
@@ -1408,18 +1409,20 @@ final class ChangesAppKitActionRelay {
 private struct ChangesAppKitRowToken<Value: Equatable>: Equatable {
     let value: Value
     let theme: Theme
+    let scale: DesignScale
 }
 
 private struct ChangesEmptyRow: View {
     let text: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

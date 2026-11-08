@@ -57,6 +57,8 @@ struct WorkingTreeSectionView: View {
 
     @Environment(\.theme) private var theme
 
+    @Environment(\.designScale) private var scale
+
     private var staged:   [ChangedFile] { changes.filter { $0.stage == .staged   } }
     private var unstaged: [ChangedFile] { changes.filter { $0.stage == .unstaged } }
     private var changeGroups: [WorkingTreeChangeGroup] {
@@ -75,9 +77,9 @@ struct WorkingTreeSectionView: View {
             if expanded {
                 if changes.isEmpty {
                     Text("no changes")
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(theme.color("fg-faint"))
-                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     flatFileTree(groups: changeGroups)
@@ -199,6 +201,8 @@ struct WorkingTreeFlatRowView: View {
 
     @Environment(\.theme) private var theme
 
+    @Environment(\.designScale) private var scale
+
     @ViewBuilder
     var body: some View {
         if row.node.kind == .dir {
@@ -240,15 +244,15 @@ struct WorkingTreeFlatRowView: View {
                     fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
                 )
                 Text(node.name)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.body.font(design: .monospaced))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
             }
             .padding(.leading, WorkingTreeSectionView.directoryRowLeadingPadding(depth: row.depth))
-            .padding(.trailing, 12)
-            .padding(.vertical, 4)
+            .padding(.trailing, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
