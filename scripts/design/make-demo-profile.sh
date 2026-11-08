@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=3
+fixture_version=4
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -88,6 +88,11 @@ build_fixture() {
       seq -f "new line %g" 1 "$added" >> "$path/src/ledger.txt"
     fi
   done
+
+  # One stash on the selected worktree, so the Changes tab has a stash row.
+  path="$fixture/worktrees/${selected_branch//\//-}"
+  printf '# Runbook\n\nRotate the billing keys before the March close.\n' > "$path/docs/runbook.md"
+  git -C "$path" stash push -q -m "runbook notes for the March close" -- docs/runbook.md
 }
 
 if [[ "$(cat "$fixture/version" 2>/dev/null)" != "$fixture_version" ]]; then
