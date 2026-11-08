@@ -187,3 +187,14 @@ Alas/Sources/Center/Commit/DraftCommitTabView.swift
 Alas/Sources/Center/Commit/FollowRevisionPrefill.swift
 Alas/Sources/Center/Commit/RevisionFollowControl.swift
 Alas/Sources/Center/Commit/StagedDiffLoader.swift
+Alas/Sources/Center/ImageDiff/ImageDiffView.swift
+Alas/Sources/Center/Merge/MergeActionGutter.swift
+Alas/Sources/Center/Merge/MergeCodeTextView.swift
+Alas/Sources/Center/Merge/MergeRegionVisualLayout.swift
+Alas/Sources/Center/Merge/MergeResultPane.swift
+Alas/Sources/Center/Merge/MergeScrollCoordinator.swift
+Alas/Sources/Center/Merge/MergeSidePane.swift
+Alas/Sources/Center/Merge/MergeSyntaxHighlighter.swift
+Alas/Sources/Center/Merge/MergeView3Way.swift
+Alas/Sources/Center/Merge/MergeWordDiff.swift
+Alas/Sources/Center/DiffTabView.swift
