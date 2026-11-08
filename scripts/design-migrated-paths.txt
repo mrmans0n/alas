@@ -25,3 +25,9 @@ Alas/Sources/ACP/UI/Scroller/ACPTranscriptNativeRows.swift
 Alas/Sources/ACP/UI/Scroller/ACPTranscriptMarkdownLayout.swift
 Alas/Sources/ACP/UI/Scroller/ACPTranscriptScroller.swift
 Alas/Sources/ACP/UI/Scroller/ACPTranscriptCoreTextRowView+Drawing.swift
+Alas/Sources/Right/SectionHeader.swift
+Alas/Sources/Right/SubHeader.swift
+Alas/Sources/Right/PaneBandStyle.swift
+Alas/Sources/Right/RightPaneCardChrome.swift
+Alas/Sources/Right/RightPaneRail.swift
+Alas/Sources/Right/RightPaneToolbar.swift

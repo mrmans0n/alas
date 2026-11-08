@@ -29,6 +29,7 @@ struct RightPaneToolbar: View {
     var deviceActions: AnyView?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var previewHovered = false
     @State private var newScriptHovered = false
 
@@ -76,8 +77,8 @@ struct RightPaneToolbar: View {
                 }
             }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
+        .padding(.leading, scale.space[2])
+        .padding(.trailing, scale.space[1])
         .frame(height: 34)
         // Flush, not a `paneBand`: this row is the pane's chrome, and reads
         // as the counterpart to the center pane's toolbar. The floating
@@ -102,7 +103,7 @@ struct RightPaneToolbar: View {
                 scheduleCount: scheduleCount,
                 schedulesPaused: schedulesPaused
             ))
-            .font(.system(size: 10.5, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .foregroundColor(theme.color("fg-muted"))
             .lineLimit(1)
             .truncationMode(.middle)
@@ -119,7 +120,9 @@ struct RightPaneToolbar: View {
                 Text("+\(add)").foregroundColor(theme.color("add"))
                 Text("−\(del)").foregroundColor(theme.color("del"))
             }
-            .font(.system(size: 10.5, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
+            .lineLimit(1)
+            .fixedSize()
         case .search:
             ToolbarBtn(icon: "search", tooltip: "Search files", action: onSearch)
         }
@@ -131,12 +134,12 @@ struct RightPaneToolbar: View {
                 HStack(spacing: 5) {
                     Icon(name: "globe", size: 11)
                     Text("Preview")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                 }
                 .foregroundStyle(theme.color(previewHovered ? "fg" : "fg-muted"))
-                .padding(.horizontal, 6)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
-                .background(previewHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .background(previewHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: scale.radius.small))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.toolbarControl)

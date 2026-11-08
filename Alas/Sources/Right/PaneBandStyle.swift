@@ -69,17 +69,31 @@ extension AnyTransition {
     static let paneDrawerBody: AnyTransition = .move(edge: .top).combined(with: .opacity)
 }
 
+/// Reads the design scale so a band's default padding follows the density.
+private struct PaneBandModifier: ViewModifier {
+    let fill: Color
+    let horizontal: CGFloat?
+    let vertical: CGFloat?
+
+    @Environment(\.designScale) private var scale
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, PaneBandLayout.innerHorizontal(horizontal ?? scale.space[3]))
+            .padding(.vertical, vertical ?? scale.space[2])
+            .background(fill, in: RoundedRectangle(cornerRadius: PaneBandLayout.cornerRadius))
+            .padding(.horizontal, PaneBandLayout.outerHorizontal)
+            .padding(.vertical, PaneBandLayout.outerVertical)
+    }
+}
+
 extension View {
     /// Pads and fills a header-style band. `horizontal` is the content inset
     /// measured from the column edge, which the band preserves by giving back
     /// whatever the outer gap takes.
-    func paneBand(fill: Color, horizontal: CGFloat = 12, vertical: CGFloat = 7) -> some View {
-        self
-            .padding(.horizontal, PaneBandLayout.innerHorizontal(horizontal))
-            .padding(.vertical, vertical)
-            .background(fill, in: RoundedRectangle(cornerRadius: PaneBandLayout.cornerRadius))
-            .padding(.horizontal, PaneBandLayout.outerHorizontal)
-            .padding(.vertical, PaneBandLayout.outerVertical)
+    /// Defaults come from the design scale; pass either to override it.
+    func paneBand(fill: Color, horizontal: CGFloat? = nil, vertical: CGFloat? = nil) -> some View {
+        modifier(PaneBandModifier(fill: fill, horizontal: horizontal, vertical: vertical))
     }
 
     /// Chrome for a bottom drawer whose row and body are already padded with

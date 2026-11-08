@@ -20,6 +20,7 @@ struct RightPaneRail: View {
     let onAction: (RightPaneRailAction) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 3) {
@@ -58,16 +59,13 @@ struct RightPaneRail: View {
                         )
                     }
                 }
-                // Badges extend 3pt above the first button.
-                .padding(.top, 3)
-                .padding(.horizontal, 5)
+                .padding(.horizontal, scale.space[1])
             }
-            // Use the full rail width so trailing badge outsets stay inside the scroll clip.
             .frame(width: Self.width)
             .scrollBounceBehavior(.basedOnSize)
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, scale.space[1])
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
         // Neither a fill nor a divider: the rail sits over the same
@@ -112,14 +110,15 @@ private struct RightPaneRailButton: View {
     let onTap: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
         Button(action: onTap) {
-            Icon(name: icon, size: 14, color: foreground)
-                .frame(width: 26, height: 26)
+            Icon(name: icon, size: 16, color: foreground)
+                .frame(width: 28, height: 28)
                 .background(background)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 .overlay(alignment: .leading) { collapsedMarker }
                 .overlay(alignment: .topTrailing) { badgeView }
                 .contentShape(Rectangle())
@@ -137,7 +136,7 @@ private struct RightPaneRailButton: View {
         switch state {
         case .active:          return theme.color("accent")
         case .activeCollapsed: return theme.color("fg-dim")
-        case .inactive:        return hovering ? theme.color("fg-muted") : theme.color("fg-faint")
+        case .inactive:        return hovering ? theme.color("fg") : theme.color("fg-muted")
         }
     }
 
@@ -145,15 +144,15 @@ private struct RightPaneRailButton: View {
     private var background: some View {
         switch state {
         case .active:
-            RoundedRectangle(cornerRadius: 6).fill(theme.color("accent-soft"))
+            RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("accent-soft"))
         case .activeCollapsed:
-            RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5)
         case .inactive:
             if hovering {
                 // A theme token rather than a white wash: the rail sits on
                 // `bg-1`, and `bg-3` reads as a subtle step away from it in
                 // both the dark and the light theme.
-                RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3"))
+                RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3"))
             } else {
                 Color.clear
             }
@@ -167,7 +166,7 @@ private struct RightPaneRailButton: View {
     @ViewBuilder
     private var collapsedMarker: some View {
         if state == .activeCollapsed {
-            RoundedRectangle(cornerRadius: 1)
+            RoundedRectangle(cornerRadius: scale.space[0] / 2)
                 .fill(theme.color("accent"))
                 .frame(width: 2, height: 12)
                 .offset(x: -3)
@@ -184,17 +183,16 @@ private struct RightPaneRailButton: View {
                 .fill(theme.color(tone ?? "add"))
                 .frame(width: 7, height: 7)
                 .overlay(Circle().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
-                .offset(x: 2, y: -2)
+                .padding(scale.space[0])
         case .count:
             if let text = badge.displayText {
                 Text(text)
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(scale.caption.font(weight: .bold))
                     .foregroundColor(theme.color(tone == nil ? "fg-muted" : "bg-1"))
-                    .padding(.horizontal, 3)
-                    .frame(minWidth: 12, minHeight: 12)
+                    .padding(.horizontal, scale.space[0])
+                    .frame(minWidth: 14, minHeight: 14)
                     .background(Capsule().fill(theme.color(tone ?? "bg-4")))
                     .overlay(Capsule().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
-                    .offset(x: 4, y: -3)
             }
         }
     }
