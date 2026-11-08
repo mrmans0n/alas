@@ -32,6 +32,17 @@ struct ReviewLoopDrawerTests {
         #expect(model.requestNumberTitle == "!42")
     }
 
+    @Test(arguments: [
+        ("unsupported", "No supported review host", false, "No supported review host"),
+        ("unsupported", "No supported review host", true, "No code host"),
+        ("ready", "Ready", false, "Ready"),
+        ("ready", "Ready", true, "Ready"),
+    ])
+    func chipLabelShortensOnlyTheUnsupportedHost(id: String, title: String, compact: Bool, expected: String) {
+        let chip = ReviewReadinessModel.Chip(id: id, title: title, tone: .muted)
+        #expect(ReviewLoopDrawer.chipLabel(for: chip, compact: compact) == expected)
+    }
+
     @Test func githubSnapshotWithoutRequestExposesCreatePR() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),

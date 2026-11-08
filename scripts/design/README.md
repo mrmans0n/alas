@@ -10,7 +10,7 @@ scripts/design/capture.sh /tmp/alas-design-demo <out-dir> dark
 scripts/design/capture.sh /tmp/alas-design-demo <out-dir> light
 ```
 
-Each capture writes `window.png`, `sidebar.png` and `transcript.png`. It uses
+Each capture writes `window.png`, `sidebar.png`, `transcript.png` and `right-pane.png`. It uses
 this checkout's Debug build; set `ALAS_DEV_APP` to use another. Set
 `ALAS_CAPTURE_DENSITY=compact` to capture Compact.
 

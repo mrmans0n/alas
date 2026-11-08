@@ -136,7 +136,7 @@ struct ChangesPreparationModel: Equatable {
         let builtReviewAction: ReviewAction?
         if let summary = ReviewChangesTriggerSummary.summary(for: changes) {
             builtReviewAction = ReviewAction(
-                title: "Review current changes",
+                title: "Review changes",
                 fileCount: summary.fileCount,
                 additions: summary.additions,
                 deletions: summary.deletions
@@ -299,7 +299,7 @@ struct ChangesPreparationModel: Equatable {
         }
         let reviewAction = reviewSummary.map {
             ReviewAction(
-                title: "Review current changes",
+                title: "Review changes",
                 fileCount: $0.fileCount,
                 additions: $0.additions,
                 deletions: $0.deletions
