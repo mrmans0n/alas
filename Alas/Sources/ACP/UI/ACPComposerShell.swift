@@ -5,13 +5,6 @@ enum ACPComposerControlPresentation {
         spec.options.first(where: { $0.id == spec.currentId })?.kind == .fullAccess
     }
 
-    /// Colour says a mode is doing something: an ordinary one, or one that
-    /// hasn't said what it is, stays neutral.
-    static func modeIsNeutral(_ spec: ChipSpec) -> Bool {
-        let kind = spec.options.first(where: { $0.id == spec.currentId })?.kind
-        return kind == nil || kind == .standard
-    }
-
     static func fastModeIconName(isEnabled: Bool) -> String {
         isEnabled ? "bolt.fill" : "bolt"
     }
@@ -606,6 +599,7 @@ struct ACPComposer: View {
                         .padding(.horizontal, scale.space[3])
                         .frame(height: 26)
                         .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
@@ -768,9 +762,9 @@ struct ACPComposer: View {
     private var shortcutHint: some View {
         HStack(spacing: 6) {
             kbdLabel("⏎")
-            Text("send").font(scale.captionFont).foregroundStyle(theme.color("fg-dim"))
+            Text("send").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
             kbdLabel("⇧⏎")
-            Text("newline").font(scale.captionFont).foregroundStyle(theme.color("fg-dim"))
+            Text("newline").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
         }
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -779,12 +773,12 @@ struct ACPComposer: View {
         Text(s)
             .font(scale.caption.font(weight: .regular, design: .monospaced))
             .fontWeight(.semibold)
-            // A hint, so it stays quieter than the controls beside it.
-            .foregroundStyle(theme.color("fg-muted"))
+            .foregroundStyle(theme.color("fg"))
             .padding(.horizontal, scale.space[1])
             .padding(.vertical, 1) // design-literal: fits the key cap inside a hint line
             .background(theme.color("bg-0").opacity(0.7))
             .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func providerPill(_ name: String) -> some View {
@@ -794,6 +788,7 @@ struct ACPComposer: View {
             .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Provider, \(name)")
             .help("Provider selected by the adapter")
     }
@@ -805,6 +800,7 @@ struct ACPComposer: View {
             .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Signed in, \(status.label)")
             .help(Self.authStatusHoverText(status))
     }
@@ -894,6 +890,7 @@ struct ACPComposer: View {
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
                 .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(offersPDFs ? "Attach image or PDF" : "Attach image")
@@ -1028,6 +1025,7 @@ struct ACPComposerOptionsButton: View {
             .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3")))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
@@ -1071,6 +1069,7 @@ struct ACPComposerOptionsButton: View {
                 icon: ACPComposerControlPresentation.autoRunIconName(isEnabled: autoRun.isEnabled),
                 foreground: ACPAutoRunToggle.foreground(isEnabled: autoRun.isEnabled, theme: theme),
                 background: ACPAutoRunToggle.background(isEnabled: autoRun.isEnabled, theme: theme),
+                border: ACPAutoRunToggle.border(isEnabled: autoRun.isEnabled, theme: theme),
                 isDisabled: autoRun.isDisabled,
                 help: autoRun.help,
                 action: autoRun.toggle
@@ -1087,6 +1086,7 @@ struct ACPComposerOptionsButton: View {
                     icon: option.currentBoolValue == true ? "checkmark.circle.fill" : "circle",
                     foreground: chips.booleanOptionFg(isEnabled: option.currentBoolValue == true),
                     background: chips.booleanOptionBg(isEnabled: option.currentBoolValue == true),
+                    border: chips.booleanOptionBorder(isEnabled: option.currentBoolValue == true),
                     action: { chips.onConfigValue(option.id, .boolean(option.currentBoolValue != true)) }
                 )
             }
@@ -1127,6 +1127,7 @@ struct ACPComposerOptionsButton: View {
                 icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: chips.isFastModeEnabled(parameter.spec)),
                 foreground: chips.fastModeFg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
                 background: chips.fastModeBg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
+                border: chips.fastModeBorder(isEnabled: chips.isFastModeEnabled(parameter.spec)),
                 isDisabled: chips.fastModeToggleTarget(for: parameter.spec) == nil,
                 help: chips.fastModeHelp(isEnabled: chips.isFastModeEnabled(parameter.spec),
                                    canToggle: chips.fastModeToggleTarget(for: parameter.spec) != nil)
@@ -1141,6 +1142,7 @@ struct ACPComposerOptionsButton: View {
                 icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: option.currentBoolValue == true),
                 foreground: chips.fastModeFg(isEnabled: option.currentBoolValue == true),
                 background: chips.fastModeBg(isEnabled: option.currentBoolValue == true),
+                border: chips.fastModeBorder(isEnabled: option.currentBoolValue == true),
                 help: chips.fastModeHelp(isEnabled: option.currentBoolValue == true, canToggle: true)
             ) {
                 chips.onConfigValue(option.id, .boolean(option.currentBoolValue != true))
@@ -1154,6 +1156,7 @@ struct ACPComposerOptionsButton: View {
         icon: String,
         foreground: Color,
         background: Color,
+        border: Color,
         isDisabled: Bool = false,
         help: String? = nil,
         action: @escaping () -> Void
@@ -1174,6 +1177,7 @@ struct ACPComposerOptionsButton: View {
                 .padding(.horizontal, scale.space[2])
                 .frame(width: controlWidth, height: 24)
                 .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(background))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(border, lineWidth: 0.75))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
@@ -1262,7 +1266,7 @@ struct ACPComposerPillChrome: ViewModifier {
             .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .overlay(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .strokeBorder(focused ? theme.color("add").opacity(0.7) : theme.color("line"), lineWidth: focused ? 0.75 : 0.5)
+                    .strokeBorder(focused ? theme.color("add").opacity(0.7) : theme.color("line"), lineWidth: 0.75)
             )
             .acpElevation(darkMode: theme.darkMode)
     }

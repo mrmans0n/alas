@@ -26,11 +26,6 @@ struct ACPSelectChip: View {
     let label: String
     let placeholder: String
     let accent: Color
-    /// Drawn before the label, whatever is selected.
-    var leadingSymbol: String? = nil
-    /// The chip itself has no state to show, so it stays grey. `accent` still
-    /// marks the selected row in its popover.
-    var isNeutral = false
     let items: [Item]
     let selectedId: String?
     let searchDescriptions: Bool
@@ -46,32 +41,32 @@ struct ACPSelectChip: View {
         Button {
             showPopover.toggle()
         } label: {
-            // Neutral, or a dark accent-tinted fill and accent-tinted (not
-            // white) text when the accent means a state; never a solid bright pill.
+            // Matches Anthropic's `.chat-model` chip in the Alas design
+            // handoff: dark accent-tinted fill, 0.75px accent-colored
+            // outline at low opacity, accent-tinted (not white) text.
+            // Outline-on-fill, not a solid bright pill.
             HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
-                if let leadingSymbol {
-                    Image(systemName: leadingSymbol)
-                        .font(scale.meta.font(weight: .regular))
-                        .foregroundStyle(glyphColor)
-                        .accessibilityHidden(true)
-                }
                 if let icon = items.first(where: { $0.id == selectedId })?.icon {
-                    Self.iconView(icon, symbolFont: scale.glyphFont, accent: glyphColor)
+                    Self.iconView(icon, symbolFont: scale.glyphFont, accent: accent)
                 }
                 Text(label.isEmpty ? placeholder : label)
                     .font(scale.meta.font(weight: .medium))
-                    .foregroundStyle(isNeutral ? theme.color("fg-muted") : Self.labelForeground(accent: accent, theme: theme))
+                    .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
                     .lineLimit(1)
                 if fillsWidth { Spacer(minLength: 0) }
                 Image(systemName: "chevron.down")
                     .font(scale.glyph.font(weight: .bold))
-                    .foregroundStyle(glyphColor)
+                    .foregroundStyle(accent)
             }
             .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .fill(isNeutral ? theme.color("bg-3").opacity(0.7) : accent.opacity(0.18))
+                    .fill(accent.opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(accent.opacity(0.45), lineWidth: 0.75)
             )
         }
         .buttonStyle(.plain)
@@ -92,8 +87,6 @@ struct ACPSelectChip: View {
             .environment(\.designScale, scale)
         }
     }
-
-    private var glyphColor: Color { isNeutral ? theme.color("fg-muted") : accent }
 
     @ViewBuilder
     static func iconView(_ icon: Icon, symbolFont: Font, accent: Color) -> some View {
