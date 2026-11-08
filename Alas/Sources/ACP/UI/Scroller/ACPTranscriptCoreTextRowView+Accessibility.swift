@@ -22,7 +22,7 @@ extension ACPTranscriptCoreTextRowView {
 
     override func accessibilityLabel() -> String? {
         switch content {
-        case .thought(let label), .toolGroupHeader(let label, _, _):
+        case .thought(let label), .toolGroupHeader(let label, _, _, _):
             return label
         case .toolCall(let presentation, let target, let duration, _, let failed):
             let name = [presentation.label, target].compactMap { $0 }.joined(separator: " ")
@@ -37,7 +37,7 @@ extension ACPTranscriptCoreTextRowView {
 
     override func accessibilityValue() -> Any? {
         switch content {
-        case .toolGroupHeader(_, _, let expanded): expanded ? "Expanded" : "Collapsed"
+        case .toolGroupHeader(_, _, let expanded, _): expanded ? "Expanded" : "Collapsed"
         // A native tool call or thought is always collapsed.
         case .thought, .toolCall: "Collapsed"
         case .agent, .user, nil: super.accessibilityValue()
@@ -46,7 +46,7 @@ extension ACPTranscriptCoreTextRowView {
 
     override func accessibilityPerformPress() -> Bool {
         guard !hasTextArea, let toggle = actions.toggleExpanded else { return false }
-        if case .toolGroupHeader(_, _, let expanded) = content {
+        if case .toolGroupHeader(_, _, let expanded, _) = content {
             toggle(!expanded)
         } else {
             toggle(true)
@@ -229,7 +229,8 @@ extension ACPTranscriptCoreTextRowView {
             element.visibleLines = { [weak self] in self?.visibleTextPositions() }
             textElement = element
         }
-        element.setAccessibilityFrameInParentSpace(CGRect(origin: origin, size: CGSize(width: markdown.width, height: markdown.height)))
+        // Code and tables break out past the prose column.
+        element.setAccessibilityFrameInParentSpace(CGRect(origin: origin, size: CGSize(width: markdown.wideWidth, height: markdown.height)))
         return [element]
     }
 

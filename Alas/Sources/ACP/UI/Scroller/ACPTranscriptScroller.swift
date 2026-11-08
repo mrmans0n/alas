@@ -58,6 +58,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var onOpenPlanFile: (String) -> Void = { _ in }
     /// Nil shows no "Reported changes" control.
     var reportedChangesActions: ACPReportedChangesActions? = nil
+    /// Height of the invisible tail row that keeps the end of the transcript
+    /// clear of the composer stack; see `ACPComposerMetrics.tailSpacerHeight`.
+    var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -67,6 +70,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// single-ScrollView tree — does not reach them automatically. Every row
     /// spec re-applies this value explicitly (see `wrapRow`).
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var designScale
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
     /// Routes markdown link taps inside message rows back through the host
@@ -152,8 +156,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private var lastShowsActionsPermanently = false
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
-
-        static let composerSpacerHeight: CGFloat = 220
 
         init() {
             scrollSettleTimer = DebounceTimer(
@@ -461,14 +463,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// framing and the environment values must be re-applied per row.
         private static func wrapRow<Content: View>(
             host: ACPTranscriptScroller,
+            breaksOut: Bool = false,
             @ViewBuilder _ content: () -> Content
         ) -> AnyView {
             AnyView(
-                content()
-                    .frame(maxWidth: host.contentMaxWidth, alignment: .leading)
-                    .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                ACPTranscriptColumnLayout(readingMax: host.contentMaxWidth, role: breaksOut ? .breakout : .reading) {
+                    content()
+                        .environment(\.acpMarkdownProseMaxWidth, breaksOut ? host.contentMaxWidth : nil)
+                }
                     .environment(\.theme, host.theme)
+                    .environment(\.designScale, host.designScale)
                     .environment(\.openURL, host.openTranscriptURLAction)
                     .environment(\.acpUpstreamReferenceStore, host.upstreamReferences)
                     .environment(\.acpPromptCardContext, host.promptCardContext)
@@ -497,11 +501,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Specs whose build closures do capture it (the queue row) fold
         /// it into their own token explicitly instead.
         private static func token<T: Equatable>(_ base: T, host: ACPTranscriptScroller) -> ACPRowEqualityToken {
-            ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, base: base))
+            ACPRowEqualityToken(ThemedToken(theme: host.theme, designScale: host.designScale, contentMaxWidth: host.contentMaxWidth, base: base))
         }
 
         private struct ThemedToken<Base: Equatable>: Equatable {
             let theme: Theme
+            let designScale: DesignScale
             let contentMaxWidth: CGFloat
             let base: Base
         }
@@ -796,7 +801,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 id: row.stableId,
                 equalityToken: rowToken,
                 build: {
-                    wrapRow(host: host) {
+                    wrapRow(host: host, breaksOut: Self.breaksOut(message, isExpanded: expansion?.isExpanded ?? false)) {
                         let card = Self.messageRow(
                             host: host,
                             row: row,
@@ -820,7 +825,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if let content = nativeContent {
                 spec.native = ACPTranscriptNativeRows.row(
                     content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
-                    theme: host.theme, typography: host.typography,
+                    theme: host.theme, typography: host.typography, scale: host.designScale,
                     actions: nativeActions(
                         host: host, snapshot: snapshot, row: row, message: message,
                         toggleExpanded: expansion?.setExpanded,
@@ -1174,9 +1179,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // The native header has no "Show N earlier" button.
             if isNativeHeader {
                 spec.native = ACPTranscriptNativeRows.row(
-                    .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
+                    .toolGroupHeader(
+                        label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded, failure: summary.failureLabel
+                    ),
                     contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
-                    theme: host.theme, typography: host.typography,
+                    theme: host.theme, typography: host.typography, scale: host.designScale,
                     actions: .init(
                         menu: nil,
                         toggleExpanded: { expansionSeeds.setExpanded($0, members: memberStableIds) },
@@ -1265,17 +1272,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             contentViewWidth: CGFloat,
             contentMaxWidth: CGFloat
         ) -> CGFloat {
-            let rowContentWidth = availableRowContentWidth(
-                contentViewWidth: contentViewWidth,
-                contentMaxWidth: contentMaxWidth
-            )
-            let centeredRowWidth = rowContentWidth + 2 * rowHorizontalPadding
-            let trailingCenteringMargin = max(0, contentViewWidth - centeredRowWidth) / 2
-            return rowHorizontalPadding + trailingCenteringMargin
+            contentViewWidth - ACPChatLayout.transcriptColumns(rowWidth: contentViewWidth, readingMax: contentMaxWidth).breakoutMaxX
         }
 
-        private static var rowHorizontalPadding: CGFloat {
-            28 + ACPMessageGutterLayout.laneWidth
+        private static var rowHorizontalPadding: CGFloat { ACPChatLayout.transcriptRowInset }
+
+        /// Whether a message row takes the breakout width: agent prose may hold
+        /// code and tables, and an open tool call or file edit shows a diff.
+        private static func breaksOut(_ message: ACPMessage, isExpanded: Bool) -> Bool {
+            switch message {
+            case .agent, .fileEdit: true
+            case .toolCall: isExpanded
+            default: false
+            }
         }
 
         private static func lastAgentText(in messages: ArraySlice<ACPMessage>) -> String? {
@@ -1644,9 +1653,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Still routed through `wrapRow` for the same column framing
             // every other row gets, matching the legacy VStack where this
             // spacer was a plain child of the same constrained stack.
-            // The background task tray docks above the pill, so its height
-            // extends the spacer; the token is that height.
-            let spacerHeight = composerSpacerHeight + session.backgroundTrayHeight
+            // The host measures everything stacked on the composer (banner,
+            // tray, pill, a docked /btw card); the token is that height.
+            let spacerHeight = host.composerSpacerHeight
             specs.append(ACPTranscriptRowSpec(
                 id: "__composer_spacer__",
                 equalityToken: ACPRowEqualityToken(spacerHeight),
@@ -2471,7 +2480,7 @@ private struct StreamingCaret: View {
     @State private var on = false
     @Environment(\.theme) private var theme
     var body: some View {
-        RoundedRectangle(cornerRadius: 1)
+        RoundedRectangle(cornerRadius: 1) // design-literal: 2pt-wide streaming caret
             .fill(theme.color("accent"))
             .opacity(on ? 1 : 0)
             .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: on)
@@ -2484,6 +2493,7 @@ private struct ContextRecoveryRow: View {
     let status: ACPSession.ContextRecoveryStatus
     let onRetry: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 8) {
@@ -2500,7 +2510,7 @@ private struct ContextRecoveryRow: View {
             }
 
             Text(Self.text(for: status))
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
 
             if case .failed = status {
@@ -2511,15 +2521,11 @@ private struct ContextRecoveryRow: View {
                 .controlSize(.small)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(theme.color("bg-1").opacity(0.65))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(theme.color("line").opacity(0.8), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
+                .fill(theme.color("bg-2").opacity(0.5))
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -2543,24 +2549,21 @@ private struct ContextRecoveryRow: View {
 private struct PreparingAppActionRow: View {
     let status: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 8) {
             Spinner(lineWidth: 1.5)
                 .frame(width: 12, height: 12)
             Text(status)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(theme.color("bg-1").opacity(0.65))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(theme.color("line").opacity(0.8), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
+                .fill(theme.color("bg-2").opacity(0.5))
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

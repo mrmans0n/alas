@@ -12,6 +12,7 @@ struct ACPThoughtView: View {
     var onExpandedChange: ((Bool) -> Void)?
     @State private var expanded: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     init(
         buffer: StreamingText, isLive: Bool = false,
@@ -58,11 +59,11 @@ struct ACPThoughtView: View {
                 } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "brain")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                         Text(expanded ? "Hide thinking" : (Self.inlineLabel(for: buffer.value) ?? "Thinking…"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(theme.color("fg-faint"))
+                            .font(scale.metaFont)
+                            .foregroundStyle(theme.color("fg-dim"))
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }

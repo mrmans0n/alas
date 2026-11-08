@@ -265,10 +265,13 @@ struct ACPPermissionCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
+                .strokeBorder(theme.color("accent").opacity(0.8), lineWidth: 1)
         )
-        .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
-        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+        // On the light page the outline carries the card; a shadow only made it heavy.
+        .modifier(PermissionCardDarkElevation(theme: theme))
+        // Contains, not combines, so Accept and Reject stay separate buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(content.kind.map { "Permission request: \($0)" } ?? "Permission request")
     }
 
     /// Header is a short status row only. The long command / details live
@@ -284,22 +287,18 @@ struct ACPPermissionCard: View {
             }
             .frame(width: 18, height: 18)
 
-            Text("Permission")
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.6)
-                .textCase(.uppercase)
-                .foregroundStyle(theme.color("accent"))
-
+            // "Awaiting approval" is the card's one status label; the kind
+            // says what is being asked for.
             if let kind = content.kind {
-                Text("· \(kind)")
+                Text(kind)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-faint"))
+                    .foregroundStyle(theme.color("fg-dim"))
             }
 
             if let server = content.mcpServerName {
                 Text("· via \(server)")
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-faint"))
+                    .foregroundStyle(theme.color("fg-dim"))
             }
 
             Spacer(minLength: 6)
@@ -325,9 +324,8 @@ struct ACPPermissionCard: View {
     private var commandBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(content.heading ?? "Allow this?")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.3)
-                .foregroundStyle(theme.color("fg-faint"))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.color("fg"))
             Text(content.title)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(theme.color("fg"))
@@ -431,6 +429,21 @@ struct ACPPermissionOptionList: View {
     }
 }
 
+/// The card's accent glow and drop shadow, on dark themes only.
+private struct PermissionCardDarkElevation: ViewModifier {
+    let theme: Theme
+
+    func body(content: Content) -> some View {
+        if theme.darkMode {
+            content
+                .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
+                .acpElevation(darkMode: true)
+        } else {
+            content
+        }
+    }
+}
+
 /// One permission option as a button, styled by its kind.
 struct ACPPermissionOptionButton: View {
     let option: ACPPermissionCardContent.Option
@@ -443,18 +456,22 @@ struct ACPPermissionOptionButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: glyph)
-                    .font(.system(size: 10))
+                    .font(.system(size: 10, weight: isDefaultStyled ? .semibold : .regular))
                 Text(option.name)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 11.5, weight: isDefaultStyled ? .semibold : .medium))
             }
             .padding(.horizontal, 10)
             .frame(height: 26)
             .background(isDefaultStyled ? theme.color("accent") : theme.color("bg-3"))
             .foregroundStyle(isDefaultStyled ? theme.color("bg-0") : theme.color("fg"))
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            // The filled default needs no edge; the others get one that shows on both themes.
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isDefaultStyled ? theme.color("accent") : theme.color("line"), lineWidth: 0.5)
+                    .strokeBorder(
+                        isDefaultStyled ? theme.color("accent") : theme.color("fg-faint"),
+                        lineWidth: isDefaultStyled ? 0.5 : 1
+                    )
             )
             .opacity(isEnabled ? 1 : 0.45)
         }

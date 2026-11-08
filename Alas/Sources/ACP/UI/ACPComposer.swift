@@ -542,6 +542,7 @@ struct ACPInputField: NSViewRepresentable {
             if let tv = tv as? ACPNSTextView {
                 tv.reconcileSlashPanel()
             }
+            Self.remeasure(tv)
             let draft = Self.draft(from: storage)
             lastSyncedDraft = draft
             onDraftChange(draft)
@@ -767,6 +768,7 @@ struct ACPInputField: NSViewRepresentable {
             }
             ACPMarkdownLiveStyler.restyle(storage, typography: typography, excluding: blockRanges)
             textView.needsDisplay = true
+            Self.remeasure(textView)
             restoringDraft = false
             lastSyncedDraft = Self.draft(from: storage)
             lastAppliedComposerDraft = draft
@@ -828,7 +830,13 @@ struct ACPInputField: NSViewRepresentable {
             // fenced blocks.
             lastBlocks = []
             textView.needsDisplay = true
+            Self.remeasure(textView)
             restoringDraft = false
+        }
+
+        /// The field hugs its content, and nothing else tells SwiftUI to measure it again.
+        private static func remeasure(_ textView: NSTextView) {
+            textView.enclosingScrollView?.invalidateIntrinsicContentSize()
         }
 
         private func finishSubmit(

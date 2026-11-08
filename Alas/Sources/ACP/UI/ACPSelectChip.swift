@@ -26,6 +26,11 @@ struct ACPSelectChip: View {
     let label: String
     let placeholder: String
     let accent: Color
+    /// Drawn before the label, whatever is selected.
+    var leadingSymbol: String? = nil
+    /// The chip itself has no state to show, so it stays grey. `accent` still
+    /// marks the selected row in its popover.
+    var isNeutral = false
     let items: [Item]
     let selectedId: String?
     let searchDescriptions: Bool
@@ -34,38 +39,39 @@ struct ACPSelectChip: View {
     let onSelect: (Item) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var showPopover = false
 
     var body: some View {
         Button {
             showPopover.toggle()
         } label: {
-            // Matches Anthropic's `.chat-model` chip in the Alas design
-            // handoff: dark accent-tinted fill, 0.5px accent-colored
-            // outline at low opacity, accent-tinted (not white) text.
-            // Outline-on-fill, not a solid bright pill.
+            // Neutral, or a dark accent-tinted fill and accent-tinted (not
+            // white) text when the accent means a state; never a solid bright pill.
             HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
+                if let leadingSymbol {
+                    Image(systemName: leadingSymbol)
+                        .font(scale.meta.font(weight: .regular))
+                        .foregroundStyle(glyphColor)
+                        .accessibilityHidden(true)
+                }
                 if let icon = items.first(where: { $0.id == selectedId })?.icon {
-                    Self.iconView(icon, symbolSize: 9, accent: accent)
+                    Self.iconView(icon, symbolFont: scale.glyphFont, accent: glyphColor)
                 }
                 Text(label.isEmpty ? placeholder : label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundStyle(isNeutral ? theme.color("fg-muted") : Self.labelForeground(accent: accent, theme: theme))
                     .lineLimit(1)
                 if fillsWidth { Spacer(minLength: 0) }
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(accent)
+                    .font(scale.glyph.font(weight: .bold))
+                    .foregroundStyle(glyphColor)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(accent.opacity(0.18))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(accent.opacity(0.45), lineWidth: 0.75)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .fill(isNeutral ? theme.color("bg-3").opacity(0.7) : accent.opacity(0.18))
             )
         }
         .buttonStyle(.plain)
@@ -83,15 +89,18 @@ struct ACPSelectChip: View {
                 }
             )
             .environment(\.theme, theme)
+            .environment(\.designScale, scale)
         }
     }
 
+    private var glyphColor: Color { isNeutral ? theme.color("fg-muted") : accent }
+
     @ViewBuilder
-    static func iconView(_ icon: Icon, symbolSize: CGFloat, accent: Color) -> some View {
+    static func iconView(_ icon: Icon, symbolFont: Font, accent: Color) -> some View {
         switch icon {
         case .system(let name):
             Image(systemName: name)
-                .font(.system(size: symbolSize, weight: .semibold))
+                .font(symbolFont)
                 .foregroundStyle(accent)
         case .image(let image):
             Image(nsImage: image)
@@ -124,10 +133,10 @@ struct ACPSelectChip: View {
             return Color.blend(accent, .white, t: 0.55)
         }
 
-        let chipBackground = composited(foreground: accent, alpha: 0.18, over: theme.color("bg-1"))
+        let chipBackground = Color.composited(accent, alpha: 0.18, over: theme.color("bg-1"))
         let minimumContrast = 4.5
         let preferredBlend = Color.blend(accent, .black, t: 0.30)
-        if contrastRatio(preferredBlend, chipBackground) >= minimumContrast {
+        if Color.contrastRatio(preferredBlend, chipBackground) >= minimumContrast {
             return preferredBlend
         }
 
@@ -136,57 +145,13 @@ struct ACPSelectChip: View {
         for _ in 0..<12 {
             let midpoint = (lower + upper) / 2
             let candidate = Color.blend(accent, .black, t: midpoint)
-            if contrastRatio(candidate, chipBackground) >= minimumContrast {
+            if Color.contrastRatio(candidate, chipBackground) >= minimumContrast {
                 upper = midpoint
             } else {
                 lower = midpoint
             }
         }
         return Color.blend(accent, .black, t: upper)
-    }
-
-    private struct ColorComponents {
-        let red: Double
-        let green: Double
-        let blue: Double
-        let alpha: Double
-    }
-
-    private static func colorComponents(_ color: Color) -> ColorComponents {
-        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
-        return ColorComponents(
-            red: Double(nsColor.redComponent),
-            green: Double(nsColor.greenComponent),
-            blue: Double(nsColor.blueComponent),
-            alpha: Double(nsColor.alphaComponent)
-        )
-    }
-
-    private static func composited(foreground: Color, alpha: Double, over background: Color) -> Color {
-        let fg = colorComponents(foreground)
-        let bg = colorComponents(background)
-        let a = max(0, min(1, alpha))
-        return Color(
-            .sRGB,
-            red: fg.red * a + bg.red * (1 - a),
-            green: fg.green * a + bg.green * (1 - a),
-            blue: fg.blue * a + bg.blue * (1 - a),
-            opacity: fg.alpha * a + bg.alpha * (1 - a)
-        )
-    }
-
-    private static func contrastRatio(_ lhs: Color, _ rhs: Color) -> Double {
-        let l1 = relativeLuminance(lhs)
-        let l2 = relativeLuminance(rhs)
-        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-    }
-
-    private static func relativeLuminance(_ color: Color) -> Double {
-        let c = colorComponents(color)
-        func channel(_ value: Double) -> Double {
-            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
     }
 }
 
@@ -205,6 +170,7 @@ private struct DropdownPanel: View {
     let onSelect: (ACPSelectChip.Item) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var query: String = ""
     @State private var highlight: Int = 0
     /// Bumps only on keyboard navigation. The scroll tracker watches
@@ -250,12 +216,12 @@ private struct DropdownPanel: View {
                         }
                         if filtered.isEmpty {
                             Text("No matches")
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-faint"))
-                                .padding(.horizontal, 10).padding(.vertical, 10)
+                                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
                 .onChange(of: keyboardScrollTick) { _, _ in
                     let items = filtered
@@ -304,15 +270,15 @@ private struct DropdownPanel: View {
     private var searchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
             TextField("Search…", text: $query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .focused($searchFocused)
                 .onChange(of: query) { _, _ in highlight = 0 }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-0").opacity(0.6))
     }
 
@@ -325,34 +291,34 @@ private struct DropdownPanel: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         if let icon = item.icon {
-                            ACPSelectChip.iconView(icon, symbolSize: 10, accent: accent)
+                            ACPSelectChip.iconView(icon, symbolFont: scale.caption.font(weight: .semibold), accent: accent)
                         }
                         Text(item.name)
-                            .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
+                            .font(scale.body.font(weight: isSelected ? .semibold : .regular))
                             .foregroundStyle(theme.color("fg"))
                         if isSelected {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(scale.glyph.font(weight: .bold))
                                 .foregroundStyle(accent)
                         }
                         if let badge = item.badge {
                             Text(badge)
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-faint"))
                         }
                     }
                     if let desc = item.description, !desc.isEmpty {
                         Text(desc)
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(2)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             .background(rowBg(isHighlighted: isHighlighted, isSelected: isSelected))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

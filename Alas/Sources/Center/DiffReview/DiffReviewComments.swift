@@ -561,7 +561,10 @@ enum DiffReviewInlineFeedbackMarkdown {
             raw: source,
             typography: typography,
             showsCodeBlockCopyButton: false,
-            noninteractiveTapAction: noninteractiveTapAction
+            noninteractiveTapAction: noninteractiveTapAction,
+            // Diffs keep their density, and hosted rows don't see the setting.
+            // No code hanging indent either: that belongs to the transcript.
+            spacing: .init(block: 8, line: 0, codeHangingIndent: 0)
         )
     }
 

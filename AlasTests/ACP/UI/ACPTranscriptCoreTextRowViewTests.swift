@@ -72,7 +72,7 @@ import Testing
         let text = StreamingText("Reading the files")
         let spec = ACPTranscriptNativeRows.row(
             .thought(label: ACPThoughtView.inlineLabel(for: text.value) ?? "Thinking…"), contentMaxWidth: 720,
-            inToolCallGroup: false, theme: theme, typography: .default, actions: .inert, source: text
+            inToolCallGroup: false, theme: theme, typography: .default, scale: .comfortable, actions: .inert, source: text
         )
         let view = try #require(spec.make() as? ACPTranscriptCoreTextRowView)
         spec.configure(view)
@@ -90,7 +90,7 @@ import Testing
         let text = StreamingText("Short")
         let spec = ACPTranscriptNativeRows.row(
             .agent(markdown: text.value, commentary: true), contentMaxWidth: 720, inToolCallGroup: false,
-            theme: theme, typography: .default, actions: .inert, source: text
+            theme: theme, typography: .default, scale: .comfortable, actions: .inert, source: text
         )
         text.replace(with: Self.longerText)
         let view = try #require(spec.make() as? ACPTranscriptCoreTextRowView)
@@ -352,7 +352,7 @@ import Testing
             view.frame = NSRect(x: 0, y: 0, width: 1_000, height: height)
             // Agent text starts at the column's left edge; the bubble hugs the right edge.
             let x: CGFloat
-            if case .user = content { x = view.columnRect.maxX - 30 } else { x = view.columnRect.minX + 8 }
+            if case .user = content { x = view.columnRect.maxX - 40 } else { x = view.columnRect.minX + 8 }
             let start = view.convert(NSPoint(x: x, y: 10), to: nil)
             func send(_ type: NSEvent.EventType, at point: NSPoint, clickCount: Int = 1) {
                 let event = NSEvent.mouseEvent(
@@ -580,6 +580,23 @@ import Testing
         #expect(header.accessibilityValue() as? String == value)
         #expect(header.accessibilityPerformPress())
         #expect(toggled == [toggledTo])
+    }
+
+    @Test func aNarrowGroupHeaderKeepsItsFailureAndChevronInside() {
+        let failure = "3 failed while the network was down"
+        let width: CGFloat = 160
+        let header = row(.toolGroupHeader(
+            label: "Ran 9 commands · " + failure, iconSystemName: "terminal", expanded: false, failure: failure
+        ))
+        let rightEdges = header.layout(forWidth: width).items.compactMap { item -> CGFloat? in
+            switch item {
+            case .text(let line, let origin): origin.x + CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            case .symbol(_, let rect): rect.maxX
+            default: nil
+            }
+        }
+        #expect(!rightEdges.isEmpty)
+        #expect(rightEdges.allSatisfy { $0 <= width })
     }
 
     @Test func toolRowsDescribeTheirTargetDurationAndFailure() {

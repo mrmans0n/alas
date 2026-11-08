@@ -8,6 +8,38 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    /// Typing and a restore or clear reach the field by different routes, and
+    /// neither re-renders the SwiftUI view that sizes it.
+    @Test("the field hugs its content as text comes and goes")
+    func fieldFollowsItsContentHeight() throws {
+        let field = ACPInputField(
+            streamingState: .idle, canSteerRunningTurn: false, promptSuggestions: [], composer: ACPComposerState(),
+            worktreeRoot: URL(fileURLWithPath: "/tmp"), actions: ACPComposerActions(), dropRouter: ACPComposerDropRouter(),
+            isFocused: .constant(false), focusRequest: 0, sendOnEnter: true, typography: .default,
+            onDraftChange: { _ in }, onDraftClear: {}, onStopDictation: {},
+            onSubmit: { _, _, _, _, _ in true }, onImageError: { _ in }, filesProvider: nil
+        ).fixedSize(horizontal: false, vertical: true)
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let host = NSHostingView(rootView: VStack(spacing: 0) { field
+        Spacer(minLength: 0) }
+            .environment(\.theme, theme).frame(width: 600, height: 400))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
+        let scroll = try #require(descendants(host).compactMap { $0 as? NSScrollView }.first { $0.documentView is ACPNSTextView })
+        let textView = try #require(scroll.documentView as? ACPNSTextView)
+        #expect(scroll.frame.height == 44)
+
+        textView.insertText("one\ntwo\nthree\nfour", replacementRange: NSRange(location: 0, length: 0))
+        host.layoutSubtreeIfNeeded()
+        #expect(scroll.frame.height > 44)
+
+        textView.restoreDraftForTesting(.empty)
+        host.layoutSubtreeIfNeeded()
+        #expect(scroll.frame.height == 44)
+    }
+
     @Test("marked input keeps Return in the input method instead of the peer picker")
     func markedInputBypassesExternalPickerKeys() throws {
         let (editor, coordinator, window) = makeSlashTextView()
