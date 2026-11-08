@@ -97,7 +97,7 @@ struct RepoSelectorRowView: View {
                             .stroke(theme.color("accent").opacity(0.25), lineWidth: 2)
                     )
             }
-            Highlighted(text: worktree.title, indices: indices)
+            Highlighted(text: worktree.title, indices: indices, monospaced: false)
                 .font(scale.meta.font(weight: isCurrent ? .semibold : .medium))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
