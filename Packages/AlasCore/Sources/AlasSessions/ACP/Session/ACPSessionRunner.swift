@@ -2030,25 +2030,32 @@ public final class ACPSessionRunner {
         loadReplayEndReceived = false
     }
 
-    /// Applies a held load replay as history.
+    /// Applies a held load replay as history. After a response the manager
+    /// has already set the history window, which this keeps as it is.
     public func releaseHeldLoadReplay() {
         guard let hold = loadReplayHold else { return }
         loadReplayHold = nil
-        treatLoadReplayAsHistory(throughYieldedUpdateCount: dequeuedUpdateCount)
+        if unsuppressedLoadReplayTarget == nil {
+            treatLoadReplayAsHistory(throughYieldedUpdateCount: dequeuedUpdateCount)
+        }
         for held in hold.updates {
             enqueueIncomingUpdate(held.params, streamIndex: held.streamIndex)
         }
         flushPendingIncomingUpdates()
     }
 
-    /// Drops a held load replay that never ended: a partial history is not
-    /// shown. The dropped updates count as applied, so the yielded-count
-    /// watermarks stay aligned.
+    /// Drops a held load replay that never ended, so a partial history is
+    /// not shown. It goes through load replay suppression, as a failed load's
+    /// replay did before the hold existed: reconciled, counted, and
+    /// acknowledged, so a broker does not deliver it again.
     public func discardHeldLoadReplay() {
         guard let hold = loadReplayHold else { return }
         loadReplayHold = nil
-        observedUpdateCount += hold.updates.count
-        appliedUpdateCount += hold.updates.count
+        suppressLoadReplay(throughYieldedUpdateCount: dequeuedUpdateCount)
+        for held in hold.updates {
+            enqueueIncomingUpdate(held.params, streamIndex: held.streamIndex)
+        }
+        flushPendingIncomingUpdates()
     }
 
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {

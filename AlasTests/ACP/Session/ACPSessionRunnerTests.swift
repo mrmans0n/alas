@@ -1646,10 +1646,13 @@ struct ACPSessionRunnerTests {
           arguments: [true, false])
     func heldLoadReplayWithoutEndEvent(loadSucceeds: Bool) async throws {
         let (runner, session, mock) = try makeRunnerWithSession()
+        let acknowledgement = DurableAcknowledgementRecorder()
         runner.holdLoadReplay(untilEndOf: "load-1")
         runner.start()
         defer { runner.stop() }
-        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("replayed"))))
+        mock.emit(.init(
+            sessionId: "s", update: .agentMessageChunk(.text("replayed")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }))
         try await waitUntil { runner.heldLoadReplayCountForTesting == 1 }
 
         if loadSucceeds {
@@ -1659,6 +1662,9 @@ struct ACPSessionRunnerTests {
         }
 
         #expect(session.transcript.messages.count == (loadSucceeds ? 1 : 0))
+        // Applied or dropped, the replay is consumed: a broker does not resend it.
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 1)
         // Dropped updates still count, so later ones keep the yielded watermark.
         mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(title: "Live"))))
         try await waitUntil { runner.observedUpdateCountForTesting == 2 }
