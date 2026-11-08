@@ -9,6 +9,9 @@ import SwiftUI
 struct Highlighted: View {
     let text: String
     let indices: [Int]
+    /// Matches the text's own family: file names read in the system font,
+    /// folder paths in monospace.
+    var monospaced = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -21,7 +24,7 @@ struct Highlighted: View {
             attributed[start..<end].font = .system(
                 size: NSFont.systemFontSize,
                 weight: .heavy,
-                design: .monospaced
+                design: monospaced ? .monospaced : .default
             )
         }
         return Text(attributed)
