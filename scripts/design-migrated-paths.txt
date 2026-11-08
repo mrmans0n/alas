@@ -113,3 +113,6 @@ Alas/Sources/Settings/AdvancedPane.swift
 Alas/Sources/Settings/AgentsPane.swift
 Alas/Sources/Settings/AgentEditView.swift
 Alas/Sources/Settings/ACPRegistryBrowserView.swift
+Alas/Sources/Settings/OnDeviceAIPane.swift
+Alas/Sources/Settings/LocalTextModelSettings.swift
+Alas/Sources/Settings/ComputerUsePane.swift
