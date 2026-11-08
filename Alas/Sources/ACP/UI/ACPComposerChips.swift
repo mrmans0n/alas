@@ -56,6 +56,10 @@ struct ACPComposerChips {
             .background(
                 RoundedRectangle(cornerRadius: scale.radius.medium).fill(fastModeBg(isEnabled: isEnabled))
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(fastModeBorder(isEnabled: isEnabled), lineWidth: 0.75)
+            )
     }
 
     func fastModeHelp(isEnabled: Bool, canToggle: Bool) -> String {
@@ -102,6 +106,16 @@ struct ACPComposerChips {
             : theme.color("bg-3").opacity(0.7)
     }
 
+    func fastModeBorder(_ spec: ChipSpec) -> Color {
+        fastModeBorder(isEnabled: isFastModeEnabled(spec))
+    }
+
+    func fastModeBorder(isEnabled: Bool) -> Color {
+        isEnabled
+            ? cursorFastAccent.opacity(0.55)
+            : theme.color("line")
+    }
+
     func fastModeFg(_ spec: ChipSpec) -> Color {
         fastModeFg(isEnabled: isFastModeEnabled(spec))
     }
@@ -122,10 +136,9 @@ struct ACPComposerChips {
              placeholder: "Mode",
              // `fullAccess` (bypassPermissions / agent-full-access) bypasses
              // per-action approval, so the chip switches to the warning
-             // tint as a passive heads-up. Other non-standard modes keep the
-             // accent; an ordinary mode is neutral.
-             accent: modeAccent(spec),
-             isNeutral: ACPComposerControlPresentation.modeIsNeutral(spec))
+             // tint as a passive heads-up. Every other kind — including no
+             // kind at all — keeps the standard accent.
+             accent: modeAccent(spec))
     }
 
     func modeAccent(_ spec: ChipSpec) -> Color {
@@ -135,11 +148,9 @@ struct ACPComposerChips {
 
     func thinkingChip(_ spec: ChipSpec) -> some View {
         chip(spec: spec,
-             label: selectedName(spec: spec, fallback: "Thinking"),
+             label: iconChipLabel(icon: "🧠", spec: spec, fallback: "Thinking"),
              placeholder: "Thinking",
-             accent: theme.color("accent"),
-             leadingSymbol: "brain",
-             isNeutral: true)
+             accent: theme.color("warn"))
     }
 
     func modelChip(_ spec: ChipSpec) -> some View {
@@ -148,8 +159,7 @@ struct ACPComposerChips {
                     ?? spec.currentId
                     ?? "Model",
              placeholder: "Model",
-             accent: theme.color("accent"),
-             isNeutral: true,
+             accent: theme.color("syntax-keyword"),
              searchDescriptions: false,
              searchIdentifiers: false)
     }
@@ -159,11 +169,9 @@ struct ACPComposerChips {
         switch parameter.presentation {
         case .cursorContextWindow:
             chip(spec: parameter.spec,
-                 label: selectedName(spec: parameter.spec, fallback: parameter.label),
+                 label: iconChipLabel(icon: "🪟", spec: parameter.spec, fallback: parameter.label),
                  placeholder: parameter.label,
-                 accent: theme.color("accent"),
-                 leadingSymbol: "macwindow",
-                 isNeutral: true)
+                 accent: cursorContextAccent)
         case .fastMode:
             chip(spec: parameter.spec,
                  label: chipLabel(prefix: parameter.label, spec: parameter.spec),
@@ -173,13 +181,16 @@ struct ACPComposerChips {
             chip(spec: parameter.spec,
                  label: chipLabel(prefix: parameter.label, spec: parameter.spec),
                  placeholder: parameter.label,
-                 accent: theme.color("accent"),
-                 isNeutral: true)
+                 accent: theme.color("fg-muted"))
         }
     }
 
-    // Cursor's own hue is tuned for dark surfaces; on light the theme's
-    // matching status token keeps the chips legible.
+    // Cursor's own hues are tuned for dark surfaces; on light the theme's
+    // matching status tokens keep the chips legible.
+    private var cursorContextAccent: Color {
+        theme.darkMode ? Color(.sRGB, red: 0.28, green: 0.72, blue: 0.88, opacity: 1) : theme.color("info")
+    }
+
     private var cursorFastAccent: Color {
         theme.darkMode ? Color(.sRGB, red: 0.48, green: 0.82, blue: 0.42, opacity: 1) : theme.color("add")
     }
@@ -192,7 +203,7 @@ struct ACPComposerChips {
     }
 
     /// Agent-defined boolean options carry no icon, so they render as a
-    /// labelled pill with the same tinted on/off treatment as the fast-mode
+    /// labelled pill with the same outlined on/off treatment as the fast-mode
     /// and auto-run buttons.
     func booleanConfigToggle(_ option: ACPConfigOption) -> some View {
         let isEnabled = option.currentBoolValue ?? false
@@ -208,6 +219,10 @@ struct ACPComposerChips {
                 .background(
                     RoundedRectangle(cornerRadius: scale.radius.medium).fill(booleanOptionBg(isEnabled: isEnabled))
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
+                        .strokeBorder(booleanOptionBorder(isEnabled: isEnabled), lineWidth: 0.75)
+                )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(name)
@@ -216,13 +231,30 @@ struct ACPComposerChips {
     }
 
     func booleanOptionBg(isEnabled: Bool) -> Color {
-        isEnabled ? theme.color("accent").opacity(0.20) : theme.color("bg-3").opacity(0.7)
+        isEnabled ? booleanOptionAccent.opacity(0.20) : theme.color("bg-3").opacity(0.7)
+    }
+
+    func booleanOptionBorder(isEnabled: Bool) -> Color {
+        isEnabled ? booleanOptionAccent.opacity(0.55) : theme.color("line")
     }
 
     func booleanOptionFg(isEnabled: Bool) -> Color {
         isEnabled
-            ? ACPSelectChip.labelForeground(accent: theme.color("accent"), theme: theme)
+            ? ACPSelectChip.labelForeground(accent: booleanOptionAccent, theme: theme)
             : theme.color("fg-muted")
+    }
+
+    // Every theme hue near the toolbar is already taken (mode accent,
+    // thinking, auto-run, fast mode, model), so enabled options get a
+    // magenta of their own. labelForeground keeps the light variant legible.
+    private var booleanOptionAccent: Color {
+        theme.darkMode
+            ? Color(.sRGB, red: 0.90, green: 0.52, blue: 0.76, opacity: 1)
+            : Color(.sRGB, red: 0.78, green: 0.25, blue: 0.56, opacity: 1)
+    }
+
+    private func iconChipLabel(icon: String, spec: ChipSpec, fallback: String) -> String {
+        "\(icon) \(selectedName(spec: spec, fallback: fallback))"
     }
 
     func selectedName(spec: ChipSpec, fallback: String) -> String {
@@ -237,8 +269,6 @@ struct ACPComposerChips {
                       label: String,
                       placeholder: String,
                       accent: Color,
-                      leadingSymbol: String? = nil,
-                      isNeutral: Bool = false,
                       searchDescriptions: Bool = true,
                       searchIdentifiers: Bool = true,
                       fillsWidth: Bool = false) -> some View {
@@ -246,8 +276,6 @@ struct ACPComposerChips {
             label: label,
             placeholder: placeholder,
             accent: accent,
-            leadingSymbol: leadingSymbol,
-            isNeutral: isNeutral,
             items: spec.options.map {
                 ACPSelectChip.Item(
                     id: $0.id, name: $0.name, description: $0.description,
@@ -272,8 +300,8 @@ struct ACPComposerChips {
     }
 }
 
-/// Auto-run pill visuals: dark accent-tinted fill when active, plain dark when
-/// inactive. No glow or filled
+/// Auto-run pill visuals. Mirrors the design's outlined-pill treatment: dark
+/// accent-tinted fill when active, plain dark when inactive. No glow or filled
 /// gradient; that styling diverges from the handoff.
 struct ACPAutoRunToggle: View {
     @Environment(\.theme) private var theme
@@ -292,6 +320,10 @@ struct ACPAutoRunToggle: View {
                 .background(
                     RoundedRectangle(cornerRadius: scale.radius.medium).fill(background)
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
+                        .strokeBorder(border, lineWidth: 0.75)
+                )
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Auto-run")
@@ -301,12 +333,19 @@ struct ACPAutoRunToggle: View {
     }
 
     private var background: Color { Self.background(isEnabled: isEnabled, theme: theme) }
+    private var border: Color { Self.border(isEnabled: isEnabled, theme: theme) }
     private var foreground: Color { Self.foreground(isEnabled: isEnabled, theme: theme) }
 
     static func background(isEnabled: Bool, theme: Theme) -> Color {
         isEnabled
             ? theme.color("caution").opacity(0.20)
             : theme.color("bg-3").opacity(0.7)
+    }
+
+    static func border(isEnabled: Bool, theme: Theme) -> Color {
+        isEnabled
+            ? theme.color("caution").opacity(0.55)
+            : theme.color("line")
     }
 
     static func foreground(isEnabled: Bool, theme: Theme) -> Color {

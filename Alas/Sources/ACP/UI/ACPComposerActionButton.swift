@@ -120,6 +120,10 @@ struct ACPComposerActionButton: View {
                 RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("del").opacity(0.15))
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
+            )
         }
         .buttonStyle(.plain)
         .help("Stop the running turn (Esc)")
@@ -151,6 +155,10 @@ struct ACPComposerActionButton: View {
             foreground: theme.color("fg"),
             fill: theme.color("bg-3"),
             cornerRadius: scale.radius.medium
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("line"), lineWidth: 1)
         )
     }
 
