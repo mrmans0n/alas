@@ -36,6 +36,7 @@ struct ReviewShepherdDrawerModel {
 struct ReviewShepherdBlock: View {
     let model: ReviewShepherdDrawerModel
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -45,10 +46,10 @@ struct ReviewShepherdBlock: View {
                 unbound
             }
         }
-        .padding(8)
+        .padding(scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-2").opacity(0.48))
         )
         .accessibilityElement(children: .contain)
@@ -60,7 +61,7 @@ struct ReviewShepherdBlock: View {
     @ViewBuilder
     private func bound(_ record: ShepherdRecord) -> some View {
         Text(model.presentation.phaseLine)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -99,10 +100,10 @@ struct ReviewShepherdBlock: View {
     private var unbound: some View {
         HStack(spacing: 6) {
             Image(systemName: "pawprint")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-faint"))
             Text("Not shepherded")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             Spacer(minLength: 6)
             ReviewShepherdSessionMenu(model: model, title: "Shepherd with…", help: "Have a session fix and merge this PR")
@@ -119,15 +120,16 @@ struct ShepherdSwitchRow: View {
     let isDisabled: Bool
     let set: @MainActor (Bool) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                 Text(detail)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-muted"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -177,6 +179,7 @@ struct ChangesShepherdLine: View {
     let isDisabled: Bool
     let select: (ChangesShepherdChoice) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private var selected: ReviewShepherdDrawerModel.Candidate? {
         candidates.first { $0.id == selectedID }
@@ -189,7 +192,7 @@ struct ChangesShepherdLine: View {
                 set: { on in select(on ? candidates.first.map { .session($0.id) } ?? .noSession : .noSession) }
             )) {
                 Text("Shepherd with")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             .toggleStyle(.checkbox)
@@ -202,7 +205,7 @@ struct ChangesShepherdLine: View {
                 Button("None") { select(.noSession) }
             } label: {
                 Text(selected?.menuTitle ?? "None")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -221,6 +224,7 @@ struct ChangesShepherdLine: View {
 /// Sessions sorted by `updatedAt` (the history list sorts by
 /// `lastOpenedAt`, so the order here is explicit), then "New session".
 struct ReviewShepherdSessionMenu: View {
+    @Environment(\.designScale) private var scale
     let model: ReviewShepherdDrawerModel
     let title: String
     let help: String
@@ -240,7 +244,7 @@ struct ReviewShepherdSessionMenu: View {
             }
         } label: {
             Label(title, systemImage: "pawprint")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
@@ -256,22 +260,23 @@ struct ReviewShepherdActionButton: View {
     let help: String
     let action: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(scale.glyphFont)
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .lineLimit(1)
             }
             .foregroundColor(theme.color("fg-muted"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(theme.color("bg-3").opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -287,6 +292,7 @@ struct ReviewShepherdActionButton: View {
 struct ReviewShepherdChip: View {
     let model: ReviewShepherdDrawerModel
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Group {
@@ -297,7 +303,7 @@ struct ReviewShepherdChip: View {
                             AgentLogoView(agent: agent, size: 11)
                         } else {
                             Image(systemName: "pawprint")
-                                .font(.system(size: 9, weight: .semibold))
+                                .font(scale.glyphFont)
                         }
                     }
                 }
@@ -320,7 +326,7 @@ struct ReviewShepherdChip: View {
                 } label: {
                     chip(title: "Owner missing", color: theme.color("warn"), textColor: theme.color("warn")) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(scale.glyphFont)
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -346,17 +352,17 @@ struct ReviewShepherdChip: View {
             leading()
                 .foregroundStyle(textColor)
             Text(title)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundColor(textColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .padding(.horizontal, 7)
+        .padding(.horizontal, scale.space[2])
         .frame(maxWidth: 160)
         .frame(height: 22)
-        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color.opacity(0.2), lineWidth: 0.75))
-        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(color.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(color.opacity(0.2), lineWidth: 0.75))
+        .contentShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     /// The session name, or the phase while the shepherd is acting on the PR.
