@@ -13,6 +13,7 @@ struct BaseBranchSelector: View {
     let onOpen: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var open = false
     @State private var search = ""
     @State private var hovering = false
@@ -46,7 +47,7 @@ struct BaseBranchSelector: View {
         HStack(spacing: 4) {
             icon
             Text(currentRef ?? baseBranch)
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-faint"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -74,22 +75,22 @@ struct BaseBranchSelector: View {
     private var popoverBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             AlasField(text: $search, placeholder: "Search branches...")
-                .padding(8)
+                .padding(scale.space[2])
             Divider().background(theme.color("line"))
             if Self.shouldShowLoading(isLoading: isLoadingBranches, hasLoaded: hasLoadedBranches) {
                 HStack(spacing: 8) {
                     Spinner(lineWidth: 1.5, duration: 0.7)
                         .frame(width: 12, height: 12)
                     Text("Loading branches...")
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
-                .padding(12)
+                .padding(scale.space[3])
             } else if branches.isEmpty {
                 Text("No branches")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(12)
+                    .padding(scale.space[3])
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -111,17 +112,17 @@ struct BaseBranchSelector: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(Self.isSelected(row: name, baseBranch: baseBranch, currentRef: currentRef) ? 1 : 0)
                 Text(name)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: Self.branchRowHeight)
             .contentShape(Rectangle())
         }

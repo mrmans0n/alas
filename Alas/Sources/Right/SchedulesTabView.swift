@@ -261,7 +261,7 @@ private struct ScheduleCard: View {
             HStack(spacing: scale.space[1]) {
                 Icon(name: "terminal", size: 9, color: theme.color("fg-faint"))
                 Text("\(targetLabel) · \(hostLabel)")
-                    .font(scale.caption.font(weight: .regular, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)

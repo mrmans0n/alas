@@ -15,6 +15,7 @@ struct BranchOpsMenu: View {
     @State private var showRebasePicker: Bool = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Menu {
@@ -24,7 +25,7 @@ struct BranchOpsMenu: View {
             Button("Fetch now") { rps.fetchNow() }
         } label: {
             Image(systemName: "arrow.triangle.merge")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-muted"))
         }
         .menuStyle(.borderlessButton)
@@ -61,7 +62,7 @@ struct BranchOpsMenu: View {
                              selection: Binding<String>,
                              onConfirm: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(title).font(scale.meta.font(weight: .semibold))
             BranchPicker(
                 selection: selection,
                 branches: branchesForPicker,
@@ -80,7 +81,7 @@ struct BranchOpsMenu: View {
                     .disabled(selection.wrappedValue.isEmpty)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private func openMergePicker() {

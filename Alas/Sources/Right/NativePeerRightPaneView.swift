@@ -11,6 +11,7 @@ struct NativePeerRightPaneView: View {
     static let changesPollInterval: Duration = .seconds(5)
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var activeTab: RightPaneTab = .changes
     @State private var openPaths: Set<String> = []
@@ -284,7 +285,7 @@ struct NativePeerRightPaneView: View {
             Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
             // The peer's name already shows in the center pane's tab bar.
             Text(client.selectedWorktreeGroup?.worktree?.branch ?? "")
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -314,7 +315,7 @@ struct NativePeerRightPaneView: View {
                     Button("Fetch now") { runGit(.fetch, on: gitTarget) }
                 } label: {
                     Image(systemName: "arrow.triangle.merge")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 .menuStyle(.borderlessButton)
@@ -331,8 +332,8 @@ struct NativePeerRightPaneView: View {
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
+        .padding(.leading, scale.space[2])
+        .padding(.trailing, scale.space[1])
         .frame(height: 34)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
@@ -499,7 +500,7 @@ struct NativePeerRightPaneView: View {
         case nil: break
         }
         return VStack(alignment: .leading, spacing: 8) {
-            Text(isMerge ? "Merge into current" : "Rebase current onto").font(.system(size: 12, weight: .semibold))
+            Text(isMerge ? "Merge into current" : "Rebase current onto").font(scale.meta.font(weight: .semibold))
             BranchPicker(
                 selection: $integrateBranch,
                 branches: names,
@@ -520,7 +521,7 @@ struct NativePeerRightPaneView: View {
                 .disabled(integrateBranch.isEmpty)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private func openIntegratePicker(_ kind: IntegrateKind, on target: (serverId: String, worktree: PeerHostWorktree)) {
@@ -716,7 +717,7 @@ struct NativePeerRightPaneView: View {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                     if let subtitle {
                         Text(subtitle).foregroundColor(theme.color("fg-faint"))
@@ -732,9 +733,9 @@ struct NativePeerRightPaneView: View {
                     Text("\(openCount) open").foregroundColor(theme.color("accent"))
                 }
             }
-            .font(.system(size: 10.5))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
+            .font(scale.caption.font(weight: .regular))
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
