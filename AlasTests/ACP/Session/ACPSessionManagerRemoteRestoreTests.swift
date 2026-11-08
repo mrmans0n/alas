@@ -306,6 +306,85 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    enum LoadAfterReplayEnd: CaseIterable {
+        case succeeds
+        case failsLater
+        /// The error arrives while the end event may still be queued.
+        case failsAtOnce
+    }
+
+    @Test("a strict load shows its history at the replay's end, before the session is ready, and keeps it",
+          arguments: LoadAfterReplayEnd.allCases)
+    func strictLoadShowsHistoryAtReplayEnd(outcome: LoadAfterReplayEnd) async throws {
+        let (manager, store, client, session) = try await fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true, loadReplayEnd: true)
+        let gate = LoadResponseGate()
+        client.scriptAsync(method: "session/load") { request in
+            let loadID = (request.params as? ACPSessionLoadParams)?.meta?.loadReplayEnd?.id
+            client.emit(.init(sessionId: "remote-id", update: .agentMessageChunk(.text("restored history"))))
+            client.emit(.init(sessionId: "remote-id", update: .loadReplayEnd(id: loadID)))
+            if outcome != .failsAtOnce { await gate.wait() }
+            if outcome != .succeeds {
+                throw JSONRPCError(code: -32603, message: "Claude Code process exited", data: nil)
+            }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-id", availableModels: [], availableModes: [],
+                currentModel: nil, currentMode: nil, promptSuggestions: []))
+        }
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        let attaching = Task { await manager.attach(to: session.id, freshlyCreated: false) }
+        if outcome != .failsAtOnce {
+            try await waitUntil { session.transcript.messages.count == 1 }
+            #expect(manager.runners[session.id] == nil)
+            #expect(session.agentState != .ready)
+        }
+
+        await gate.open()
+        await attaching.value
+        await manager.flushAllPersistence()
+
+        #expect(manager.runners[session.id] != nil)
+        #expect(client.sent.map(\.method)
+            == ["initialize", "session/load"] + (outcome == .succeeds ? [] : ["session/resume"]))
+        #expect(session.contextRestoreWarning == nil)
+        #expect(session.transcript.messages.count == 1)
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+        guard case .agent(_, _, let text) = session.transcript.messages.first else {
+            Issue.record("Expected the restored history")
+            return
+        }
+        #expect(text.value == "restored history")
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a strict load without its own replay end shows its history only once it succeeds",
+          arguments: [false, true])
+    func strictLoadWithoutReplayEnd(loadFails: Bool) async throws {
+        let (manager, store, client, session) = try await fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true, loadReplayEnd: true)
+        client.scriptAsync(method: "session/load") { _ in
+            client.emit(.init(sessionId: "remote-id", update: .agentMessageChunk(.text("replayed history"))))
+            // The end of another load, redelivered.
+            client.emit(.init(sessionId: "remote-id", update: .loadReplayEnd(id: "earlier-load")))
+            if loadFails {
+                throw JSONRPCError(code: -32603, message: "Internal error", data: nil)
+            }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-id", availableModels: [], availableModes: [],
+                currentModel: nil, currentMode: nil, promptSuggestions: []))
+        }
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        #expect(manager.runners[session.id] != nil)
+        #expect(session.transcript.messages.count == (loadFails ? 0 : 1))
+        #expect(try store.messageCount(sessionId: session.id) == (loadFails ? 0 : 1))
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("imported sessions resume after their history has been persisted locally")
     func importedSessionWithLocalHistoryUsesResume() async throws {
         let (manager, store, client, session) = try await fixture(
@@ -962,8 +1041,19 @@ struct ACPSessionManagerRemoteRestoreTests {
         _ client: ACPMockClient,
         canLoad: Bool,
         canResume: Bool,
-        providers: Bool = false
+        providers: Bool = false,
+        loadReplayEnd: Bool = false
     ) {
+        if loadReplayEnd {
+            client.script(method: "initialize") { _ in
+                Data("""
+                {"protocolVersion":1,"agentCapabilities":{"loadSession":\(canLoad),\
+                "sessionCapabilities":{\(canResume ? #""resume":{}"# : "")}},\
+                "authMethods":[],"_meta":{"loadReplayEnd":{"version":1}}}
+                """.utf8)
+            }
+            return
+        }
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
@@ -1136,5 +1226,22 @@ private actor RecoveryCrashEndpoint {
             throw Crash()
         }
         return result
+    }
+}
+
+/// Holds a scripted load response until the test opens it.
+private actor LoadResponseGate {
+    private var opened = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        guard !opened else { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func open() {
+        opened = true
+        waiter?.resume()
+        waiter = nil
     }
 }
