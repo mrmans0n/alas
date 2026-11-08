@@ -136,6 +136,7 @@ struct CheckpointCard: View {
     let onInspect: (CheckpointFileGroup) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     private var unavailable: Bool { checkpoint.unavailableReason != nil }
@@ -146,19 +147,19 @@ struct CheckpointCard: View {
             chipLine
             if let reason = checkpoint.unavailableReason {
                 Text(reason)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("del"))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 6)
+                    .padding(.top, scale.space[2])
                     .padding(.leading, Self.bodyIndent)
             } else if expanded {
                 expandedBody
             }
         }
-        .padding(10)
+        .padding(scale.space[2])
         .rightPaneCardChrome(accent: tone, isHovering: hovering || expanded)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Restore…") { onRestore() }
@@ -189,22 +190,22 @@ struct CheckpointCard: View {
                     .frame(width: 6, height: 6)
                     .accessibilityHidden(true)
                 Text(checkpoint.label)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color(unavailable ? "fg-muted" : "fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if checkpoint.kind != .automatic {
                     Text(CheckpointPresentation.kind(checkpoint.kind).uppercased())
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .tracking(0.3)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                         .background(theme.color("seg-pill-bg"), in: Capsule())
                         .foregroundColor(theme.color("fg-muted"))
                         .fixedSize()
                 }
                 Spacer(minLength: 8)
                 Text(CheckpointPresentation.compactDate(checkpoint.createdAt))
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                     .fixedSize()
             }
@@ -219,7 +220,7 @@ struct CheckpointCard: View {
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(CheckpointPresentation.detail(checkpoint))
-                .font(.system(size: 10, design: .monospaced))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
             manifestContent
             HStack(spacing: 6) {
@@ -241,15 +242,15 @@ struct CheckpointCard: View {
                 )
                 .accessibilityIdentifier(CheckpointPresentation.deleteButtonID(checkpointID: checkpoint.id))
             }
-            .padding(.top, 5)
+            .padding(.top, scale.space[1])
             if mutationsDisabled, let blockedReason {
                 Text(blockedReason)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("mod"))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 6)
+        .padding(.top, scale.space[2])
         .padding(.leading, Self.bodyIndent)
     }
 
@@ -260,12 +261,12 @@ struct CheckpointCard: View {
                 ProgressView().controlSize(.small)
                 Text("Loading checkpoint files…")
             }
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-muted"))
-            .padding(.vertical, 2)
+            .padding(.vertical, scale.space[0])
         } else if let manifestError {
             Text(manifestError)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("del"))
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
@@ -286,7 +287,7 @@ struct CheckpointCard: View {
             if total > cap {
                 HStack(spacing: 6) {
                     Text("\(pageStart + 1)–\(pageEnd) of \(total) files")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                     Spacer(minLength: 6)
                     Button(action: onPreviousFilePage) {
@@ -302,7 +303,7 @@ struct CheckpointCard: View {
                     .disabled(pageEnd >= total)
                     .accessibilityLabel("Next files")
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, scale.space[0])
             }
             if !manifest.exclusions.isEmpty {
                 CheckpointExclusionsRow(exclusions: manifest.exclusions)
@@ -326,16 +327,17 @@ struct CheckpointActionButton: View {
     let action: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Icon(name: icon, size: 10, color: foreground)
                 Text(title)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.titleFont)
             }
             .foregroundStyle(foreground)
-            .padding(.horizontal, 11)
+            .padding(.horizontal, scale.space[3])
             .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
                 RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
@@ -382,12 +384,13 @@ struct CheckpointFooterRow: View {
     let storageUsage: Int64
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(CheckpointPresentation.footer(storageUsage: storageUsage))
-            .font(.system(size: 10))
+            .font(scale.caption.font(weight: .regular))
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             .help(CheckpointPresentation.retentionHelp)
     }
 }
@@ -398,6 +401,7 @@ struct CheckpointFileGroupRow: View {
     let onInspect: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button {
@@ -407,13 +411,13 @@ struct CheckpointFileGroupRow: View {
                 Icon(name: "file", size: 10, color: theme.color("fg-faint"))
                     .frame(width: 11, height: 11)
                 Text(group.renameSource.map { "\($0) → \(group.primaryPath)" } ?? group.primaryPath)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 6)
                 Text(badges)
-                    .font(.system(size: 9))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .fixedSize()
             }
@@ -421,7 +425,7 @@ struct CheckpointFileGroupRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 2)
+        .padding(.vertical, scale.space[0])
         .accessibilityLabel("Inspect checkpoint file \(group.primaryPath)")
     }
 }
@@ -429,13 +433,15 @@ struct CheckpointFileGroupRow: View {
 struct CheckpointExclusionsRow: View {
     let exclusions: [CheckpointExclusion]
 
+    @Environment(\.designScale) private var scale
+
     var body: some View {
         DisclosureGroup("Excluded files (\(exclusions.count))") {
             ForEach(exclusions, id: \.relativePath) { exclusion in
                 Text("\(exclusion.relativePath) — \(CreateCheckpointSheetModel.exclusionReason(exclusion.reason))")
             }
         }
-        .font(.system(size: 10))
-        .padding(.vertical, 2)
+        .font(scale.caption.font(weight: .regular))
+        .padding(.vertical, scale.space[0])
     }
 }

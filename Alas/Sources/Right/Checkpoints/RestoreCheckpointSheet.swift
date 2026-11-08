@@ -132,7 +132,7 @@ struct RestoreCheckpointSheet: View {
             .frame(minHeight: 220)
             footer
         }
-        .padding(20)
+        .padding(20) // design-literal: sheet inset sits between the 16 and 24 scale steps
         .frame(width: 560, height: 520)
     }
 
@@ -194,6 +194,8 @@ private struct CheckpointRestoreGroupRow: View {
     let selected: Bool
     let onToggle: () -> Void
 
+    @Environment(\.designScale) private var scale
+
     var body: some View {
         Button(action: onToggle) {
             HStack(alignment: .top, spacing: 10) {
@@ -202,10 +204,10 @@ private struct CheckpointRestoreGroupRow: View {
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(RestoreCheckpointSheetModel.title(for: group))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                     ForEach(RestoreCheckpointSheetModel.effectLines(for: group), id: \.self) { line in
                         Text(line)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(.secondary)
                     }
                 }
