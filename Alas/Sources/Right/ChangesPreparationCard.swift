@@ -122,7 +122,7 @@ struct ChangesPreparationCard: View {
             RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
         )
-        .padding(.horizontal, scale.space[2])
+        .padding(.horizontal, scale.space[3])
         .padding(.top, scale.space[2])
         .padding(.bottom, scale.space[1])
         .accessibilityIdentifier("changes-preparation-card")
@@ -321,7 +321,6 @@ struct ChangesPreparationCard: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
-            .layoutPriority(1)
             .help(reviewScopeHelp(ChangesPreparationCardText.reviewScopeMenuTitle))
             .accessibilityLabel(ChangesPreparationCardText.reviewScopeMenuTitle)
             .accessibilityIdentifier("changes-preparation-review-scope-menu")
@@ -502,14 +501,12 @@ struct ChangesPreparationCard: View {
                             .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("fg"))
                             .lineLimit(2)
-                            .minimumScaleFactor(0.85)
                         Spacer(minLength: 0)
                     }
                     Text(ggSubtitle(for: action))
                         .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
                 }
                 if action.isInFlight {
                     Spinner(lineWidth: 1.5, duration: 0.7)
