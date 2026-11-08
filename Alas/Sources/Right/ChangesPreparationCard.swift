@@ -118,10 +118,8 @@ struct ChangesPreparationCard: View {
             RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-1"))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: scale.radius.medium)
-                .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
-        )
+        // Fill only: the buttons inside already carry their own edges, so an
+        // outline here would nest a third border.
         .padding(.horizontal, scale.space[3])
         .padding(.top, scale.space[2])
         .padding(.bottom, scale.space[1])

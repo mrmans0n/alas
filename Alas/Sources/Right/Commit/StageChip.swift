@@ -36,7 +36,7 @@ struct StageChip: View {
             }
             .frame(width: 20, height: 20)
             .contentShape(Rectangle())
-            .opacity(state != .unstaged || hovering ? 1.0 : 0.55)
+            .opacity(state != .unstaged || hovering ? 1.0 : 0.85)
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
