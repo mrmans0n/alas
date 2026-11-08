@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Launches Alas Dev on a demo profile and writes window.png, sidebar.png and
-# transcript.png to <out-dir>. Everything comes from the seeded profile; nothing
+# Launches Alas Dev on a demo profile and writes window.png, sidebar.png,
+# transcript.png and right-pane.png to <out-dir>. Everything comes from the seeded profile; nothing
 # is clicked or typed. See README.md.
 #
 # Usage: capture.sh <profile-dir> <out-dir> <dark|light>
@@ -262,6 +262,7 @@ func write(_ name: String, x: Int, width: Int) {
 }
 write("sidebar.png", x: 0, width: sidebar)
 write("transcript.png", x: sidebar, width: window.width - sidebar - rightPane)
+write("right-pane.png", x: window.width - rightPane, width: rightPane)
 SWIFT
 
 echo "captured $3 at ${window_size}pt to $out_dir"
