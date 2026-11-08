@@ -59,3 +59,5 @@ Alas/Sources/Dialogs/ProjectSettingsTabBar.swift
 Alas/Sources/Dialogs/ProjectAgentSettingsView.swift
 Alas/Sources/Dialogs/ProjectMCPServerManager.swift
 Alas/Sources/Dialogs/ProjectMCPServerEditor.swift
+Alas/Sources/Dialogs/RepoSelector/RepoSelectorDialog.swift
+Alas/Sources/Dialogs/RepoSelector/RepoSelectorRowView.swift

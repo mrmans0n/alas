@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct RepoSelectorDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var appState: AppState
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
@@ -36,13 +37,13 @@ struct RepoSelectorDialog: View {
                 }
                 .frame(width: 720)
                 .background(theme.color("bg-1").opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
                 .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                .padding(.top, 70)
+                .padding(.top, 70) // design-literal: palette sits a fixed distance below the window top
                 .frame(maxHeight: .infinity, alignment: .top)
                 .onTapGesture { /* swallow */ }
                 .onKeyPress { press in handleKey(press) }
@@ -69,16 +70,16 @@ struct RepoSelectorDialog: View {
     private var inputRow: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .regular))
+                .font(scale.meta.font(weight: .regular))
                 .foregroundColor(theme.color("fg-dim"))
             TextField("Switch worktree…", text: Bindable(appState.repoSelector).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
-                .font(.system(size: 15))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg"))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[3])
         .overlay(
             Rectangle()
                 .fill(theme.color("line-soft"))
@@ -124,7 +125,7 @@ struct RepoSelectorDialog: View {
                         .id(renderedRow.id)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: appState.repoSelector.scrollToSelectionTick) { _, _ in
@@ -147,8 +148,8 @@ struct RepoSelectorDialog: View {
             label("esc close")
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.5))
         .overlay(
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5),
@@ -158,7 +159,7 @@ struct RepoSelectorDialog: View {
 
     private func label(_ s: String) -> some View {
         Text(s)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
     }
 
