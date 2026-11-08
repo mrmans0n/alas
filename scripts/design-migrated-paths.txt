@@ -117,3 +117,14 @@ Alas/Sources/Settings/OnDeviceAIPane.swift
 Alas/Sources/Settings/LocalTextModelSettings.swift
 Alas/Sources/Settings/ComputerUsePane.swift
 Alas/Sources/Settings/ShortcutsPane.swift
+Alas/Sources/Center/TabBarView.swift
+Alas/Sources/Center/BreadcrumbView.swift
+Alas/Sources/Center/EditorTabView.swift
+Alas/Sources/Center/EmptyTabView.swift
+Alas/Sources/Center/CenterPaneView.swift
+Alas/Sources/Center/LoadingProjectView.swift
+Alas/Sources/Center/ForestScene.swift
+Alas/Sources/Center/TerminalTabView.swift
+Alas/Sources/Center/RunActivityPill.swift
+Alas/Sources/Center/AgentHookInstallNudgeBanner.swift
+Alas/Sources/Center/EditorNavigationResultsView.swift

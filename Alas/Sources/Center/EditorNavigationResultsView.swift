@@ -3,6 +3,7 @@ import SwiftUI
 /// A worktree-owned, lazily-rendered references surface. The store is held by
 /// `TabsManager`, so this view is intentionally disposable.
 struct EditorNavigationResultsView: View {
+    @Environment(\.designScale) private var scale
     let store: EditorNavigationStore
     let onOpen: (EditorNavigationTarget) -> Void
     let onRerun: () -> Void
@@ -32,7 +33,7 @@ struct EditorNavigationResultsView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Button {
                 store.isExpanded.toggle()
             } label: {
@@ -41,25 +42,25 @@ struct EditorNavigationResultsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(store.isExpanded ? "Collapse references" : "Expand references")
             Text("References")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
             Text("\(store.results.count)")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .accessibilityLabel("\(store.results.count) references")
             if store.resultsAreStale {
                 Text("Stale")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("warn"))
                     .accessibilityLabel("Reference results are stale")
                 Button("Rerun", action: onRerun)
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .accessibilityLabel("Rerun reference search")
             }
             if store.isLoading { Button("Cancel") { store.cancelRequest() }.buttonStyle(.plain) }
             if let statusMessage = store.statusMessage {
                 Text(statusMessage)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("warn"))
                     .lineLimit(1)
             }
@@ -73,7 +74,7 @@ struct EditorNavigationResultsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Close references")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 30)
     }
 
@@ -93,30 +94,30 @@ struct EditorNavigationResultsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: scale.space[0]) {
                     ForEach(grouped, id: \.document) { group in
                         Text(documentLabel(group.document))
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundStyle(theme.color("fg-muted"))
-                            .padding(.top, 5)
+                            .padding(.top, scale.space[1])
                         ForEach(group.targets, id: \.self) { target in
                             Button {
                                 store.selectedResult = target
                                 onOpen(target)
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: scale.space[0]) {
                                     Text("Line \(target.position.line + 1)")
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(scale.meta.font(weight: .medium))
                                     Text(store.snippets[target] ?? "Loading snippet…")
-                                        .font(.system(size: 11, design: .monospaced))
+                                        .font(scale.meta.font(design: .monospaced))
                                         .lineLimit(1)
                                         .foregroundStyle(theme.color("fg-muted"))
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .buttonStyle(.plain)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, scale.space[3])
+                            .padding(.vertical, scale.space[1])
                             .background(store.selectedResult == target ? Color.accentColor.opacity(0.15) : .clear)
                             .accessibilityAddTraits(store.selectedResult == target ? .isSelected : [])
                             .accessibilityLabel("Open \(target.document.uri), line \(target.position.line + 1)")
@@ -126,8 +127,8 @@ struct EditorNavigationResultsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 6)
+                .padding(.horizontal, scale.space[2])
+                .padding(.bottom, scale.space[2])
             }
             .focusable()
             .onKeyPress(.downArrow) { store.moveResultSelection(by: 1)

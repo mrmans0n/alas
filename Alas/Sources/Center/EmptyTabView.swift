@@ -10,6 +10,7 @@ struct EmptyTabAction: Identifiable {
 }
 
 struct EmptyTabView: View {
+    @Environment(\.designScale) private var scale
     var subtitle = "Choose how to start working in this worktree."
     let actions: [EmptyTabAction]
     @Environment(\.theme) var theme
@@ -44,52 +45,53 @@ struct EmptyTabView: View {
     }
 
     private var card: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: scale.space[4]) {
             LovebirdView(pose: .idle)
                 .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
-            VStack(spacing: 5) {
+            VStack(spacing: scale.space[1]) {
                 Text("No tabs open")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: hero title
                     .foregroundColor(theme.color("fg"))
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
             }
             if !actions.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: scale.space[2]) {
                     ForEach(actions) { EmptyTabActionRow(item: $0) }
                 }
                 .frame(maxWidth: 420)
             }
         }
-        .padding(24)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .padding(scale.space[5])
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, scale.space[5])
     }
 }
 
 private struct EmptyTabActionRow: View {
+    @Environment(\.designScale) private var scale
     let item: EmptyTabAction
     @Environment(\.theme) var theme
     @State private var hovering = false
 
     var body: some View {
         Button(action: item.action) {
-            HStack(spacing: 10) {
+            HStack(spacing: scale.space[2]) {
                 Icon(name: item.icon, size: 14,
                      color: hovering ? theme.color("fg") : theme.color("fg-muted"))
                     .frame(width: 20)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(item.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text(item.subtitle)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -98,27 +100,27 @@ private struct EmptyTabActionRow: View {
                 Spacer(minLength: 12)
                 if let shortcut = item.shortcut {
                     Text(shortcut)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, scale.space[2])
                         .frame(height: 21)
                         .background(theme.color("bg-2"))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: scale.radius.small)
                                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
                         )
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
             .frame(height: 48)
             .background(hovering ? theme.color("bg-3") : theme.color("bg-2").opacity(0.55))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
