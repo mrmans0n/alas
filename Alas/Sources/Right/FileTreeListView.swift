@@ -100,7 +100,7 @@ struct FileTreeListView: View {
                                 fallbackColor: folderColor(for: terminal, open: open)
                             )
                             Text(chain.displayName)
-                                .font(scale.body.font(design: .monospaced))
+                                .font(scale.body.font)
                                 .foregroundColor(rowForeground(for: terminal))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -187,7 +187,7 @@ struct FileTreeListView: View {
                     HStack(spacing: 6) {
                         FileTypeIconView(filename: node.name, size: 18)
                         Text(node.name)
-                            .font(scale.body.font(design: .monospaced))
+                            .font(scale.body.font)
                             .foregroundColor(rowForeground(for: node))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -242,7 +242,7 @@ struct FileTreeListView: View {
             let parent = node.path.split(separator: "/").dropLast().joined(separator: "/")
             if !parent.isEmpty {
                 Text(parent)
-                    .font(scale.caption.font(weight: .regular, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -415,7 +415,7 @@ struct FileTreeListView: View {
 
     private func visibilityPill(_ node: FileTreeNode) -> some View {
         Text(node.visibility.rawValue)
-            .font(scale.caption.font(weight: .semibold, design: .monospaced))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundColor(theme.color("fg-dim"))
             .padding(.horizontal, scale.space[1])
             .padding(.vertical, scale.space[0])
@@ -425,7 +425,7 @@ struct FileTreeListView: View {
 
     private var submodulePill: some View {
         Text("submodule")
-            .font(scale.caption.font(weight: .semibold, design: .monospaced))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundColor(theme.color("submodule"))
             .padding(.horizontal, scale.space[1])
             .padding(.vertical, scale.space[0])
@@ -443,7 +443,7 @@ struct FileTreeListView: View {
 
     private func treeMessage(_ text: String, depth: Int) -> some View {
         Text(text)
-            .font(scale.meta.font(design: .monospaced))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-faint"))
             .padding(.leading, Self.messageLeadingPadding(depth: depth))
             .padding(.trailing, scale.space[3])

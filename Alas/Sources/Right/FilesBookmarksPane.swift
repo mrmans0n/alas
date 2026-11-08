@@ -143,13 +143,13 @@ struct FilesBookmarksPane: View {
         return HStack(spacing: scale.space[2]) {
             leading()
             Text(FilesBookmarksPane.leafName(of: path))
-                .font(scale.meta.font(design: .monospaced))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let parent = FilesBookmarksPane.parentPath(of: path) {
                 Text(parent)
-                    .font(scale.caption.font(weight: .regular, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)

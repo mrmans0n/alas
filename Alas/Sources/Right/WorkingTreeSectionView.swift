@@ -244,7 +244,7 @@ struct WorkingTreeFlatRowView: View {
                     fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
                 )
                 Text(node.name)
-                    .font(scale.body.font(design: .monospaced))
+                    .font(scale.body.font)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)

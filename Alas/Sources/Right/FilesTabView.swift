@@ -154,7 +154,7 @@ struct FilesTabView: View {
                 Icon(name: "target", size: 12, color: theme.color("accent"))
                     .frame(width: 14, height: 14)
                 Text(FileTreeListView.revealDisplayName(for: revealPath))
-                    .font(scale.meta.font(design: .monospaced))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
