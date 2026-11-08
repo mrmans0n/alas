@@ -90,6 +90,9 @@ struct ChangesPreparationCard: View {
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
     let onDismissSyncFailure: () -> Void
     let onOpenGGLanding: () -> Void
+    /// Draws Review in the secondary style, so a question waiting in the chat
+    /// leads instead.
+    var quietsReview = false
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -274,14 +277,16 @@ struct ChangesPreparationCard: View {
     }
 
     private func primaryReviewButton(_ action: ChangesPreparationModel.ReviewAction) -> some View {
-        HStack(spacing: 1) {
+        let fill = quietsReview ? theme.color("bg-2").opacity(0.72) : theme.color("accent")
+        let ink = quietsReview ? theme.color("fg") : theme.color("bg-0")
+        return HStack(spacing: 1) {
             Button(action: onReviewChanges) {
                 HStack(spacing: 9) {
-                    Icon(name: "diff", size: 13, color: theme.color("bg-0"))
+                    Icon(name: "diff", size: 13, color: ink)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(action.title)
                             .font(scale.emphasis.font(weight: .semibold))
-                            .foregroundColor(theme.color("bg-0"))
+                            .foregroundColor(ink)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Text(ChangesPreparationCardText.reviewStats(
@@ -290,17 +295,17 @@ struct ChangesPreparationCard: View {
                             deletions: action.deletions
                         ))
                         .font(scale.metaFont.monospacedDigit())
-                        .foregroundColor(theme.color("bg-0").opacity(0.72))
+                        .foregroundColor(ink.opacity(0.72))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 8)
-                    Icon(name: "chev-right", size: 11, color: theme.color("bg-0").opacity(0.72))
+                    Icon(name: "chev-right", size: 11, color: ink.opacity(0.72))
                 }
                 .padding(.horizontal, scale.space[3])
                 .frame(height: 44)
-                .background(theme.color("accent"))
+                .background(fill)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -310,9 +315,9 @@ struct ChangesPreparationCard: View {
             Menu {
                 reviewScopeMenuContent
             } label: {
-                Icon(name: "chev-down", size: 10, color: theme.color("bg-0").opacity(0.72))
+                Icon(name: "chev-down", size: 10, color: ink.opacity(0.72))
                     .frame(width: 26, height: 44)
-                    .background(theme.color("accent"))
+                    .background(fill)
                     .contentShape(Rectangle())
             }
             .menuStyle(.button)
@@ -324,6 +329,11 @@ struct ChangesPreparationCard: View {
             .accessibilityIdentifier("changes-preparation-review-scope-menu")
         }
         .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("line").opacity(quietsReview ? 0.65 : 0), lineWidth: 0.75)
+        )
+        .animation(.easeOut(duration: 0.2), value: quietsReview)
     }
 
     /// The scopes, grouped local first and hosted requests after, then the

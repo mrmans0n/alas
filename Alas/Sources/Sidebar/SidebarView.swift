@@ -132,16 +132,7 @@ struct SidebarView: View {
                                             GGLandingPresentation.sidebarStatus(for: $0)
                                         },
                                         onOpenGGLanding: { state.openGGLanding(projectId: project.id) },
-                                        harnessSummary: { worktreeId in
-                                            let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
-                                                switch tab {
-                                                case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                                                case .acpSession(let s): return [s.sessionId]
-                                                default:                 return []
-                                                }
-                                            }
-                                            return state.harness.summary(forSessionIds: ids)
-                                        },
+                                        harnessSummary: { state.harnessSummary(forWorktree: $0) },
                                         ggMenuModel: { wt in
                                             state.ggWorktreeMenuModel(project: project, worktree: wt)
                                         },

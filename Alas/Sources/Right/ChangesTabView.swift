@@ -606,10 +606,13 @@ struct ChangesTabView: View {
             hasReviewScopes: !reviewScopeOptions.isEmpty
         ) {
             let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
+            let quietsReview = Self.quietsReview(
+                harnessState: appState.harnessSummary(forWorktree: rps.worktree.id)?.state
+            )
             rows.append(appKitRow(
                 id: "changes-preparation",
                 token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut)
-                    + String(reflecting: reviewScopeOptions),
+                    + String(reflecting: reviewScopeOptions) + "\(quietsReview)",
                 estimatedHeight: 92
             ) {
                 ChangesPreparationCard(
@@ -627,7 +630,8 @@ struct ChangesTabView: View {
                     onGGStackAction: { rps.onGGStackAction($0, appState: appState) },
                     onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) },
                     onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
-                    onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) }
+                    onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) },
+                    quietsReview: quietsReview
                 )
             })
         }
@@ -1276,6 +1280,12 @@ struct ChangesTabView: View {
         landingStatus: ChangesPreparationModel.GGLandingStatus?
     ) -> Bool {
         drawerIsActive || landingStatus != nil
+    }
+
+    /// Review steps back while an agent in this worktree waits on the user
+    /// (an approval or a question), so the chat's ask leads the window.
+    static func quietsReview(harnessState: HarnessService.AggregatedState?) -> Bool {
+        harnessState == .awaiting
     }
 
     /// The model the Prepare card renders, or nil to hide it. A card with

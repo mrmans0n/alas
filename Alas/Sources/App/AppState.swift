@@ -727,6 +727,19 @@ final class AppState {
         boot: { try await SimulatorControl.boot(udid: $0) }
     )
     var harness: HarnessService { core.harness }
+
+    /// The agents running in a worktree's terminal panes and chat tabs,
+    /// rolled up as the sidebar row and the Changes tab show them.
+    func harnessSummary(forWorktree worktreeId: String) -> HarnessService.WorktreeHarnessSummary? {
+        let ids = tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+            switch tab {
+            case .terminal(let s): return s.root.leaves().map(\.sessionId)
+            case .acpSession(let s): return [s.sessionId]
+            default: return []
+            }
+        }
+        return harness.summary(forSessionIds: ids)
+    }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
     @ObservationIgnored
