@@ -134,3 +134,10 @@ Alas/Sources/Center/FileSnapshotTabView.swift
 Alas/Sources/Center/FileHistoryTabView.swift
 Alas/Sources/Center/StashDiffTabView.swift
 Alas/Sources/Center/CheckpointDiffTabView.swift
+Alas/Sources/Center/MergeConflictTabView.swift
+Alas/Sources/Center/MergeConflictToolbar.swift
+Alas/Sources/Center/MergeConflictAnnotationStrip.swift
+Alas/Sources/Center/MergeConflictAgentProposalView.swift
+Alas/Sources/Center/MergeConflictBinaryView.swift
+Alas/Sources/Center/MergeConflictResolvedEmptyView.swift
+Alas/Sources/Center/MergeConflictMinimap.swift

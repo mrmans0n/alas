@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MergeConflictAgentProposalView: View {
+    @Environment(\.designScale) private var scale
     let currentText: String
     let proposedText: String
     let fileExtension: String
@@ -40,39 +41,39 @@ struct MergeConflictAgentProposalView: View {
         }
         .background(theme.color("bg-1"))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 1)
         )
-        .padding(20)
+        .padding(scale.space[4])
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "sparkles")
                 .foregroundColor(theme.color("accent"))
             Text("Review proposed resolution")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider(), alignment: .bottom)
     }
 
     private func columnLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .textCase(.uppercase)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
     }
 
     private var actions: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Spacer()
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
@@ -81,8 +82,8 @@ struct MergeConflictAgentProposalView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(theme.color("accent"))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider(), alignment: .top)
     }
