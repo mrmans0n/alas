@@ -31,3 +31,5 @@ Alas/Sources/Right/PaneBandStyle.swift
 Alas/Sources/Right/RightPaneCardChrome.swift
 Alas/Sources/Right/RightPaneRail.swift
 Alas/Sources/Right/RightPaneToolbar.swift
+Alas/Sources/Integrations/CodeHost/ReviewLoopDrawer.swift
+Alas/Sources/Integrations/GG/GGStackDrawer.swift
