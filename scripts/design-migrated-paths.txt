@@ -116,3 +116,4 @@ Alas/Sources/Settings/ACPRegistryBrowserView.swift
 Alas/Sources/Settings/OnDeviceAIPane.swift
 Alas/Sources/Settings/LocalTextModelSettings.swift
 Alas/Sources/Settings/ComputerUsePane.swift
+Alas/Sources/Settings/ShortcutsPane.swift
