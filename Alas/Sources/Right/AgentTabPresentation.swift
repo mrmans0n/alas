@@ -171,7 +171,9 @@ struct AgentSidebarRowView: View {
                 followUpComposer(sessionID: sessionID)
             }
         }
-        .padding(scale.space[3])
+        // The metadata line shares its row with the status pill and has only a
+        // few points to spare, so the card keeps a tight inset.
+        .padding(scale.space[2])
         .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
         .onHover { isHovering = $0 }
         .onChange(of: delivery) {
