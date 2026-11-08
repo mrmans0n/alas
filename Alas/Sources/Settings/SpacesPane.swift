@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 struct SpacesPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -9,11 +10,11 @@ struct SpacesPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Spaces")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(SettingsPaneStyle.titleFont)
                 Text("Organize sidebar repositories into focused groups.")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Spaces") {
                     ForEach(state.spacesManager.spaces) { space in
@@ -42,8 +43,8 @@ struct SpacesPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5])
+            .padding(.vertical, scale.space[5])
         }
     }
 }
@@ -123,6 +124,7 @@ private struct SpaceSettingsRow: View {
 }
 
 private struct SpaceRowIconButton: View {
+    @Environment(\.designScale) private var scale
     let icon: String
     let tooltip: String
     let action: () -> Void
@@ -134,10 +136,10 @@ private struct SpaceRowIconButton: View {
                 .frame(width: 28, height: 28)
                 .background(theme.color("bg-3"))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(tooltip)

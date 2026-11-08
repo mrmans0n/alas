@@ -97,3 +97,16 @@ Alas/Sources/Settings/SettingsRow.swift
 Alas/Sources/Settings/ShortcutChip.swift
 Alas/Sources/Settings/FontFamilyPicker.swift
 Alas/Sources/Settings/PromptEditorBody.swift
+Alas/Sources/Settings/GeneralPane.swift
+Alas/Sources/Settings/AppearancePane.swift
+Alas/Sources/Settings/ChatPane.swift
+Alas/Sources/Settings/ChangesPane.swift
+Alas/Sources/Settings/CodePane.swift
+Alas/Sources/Settings/CodeLanguageDetailView.swift
+Alas/Sources/Settings/LSPInstallProgressSheet.swift
+Alas/Sources/Settings/TerminalPane.swift
+Alas/Sources/Settings/SpacesPane.swift
+Alas/Sources/Settings/WorktreesPane.swift
+Alas/Sources/Settings/WorktreeVMsSection.swift
+Alas/Sources/Settings/OpenSessionsSection.swift
+Alas/Sources/Settings/AdvancedPane.swift
