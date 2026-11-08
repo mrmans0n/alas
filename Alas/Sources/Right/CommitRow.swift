@@ -296,9 +296,9 @@ struct CommitRow: View {
 
     private var avatar: some View {
         Text(commit.authorInitials)
-            .font(scale.glyph.font(weight: .bold))
+            .font(scale.caption.font(weight: .bold))
             .foregroundColor(.white)
-            .frame(width: 14, height: 14)
+            .frame(width: 16, height: 16)
             .background(authorColor(commit.author))
             .clipShape(Circle())
     }

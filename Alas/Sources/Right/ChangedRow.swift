@@ -59,9 +59,15 @@ struct ChangedRow: View {
                 }
                 .contentShape(Rectangle())
                 Spacer()
-                if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
-                if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
-                StatusBadge(status: file.status)
+                // A fixed gutter keeps the status letter from reading as part
+                // of the counts.
+                HStack(spacing: scale.space[2]) {
+                    HStack(spacing: scale.space[1]) {
+                        if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
+                        if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
+                    }
+                    StatusBadge(status: file.status)
+                }
             }
             .font(scale.meta.font(design: .monospaced))
             .padding(.leading, Self.rowLeadingPadding(depth: depth))
