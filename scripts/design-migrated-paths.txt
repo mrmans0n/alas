@@ -52,3 +52,10 @@ Alas/Sources/Dialogs/NewWorktreeDialog.swift
 Alas/Sources/Dialogs/BranchPicker.swift
 Alas/Sources/Dialogs/IssueAutocompleteField.swift
 Alas/Sources/Dialogs/AttachIssueDialog.swift
+Alas/Sources/Dialogs/NewProjectDialog.swift
+Alas/Sources/Dialogs/ProjectPicker.swift
+Alas/Sources/Dialogs/SSHHostPicker.swift
+Alas/Sources/Dialogs/ProjectSettingsTabBar.swift
+Alas/Sources/Dialogs/ProjectAgentSettingsView.swift
+Alas/Sources/Dialogs/ProjectMCPServerManager.swift
+Alas/Sources/Dialogs/ProjectMCPServerEditor.swift

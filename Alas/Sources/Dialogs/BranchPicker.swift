@@ -56,7 +56,7 @@ struct BranchPicker: View {
     private var popoverBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                AlasField(text: $selection, placeholder: "Branch or ref", monospaced: true)
+                AlasField(text: $selection, placeholder: "Branch or ref")
                 AlasField(text: $search, placeholder: "Search branches...")
             }
             .padding(scale.space[2])
