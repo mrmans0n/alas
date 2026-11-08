@@ -33,3 +33,4 @@ Alas/Sources/Right/RightPaneRail.swift
 Alas/Sources/Right/RightPaneToolbar.swift
 Alas/Sources/Integrations/CodeHost/ReviewLoopDrawer.swift
 Alas/Sources/Integrations/GG/GGStackDrawer.swift
+Alas/Sources/Right/ChangesPreparationCard.swift

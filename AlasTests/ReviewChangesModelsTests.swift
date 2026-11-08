@@ -260,7 +260,7 @@ struct ReviewChangesModelsTests {
         #expect(review.fileCount == 1)
         #expect(review.additions == 8)
         #expect(review.deletions == 2)
-        #expect(review.title == "Review current changes")
+        #expect(review.title == "Review changes")
     }
 
     @Test func preparationModelHidesReviewActionWhenOnlyConflictsExist() {
@@ -652,7 +652,7 @@ struct ReviewChangesModelsTests {
             readinessActions: readiness.actions
         )
 
-        #expect(model.reviewAction?.title == "Review current changes")
+        #expect(model.reviewAction?.title == "Review changes")
         #expect(model.reviewRequestActions.first?.kind == .createReviewRequest)
         #expect(model.reviewRequestActions.first?.title == "Create PR")
     }
