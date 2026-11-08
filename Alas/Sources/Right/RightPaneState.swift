@@ -82,7 +82,17 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Folder projects have no git: only the Files tree refreshes, from the
     /// filesystem, and every git probe is skipped.
     let isFolder: Bool
-    var defaultTab: RightPaneTab { isFolder ? .files : .changes }
+    var defaultTab: RightPaneTab {
+        #if DEBUG
+        // Design captures open on another tab without clicking; see scripts/design/README.md.
+        if let raw = ProcessInfo.processInfo.environment["ALAS_CAPTURE_RIGHT_TAB"],
+           let tab = RightPaneTab(rawValue: raw),
+           RightPaneTab.available(isFolder: isFolder).contains(tab) {
+            return tab
+        }
+        #endif
+        return isFolder ? .files : .changes
+    }
     let reviewLoop: ReviewLoopState
     @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
     @ObservationIgnored
