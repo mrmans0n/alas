@@ -43,6 +43,7 @@ struct FilesTabView: View {
     var createsOnPeer: Bool = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var dragStartHeight: CGFloat?
 
     var body: some View {
@@ -103,7 +104,7 @@ struct FilesTabView: View {
                             revealPath: revealPath
                         )
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
                 .contextMenu { if !readOnly || createsOnPeer { rootContextMenu } }
                 .onChange(of: revealTick) { _, _ in
@@ -149,11 +150,11 @@ struct FilesTabView: View {
     @ViewBuilder
     private var revealBar: some View {
         if let revealPath {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Icon(name: "target", size: 12, color: theme.color("accent"))
                     .frame(width: 14, height: 14)
                 Text(FileTreeListView.revealDisplayName(for: revealPath))
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -167,9 +168,9 @@ struct FilesTabView: View {
                 .accessibilityLabel("Clear focused file highlight")
                 .help("Clear focused file highlight")
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 8)
-            .padding(.vertical, 5)
+            .padding(.leading, scale.space[3])
+            .padding(.trailing, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .background(theme.color("bg-3").opacity(0.92))
             .overlay(alignment: .bottom) {
                 Rectangle()

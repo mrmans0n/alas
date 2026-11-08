@@ -2,25 +2,26 @@ import SwiftUI
 
 struct AgentSidebarEmptyState: View {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             Image(systemName: "sparkles")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 18, weight: .medium)) // design-literal: decorative icon, not text
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 38, height: 38)
-                .background(theme.color("accent").opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .background(theme.color("accent").opacity(0.12), in: RoundedRectangle(cornerRadius: scale.radius.medium))
             Text("No agent activity")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundStyle(theme.color("fg"))
             Text("Agent sessions and terminals for this worktree will appear here.")
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 28)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[5])
         .background(
             LinearGradient(
                 colors: [
@@ -30,10 +31,10 @@ struct AgentSidebarEmptyState: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 12)
+            in: RoundedRectangle(cornerRadius: scale.radius.medium)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(0.7), lineWidth: 0.75)
         )
         .accessibilityElement(children: .combine)
@@ -44,23 +45,24 @@ struct AgentSidebarSectionHeader: View {
     let title: String
     let count: Int
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
             Text("\(count)")
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .monospacedDigit()
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("seg-pill-bg"), in: Capsule())
             Spacer(minLength: 0)
         }
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(.horizontal, 2)
-        .padding(.top, 4)
+        .padding(.horizontal, scale.space[0])
+        .padding(.top, scale.space[1])
         .accessibilityElement(children: .combine)
     }
 }
@@ -116,6 +118,7 @@ struct AgentSidebarRowView: View {
     @State private var isEditing = false
     @State private var isHovering = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     /// Whether `controls` has anything worth rendering beyond the
     /// interrupt/etc. buttons already gated by `canControl` — mirrors
@@ -127,14 +130,14 @@ struct AgentSidebarRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Button { actions.onFocus(row.id) } label: {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: scale.space[2]) {
                     logo
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
+                        HStack(alignment: .firstTextBaseline, spacing: scale.space[1]) {
                             Text(row.title)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(scale.titleFont)
                                 .foregroundStyle(theme.color("fg"))
                                 .lineLimit(2)
                             if case .child = row.delegation {
@@ -168,7 +171,7 @@ struct AgentSidebarRowView: View {
                 followUpComposer(sessionID: sessionID)
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
         .onHover { isHovering = $0 }
         .onChange(of: delivery) {
@@ -181,27 +184,27 @@ struct AgentSidebarRowView: View {
 
     private var logo: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(stateColor.opacity(0.13))
             if let agent {
                 AgentLogoView(agent: agent, size: 20)
                     .accessibilityHidden(true)
             } else {
                 Image(systemName: row.agentID == "terminal" ? "terminal" : "sparkles")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 14, weight: .medium)) // design-literal: logo glyph, not text
                     .foregroundStyle(stateColor)
                     .accessibilityHidden(true)
             }
         }
         .frame(width: 32, height: 32)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(stateColor.opacity(0.24), lineWidth: 0.75)
         )
     }
 
     private var metadata: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: scale.space[1]) {
             ForEach(Array(metadataSegments.enumerated()), id: \.offset) { index, segment in
                 if index > 0 {
                     Text("·")
@@ -210,7 +213,7 @@ struct AgentSidebarRowView: View {
                 segment
             }
         }
-        .font(.system(size: 10))
+        .font(scale.caption.font(weight: .regular))
         .foregroundStyle(theme.color("fg-muted"))
         .lineLimit(1)
     }
@@ -258,7 +261,7 @@ struct AgentSidebarRowView: View {
         }
         if let host = row.host {
             segments.append(AnyView(
-                HStack(spacing: 3) {
+                HStack(spacing: scale.space[1]) {
                     Image(systemName: "network")
                         .accessibilityHidden(true)
                     Text(AgentSidebarHostDisplay.shortName(for: host))
@@ -280,37 +283,37 @@ struct AgentSidebarRowView: View {
     private var delegationNote: some View {
         if let name = row.delegatedFromName {
             Text("From \(name)")
-                .font(.system(size: 9.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
                 .lineLimit(1)
-                .padding(.top, 1)
+                .padding(.top, scale.space[0])
         }
         if let childSummary {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(scale.glyphFont)
                     .accessibilityHidden(true)
                 Text(childSummary)
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .monospacedDigit()
             }
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[0])
             .background(theme.color("seg-pill-bg"), in: Capsule())
-            .padding(.top, 1)
+            .padding(.top, scale.space[0])
         }
         if case .child(_, let parentTitle, false) = row.delegation {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(scale.glyphFont)
                     .accessibilityHidden(true)
                 Text(delegatedByLabel(parentTitle))
-                    .font(.system(size: 9.5))
+                    .font(scale.caption.font(weight: .regular))
                     .lineLimit(1)
             }
             .foregroundStyle(theme.color("fg-faint"))
-            .padding(.top, 1)
+            .padding(.top, scale.space[0])
         }
     }
 
@@ -332,15 +335,15 @@ struct AgentSidebarRowView: View {
     }
 
     private var statusPill: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             Circle()
                 .fill(stateColor)
                 .frame(width: 6, height: 6)
             Text(row.state.label)
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
         }
         .foregroundStyle(stateColor)
-        .padding(.horizontal, 7)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 22)
         .background(stateColor.opacity(0.12), in: Capsule())
         .overlay(Capsule().strokeBorder(stateColor.opacity(0.22), lineWidth: 0.5))
@@ -350,17 +353,17 @@ struct AgentSidebarRowView: View {
     }
 
     private func planProgress(_ plan: AgentSidebarPlanProgress) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "checklist")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundStyle(stateColor)
                 Text("Tasks \(plan.completed)/\(plan.total)")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                 Spacer(minLength: 0)
                 if let step = plan.currentStep {
                     Text(step)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-muted"))
                         .lineLimit(1)
                 }
@@ -369,12 +372,12 @@ struct AgentSidebarRowView: View {
                 .tint(stateColor)
         }
         .foregroundStyle(theme.color("fg"))
-        .padding(8)
-        .background(theme.color("bg-0").opacity(0.42), in: RoundedRectangle(cornerRadius: 7))
+        .padding(scale.space[2])
+        .background(theme.color("bg-0").opacity(0.42), in: RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private var controls: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
             ACPContextUsageButton(
                 usage: row.contextUsage, modelName: row.model,
                 lastTurnQuota: row.lastTurnQuota, sessionQuotaTotal: row.sessionQuotaTotal)
@@ -405,22 +408,22 @@ struct AgentSidebarRowView: View {
     }
 
     private func followUpComposer(sessionID: ACPSession.ID) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             TextField("Follow-up message", text: $draft, axis: .vertical)
                 .lineLimit(2 ... 5)
                 .textFieldStyle(.plain)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
-                .background(theme.color("bg-0").opacity(0.66), in: RoundedRectangle(cornerRadius: 7))
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[2])
+                .background(theme.color("bg-0").opacity(0.66), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.75)
                 )
                 .disabled(delivery == .sending)
             HStack {
                 if delivery == .failed {
                     Text("Could not send. Your message is kept here.")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("del"))
                 }
                 Spacer(minLength: 0)
@@ -437,10 +440,10 @@ struct AgentSidebarRowView: View {
                 .controlSize(.small)
             }
         }
-        .padding(8)
-        .background(theme.color("bg-1").opacity(0.62), in: RoundedRectangle(cornerRadius: 9))
+        .padding(scale.space[2])
+        .background(theme.color("bg-1").opacity(0.62), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 9)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.22), lineWidth: 0.75)
         )
     }
@@ -519,15 +522,16 @@ extension AgentSidebarState {
 struct AgentSidebarKindTag: View {
     let label: String
     let color: Color
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(label)
-            .font(.system(size: 8.5, weight: .bold))
+            .font(scale.caption.font(weight: .bold))
             .tracking(0.3)
             .foregroundStyle(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
+            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: scale.radius.small))
             .fixedSize()
     }
 }
@@ -540,32 +544,33 @@ struct AgentSidebarSubagentRowView: View {
     let onCancel: (() -> Void)?
     @State private var isHovering = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Button(action: onFocus) {
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: scale.space[2]) {
                     Image(systemName: "person.2")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(scale.captionFont)
                         .foregroundStyle(stateColor)
                         .frame(width: 24, height: 24)
-                        .background(stateColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
+                        .background(stateColor.opacity(0.13), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
+                        HStack(spacing: scale.space[1]) {
                             Text(subagent.name)
-                                .font(.system(size: 11.5, weight: .semibold))
+                                .font(scale.meta.font(weight: .semibold))
                                 .foregroundStyle(theme.color("fg"))
                                 .lineLimit(1)
                             AgentSidebarKindTag(label: "SUBAGENT", color: theme.color("info"))
                         }
                         if let task = ACPSubagentRowPolicy.summary(task: subagent.task, messageCount: 0) {
                             Text(task)
-                                .font(.system(size: 10).italic())
+                                .font(scale.caption.font(weight: .regular).italic())
                                 .foregroundStyle(theme.color("fg-muted"))
                                 .lineLimit(2)
                         }
                         timing
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -589,7 +594,7 @@ struct AgentSidebarSubagentRowView: View {
                 }
             }
         }
-        .padding(8)
+        .padding(scale.space[2])
         .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
         .opacity(isDimmed ? 0.6 : 1)
         .onHover { isHovering = $0 }
@@ -612,9 +617,9 @@ struct AgentSidebarSubagentRowView: View {
 
     private var statusPill: some View {
         Text(ACPSubagentRowPolicy.stateLabel(for: subagent.state))
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundStyle(stateColor)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 20)
             .background(stateColor.opacity(0.12), in: Capsule())
             .fixedSize()
