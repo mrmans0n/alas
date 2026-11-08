@@ -8,6 +8,7 @@ struct OperationCard: View {
     let onAbort: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     /// System orange text and black hairlines assume a dark surface; the
     /// light theme uses its own `warn` and `line` instead.
@@ -24,7 +25,7 @@ struct OperationCard: View {
             }
             actions
         }
-        .padding(10)
+        .padding(scale.space[2])
         .background(
             LinearGradient(
                 colors: [tint.opacity(0.25), tint.opacity(0.10)],
@@ -40,7 +41,7 @@ struct OperationCard: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(tint)
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(tint)
         }
     }
@@ -56,7 +57,7 @@ struct OperationCard: View {
 
     private var subtitle: some View {
         Text(subtitleText)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(.primary)
     }
 
@@ -89,7 +90,7 @@ struct OperationCard: View {
             }
         }
         .frame(height: 4)
-        .clipShape(RoundedRectangle(cornerRadius: 2))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     private func planList(plan: RebasePlan) -> some View {
@@ -103,16 +104,16 @@ struct OperationCard: View {
                         .truncationMode(.tail)
                         .foregroundColor(color(commit.state))
                 }
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
             }
             if plan.commits.count > 6 {
                 Text("…\(plan.commits.count - 6) more")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.top, 4)
-        .padding(.bottom, 2)
+        .padding(.top, scale.space[1])
+        .padding(.bottom, scale.space[0])
     }
 
     private func symbol(_ s: RebasePlanCommit.State) -> String {
@@ -128,19 +129,19 @@ struct OperationCard: View {
 
     private var actions: some View {
         HStack(spacing: 4) {
-            Button(action: onContinue) { Text("Continue").font(.system(size: 11)) }
+            Button(action: onContinue) { Text("Continue").font(scale.metaFont) }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .disabled(hasUnresolvedConflicts)
             if case .merge = operation {} else {
-                Button(action: onSkip) { Text("Skip").font(.system(size: 11)) }
+                Button(action: onSkip) { Text("Skip").font(scale.metaFont) }
                     .buttonStyle(.bordered)
             }
             Spacer()
-            Button(action: onAbort) { Text("Abort").font(.system(size: 11)) }
+            Button(action: onAbort) { Text("Abort").font(scale.metaFont) }
                 .buttonStyle(.bordered)
                 .tint(.red)
         }
-        .padding(.top, 4)
+        .padding(.top, scale.space[1])
     }
 }

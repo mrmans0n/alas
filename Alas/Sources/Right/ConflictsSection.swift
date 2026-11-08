@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ConflictsSection: View {
+    @Environment(\.designScale) private var scale
     let conflicts: [ChangedFile]
     /// True while the workspace-level agent invocation is running. The
     /// resolve button flips into Cancel and a spinner row appears below
@@ -44,14 +45,14 @@ struct ConflictsSection: View {
                     row(for: file)
                 }
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, scale.space[1])
         }
     }
 
     private var header: some View {
         HStack(spacing: 6) {
             Text("Conflicts (\(conflicts.count))")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .textCase(.uppercase)
                 .foregroundColor(.secondary)
             Spacer()
@@ -59,9 +60,9 @@ struct ConflictsSection: View {
                 bulkResolveButton
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
+        .padding(.horizontal, scale.space[2])
+        .padding(.top, scale.space[2])
+        .padding(.bottom, scale.space[0])
     }
 
     @ViewBuilder
@@ -72,7 +73,7 @@ struct ConflictsSection: View {
                     Image(systemName: "stop.circle")
                     Text("Cancel")
                 }
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
@@ -83,7 +84,7 @@ struct ConflictsSection: View {
                     Image(systemName: "sparkles")
                     Text("Resolve all with agent")
                 }
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
@@ -99,12 +100,12 @@ struct ConflictsSection: View {
             Spinner(lineWidth: 1.5, duration: 0.7)
                 .frame(width: 10, height: 10)
             Text("Agent resolving conflicts…")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(.secondary)
             Spacer()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
     }
 
     @ViewBuilder
@@ -136,11 +137,11 @@ struct ConflictsSection: View {
                     .foregroundColor(.primary)
                 Spacer()
                 Text(kindLabel(file.conflict))
-                    .font(.system(size: 9))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -162,11 +163,11 @@ struct ConflictsSection: View {
                     .foregroundColor(.primary)
                 Spacer()
                 Text("both deleted")
-                    .font(.system(size: 9))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -215,8 +216,8 @@ struct ConflictsSection: View {
                 .controlSize(.mini)
                 .tint(.red)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .contextMenu {
             if isOursDeleted {
                 Button("Keep theirs") { onUseTheirs(file) }
