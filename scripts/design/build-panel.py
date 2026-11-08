@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 IMAGES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-SCREENS = ("sidebar", "transcript", "window")
+SCREENS = ("sidebar", "transcript", "right-pane", "window")
 
 
 def slug(text):

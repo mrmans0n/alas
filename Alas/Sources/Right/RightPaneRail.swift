@@ -183,7 +183,9 @@ private struct RightPaneRailButton: View {
                 .fill(theme.color(tone ?? "add"))
                 .frame(width: 7, height: 7)
                 .overlay(Circle().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
-                .padding(scale.space[0])
+                // Hangs off the button's corner so it never covers the glyph;
+                // the rail's padding leaves room on both edges.
+                .offset(x: 2, y: -2)
         case .count:
             if let text = badge.displayText {
                 Text(text)
@@ -193,6 +195,7 @@ private struct RightPaneRailButton: View {
                     .frame(minWidth: 14, minHeight: 14)
                     .background(Capsule().fill(theme.color(tone ?? "bg-4")))
                     .overlay(Capsule().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
+                    .offset(x: 2, y: -2)
             }
         }
     }
