@@ -173,3 +173,17 @@ Alas/Sources/Center/ReviewWorkspace/ReviewFeedbackBundle.swift
 Alas/Sources/Center/ReviewWorkspace/ReviewSessionLoader.swift
 Alas/Sources/Center/ReviewWorkspace/ReviewSessionSelectionPersister.swift
 Alas/Sources/Center/ReviewWorkspace/ReviewSessionTabView.swift
+Alas/Sources/Center/Commit/CommitDiffView.swift
+Alas/Sources/Center/Commit/CommitEditorTabView.swift
+Alas/Sources/Center/Commit/CommitFilesListView.swift
+Alas/Sources/Center/Commit/CommitHeaderView.swift
+Alas/Sources/Center/Commit/CommitMessageEditorView.swift
+Alas/Sources/Center/Commit/CommitMessageSuggestion.swift
+Alas/Sources/Center/Commit/CommitPrimaryAction.swift
+Alas/Sources/Center/Commit/CommitReviewLoader.swift
+Alas/Sources/Center/Commit/CommitTabView.swift
+Alas/Sources/Center/Commit/DraftAmendPrefill.swift
+Alas/Sources/Center/Commit/DraftCommitTabView.swift
+Alas/Sources/Center/Commit/FollowRevisionPrefill.swift
+Alas/Sources/Center/Commit/RevisionFollowControl.swift
+Alas/Sources/Center/Commit/StagedDiffLoader.swift

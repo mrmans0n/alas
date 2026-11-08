@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct CommitFilesListView: View {
+    @Environment(\.designScale) private var scale
     let files: [CommitChangedFile]
     @Binding var selectedPath: String?
     let onDropFile: ((CommitChangedFile) -> Void)?
@@ -31,7 +32,7 @@ struct CommitFilesListView: View {
                     row(file)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, scale.space[1])
         }
         .background(theme.color("bg-1"))
     }
@@ -41,18 +42,18 @@ struct CommitFilesListView: View {
         return Button {
             selectedPath = file.path
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text(file.status)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(scale.caption.font(weight: .bold, design: .monospaced))
                     .foregroundColor(statusColor(file.status))
                     .frame(width: 12)
                 Text((file.path as NSString).lastPathComponent)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text((file.path as NSString).deletingLastPathComponent)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -62,8 +63,8 @@ struct CommitFilesListView: View {
                     Text("−\(file.del)").foregroundColor(theme.color("del"))
                 }
             }
-            .font(.system(size: 10.5, design: .monospaced))
-            .padding(.horizontal, 12).padding(.vertical, 4)
+            .font(scale.caption.font(weight: .regular, design: .monospaced))
+            .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
             .centerPanelRowSpacing()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? theme.color("accent").opacity(0.2) : Color.clear)

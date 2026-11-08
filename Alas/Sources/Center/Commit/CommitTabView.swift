@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct CommitTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let tabState: CommitTabState
     let worktreeId: String
@@ -98,12 +99,12 @@ struct CommitTabView: View {
                     .frame(width: 20, height: 20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detailsError {
-                VStack(spacing: 8) {
+                VStack(spacing: scale.space[2]) {
                     Text("Could not load commit \(String(sha.prefix(7)))")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(scale.titleFont)
                         .foregroundColor(theme.color("del"))
                     Text(detailsError)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                     AlasButton(title: "Retry", style: .subtle) {
                         Task { await loadDetails() }
@@ -136,12 +137,12 @@ struct CommitTabView: View {
                 .frame(width: 20, height: 20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .error:
-            VStack(spacing: 8) {
+            VStack(spacing: scale.space[2]) {
                 Text("Could not load commit diffs")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("del"))
                 Text(reviewSessionError ?? "")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(4)
@@ -149,7 +150,7 @@ struct CommitTabView: View {
                     Task { await loadDetails() }
                 }
             }
-            .padding(24)
+            .padding(scale.space[5])
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             if let reviewSession {
@@ -178,24 +179,24 @@ struct CommitTabView: View {
             }
         case .empty:
             Text("No files changed in this commit")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     private func commitReviewHeader(details: CommitDetails) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text("Commit review")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text(details.info.shortSha)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
             if let reviewSessionLaunchError {
                 Text(reviewSessionLaunchError)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -214,8 +215,8 @@ struct CommitTabView: View {
                 )
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .lspServerLeases(
             lspLeases,
