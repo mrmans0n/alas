@@ -10,6 +10,7 @@ struct StageChip: View {
     let state: DisplayState
     let action: (() -> Void)?
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     init(staged: Bool, action: @escaping () -> Void) {
@@ -25,10 +26,10 @@ struct StageChip: View {
     var body: some View {
         Button(action: action ?? {}) {
             ZStack {
-                RoundedRectangle(cornerRadius: 3)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(fill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 3)
+                        RoundedRectangle(cornerRadius: scale.radius.small)
                             .strokeBorder(border, lineWidth: 0.5)
                     )
                     .frame(width: 14, height: 14)

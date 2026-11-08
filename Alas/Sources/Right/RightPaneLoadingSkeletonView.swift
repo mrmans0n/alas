@@ -78,6 +78,7 @@ struct RightPaneLoadingSkeletonView: View {
 // MARK: - Changes skeleton
 
 private struct ChangesSkeletonView: View {
+    @Environment(\.designScale) private var scale
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SkeletonSectionHeader(role: .workingTree, title: "Working tree")
@@ -87,8 +88,8 @@ private struct ChangesSkeletonView: View {
                 SkeletonRow(widthFraction: 0.65)
                 SkeletonRow(widthFraction: 0.4)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
 
             SkeletonSectionHeader(role: .commits, title: "Commits")
             VStack(alignment: .leading, spacing: 6) {
@@ -96,8 +97,8 @@ private struct ChangesSkeletonView: View {
                 SkeletonRow(widthFraction: 0.6)
                 SkeletonRow(widthFraction: 0.7)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
 
             Spacer(minLength: 0)
         }
@@ -110,6 +111,7 @@ private struct ChangesSkeletonView: View {
 // MARK: - Files skeleton
 
 private struct FilesSkeletonView: View {
+    @Environment(\.designScale) private var scale
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(RightPaneSkeletonLayout.files.enumerated()), id: \.offset) { _, row in
@@ -117,7 +119,7 @@ private struct FilesSkeletonView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, scale.space[1])
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading files")
@@ -127,6 +129,7 @@ private struct FilesSkeletonView: View {
 private struct FileSkeletonRow: View {
     let row: RightPaneSkeletonLayout.FileRow
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
@@ -141,8 +144,8 @@ private struct FileSkeletonRow: View {
         // Same indentation math the real tree rows use, so the skeleton's
         // nesting doesn't shift once the real tree loads in.
         .padding(.leading, FileTreeListView.rowLeadingPadding(depth: row.depth))
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.trailing, scale.space[3])
+        .padding(.vertical, scale.space[1])
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -150,6 +153,7 @@ private struct FileSkeletonRow: View {
 // MARK: - Agent skeleton
 
 private struct AgentSkeletonView: View {
+    @Environment(\.designScale) private var scale
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 8) {
@@ -160,8 +164,8 @@ private struct AgentSkeletonView: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 12)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[3])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .ignore)
@@ -172,11 +176,12 @@ private struct AgentSkeletonView: View {
 private struct AgentSkeletonSectionHeader: View {
     let title: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
                 .foregroundStyle(theme.color("fg-muted"))
             Capsule()
@@ -184,17 +189,18 @@ private struct AgentSkeletonSectionHeader: View {
                 .frame(width: 16, height: 12)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 2)
-        .padding(.top, 4)
+        .padding(.horizontal, scale.space[0])
+        .padding(.top, scale.space[1])
     }
 }
 
 private struct AgentSkeletonCard: View {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("fg-faint").opacity(0.16))
                 .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 6) {
@@ -206,10 +212,10 @@ private struct AgentSkeletonCard: View {
                 .fill(theme.color("fg-faint").opacity(0.3))
                 .frame(width: 40, height: 14)
         }
-        .padding(10)
-        .background(theme.color("fg-faint").opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+        .padding(scale.space[2])
+        .background(theme.color("fg-faint").opacity(0.06), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 11)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(0.5), lineWidth: 0.75)
         )
     }
@@ -238,11 +244,12 @@ private struct RunSkeletonView: View {
 private struct RunSkeletonSectionHeader: View {
     let title: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
             Capsule()
@@ -257,6 +264,7 @@ private struct RunSkeletonSectionHeader: View {
 private struct RunSkeletonRow: View {
     let nameWidthFraction: CGFloat
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
@@ -271,8 +279,8 @@ private struct RunSkeletonRow: View {
                 .fill(theme.color("fg-faint").opacity(0.3))
                 .frame(width: 36, height: 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 }
 
@@ -282,6 +290,7 @@ private struct SkeletonSectionHeader: View {
     let role: SectionHeaderRole
     let title: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
@@ -293,7 +302,7 @@ private struct SkeletonSectionHeader: View {
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)

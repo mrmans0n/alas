@@ -558,7 +558,7 @@ struct RunRowView: View {
                 HStack(spacing: scale.space[1]) {
                     Icon(name: "terminal", size: 9, color: theme.color("fg-faint"))
                     Text(location)
-                        .font(scale.caption.font(weight: .regular, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
@@ -658,7 +658,7 @@ struct RunRowView: View {
             HStack(spacing: scale.space[1]) {
                 if case .openEndpoint = action {
                     Text(label(for: action))
-                        .font(scale.caption.font(weight: .regular, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Icon(name: "arrow.up.right", size: 10)

@@ -9,38 +9,39 @@ struct CheckpointRecoveryCard: View {
     let onRecover: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(journal.map { "Interrupted restore \(CheckpointRecoveryPresentation.operationSuffix($0.id))" } ?? "Interrupted restore")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.title.font(weight: .semibold))
                 Spacer()
                 if let journal {
                     Text(CheckpointRecoveryPresentation.phase(journal.phase))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(scale.captionFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
             }
             Text("Recover the pre-restore state before creating, deleting, or restoring another checkpoint.")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-muted"))
             if let journal {
                 DisclosureGroup(CheckpointRecoveryPresentation.affectedPathsSummary(journal.selectedPaths)) {
                     Text(CheckpointRecoveryPresentation.affectedPathsText(journal.selectedPaths))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-muted"))
                         .textSelection(.enabled)
                 }
             }
             if let status {
                 Text(status)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("add"))
             }
             if let error {
                 Text(error)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("del"))
             }
             HStack {
@@ -51,7 +52,7 @@ struct CheckpointRecoveryCard: View {
                 .disabled(inFlight)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 }

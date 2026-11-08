@@ -61,8 +61,6 @@ struct RootView: View {
                 .padding(16)
             }
             .onPreferenceChange(ApprovalStackHeightKey.self) { approvalStackHeight = $0 }
-            .environment(\.theme, state.themeStore.current)
-            .environment(\.designScale, .resolved(for: state.config.density))
             .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
                 // `initial: true` is load-bearing: AppState.init() calls
                 // WindowAppearance.apply too, but that runs before the SwiftUI
@@ -186,6 +184,11 @@ struct RootView: View {
             .onChange(of: state.selectedWorktreeId) { _, _ in
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()
             }
+            // Last, so the sheets and alerts attached above inherit them too: a
+            // sheet presented from outside this scope falls back to the default
+            // dark theme, which is how light mode got dark dialogs.
+            .environment(\.theme, state.themeStore.current)
+            .environment(\.designScale, .resolved(for: state.config.density))
     }
 
     private var rootContent: some View {

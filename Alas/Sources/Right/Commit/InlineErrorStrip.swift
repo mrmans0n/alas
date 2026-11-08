@@ -5,6 +5,7 @@ struct InlineErrorStrip: View {
     let onDismiss: () -> Void
     @State private var expanded: Bool
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     init(message: String, onDismiss: @escaping () -> Void, initiallyExpanded: Bool = false) {
         self.message = message
@@ -15,7 +16,7 @@ struct InlineErrorStrip: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Icon(name: "alert", size: 11, color: theme.color("del"))
-                .padding(.top, 2)
+                .padding(.top, scale.space[0])
             messageView
             Button(action: onDismiss) {
                 Icon(name: "x", size: 10, color: theme.color("fg-faint"))
@@ -23,10 +24,10 @@ struct InlineErrorStrip: View {
             .buttonStyle(.plain)
             .help("Dismiss error")
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.10))
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .stroke(theme.color("del").opacity(0.30), lineWidth: 0.5)
         )
         .contentShape(Rectangle())
@@ -34,7 +35,7 @@ struct InlineErrorStrip: View {
             expanded = true
         }
         .help(expanded ? "Select and copy error text" : "Click to expand error")
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
     }
 
     @ViewBuilder
@@ -43,7 +44,7 @@ struct InlineErrorStrip: View {
             ScrollView(.vertical) {
                 messageText
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, 2)
+                    .padding(.trailing, scale.space[0])
             }
             .frame(maxWidth: .infinity, maxHeight: 180, alignment: .leading)
         } else {
@@ -55,7 +56,7 @@ struct InlineErrorStrip: View {
 
     private var messageText: some View {
         Text(message)
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(scale.meta.font(weight: .regular, design: .monospaced))
             .foregroundColor(theme.color("fg"))
             .textSelection(.enabled)
     }

@@ -82,7 +82,7 @@ struct CreateCheckpointSheet: View {
                 .accessibilityIdentifier("create-checkpoint")
             }
         }
-        .padding(20)
+        .padding(20) // design-literal: sheet inset sits between the 16 and 24 scale steps
         .frame(width: 440)
     }
 
