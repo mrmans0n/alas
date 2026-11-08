@@ -50,6 +50,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
     let footerHint: String?
 
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     /// The body's natural height, as last laid out. Drives the cap below;
     /// zero until the first layout pass has measured it.
     @State private var measuredBodyHeight: CGFloat = 0
@@ -86,36 +87,36 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.system(size: 15, weight: .semibold))
+            HStack(alignment: .top, spacing: scale.space[3]) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
+                    Text(title).font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                         .foregroundColor(theme.color("fg"))
                     if let subtitle {
-                        Text(subtitle).font(.system(size: 12))
+                        Text(subtitle).font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 headerAccessory()
             }
-            .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 6)
+            .padding(.horizontal, scale.space[5]).padding(.top, scale.space[4]).padding(.bottom, scale.space[2])
 
             // The body scrolls rather than growing without limit: a dialog
             // whose content expands (an optional section being opened, a
             // long form) must not push its own footer off the screen.
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 14) { content() }
-                    .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
+                VStack(alignment: .leading, spacing: scale.space[4]) { content() }
+                    .padding(.horizontal, scale.space[5]).padding(.top, scale.space[3]).padding(.bottom, scale.space[4])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredBodyHeight = $0 }
             }
             .frame(height: bodyHeight)
             .scrollBounceBehavior(.basedOnSize)
 
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 if let footerHint, !footerHint.isEmpty {
                     Text(footerHint)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -128,13 +129,13 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
                     .disabled(!confirmEnabled)
                     .opacity(confirmEnabled ? 1 : 0.5)
             }
-            .padding(.horizontal, 18).padding(.vertical, 12)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[3])
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .top)
         }
         .frame(width: width)
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .shadow(color: .black.opacity(0.6), radius: 80, y: 30)
     }
 
@@ -189,13 +190,14 @@ struct DialogHeaderIconButton: View {
     var isHighlighted: Bool = false
     let action: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             Icon(name: icon, size: 13, color: iconColor)
                 .frame(width: 26, height: 26)
-                .dialogHeaderButtonChrome(hovering: hovering, theme: theme)
+                .dialogHeaderButtonChrome(hovering: hovering, theme: theme, radius: scale.radius.medium)
                 .aiBeam(isActive: isHighlighted)
         }
         .buttonStyle(.plain)
@@ -217,6 +219,7 @@ struct DialogHeaderMenuButton<MenuContent: View>: View {
     let tooltip: String
     @ViewBuilder let content: () -> MenuContent
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
@@ -226,7 +229,7 @@ struct DialogHeaderMenuButton<MenuContent: View>: View {
         Menu(content: content) {
             Icon(name: "menu", size: 13, color: hovering ? theme.color("fg") : theme.color("fg-muted"))
                 .frame(width: 26, height: 26)
-                .dialogHeaderButtonChrome(hovering: hovering, theme: theme)
+                .dialogHeaderButtonChrome(hovering: hovering, theme: theme, radius: scale.radius.medium)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -240,16 +243,16 @@ struct DialogHeaderMenuButton<MenuContent: View>: View {
 }
 
 private extension View {
-    func dialogHeaderButtonChrome(hovering: Bool, theme: Theme) -> some View {
+    func dialogHeaderButtonChrome(hovering: Bool, theme: Theme, radius: CGFloat) -> some View {
         background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: radius)
                 .fill(hovering ? theme.color("bg-3") : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: radius)
                 .strokeBorder(hovering ? theme.color("line") : Color.clear, lineWidth: 0.5)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: radius))
     }
 }
 
@@ -257,9 +260,10 @@ struct DialogField<Content: View>: View {
     let label: String
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 11.5, weight: .medium))
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            Text(label).font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
             content()
         }
