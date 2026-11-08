@@ -122,7 +122,7 @@ struct FileTreeListView: View {
                             }
                         }
                         .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                        .padding(.trailing, isBookmarkRoot ? 4 : 12)
+                        .padding(.trailing, isBookmarkRoot ? scale.space[1] : scale.space[3])
                         .padding(.vertical, scale.space[1])
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .opacity(isOffGit(terminal) ? 0.72 : 1.0)
@@ -201,7 +201,7 @@ struct FileTreeListView: View {
                         }
                     }
                     .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                    .padding(.trailing, isBookmarkRoot ? 4 : 12)
+                    .padding(.trailing, isBookmarkRoot ? scale.space[1] : scale.space[3])
                     .padding(.vertical, scale.space[1])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(isOffGit(node) ? 0.72 : 1.0)
@@ -437,7 +437,7 @@ struct FileTreeListView: View {
         Rectangle()
             .fill(theme.color("fg-faint").opacity(0.55))
             .frame(width: 2)
-            .padding(.leading, CGFloat(8 + depth * 14))
+            .padding(.leading, Self.rowLeadingPadding(depth: depth) - scale.space[1])
             .padding(.vertical, scale.space[1])
     }
 

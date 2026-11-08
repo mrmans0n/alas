@@ -56,7 +56,7 @@ struct CommitRow: View {
                     subjectLine
                     metaLine
                 }
-                .padding(.bottom, isLast ? 6 : 8)
+                .padding(.bottom, isLast ? scale.space[1] : scale.space[2])
             }
             .padding(.leading, scale.space[4])
             .padding(.trailing, scale.space[3])
