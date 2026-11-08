@@ -44,6 +44,20 @@ struct ACPBackgroundTaskPresentationTests {
         #expect(ACPBackgroundTaskPresentation.elapsedText(interval) == expected)
     }
 
+    @Test("tooltip skips repeated or empty detail and preserves useful context", arguments: [
+        ("make test", nil, "make test"),
+        (nil, " make test\n", "make test"),
+        ("make test", "Runs the unit tests", "make test\nRuns the unit tests"),
+        ("3 tests failed", "make test", "make test\n3 tests failed"),
+        (" ", nil, "make test"),
+    ] as [(String?, String?, String)])
+    func tooltip(summary: String?, description: String?, expected: String) {
+        var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "t", name: "make test")
+        task.summary = summary
+        task.description = description
+        #expect(ACPBackgroundTaskPresentation.tooltip(task) == expected)
+    }
+
     @Test("transcript detail prefers the summary and skips text that repeats the name", arguments: [
         (nil, "make test", nil),
         (nil, " make test\n", nil),
