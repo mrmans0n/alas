@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DeleteFailedWorktreeView: View {
+    @Environment(\.designScale) private var scale
     let worktree: Worktree
     let message: String
     let allowsRemovalActions: Bool
@@ -10,30 +11,30 @@ struct DeleteFailedWorktreeView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: scale.space[3]) {
             ZStack {
                 LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                     .frame(width: 80, height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: 22))
+                    .clipShape(RoundedRectangle(cornerRadius: 22)) // design-literal: hero icon tile
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 30))
+                    .font(.system(size: 30)) // design-literal: hero icon
                     .foregroundColor(theme.color("warn"))
             }
             Text("Delete failed")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: hero title
                 .foregroundColor(theme.color("fg"))
             Text("Could not remove worktree \(worktree.branch).")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .multilineTextAlignment(.center)
             Text(message)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
                 .multilineTextAlignment(.leading)
                 .lineLimit(4)
-                .padding(.horizontal, 24)
-            HStack(spacing: 10) {
+                .padding(.horizontal, scale.space[5])
+            HStack(spacing: scale.space[2]) {
                 AlasButton(title: "Copy Error", icon: "doc.on.doc", style: .normal, action: onCopyError)
                 if allowsRemovalActions {
                     AlasButton(title: "Archive", icon: "archivebox", style: .normal, action: onArchive)
