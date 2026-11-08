@@ -81,6 +81,7 @@ final class ACPRegistryBrowserModel {
 /// Settings → Agents sheet that browses and searches the official ACP agent
 /// registry and installs agents into the ACP launch catalog.
 struct ACPRegistryBrowserView: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let onDismiss: () -> Void
     @State private var model: ACPRegistryBrowserModel
@@ -95,23 +96,23 @@ struct ACPRegistryBrowserView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("ACP Registry")
-                .font(.system(size: 16, weight: .semibold))
+                .font(SettingsPaneStyle.titleFont)
             Text("Install agents from the official Agent Client Protocol registry. Installed agents open in Chat.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.bottom, 12)
+                .padding(.bottom, scale.space[3])
             TextField("Search agents…", text: $model.query)
                 .textFieldStyle(.roundedBorder)
-                .padding(.bottom, 10)
+                .padding(.bottom, scale.space[3])
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack {
                 Spacer()
                 AlasButton(title: "Done", style: .primary, action: onDismiss)
             }
-            .padding(.top, 12)
+            .padding(.top, scale.space[3])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 620, height: 560)
         .background(theme.color("bg-1"))
         .task { await model.load() }
@@ -125,15 +126,15 @@ struct ACPRegistryBrowserView: View {
             VStack(spacing: 8) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 14, height: 14)
                 Text("Loading registry…")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
         case .failed(let message):
             VStack(spacing: 8) {
                 Text("Could not load the ACP registry.")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(scale.emphasisFont)
                 Text(message)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                 AlasButton(title: "Retry", style: .normal) {
@@ -145,14 +146,14 @@ struct ACPRegistryBrowserView: View {
                             unlistedRows(unlisted, note: "Installed from the ACP registry.")
                         }
                     }
-                    .padding(.top, 8)
+                    .padding(.top, scale.space[2])
                 }
             }
         case .loaded(let agents):
             let visible = model.visibleAgents(agents)
             if visible.isEmpty && unlisted.isEmpty {
                 Text("No agents match “\(model.query)”.")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             } else {
                 ScrollView {
@@ -192,6 +193,7 @@ struct ACPRegistryBrowserView: View {
 
 /// An install with no registry row; it can only be uninstalled.
 private struct ACPRegistryUnlistedRow: View {
+    @Environment(\.designScale) private var scale
     let install: ACPRegistryInstalledAgent
     let note: String
     let error: String?
@@ -204,18 +206,18 @@ private struct ACPRegistryUnlistedRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(install.displayName)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                     Text(install.version)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 Text(note)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 if let error {
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(3)
                         .textSelection(.enabled)
@@ -226,25 +228,26 @@ private struct ACPRegistryUnlistedRow: View {
                 HStack(spacing: 6) {
                     Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
                     Text("Removing…")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
             } else {
                 AlasButton(title: "Uninstall", style: .subtle, action: onUninstall)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-2"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line-soft"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 
 private struct ACPRegistryRow: View {
+    @Environment(\.designScale) private var scale
     let agent: ACPRegistryAgent
     let status: ACPRegistryEntryStatus
     let operation: ACPRegistryBrowserModel.Operation?
@@ -258,22 +261,22 @@ private struct ACPRegistryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(agent.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                     Text(agent.version)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                     if let plan = agent.installPlan() {
                         pill(plan.label, fg: theme.color("fg-dim"))
                     }
                 }
                 Text(agent.description)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(2)
                 if let error {
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(3)
                         .textSelection(.enabled)
@@ -282,14 +285,14 @@ private struct ACPRegistryRow: View {
             Spacer(minLength: 8)
             actions
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-2"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line-soft"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     @ViewBuilder
@@ -298,7 +301,7 @@ private struct ACPRegistryRow: View {
             HStack(spacing: 6) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
                 Text(operation == .installing ? "Installing…" : "Removing…")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
         } else {
@@ -327,10 +330,10 @@ private struct ACPRegistryRow: View {
 
     private func pill(_ text: String, fg: Color) -> some View {
         Text(text)
-            .font(.system(size: 10))
+            .font(scale.caption.font(weight: .regular))
             .foregroundColor(fg)
-            .padding(.horizontal, 6).padding(.vertical, 2)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
             .background(fg.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 }

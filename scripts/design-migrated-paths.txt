@@ -110,3 +110,6 @@ Alas/Sources/Settings/WorktreesPane.swift
 Alas/Sources/Settings/WorktreeVMsSection.swift
 Alas/Sources/Settings/OpenSessionsSection.swift
 Alas/Sources/Settings/AdvancedPane.swift
+Alas/Sources/Settings/AgentsPane.swift
+Alas/Sources/Settings/AgentEditView.swift
+Alas/Sources/Settings/ACPRegistryBrowserView.swift
