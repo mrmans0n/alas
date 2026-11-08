@@ -1274,13 +1274,14 @@ public final class ACPSessionRunner {
     }
 
     private func receiveIncomingUpdate(_ update: ACPSessionUpdateParams) {
-        guard var hold = loadReplayHold else {
+        guard let loadID = loadReplayHold?.loadID else {
             enqueueIncomingUpdate(update)
             return
         }
-        hold.updates.append((update, dequeuedUpdateCount))
-        loadReplayHold = hold
-        guard ACPLoadReplayEnd.ends(update.update, loadID: hold.loadID) else { return }
+        // Appended in place: a local copy would share the buffer and copy it
+        // on every update, which is quadratic for a long replay.
+        loadReplayHold?.updates.append((update, dequeuedUpdateCount))
+        guard ACPLoadReplayEnd.ends(update.update, loadID: loadID) else { return }
         loadReplayEndReceived = true
         releaseHeldLoadReplay()
         onLoadReplayEnd?()
