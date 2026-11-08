@@ -750,6 +750,31 @@ struct ACPSubagentRoutingTests {
         #expect(run.isConfigConfirmed)
     }
 
+    @Test("a child's replay before its load's end event stays historical")
+    func childReplayBeforeLoadEndIsHistorical() async throws {
+        let mock = ACPMockClient()
+        let (runner, _, _) = try makeRunner(client: mock)
+        runner.holdLoadReplay(untilEndOf: "load-1")
+        runner.start()
+        defer { runner.stop() }
+        mock.emit(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", cwd: "/w/pkg"))))
+        mock.emit(.init(sessionId: "child-1", update: .sessionConfigOptionsUpdate([Self.effortOption("low")])))
+        mock.emit(.init(sessionId: "child-1", update: .agentMessageChunk(.text("replayed output"))))
+        mock.emit(.init(sessionId: "remote-parent", update: .loadReplayEnd(id: "load-1")))
+        try await eventually("the replay and its end event") { runner.observedUpdateCountForTesting == 4 }
+        let run = try #require(runner.session.subagentRun("child-1"))
+        #expect(runner.loadReplayEndReceived)
+        #expect(run.areDirectoriesConfirmed == false)
+        #expect(run.isConfigConfirmed == false)
+        #expect(run.messages.count == 1)
+
+        mock.emit(.init(sessionId: "child-1", update: .sessionConfigOptionsUpdate([Self.effortOption("high")])))
+        try await eventually("the live config") { run.isConfigConfirmed }
+        #expect(run.configOptions.map(\.currentStringValue) == ["high"])
+    }
+
     private static func effortOption(_ current: String) -> ACPConfigOption {
         ACPConfigOption(
             id: "reasoning_effort", name: "Effort", category: "thought_level", currentValue: .string(current),
@@ -1213,7 +1238,7 @@ struct ACPSubagentRoutingTests {
         let text: String
     }
 
-    private func makeRunner() throws -> (ACPSessionRunner, ACPSessionStore, String) {
+    private func makeRunner(client: ACPMockClient = ACPMockClient()) throws -> (ACPSessionRunner, ACPSessionStore, String) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("subagent-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -1226,7 +1251,7 @@ struct ACPSubagentRoutingTests {
         session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
-            connection: ACPConnection(client: ACPMockClient()),
+            connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path)

@@ -343,6 +343,14 @@ public final class ACPSessionRunner {
     /// The last yielded update of a `session/load` replay that is applied
     /// live rather than suppressed. See `treatLoadReplayAsHistory`.
     private var unsuppressedLoadReplayTarget: Int?
+    /// A `session/load` replay held back, unapplied, until the adapter's end
+    /// event for this load (`holdLoadReplay(untilEndOf:)`), with the stream
+    /// index each update was dequeued at.
+    private var loadReplayHold: (loadID: String, updates: [(params: ACPSessionUpdateParams, streamIndex: Int)])?
+    /// The adapter said this load's replay is whole; see `holdLoadReplay(untilEndOf:)`.
+    public private(set) var loadReplayEndReceived = false
+    /// Called once when the end event releases a held load replay.
+    public var onLoadReplayEnd: (() -> Void)?
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so a queue
@@ -659,7 +667,7 @@ public final class ACPSessionRunner {
                     self.costLog.append((self.dequeuedUpdateCount, cost))
                     if self.costLog.count > 32 { self.compactCostLog() }
                 }
-                self.enqueueIncomingUpdate(u)
+                self.receiveIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
             // that's the intentional detach path (tab close, worktree
@@ -1265,7 +1273,20 @@ public final class ACPSessionRunner {
         }
     }
 
-    private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
+    private func receiveIncomingUpdate(_ update: ACPSessionUpdateParams) {
+        guard var hold = loadReplayHold else {
+            enqueueIncomingUpdate(update)
+            return
+        }
+        hold.updates.append((update, dequeuedUpdateCount))
+        loadReplayHold = hold
+        guard ACPLoadReplayEnd.ends(update.update, loadID: hold.loadID) else { return }
+        loadReplayEndReceived = true
+        releaseHeldLoadReplay()
+        onLoadReplayEnd?()
+    }
+
+    private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams, streamIndex: Int? = nil) {
         guard isConnectionCurrent() else { return }
         // The diffPatch gate, at the one intake every live and broker-replayed
         // update passes. `session.diffPatch` is this connection's own
@@ -1282,7 +1303,7 @@ public final class ACPSessionRunner {
         pendingIncomingUpdates.append(.init(
             params: update,
             receivedWhileHoldingLease: receivedWhileHoldingLease,
-            streamIndex: dequeuedUpdateCount
+            streamIndex: streamIndex ?? dequeuedUpdateCount
         ))
         guard incomingUpdateFlushTask == nil else { return }
         incomingUpdateFlushTask = Task { @MainActor [weak self] in
@@ -1973,6 +1994,7 @@ public final class ACPSessionRunner {
 
     #if DEBUG
     public var pendingIncomingUpdateCountForTesting: Int { pendingIncomingUpdates.count }
+    public var heldLoadReplayCountForTesting: Int { loadReplayHold?.updates.count ?? 0 }
 
     public func applyIncomingUpdateForTesting(_ params: ACPSessionUpdateParams) {
         applyIncomingUpdate(params)
@@ -1994,6 +2016,39 @@ public final class ACPSessionRunner {
     public func treatLoadReplayAsHistory(throughYieldedUpdateCount target: Int) {
         guard target > observedUpdateCount else { return }
         unsuppressedLoadReplayTarget = max(unsuppressedLoadReplayTarget ?? 0, target)
+    }
+
+    /// Holds an unsuppressed `session/load` replay, unapplied, until the
+    /// adapter's end event for `loadID` says it is whole (`ACPLoadReplayEnd`).
+    /// The end event then applies it as history at once, before the load
+    /// response. Without one, the load's outcome decides:
+    /// `releaseHeldLoadReplay()` after a successful response,
+    /// `discardHeldLoadReplay()` after a failed one. Call before `start()`.
+    public func holdLoadReplay(untilEndOf loadID: String) {
+        guard !suppressingLoadReplay, loadReplayHold == nil else { return }
+        loadReplayHold = (loadID, [])
+        loadReplayEndReceived = false
+    }
+
+    /// Applies a held load replay as history.
+    public func releaseHeldLoadReplay() {
+        guard let hold = loadReplayHold else { return }
+        loadReplayHold = nil
+        treatLoadReplayAsHistory(throughYieldedUpdateCount: dequeuedUpdateCount)
+        for held in hold.updates {
+            enqueueIncomingUpdate(held.params, streamIndex: held.streamIndex)
+        }
+        flushPendingIncomingUpdates()
+    }
+
+    /// Drops a held load replay that never ended: a partial history is not
+    /// shown. The dropped updates count as applied, so the yielded-count
+    /// watermarks stay aligned.
+    public func discardHeldLoadReplay() {
+        guard let hold = loadReplayHold else { return }
+        loadReplayHold = nil
+        observedUpdateCount += hold.updates.count
+        appliedUpdateCount += hold.updates.count
     }
 
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
@@ -2067,6 +2122,7 @@ public final class ACPSessionRunner {
         defer { session.releaseLegacyProjection(epoch: projectionEpoch) }
         stopped = true
         unsuppressedLoadReplayTarget = nil
+        loadReplayHold = nil
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()

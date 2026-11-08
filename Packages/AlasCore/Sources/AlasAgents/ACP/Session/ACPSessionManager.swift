@@ -7983,6 +7983,28 @@ extension ACPSessionManager {
                 if !hasPendingForkContext, session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
                 }
+                // With no hydrated transcript, a load's replay is held until
+                // the adapter says it is whole, then shown at once, while the
+                // runtime keeps starting. The end event changes nothing else:
+                // the session is ready only after the response.
+                let loadReplayEndID: String? = initialized.supportsLoadReplayEnd
+                    && !shouldSuppressLoadReplay
+                    && (restoreOperation == .loadStrict || restoreOperation == .loadWithRecovery)
+                    ? UUID().uuidString : nil
+                let loadSentAt = ContinuousClock.now
+                if let loadReplayEndID {
+                    runner.onLoadReplayEnd = {
+                        acpLoadReplayLogger.notice(
+                            "load history whole session=\(sessionId, privacy: .public) load=\(loadReplayEndID, privacy: .public) afterMs=\(ACPLoadReplayEnd.milliseconds(since: loadSentAt))")
+                    }
+                    runner.holdLoadReplay(untilEndOf: loadReplayEndID)
+                    startRunnerIfNeeded()
+                }
+                func logLoadResponse(failed: Bool) {
+                    guard let loadReplayEndID else { return }
+                    acpLoadReplayLogger.notice(
+                        "load response session=\(sessionId, privacy: .public) load=\(loadReplayEndID, privacy: .public) failed=\(failed) historyEarly=\(runner.loadReplayEndReceived) afterMs=\(ACPLoadReplayEnd.milliseconds(since: loadSentAt))")
+                }
                 switch restoreOperation {
                 case .resume:
                     do {
@@ -8094,6 +8116,10 @@ extension ACPSessionManager {
                     }
                     func suppressFailedLoadReplayIfNeeded() {
                         guard !shouldSuppressLoadReplay else { return }
+                        // A replay the adapter said is whole stays: it is
+                        // the session's history even when the load fails.
+                        guard !runner.loadReplayEndReceived else { return }
+                        runner.discardHeldLoadReplay()
                         let target = connection.client.yieldedUpdateCount
                         guard target > 0 else { return }
                         runner.suppressLoadReplay(throughYieldedUpdateCount: target)
@@ -8105,13 +8131,16 @@ extension ACPSessionManager {
                                 cwd: worktreePath,
                                 sessionId: remoteId,
                                 mcpServers: wireMCPServers,
-                                brokerOperationKey: loadOperationKey
+                                brokerOperationKey: loadOperationKey,
+                                loadReplayEndID: loadReplayEndID
                             )
+                            logLoadResponse(failed: false)
                             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                                 throw CancellationError()
                             }
                             return (loaded, false)
                         } catch {
+                            logLoadResponse(failed: true)
                             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                                 throw CancellationError()
                             }
@@ -8150,7 +8179,8 @@ extension ACPSessionManager {
                         return
                     }
                     result = restored.0
-                    if restored.resumed {
+                    // A replay the adapter said is whole is in Alas already.
+                    if restored.resumed, !runner.loadReplayEndReceived {
                         restoreWarning = .init(
                             message: "Earlier messages remain in the agent and are not available in Alas.",
                             canSendTranscript: false
@@ -8181,8 +8211,10 @@ extension ACPSessionManager {
                                 sessionId: sessionId,
                                 method: "session/load",
                                 remoteSessionId: remoteId
-                            )
+                            ),
+                            loadReplayEndID: loadReplayEndID
                         )
+                        logLoadResponse(failed: false)
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                             await connection.shutdown()
                             return
@@ -8201,6 +8233,7 @@ extension ACPSessionManager {
                             session.contextRecoveryStatus = nil
                         }
                     } catch {
+                        logLoadResponse(failed: true)
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                             await connection.shutdown()
                             return
@@ -8208,6 +8241,11 @@ extension ACPSessionManager {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
+                        // A partial replay is not shown; a whole one stays as
+                        // the history the recovery below sends on.
+                        if !runner.loadReplayEndReceived {
+                            runner.discardHeldLoadReplay()
+                        }
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
@@ -8556,6 +8594,9 @@ extension ACPSessionManager {
             let localModelAfterRemoteIdPersist = session.currentModel
             connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
+            // No end event: the held load replay is history, applied now as
+            // before the end event existed.
+            runner.releaseHeldLoadReplay()
             if attachingConnections[sessionId]?.connection === connection {
                 attachingConnections[sessionId] = nil
             }
