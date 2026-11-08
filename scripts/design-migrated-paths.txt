@@ -48,3 +48,7 @@ Alas/Sources/Right/RunTabView.swift
 Alas/Sources/Right/SchedulesTabView.swift
 Alas/Sources/Right/RunScheduleEditorView.swift
 Alas/Sources/Dialogs/DialogChrome.swift
+Alas/Sources/Dialogs/NewWorktreeDialog.swift
+Alas/Sources/Dialogs/BranchPicker.swift
+Alas/Sources/Dialogs/IssueAutocompleteField.swift
+Alas/Sources/Dialogs/AttachIssueDialog.swift

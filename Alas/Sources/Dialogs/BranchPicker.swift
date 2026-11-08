@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct BranchPicker: View {
+    @Environment(\.designScale) private var scale
     @Binding var selection: String
     let branches: [String]
     let isLoading: Bool
@@ -14,7 +15,7 @@ struct BranchPicker: View {
         Button(action: { open.toggle() }) {
             HStack(spacing: 6) {
                 Text(selection.isEmpty ? "Choose a branch" : selection)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -24,17 +25,17 @@ struct BranchPicker: View {
                         .frame(width: 12, height: 12)
                 }
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .background(theme.color("bg-1"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
@@ -58,24 +59,24 @@ struct BranchPicker: View {
                 AlasField(text: $selection, placeholder: "Branch or ref", monospaced: true)
                 AlasField(text: $search, placeholder: "Search branches...")
             }
-            .padding(8)
+            .padding(scale.space[2])
 
             Divider().background(theme.color("line"))
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(.red)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
                 Divider().background(theme.color("line"))
             }
 
             if branches.isEmpty {
                 Text(isLoading ? "Loading branches..." : "No branches found")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(12)
+                    .padding(scale.space[3])
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -102,23 +103,23 @@ struct BranchPicker: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(name == selection ? 1 : 0)
                 Text(name)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let note {
                     Text(note)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
