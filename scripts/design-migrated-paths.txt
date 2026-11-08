@@ -128,3 +128,9 @@ Alas/Sources/Center/TerminalTabView.swift
 Alas/Sources/Center/RunActivityPill.swift
 Alas/Sources/Center/AgentHookInstallNudgeBanner.swift
 Alas/Sources/Center/EditorNavigationResultsView.swift
+Alas/Sources/Center/ImagePreviewTabView.swift
+Alas/Sources/Center/BinaryPreviewTabView.swift
+Alas/Sources/Center/FileSnapshotTabView.swift
+Alas/Sources/Center/FileHistoryTabView.swift
+Alas/Sources/Center/StashDiffTabView.swift
+Alas/Sources/Center/CheckpointDiffTabView.swift
