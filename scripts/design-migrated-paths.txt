@@ -67,3 +67,6 @@ Alas/Sources/Dialogs/WorktreeCleanupSheet.swift
 Alas/Sources/Dialogs/RenameBranchDialog.swift
 Alas/Sources/Dialogs/EmptyState.swift
 Alas/Sources/Dialogs/WelcomeSky.swift
+Alas/Sources/Agents/AgentLauncherDialog.swift
+Alas/Sources/RunScripts/RunScriptDialog.swift
+Alas/Sources/Search/Views/FileSearchDialog.swift

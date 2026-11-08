@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RunScriptDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var appState: AppState
     let selectedWorktree: () -> Worktree?
     @Environment(\.theme) private var theme
@@ -22,13 +23,13 @@ struct RunScriptDialog: View {
                     }
                     .frame(width: 720)
                     .background(theme.color("bg-1").opacity(0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                             .strokeBorder(theme.color("line"), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                    .padding(.top, 70)
+                    .padding(.top, 70) // design-literal: palette sits a fixed distance below the window top
                     .frame(maxHeight: .infinity, alignment: .top)
                     .onTapGesture { }
                     .onKeyPress { press in handleKey(press) }
@@ -61,11 +62,11 @@ struct RunScriptDialog: View {
             )
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
-                .font(.system(size: 14))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg"))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
     }
 
     private var rowList: some View {
@@ -89,7 +90,7 @@ struct RunScriptDialog: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .frame(height: rowListHeight(rows: rows))
             .onChange(of: appState.runScriptPalette.scrollToSelectionTick) { _, _ in
@@ -119,15 +120,15 @@ struct RunScriptDialog: View {
     private var noScriptsHint: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("No run scripts yet")
-                .font(.system(size: 11.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
             Text("Scripts live in .alas/scripts/ in the repo.")
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.horizontal, scale.space[3])
+        .padding(.top, scale.space[2])
+        .padding(.bottom, scale.space[1])
     }
 
     @ViewBuilder
@@ -135,11 +136,11 @@ struct RunScriptDialog: View {
         switch row {
         case .header(let title):
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-faint"))
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 3)
+                .padding(.horizontal, scale.space[3])
+                .padding(.top, scale.space[2])
+                .padding(.bottom, scale.space[0])
         case .script(let script):
             scriptRow(script, isSelected: index == appState.runScriptPalette.selectedIndex)
                 .onTapGesture {
@@ -175,11 +176,11 @@ struct RunScriptDialog: View {
             Icon(name: appState.runScriptPalette.mode == .edit ? "pencil" : "play", size: 11, color: theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 1) {
                 Text(script.displayName)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Text(script.fileName)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
             }
@@ -190,7 +191,7 @@ struct RunScriptDialog: View {
                     .frame(width: 6, height: 6)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 38)
         .background(isSelected ? theme.color("bg-3") : .clear)
         .contentShape(Rectangle())
@@ -199,15 +200,15 @@ struct RunScriptDialog: View {
     private func newScriptRow(_ title: String, isSelected: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "plus")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 11)
             Text(title)
-                .font(.system(size: 12.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 34)
         .background(isSelected ? theme.color("bg-3") : .clear)
         .contentShape(Rectangle())
@@ -216,10 +217,10 @@ struct RunScriptDialog: View {
     private var emptyState: some View {
         VStack(spacing: 4) {
             Text("No run scripts yet")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
             Text("Scripts live in .alas/scripts/ in the repo.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
         }
         .frame(maxWidth: .infinity, minHeight: 160)
@@ -239,8 +240,8 @@ struct RunScriptDialog: View {
             label("esc close")
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.5))
         .overlay(
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5),
@@ -250,7 +251,7 @@ struct RunScriptDialog: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
     }
 
