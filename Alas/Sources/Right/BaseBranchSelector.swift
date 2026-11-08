@@ -46,7 +46,7 @@ struct BaseBranchSelector: View {
         HStack(spacing: 4) {
             icon
             Text(currentRef ?? baseBranch)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(.system(size: 10.5))
                 .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-faint"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -115,7 +115,7 @@ struct BaseBranchSelector: View {
                     .foregroundColor(theme.color("fg"))
                     .opacity(Self.isSelected(row: name, baseBranch: baseBranch, currentRef: currentRef) ? 1 : 0)
                 Text(name)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 12))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)

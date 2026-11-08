@@ -52,7 +52,7 @@ struct ChangedRow: View {
                 HStack(spacing: 6) {
                     FileTypeIconView(filename: basename, size: 18)
                     Text(basename)
-                        .font(scale.body.font(design: .monospaced))
+                        .font(scale.body.font)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)

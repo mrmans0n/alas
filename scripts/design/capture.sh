@@ -6,6 +6,8 @@
 # Usage: capture.sh <profile-dir> <out-dir> <dark|light>
 #
 # ALAS_DEV_APP overrides the app; by default this checkout's Debug build is used.
+# ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules) opens the right pane on
+# that tab instead of Changes.
 # ALAS_CAPTURE_EXPECT_SIZE (such as 1648x1063, in points) fails the capture when
 # the window has another size. The size is also written to window-size.txt.
 set -euo pipefail
@@ -104,6 +106,39 @@ stop_profile_processes
 rm -rf "$support" "$runtime_dir"
 cp -R "$profile/seed" "$support"
 chmod 700 "$support"
+
+# The seed dates runs and schedules from a fixed anchor. Move them to now, so
+# ages read the same in every capture and no schedule is ever due: a due one
+# would fire while the app is up and add worktrees to the fixture.
+SUPPORT="$support" /usr/bin/python3 - <<'PY'
+import json, os, pathlib, re, sqlite3, time
+from datetime import datetime, timedelta, timezone
+
+support = pathlib.Path(os.environ["SUPPORT"])
+anchor = datetime(2026, 1, 15, 10, tzinfo=timezone.utc)
+delta = time.time() - anchor.timestamp()
+iso = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+def shift(value):
+    if isinstance(value, dict):
+        return {k: shift(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [shift(v) for v in value]
+    if isinstance(value, str) and iso.match(value):
+        moved = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) + timedelta(seconds=delta)
+        return moved.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return value
+
+schedules = support / "run-schedules.json"
+if schedules.exists():
+    schedules.write_text(json.dumps(shift(json.loads(schedules.read_text())), indent=2) + "\n")
+history = support / "run-history.sqlite"
+if history.exists():
+    db = sqlite3.connect(history)
+    db.execute("UPDATE run_history SET started_at = started_at + ?, finished_at = finished_at + ?", (delta, delta))
+    db.commit()
+    db.close()
+PY
 theme=$([[ "$3" == dark ]] && echo cool-slate || echo light)
 APP_JSON="$support/app.json" THEME="$theme" DENSITY="${ALAS_CAPTURE_DENSITY:-}" /usr/bin/python3 - <<'PY'
 import json
@@ -118,7 +153,7 @@ json.dump(config, open(path, "w"), indent=2)
 PY
 
 # These set the frame the window opens with, ignoring what other runs saved.
-open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" "$app" --args \
+open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" "$app" --args \
   -ApplePersistenceIgnoreState YES "-$frame_key" "100 100 $launch_width_pt $launch_height_pt 0 0 1728 1084"
 
 # Waits for a command to succeed, polling until a deadline in seconds.

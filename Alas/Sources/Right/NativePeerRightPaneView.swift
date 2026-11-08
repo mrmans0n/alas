@@ -284,7 +284,7 @@ struct NativePeerRightPaneView: View {
             Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
             // The peer's name already shows in the center pane's tab bar.
             Text(client.selectedWorktreeGroup?.worktree?.branch ?? "")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(.system(size: 10.5))
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)

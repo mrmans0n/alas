@@ -19,6 +19,8 @@ mkdir -p "$1"
 profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
+# Bump when build_fixture changes, so an older fixture is rebuilt.
+fixture_version=3
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -54,8 +56,24 @@ build_fixture() {
   # The numbered lines give each worktree's diff something to delete.
   seq -f "line %g" 1 1000 > "$tmp/lantern/src/ledger.txt"
   printf '# Lantern\n\nInvoices and usage billing for small teams.\n' > "$tmp/lantern/README.md"
+  # Enough of a tree for the Files tab to have folders to show.
+  mkdir -p "$tmp/lantern/src/billing" "$tmp/lantern/src/web" "$tmp/lantern/docs" "$tmp/lantern/tests"
+  local file
+  for file in src/billing/Invoice.swift src/billing/UsageMeter.swift src/billing/TaxRules.swift \
+    src/web/routes.ts src/web/server.ts docs/architecture.md docs/runbook.md \
+    tests/InvoiceTests.swift tests/UsageMeterTests.swift Package.swift .gitignore; do
+    printf '// %s\n' "$file" > "$tmp/lantern/$file"
+  done
+  # Run tab scripts, read from each worktree's .alas/scripts.
+  mkdir -p "$tmp/lantern/.alas/scripts"
+  printf '#!/bin/sh\n# alas-name: Dev server\n# alas-url: http://localhost:4173\nexec sleep 3600\n' \
+    > "$tmp/lantern/.alas/scripts/dev.sh"
+  printf '#!/bin/sh\n# alas-name: Tests\necho ok\n' > "$tmp/lantern/.alas/scripts/test.sh"
+  printf '#!/bin/sh\n# alas-name: Lint\n# alas-console: hidden\necho ok\n' > "$tmp/lantern/.alas/scripts/lint.sh"
+  chmod +x "$tmp/lantern/.alas/scripts/"*.sh
   git -C "$tmp/lantern" add -A
   git -C "$tmp/lantern" commit -q -m "feat: first ledger"
+  echo "$fixture_version" > "$tmp/version"
   mv "$tmp" "$fixture"
 
   local entry branch added deleted path
@@ -72,7 +90,8 @@ build_fixture() {
   done
 }
 
-if [[ ! -d "$repo/.git" ]]; then
+if [[ "$(cat "$fixture/version" 2>/dev/null)" != "$fixture_version" ]]; then
+  rm -rf "$fixture"
   build_fixture
 fi
 
@@ -82,7 +101,7 @@ cp "$script_dir/fake-acp-agent.py" "$profile/fake-acp-agent.py"
 
 selected_path="$fixture/worktrees/${selected_branch//\//-}"
 WORKTREES="$(printf '%s\n' "${worktrees[@]}")" \
-PROFILE="$profile" REPO="$repo" SELECTED_WORKTREE="$selected_path" /usr/bin/python3 - <<'PY'
+PROFILE="$profile" REPO="$repo" SELECTED_WORKTREE="$selected_path" SELECTED_BRANCH="$selected_branch" /usr/bin/python3 - <<'PY'
 import json
 import os
 import pathlib
@@ -255,6 +274,87 @@ db.execute(
 )
 db.commit()
 db.close()
+
+# Finished runs for the Run tab's history; active runs live only in memory.
+runs = [
+    # id, script key, name, outcome, exit code, start, seconds, endpoint
+    ("run-4", "repo:test.sh", "Tests", "failed", 1, TIMESTAMP_SECONDS - 600, 48, None),
+    ("run-3", "repo:dev.sh", "Dev server", "stopped", None, TIMESTAMP_SECONDS - 4200, 1800, "http://localhost:4173"),
+    ("run-2", "repo:lint.sh", "Lint", "succeeded", None, TIMESTAMP_SECONDS - 7400, 6, None),
+    ("run-1", "repo:test.sh", "Tests", "succeeded", None, TIMESTAMP_SECONDS - 86400, 52, None),
+]
+history = sqlite3.connect(seed / "run-history.sqlite")
+history.executescript("""
+    CREATE TABLE run_history (
+      run_id TEXT PRIMARY KEY, script_key TEXT NOT NULL, script_name TEXT NOT NULL,
+      worktree_id TEXT NOT NULL, branch TEXT NOT NULL,
+      target_host TEXT, target_working_directory TEXT NOT NULL, endpoint TEXT,
+      outcome TEXT NOT NULL, exit_code INTEGER,
+      started_at REAL NOT NULL, finished_at REAL NOT NULL,
+      conflict_kind TEXT, conflict_worktree_id TEXT, conflict_branch TEXT, conflict_script_name TEXT,
+      output_kind TEXT NOT NULL, output_text TEXT, output_truncated INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX run_history_worktree_finished_idx ON run_history(worktree_id, finished_at DESC, run_id DESC);
+""")
+for run_id, key, name, outcome, code, start, seconds, endpoint in runs:
+    history.execute(
+        "INSERT INTO run_history VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 'available', ?, 0)",
+        (run_id, key, name, selected, os.environ["SELECTED_BRANCH"], selected, endpoint, outcome, code,
+         float(start), float(start + seconds), f"{name} finished\n"),
+    )
+history.commit()
+history.close()
+
+# One schedule of each kind: a script on a timer and an agent in a fresh worktree.
+# Dates are relative to TIMESTAMP, which capture.sh moves to the moment of capture;
+# every nextFireAt stays in the future so nothing fires during a capture.
+target = {"worktree": {"projectId": PROJECT_ID, "worktreeId": selected}}
+write_json(seed / "run-schedules.json", {
+    "version": 1,
+    "schedules": [
+        {
+            "id": "schedule-tests", "name": "Hourly tests",
+            "target": target, "scriptKey": "repo:test.sh",
+            "trigger": {"interval": {"seconds": 3600}}, "missedRunPolicy": "skip",
+            "isEnabled": True, "createdAt": TIMESTAMP,
+        },
+        {
+            "id": "schedule-triage", "name": "Morning triage",
+            "target": target,
+            "trigger": {"timeOfDay": {"hour": 9, "minute": 0, "weekdays": [2, 3, 4, 5, 6]}},
+            "missedRunPolicy": "runLatest",
+            "composition": {"agentId": "registry-demo-agent", "prompt": "Triage yesterday's failed invoices"},
+            "isEnabled": True, "createdAt": TIMESTAMP,
+        },
+        {
+            "id": "schedule-lint", "name": "Nightly lint",
+            "target": target, "scriptKey": "repo:lint.sh",
+            "trigger": {"timeOfDay": {"hour": 2, "minute": 30, "weekdays": []}}, "missedRunPolicy": "skip",
+            "isEnabled": False, "createdAt": TIMESTAMP,
+        },
+    ],
+    "states": {
+        "schedule-tests": {
+            "lastFiredAt": "2026-01-15T09:50:00Z", "nextFireAt": "2026-01-15T10:50:00Z",
+            "lastOutcome": {"failed": {"exitCode": 1}}, "lastOutcomeAt": "2026-01-15T09:50:48Z",
+            "timeZoneIdentifier": "UTC",
+            "firings": [{
+                "id": "firing-1", "firedAt": "2026-01-15T09:50:00Z", "finishedAt": "2026-01-15T09:50:48Z",
+                "wasManual": False, "outcome": {"failed": {"exitCode": 1}},
+                "runs": [{"worktreeID": selected, "branch": os.environ["SELECTED_BRANCH"],
+                          "runID": "run-4", "scriptName": "Tests"}],
+            }],
+        },
+        "schedule-triage": {
+            "lastFiredAt": "2026-01-15T09:00:00Z", "nextFireAt": "2026-01-16T09:00:00Z",
+            "lastOutcome": {"succeeded": {}}, "lastOutcomeAt": "2026-01-15T09:04:00Z",
+            "timeZoneIdentifier": "UTC",
+        },
+    },
+    "pausedProjectIDs": [],
+    "isPausedGlobally": False,
+    "lastEvaluatedAt": TIMESTAMP,
+})
 PY
 
 echo "demo profile ready: $profile"

@@ -103,7 +103,7 @@ struct RightPaneToolbar: View {
                 scheduleCount: scheduleCount,
                 schedulesPaused: schedulesPaused
             ))
-            .font(scale.meta.font(design: .monospaced))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-muted"))
             .lineLimit(1)
             .truncationMode(.middle)

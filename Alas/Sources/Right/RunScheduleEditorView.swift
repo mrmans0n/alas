@@ -29,6 +29,7 @@ struct RunScheduleEditorView: View {
     @State private var now = Date()
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private let calendar = Calendar.autoupdatingCurrent
 
@@ -66,7 +67,7 @@ struct RunScheduleEditorView: View {
                 compositionSection
                 if let message = errorMessage ?? draft.validationError, !draft.name.isEmpty || errorMessage != nil {
                     Text(message)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("warn"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -95,13 +96,13 @@ struct RunScheduleEditorView: View {
 
     private func sectionTitle(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .tracking(0.6)
             .foregroundColor(theme.color("fg-dim"))
     }
 
     private var whereSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             sectionTitle("Where")
             HStack(spacing: 0) {
                 AlasSegmentedControl(
@@ -116,7 +117,7 @@ struct RunScheduleEditorView: View {
                 Spacer(minLength: 0)
             }
             if draft.targetKind != .allProjects {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     projectPicker
                     if draft.targetKind == .thisWorktree {
                         worktreePicker
@@ -127,13 +128,13 @@ struct RunScheduleEditorView: View {
             DialogField(label: "Script") {
                 scriptPicker
             }
-            .padding(.top, 4)
+            .padding(.top, scale.space[1])
         }
     }
 
     private var whenSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
+            HStack(spacing: scale.space[2]) {
                 sectionTitle("When")
                 Spacer(minLength: 8)
                 AlasSegmentedControl(
@@ -146,9 +147,9 @@ struct RunScheduleEditorView: View {
                 )
             }
             triggerComposer
-            HStack(spacing: 10) {
+            HStack(spacing: scale.space[3]) {
                 Text("If occurrences are missed")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                 Spacer(minLength: 8)
                 AlasSegmentedControl(
@@ -171,7 +172,7 @@ struct RunScheduleEditorView: View {
     }
 
     private var compositionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             ScheduleCheckbox(
                 isOn: $draft.launchesAgent,
                 label: targetsFolder ? "Launch an agent in the folder" : "Create a new worktree and launch an agent"
@@ -185,22 +186,22 @@ struct RunScheduleEditorView: View {
     // MARK: - Trigger composer
 
     private var triggerComposer: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             switch draft.triggerKind {
             case .timeOfDay:
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[3]) {
                     composerLead("At")
                     ClockField(hour: $draft.hour, minute: $draft.minute)
                     composerLead("on")
                     weekdayCircles
                 }
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     ForEach(RunScheduleDraft.WeekdayPreset.allCases, id: \.self) { preset in
                         presetPill(preset)
                     }
                 }
             case .interval:
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[3]) {
                     composerLead("Every")
                     NumberField(value: $draft.intervalValue, range: 1...999, accessibilityLabel: "Interval")
                     AlasSegmentedControl(
@@ -215,18 +216,18 @@ struct RunScheduleEditorView: View {
             }
             summaryRow
         }
-        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+        .padding(EdgeInsets(top: scale.space[3], leading: scale.space[4], bottom: scale.space[3], trailing: scale.space[4]))
         .background(theme.color("field-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 9)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func composerLead(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12.5))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-muted"))
     }
 
@@ -236,7 +237,7 @@ struct RunScheduleEditorView: View {
     }
 
     private var weekdayCircles: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             ForEach(orderedWeekdays, id: \.self) { day in
                 let isOn = draft.weekdays.contains(day)
                 let name = calendar.weekdaySymbols[day - 1]
@@ -244,7 +245,7 @@ struct RunScheduleEditorView: View {
                     draft.toggleWeekday(day)
                 } label: {
                     Text(calendar.veryShortStandaloneWeekdaySymbols[day - 1])
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(isOn ? theme.color("bg-0") : theme.color("fg-dim"))
                         .frame(width: 30, height: 30)
                         .background(Circle().fill(isOn ? theme.color("accent") : Color.clear))
@@ -265,9 +266,9 @@ struct RunScheduleEditorView: View {
             draft.apply(preset)
         } label: {
             Text(preset.label)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isOn ? theme.color("seg-pill-active-fg") : theme.color("fg-faint"))
-                .padding(.horizontal, 8)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
                 .background(Capsule().fill(isOn ? theme.color("accent-soft") : Color.clear))
                 .contentShape(Capsule())
@@ -277,19 +278,19 @@ struct RunScheduleEditorView: View {
     }
 
     private var summaryRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Icon(name: "clock", size: 12, color: theme.color("accent"))
             summaryText
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .lineLimit(1)
             Spacer(minLength: 8)
             Text(nextFireLabel)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .monospacedDigit()
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
         }
-        .padding(.top, 10)
+        .padding(.top, scale.space[3])
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(theme.color("line-soft"))
@@ -382,7 +383,7 @@ struct RunScheduleEditorView: View {
             }
             return "\(RunSchedulePresentation.scriptDisplayName(key)) · missing"
         }()
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: scale.space[2]) {
             HStack(spacing: 0) {
                 ScheduleChipMenu(title: selectedTitle) {
                     Picker("", selection: Binding(
@@ -412,7 +413,7 @@ struct RunScheduleEditorView: View {
             }
             if let scriptDiscoveryError {
                 Text(scriptDiscoveryError)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("warn"))
             } else if scripts.isEmpty {
                 helpText("No run scripts found in the target worktree.")
@@ -500,20 +501,20 @@ struct RunScheduleEditorView: View {
     // MARK: - Composition
 
     private var compositionFields: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             if !targetsFolder {
                 DialogField(label: "Branch template") {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         AlasField(text: $draft.branchTemplate, placeholder: RunScheduleComposition.defaultBranchTemplate, monospaced: true)
                         (Text("Variables ")
-                            + Text("{name}").font(.system(size: 10.5, design: .monospaced))
+                            + Text("{name}").font(scale.meta.font(design: .monospaced))
                             + Text(" ")
-                            + Text("{date}").font(.system(size: 10.5, design: .monospaced))
+                            + Text("{date}").font(scale.meta.font(design: .monospaced))
                             + Text(" ")
-                            + Text("{time}").font(.system(size: 10.5, design: .monospaced))
+                            + Text("{time}").font(scale.meta.font(design: .monospaced))
                             + Text(" · Preview ")
-                            + Text(branchPreview).font(.system(size: 10.5, design: .monospaced)))
-                            .font(.system(size: 11))
+                            + Text(branchPreview).font(scale.meta.font(design: .monospaced)))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-faint"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -528,7 +529,7 @@ struct RunScheduleEditorView: View {
             }
             if agentSurface == .chat, let agentID = draft.agentID {
                 DialogField(label: "Model") {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         HStack(spacing: 0) {
                             modelPicker
                             Spacer(minLength: 0)
@@ -540,7 +541,7 @@ struct RunScheduleEditorView: View {
                 }
             }
             DialogField(label: "Prompt") {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     PromptField(
                         text: $draft.prompt,
                         placeholder: "e.g. Run the full test suite, fix any failures, and open a PR summarising the changes."
@@ -553,22 +554,22 @@ struct RunScheduleEditorView: View {
             }
             helpText(RunSchedulePresentation.compositionHint(surface: agentSurface, createsWorktree: !targetsFolder))
         }
-        .padding(.leading, 23)
-        .padding(.top, 2)
+        .padding(.leading, ScheduleCheckbox.boxSize + scale.space[2])
+        .padding(.top, scale.space[0])
         .overlay(alignment: .leading) {
             // The rule that ties the sub-fields to the checkbox above them.
             Rectangle()
                 .fill(theme.color("line"))
                 .frame(width: 1)
-                .padding(.leading, 7)
-                .padding(.vertical, 4)
+                .padding(.leading, (ScheduleCheckbox.boxSize - 1) / 2)
+                .padding(.vertical, scale.space[1])
                 .accessibilityHidden(true)
         }
     }
 
     private func helpText(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -659,14 +660,15 @@ private struct ScheduleChipMenu<Items: View>: View {
     @ViewBuilder let items: () -> Items
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Menu {
             items()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text(title)
-                    .font(.system(size: monospaced ? 11.5 : 12, design: monospaced ? .monospaced : .default))
+                    .font(scale.meta.font(design: monospaced ? .monospaced : .default))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -674,18 +676,18 @@ private struct ScheduleChipMenu<Items: View>: View {
                     Spacer(minLength: 0)
                 }
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .frame(maxWidth: grows ? .infinity : nil)
             .background(theme.color("bg-1"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -697,30 +699,33 @@ private struct ScheduleChipMenu<Items: View>: View {
 /// The design's small square checkbox, drawn in theme colours rather than
 /// AppKit's, with the label as part of the click target.
 private struct ScheduleCheckbox: View {
+    static let boxSize: CGFloat = 15
+
     @Binding var isOn: Bool
     let label: String
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button {
             isOn.toggle()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: scale.radius.small)
                         .fill(isOn ? theme.color("accent") : theme.color("field-bg"))
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: scale.radius.small)
                         .strokeBorder(isOn ? Color.clear : theme.color("line"), lineWidth: 0.5)
                     if isOn {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(scale.glyph.font(weight: .bold))
                             .foregroundColor(theme.color("bg-0"))
                     }
                 }
-                .frame(width: 15, height: 15)
+                .frame(width: Self.boxSize, height: Self.boxSize)
                 Text(label)
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
             }
             .contentShape(Rectangle())
@@ -738,18 +743,19 @@ private struct ClockField: View {
     @Binding var minute: Int
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 0) {
             DigitCell(value: $hour, range: 0...23, width: 34, accessibilityLabel: "Hour")
             Text(":")
-                .font(.system(size: 16, weight: .medium, design: .monospaced))
+                .font(.system(size: 16, weight: .medium, design: .monospaced)) // design-literal: clock digit display, not a text role
                 .foregroundColor(theme.color("fg-dim"))
                 .padding(.horizontal, -2)
-                .padding(.bottom, 2)
+                .padding(.bottom, scale.space[0])
             DigitCell(value: $minute, range: 0...59, width: 34, accessibilityLabel: "Minute")
         }
-        .digitFieldChrome(theme: theme)
+        .digitFieldChrome(theme: theme, scale: scale)
     }
 }
 
@@ -760,23 +766,24 @@ private struct NumberField: View {
     let accessibilityLabel: String
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         DigitCell(value: $value, range: range, width: 40, pads: false, accessibilityLabel: accessibilityLabel)
-            .digitFieldChrome(theme: theme)
+            .digitFieldChrome(theme: theme, scale: scale)
     }
 }
 
 private extension View {
-    func digitFieldChrome(theme: Theme) -> some View {
-        padding(.horizontal, 4)
+    func digitFieldChrome(theme: Theme, scale: DesignScale) -> some View {
+        padding(.horizontal, scale.space[1])
             .frame(height: 34)
             .background(theme.color("bg-0"))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 
@@ -792,19 +799,20 @@ private struct DigitCell: View {
     @State private var text = ""
     @FocusState private var isFocused: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private var maxDigits: Int { String(range.upperBound).count }
 
     var body: some View {
         TextField("", text: $text)
             .textFieldStyle(.plain)
-            .font(.system(size: 17, weight: .medium, design: .monospaced))
+            .font(.system(size: 17, weight: .medium, design: .monospaced)) // design-literal: clock digit display, not a text role
             .monospacedDigit()
             .multilineTextAlignment(.center)
             .foregroundColor(theme.color("fg"))
             .frame(width: width, height: 28)
             .background(
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(isFocused ? theme.color("accent-soft") : Color.clear)
             )
             .focused($isFocused)
@@ -875,32 +883,33 @@ private struct PromptField: View {
     let placeholder: String
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $text)
-                .font(.system(size: 12.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64, maxHeight: 140)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 5) // design-literal: TextEditor's own inset sits under this, the placeholder below must line up
+                .padding(.vertical, scale.space[2])
             if text.isEmpty {
                 Text(placeholder)
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10) // design-literal: lines the placeholder up with the TextEditor's text
+                    .padding(.vertical, scale.space[2])
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
         .background(theme.color("field-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .accessibilityLabel("Prompt")
     }
 }
