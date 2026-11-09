@@ -288,3 +288,14 @@ Alas/Sources/Remote/Native/NativePeerNewSessionSheet.swift
 Alas/Sources/Remote/Settings/RemoteServerPane.swift
 Alas/Sources/Remote/Settings/HostSSHSetupSheet.swift
 Alas/Sources/Remote/Pairing/RemotePairingApprovalView.swift
+Alas/Sources/Code/Editor/BlockedNudgeBanner.swift
+Alas/Sources/Code/Editor/EditorConflictBanner.swift
+Alas/Sources/Code/Editor/EditorFindBarView.swift
+Alas/Sources/Code/Editor/EditorLSPStatusBadge.swift
+Alas/Sources/Code/Editor/EditorLSPStatusOverridePicker.swift
+Alas/Sources/Code/Editor/InstallNudgeBanner.swift
+Alas/Sources/Code/LSP/Install/InstallSplitButton.swift
+Alas/Sources/Code/LSP/Status/LSPServerChip.swift
+Alas/Sources/Code/LSP/Status/LSPServerChipStrip.swift
+Alas/Sources/Code/LSP/Status/LSPServerStatusDetail.swift
+Alas/Sources/Code/LSP/Status/LSPStatusPill.swift

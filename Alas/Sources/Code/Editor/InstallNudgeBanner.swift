@@ -8,6 +8,7 @@ struct InstallNudgeBanner: View {
     let absolutePath: String
 
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var installSheetVisible = false
     @State private var selectedMasonPackageId: String?
     @State private var pendingMasonPackage: MasonPackage?
@@ -69,7 +70,7 @@ struct InstallNudgeBanner: View {
             Image(systemName: "info.circle")
                 .foregroundColor(theme.color("fg-dim"))
             Text("Install \(nudge.command) for \(nudge.displayName) support")
-                .font(.system(size: 12.5))
+                .font(scale.body.font)
             Spacer()
             masonPicker(for: nudge)
             installButton(for: nudge)
@@ -79,8 +80,8 @@ struct InstallNudgeBanner: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1"))
         .overlay(Rectangle()
             .frame(height: 0.5)

@@ -6,6 +6,7 @@ struct EditorLSPStatusOverridePicker: View {
     let onOpenSettings: () -> Void
     @State private var query: String = ""
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     private var filtered: [(language: String, displayName: String)] {
         let q = query.lowercased()
@@ -20,7 +21,7 @@ struct EditorLSPStatusOverridePicker: View {
         VStack(alignment: .leading, spacing: 6) {
             TextField("Search…", text: $query)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(filtered, id: \.language) { entry in
@@ -29,14 +30,14 @@ struct EditorLSPStatusOverridePicker: View {
                         } label: {
                             HStack {
                                 Text(entry.displayName)
-                                    .font(.system(size: 11))
+                                    .font(scale.meta.font)
                                 Spacer()
                                 Text(entry.language)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                                     .foregroundColor(theme.color("fg-muted"))
                             }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, scale.space[2])
+                            .padding(.vertical, scale.space[1])
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -47,9 +48,9 @@ struct EditorLSPStatusOverridePicker: View {
             Divider()
             Button("Configure more servers in Settings…", action: onOpenSettings)
                 .buttonStyle(.link)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
         }
-        .padding(8)
+        .padding(scale.space[2])
         .frame(width: 260)
     }
 }

@@ -19,6 +19,7 @@ struct InstallSplitButton: View {
     let onInstall: (DetectedInstaller, InstallRecipe) -> Void
 
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     private var label: String { busy ? "Installing…" : "Install" }
     private var hasInstaller: Bool { !available.isEmpty }
@@ -31,15 +32,15 @@ struct InstallSplitButton: View {
                 caretMenu
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     @ViewBuilder
     private var primaryButton: some View {
         Button(action: runPrimary) {
             Text(label)
-                .font(.system(size: 11))
-                .padding(.horizontal, 10).padding(.vertical, 5)
+                .font(scale.meta.font)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
                 .foregroundColor(primaryDisabled ? theme.color("fg-faint") : theme.color("fg"))
                 .background(theme.color("bg-3"))
         }
@@ -62,7 +63,7 @@ struct InstallSplitButton: View {
             }
         } label: {
             Icon(name: "chev-down", size: 9, color: theme.color("fg-faint"))
-                .padding(.horizontal, 7).padding(.vertical, 7)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
                 .background(theme.color("bg-3"))
         }
         .menuStyle(.borderlessButton)

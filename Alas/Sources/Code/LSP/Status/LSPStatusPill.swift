@@ -8,6 +8,7 @@ struct LSPStatusPill: View {
     var isHighlighted = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     init(glyph: LSPPillGlyph, label: String, showsWarning: Bool, isHighlighted: Bool = false) {
         self.glyph = glyph
@@ -24,16 +25,16 @@ struct LSPStatusPill: View {
         HStack(spacing: 6) {
             glyphView
             Text(label)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-muted"))
             if showsWarning {
                 Text("!")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(scale.caption.font(weight: .bold))
                     .foregroundColor(theme.color("warn"))
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .background(theme.color("bg-2").opacity(isHighlighted ? 1 : 0))
         .clipShape(Capsule())
         .contentShape(Capsule())
