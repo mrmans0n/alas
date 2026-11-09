@@ -8,16 +8,41 @@ import AlasCode
 public protocol ACPAdapterInstaller {
     var agentID: String { get }
     func installState() async -> ACPSetupResult
+    /// Installs over the existing package, so a failed update leaves the
+    /// working adapter in place.
     func install() async throws
+    /// Uninstalls the package first so npm fetches every dependency again,
+    /// then installs. For adapters that are missing or already broken.
+    func reinstall() async throws
+}
+
+public enum ACPAdapterInstallMode: Sendable {
+    /// Install over the existing adapter (the update banner).
+    case update
+    /// Remove the adapter first (install, repair, Reinstall).
+    case reinstall
 }
 
 public enum ACPInstallError: LocalizedError, Sendable {
     case unsupportedAgent(String)
     case nonZeroExit(Int32, stderr: String)
+    /// npm exited 0, but the setup check still fails.
+    case unusableAfterInstall(String)
     public var errorDescription: String? {
         switch self {
         case .unsupportedAgent(let agentID): return "No ACP adapter installer is available for \(agentID)."
         case .nonZeroExit(let code, let stderr): return "install failed (exit \(code)): \(stderr)"
+        case .unusableAfterInstall(let reason): return "npm finished, but the adapter is still unusable: \(reason)"
+        }
+    }
+
+    /// Throws unless `state` is ready. Installers call it after npm succeeds,
+    /// because npm exits 0 even when it skipped an optional platform package.
+    public static func requireReady(_ state: ACPSetupResult) throws {
+        switch state {
+        case .ready: return
+        case .missing(let reason): throw unusableAfterInstall(reason)
+        case .error(let message): throw unusableAfterInstall(message)
         }
     }
 }

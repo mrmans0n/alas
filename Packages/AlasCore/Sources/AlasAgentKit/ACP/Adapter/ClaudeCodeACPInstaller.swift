@@ -9,9 +9,15 @@ import AlasACP
 public struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
     public let agentID = ACPManagedAdapterDescriptor.claude.agentID
     public let runner: (_ command: String, _ args: [String]) async throws -> (status: Int32, stderr: String)
+    /// Replaces the post-install setup check in tests.
+    private let verify: (() async -> ACPSetupResult)?
 
-    public init(runner: @escaping (String, [String]) async throws -> (status: Int32, stderr: String) = ClaudeCodeACPInstaller.defaultRunner) {
+    public init(
+        runner: @escaping (String, [String]) async throws -> (status: Int32, stderr: String) = ClaudeCodeACPInstaller.defaultRunner,
+        verify: (() async -> ACPSetupResult)? = nil
+    ) {
         self.runner = runner
+        self.verify = verify
     }
 
     public func installState() async -> ACPSetupResult {
@@ -37,6 +43,15 @@ public struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
         if rebuildStatus != 0 {
             throw ACPInstallError.nonZeroExit(rebuildStatus, stderr: rebuildStderr)
         }
+        let state = if let verify { await verify() } else { await installState() }
+        try ACPInstallError.requireReady(state)
+    }
+
+    public func reinstall() async throws {
+        // A failed uninstall leaves the tree for `install` to overwrite; the
+        // check after it reports what is still broken.
+        _ = try? await runner("npm", ["uninstall", "-g", ACPManagedAdapterDescriptor.claude.packageName])
+        try await install()
     }
 
     public static let defaultRunner: @Sendable (String, [String]) async throws -> (status: Int32, stderr: String) = { cmd, args in

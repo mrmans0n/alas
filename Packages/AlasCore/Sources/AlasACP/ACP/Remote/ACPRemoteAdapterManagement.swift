@@ -70,6 +70,10 @@ public struct ACPRemoteAdapterManagement: Sendable {
     public static let rollbackExitCode: Int32 = 41
     public static let backupCleanupExitCode: Int32 = 42
     public static let promotionLockExitCode: Int32 = 43
+    /// A probe found the adapter, but npm skipped a platform package.
+    public static let incompleteExitCode: Int32 = 44
+    /// npm skipped a platform package in the staged install; nothing was promoted.
+    public static let stagedPayloadExitCode: Int32 = 45
     public static let maximumInstallDetailLength = 2_048
     public static let installTimeout: TimeInterval = 5 * 60
 
@@ -271,6 +275,11 @@ public struct ACPRemoteAdapterManagement: Sendable {
         \(npm) --prefix "$stage" install -g \(package) || exit \(npmInstallExitCode)
         [ -d "$stage/lib/node_modules/$package" ] || exit \(stagedPackageExitCode)
         [ -x "$stage/bin/$binary" ] && [ ! -d "$stage/bin/$binary" ] || exit \(stagedBinaryExitCode)
+        staged_missing=$(\(SSHCommand.shellQuote(environment.nodePath)) -e \(SSHCommand.shellQuote(ACPAdapterPayloadCheck.script)) "$stage/lib/node_modules/$package" 2>/dev/null)
+        if [ "$?" -eq \(ACPAdapterPayloadCheck.incompleteExitCode) ] && [ -n "$staged_missing" ]; then
+            printf '%s\\n' "npm did not install $staged_missing, usually after an interrupted download. Retry the install." >&2
+            exit \(stagedPayloadExitCode)
+        fi
 
         mkdir -p "$staging_root/.locks" || exit \(stagingExitCode)
         acquire_promotion_lock || exit \(promotionLockExitCode)
@@ -346,6 +355,7 @@ public struct ACPRemoteAdapterManagement: Sendable {
             \(emit(status: "prerequisite"))
             exit \(prerequisiteExitCode)
         }
+        \(payloadProbe(node: "\"$node\"", packageDirectory: "\"$prefix/lib/node_modules/$package\""))
         \(emitReady(adapterExpression: "$adapter", nodeBinExpression: "$node_bin"))
         """
     }
@@ -398,6 +408,7 @@ public struct ACPRemoteAdapterManagement: Sendable {
                 resolved_dir=$(cd "$target_dir" 2>/dev/null && pwd -P || :)
                 case "$resolved_dir/$target_name" in
                     "$package_root"/*) [ -n "$package_root" ] && {
+                        \(payloadProbe(node: "\"$node_bin/node\"", packageDirectory: "\"$package_root\""))
                         \(emitReady(adapterExpression: "$global_adapter", nodeBinExpression: "$node_bin"))
                     } ;;
                 esac
@@ -490,6 +501,8 @@ public struct ACPRemoteAdapterManagement: Sendable {
                 return hasStatus("corrupt", output: result.stdout)
                     ? .error(message: "The managed \(descriptor.binaryName) installation on \(host) is incomplete.")
                     : .error(message: malformedMessage(descriptor, host: host))
+            case Self.incompleteExitCode:
+                return incompleteResolution(result.stdout, descriptor: descriptor, host: host)
             default:
                 return .error(message: executionMessage(result, descriptor: descriptor, host: host))
             }
@@ -524,6 +537,8 @@ public struct ACPRemoteAdapterManagement: Sendable {
                 return hasStatus("corrupt", output: result.stdout)
                     ? .error(message: "The global \(descriptor.packageName) installation on \(host) is incomplete.")
                     : .error(message: malformedMessage(descriptor, host: host))
+            case Self.incompleteExitCode:
+                return incompleteResolution(result.stdout, descriptor: descriptor, host: host)
             default:
                 return .error(message: executionMessage(result, descriptor: descriptor, host: host))
             }
@@ -542,6 +557,20 @@ public struct ACPRemoteAdapterManagement: Sendable {
     private func hasStatus(_ status: String, output: String) -> Bool {
         guard let fields = parseFields(output) else { return false }
         return fields.count == 1 && fields["status"] == status
+    }
+
+    private func incompleteResolution(
+        _ output: String,
+        descriptor: ACPManagedAdapterDescriptor,
+        host: String
+    ) -> ACPRemoteAdapterResolution {
+        guard let fields = parseFields(output), fields.count == 2, fields["status"] == "incomplete",
+              let missing = fields["missing"]
+        else { return .error(message: malformedMessage(descriptor, host: host)) }
+        return .error(message: ACPAdapterPayloadCheck.incompleteReason(
+            packageName: descriptor.packageName,
+            missing: missing.split(separator: ",").map(String.init),
+            host: host))
     }
 
     private func parseFields(_ output: String) -> [String: String]? {
@@ -588,6 +617,18 @@ public struct ACPRemoteAdapterManagement: Sendable {
 
     private static func emit(status: String) -> String {
         "printf '%s\\n' '\(protocolBegin)' 'status=\(status)' '\(protocolEnd)'"
+    }
+
+    /// Exits `incompleteExitCode` naming the platform packages npm skipped
+    /// under `packageDirectory`. A check that cannot run does not block.
+    private static func payloadProbe(node: String, packageDirectory: String) -> String {
+        """
+        payload_missing=$(\(node) -e \(SSHCommand.shellQuote(ACPAdapterPayloadCheck.script)) \(packageDirectory) 2>/dev/null)
+        if [ "$?" -eq \(ACPAdapterPayloadCheck.incompleteExitCode) ] && [ -n "$payload_missing" ]; then
+            printf '%s\\n' '\(protocolBegin)' 'status=incomplete' "missing=$payload_missing" '\(protocolEnd)'
+            exit \(incompleteExitCode)
+        fi
+        """
     }
 
     private static func installPrerequisiteError(

@@ -16,10 +16,13 @@ public enum ACPInstallerRegistry: Sendable {
         }
     }
 
-    public static func install(agentID: String) async throws {
+    public static func install(agentID: String, mode: ACPAdapterInstallMode) async throws {
         guard let installer = installer(for: agentID) else {
             throw ACPInstallError.unsupportedAgent(agentID)
         }
-        try await installer.install()
+        switch mode {
+        case .update: try await installer.install()
+        case .reinstall: try await installer.reinstall()
+        }
     }
 }

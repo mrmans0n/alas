@@ -9,8 +9,8 @@ struct ACPAdapterInstallCoordinatorTests {
         let recorder = CoordinatorInstallRecorder()
         let coordinator = makeCoordinator(recorder)
 
-        try await coordinator.install(target: .local, agentID: "codex")
-        try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex")
+        try await coordinator.install(target: .local, agentID: "codex", mode: .reinstall)
+        try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex", mode: .reinstall)
 
         #expect(await recorder.localAgentIDs == ["codex"])
         #expect(await recorder.remoteRequests == ["buildbox|codex"])
@@ -21,8 +21,8 @@ struct ACPAdapterInstallCoordinatorTests {
         let recorder = CoordinatorInstallRecorder(delay: .milliseconds(100))
         let coordinator = makeCoordinator(recorder)
 
-        async let first: Void = coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex")
-        async let second: Void = coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex")
+        async let first: Void = coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex", mode: .reinstall)
+        async let second: Void = coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex", mode: .reinstall)
         _ = try await (first, second)
 
         #expect(await recorder.remoteRequests == ["buildbox|codex"])
@@ -34,8 +34,8 @@ struct ACPAdapterInstallCoordinatorTests {
         let recorder = CoordinatorInstallRecorder(delay: .milliseconds(100))
         let coordinator = makeCoordinator(recorder)
 
-        async let first: Void = coordinator.install(target: .ssh(host: "one"), agentID: "codex")
-        async let second: Void = coordinator.install(target: .ssh(host: "two"), agentID: "pi")
+        async let first: Void = coordinator.install(target: .ssh(host: "one"), agentID: "codex", mode: .reinstall)
+        async let second: Void = coordinator.install(target: .ssh(host: "two"), agentID: "pi", mode: .reinstall)
         _ = try await (first, second)
 
         #expect(await recorder.maximumActiveRemoteInstalls == 2)
@@ -48,9 +48,9 @@ struct ACPAdapterInstallCoordinatorTests {
         let coordinator = makeCoordinator(recorder)
 
         await #expect(throws: CoordinatorTestError.failed) {
-            try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex")
+            try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex", mode: .reinstall)
         }
-        try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex")
+        try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "codex", mode: .reinstall)
 
         #expect(await recorder.remoteRequests.count == 2)
     }
@@ -61,7 +61,7 @@ struct ACPAdapterInstallCoordinatorTests {
         let coordinator = makeCoordinator(recorder)
 
         await #expect(throws: ACPRemoteAdapterInstallError.unsupportedAgent("custom")) {
-            try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "custom")
+            try await coordinator.install(target: .ssh(host: "buildbox"), agentID: "custom", mode: .reinstall)
         }
         #expect(await recorder.localAgentIDs.isEmpty)
         #expect(await recorder.remoteRequests.isEmpty)
@@ -69,7 +69,7 @@ struct ACPAdapterInstallCoordinatorTests {
 
     private func makeCoordinator(_ recorder: CoordinatorInstallRecorder) -> ACPAdapterInstallCoordinator {
         ACPAdapterInstallCoordinator(
-            localInstall: { agentID in try await recorder.installLocal(agentID) },
+            localInstall: { agentID, _ in try await recorder.installLocal(agentID) },
             remoteInstall: { host, descriptor in try await recorder.installRemote(host, descriptor) }
         )
     }

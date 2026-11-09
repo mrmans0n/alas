@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public actor ACPAdapterInstallCoordinator {
-    public typealias LocalInstall = @Sendable (_ agentID: String) async throws -> Void
+    public typealias LocalInstall = @Sendable (_ agentID: String, _ mode: ACPAdapterInstallMode) async throws -> Void
     public typealias RemoteInstall = @Sendable (
         _ host: String,
         _ descriptor: ACPManagedAdapterDescriptor
@@ -21,8 +21,8 @@ public actor ACPAdapterInstallCoordinator {
     public typealias DetectedUpdate = @Sendable (_ owner: ACPDetectedAgentOwner) async throws -> Void
 
     public init(
-        localInstall: @escaping LocalInstall = { agentID in
-            try await ACPInstallerRegistry.install(agentID: agentID)
+        localInstall: @escaping LocalInstall = { agentID, mode in
+            try await ACPInstallerRegistry.install(agentID: agentID, mode: mode)
         },
         remoteInstall: @escaping RemoteInstall = { host, descriptor in
             try await ACPRemoteAdapterManagement().install(host: host, descriptor: descriptor)
@@ -36,7 +36,10 @@ public actor ACPAdapterInstallCoordinator {
         self.detectedUpdate = detectedUpdate
     }
 
-    public func install(target: ACPAdapterTarget, agentID: String) async throws {
+    /// Installs the adapter for `agentID` on `target`. SSH installs always
+    /// build a fresh staged copy, so `mode` only changes local installs.
+    /// Concurrent requests for one target and agent share the first run.
+    public func install(target: ACPAdapterTarget, agentID: String, mode: ACPAdapterInstallMode) async throws {
         let key = ACPAdapterUpdateKey(target: target, agentID: agentID)
         if let task = inFlight[key] {
             return try await task.value
@@ -45,7 +48,7 @@ public actor ACPAdapterInstallCoordinator {
         let task: Task<Void, Error>
         switch target {
         case .local:
-            task = Task { try await localInstall(agentID) }
+            task = Task { try await localInstall(agentID, mode) }
         case .ssh(let host):
             guard let descriptor = ACPManagedAdapterDescriptor.descriptor(for: agentID) else {
                 throw ACPRemoteAdapterInstallError.unsupportedAgent(agentID)
