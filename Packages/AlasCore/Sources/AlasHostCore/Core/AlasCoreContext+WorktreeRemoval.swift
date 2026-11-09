@@ -210,13 +210,16 @@ extension AlasCoreContext {
         let others = projects.projects
             .flatMap { projects.worktrees(projectId: $0.id) }
             .filter { $0.id != worktree.id || $0.projectId != worktree.projectId }
-        let name = worktree.path.lastPathComponent
+        // Case-insensitively, as the default macOS volume resolves them:
+        // `feature` and `Feature` stage into the same folder.
+        let id = worktree.id.lowercased()
+        let name = worktree.path.lastPathComponent.lowercased()
         var folders: [URL] = []
-        if !others.contains(where: { $0.id == worktree.id }) {
+        if !others.contains(where: { $0.id.lowercased() == id }) {
             folders.append(Paths.acpAttachmentsDir(forWorktreeId: worktree.id))
         }
-        if !others.contains(where: { $0.path.lastPathComponent == name }) {
-            folders.append(Paths.acpAttachmentsRoot.appendingPathComponent(name, isDirectory: true))
+        if !others.contains(where: { $0.path.lastPathComponent.lowercased() == name }) {
+            folders.append(Paths.acpAttachmentsRoot.appendingPathComponent(worktree.path.lastPathComponent, isDirectory: true))
         }
         return folders
     }
