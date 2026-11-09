@@ -82,10 +82,10 @@ struct ToolbarControlMetrics: Equatable {
     let cornerRadius: CGFloat
 
     /// The app-wide default: tab bar, right pane, ACP and dialog toolbars.
-    static let standard = ToolbarControlMetrics(width: 26, height: 22, cornerRadius: 5)
+    static let standard = ToolbarControlMetrics(width: 26, height: 22, cornerRadius: 5) // design-literal: static toolbar metrics, no environment
 
     /// E1's sidebar header: square buttons, slightly rounder.
-    static let sidebarHeader = ToolbarControlMetrics(width: 23, height: 23, cornerRadius: 6)
+    static let sidebarHeader = ToolbarControlMetrics(width: 23, height: 23, cornerRadius: 6) // design-literal: static toolbar metrics, no environment
 }
 
 /// The shared toolbar-button surface: a fixed hit area that fills with `bg-3`

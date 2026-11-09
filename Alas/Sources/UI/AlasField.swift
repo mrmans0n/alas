@@ -14,6 +14,7 @@ struct AlasField: View {
     /// Sees pasted text before the field does; returning true consumes it.
     var onPaste: ((String) -> Bool)? = nil
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions || inputPolicy != nil
@@ -33,14 +34,14 @@ struct AlasField: View {
         } else {
             let field = TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: monospaced ? .monospaced : .default))
+                .font(scale.meta.font(weight: .regular, design: monospaced ? .monospaced : .default))
                 .foregroundColor(theme.color("fg"))
                 .disabled(!isEnabled)
 
             if let leadingIcon = leadingIcon {
                 HStack(spacing: 6) {
                     Image(systemName: leadingIcon)
-                        .font(.system(size: 12, weight: .regular))
+                        .font(scale.meta.font(weight: .regular))
                         .foregroundColor(theme.color("fg-dim"))
                         .accessibilityHidden(true)
                     field
@@ -56,14 +57,7 @@ struct AlasField: View {
 
 extension View {
     func alasFieldChrome(theme: Theme) -> some View {
-        padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(theme.color("bg-1"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+        modifier(AlasFieldChrome(theme: theme))
     }
 
     /// Marks a field whose contents a local model is still computing, or a
@@ -79,6 +73,23 @@ extension View {
             }
         }
         .animation(.easeOut(duration: 0.3), value: isActive)
+    }
+}
+
+private struct AlasFieldChrome: ViewModifier {
+    let theme: Theme
+    @Environment(\.designScale) private var scale
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, scale.space[2])
+            .frame(height: 28) // design-literal: field control height
+            .background(theme.color("bg-1"))
+            .overlay(
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 
@@ -138,15 +149,18 @@ private struct AlasNSTextField: NSViewRepresentable {
     var disablesAutomaticTextSubstitutions: Bool
     var inputPolicy: AlasFieldInputPolicy?
     var onPaste: ((String) -> Bool)?
+    @Environment(\.designScale) private var scale
+
+    private var fieldFont: NSFont {
+        monospaced ? scale.meta.monospacedNSFont(weight: .regular) : scale.metaNSFont
+    }
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false
-        field.font = monospaced
-            ? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-            : NSFont.systemFont(ofSize: 12, weight: .regular)
+        field.font = fieldFont
         field.focusRingType = .none
         field.placeholderString = placeholder
         field.stringValue = text
@@ -167,6 +181,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         nsView.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
         nsView.inputPolicy = inputPolicy
         nsView.onPaste = onPaste
+        if nsView.font != fieldFont { nsView.font = fieldFont }
         if nsView.placeholderString != placeholder { nsView.placeholderString = placeholder }
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string

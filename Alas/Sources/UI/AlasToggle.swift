@@ -3,6 +3,7 @@ import SwiftUI
 struct AlasToggle: View {
     @Binding var on: Bool
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button { on.toggle() } label: {
@@ -13,7 +14,7 @@ struct AlasToggle: View {
                 Circle()
                     .fill(.white)
                     .frame(width: 16, height: 16)
-                    .padding(2)
+                    .padding(scale.space[0])
                     .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
             }
             .animation(.easeInOut(duration: 0.15), value: on)
