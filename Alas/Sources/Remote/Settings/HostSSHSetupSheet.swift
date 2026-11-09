@@ -5,6 +5,7 @@ struct HostSSHSetupSheet: View {
     let peers: RemotePeerManager
     let describeAddError: (RemotePeerManager.AddError) -> String
     let onDismiss: () -> Void
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) var theme
 
     private indirect enum Phase {
@@ -27,11 +28,11 @@ struct HostSSHSetupSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Set up a host over SSH")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 8)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                .padding(.bottom, scale.space[2])
             content
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 520)
         .background(theme.color("bg-1"))
         .interactiveDismissDisabled(isBusy)
@@ -48,7 +49,7 @@ struct HostSSHSetupSheet: View {
             dimText("Installs or updates alas-host on another Mac, starts it at login, and pairs with it. "
                 + "This Mac needs key-based SSH access to it.")
             AlasField(text: $destination, placeholder: "user@host.local", monospaced: true, onSubmit: connect)
-                .padding(.vertical, 12)
+                .padding(.vertical, scale.space[3])
             buttons {
                 AlasButton(title: isConnecting ? "Connecting…" : "Connect", style: .primary, action: connect)
                     .disabled(isConnecting || trimmedDestination.isEmpty)
@@ -72,12 +73,12 @@ struct HostSSHSetupSheet: View {
             }
             SettingsRow(name: "Projects", desc: "Paths on the host, one per line.") {
                 TextEditor(text: $projects)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .scrollContentBackground(.hidden)
                     .frame(height: 72)
-                    .padding(8)
+                    .padding(scale.space[2])
                     .background(theme.color("bg-0"))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             buttons {
@@ -91,8 +92,8 @@ struct HostSSHSetupSheet: View {
             }
         case .done(let peerName, let warnings):
             Text("Paired with \(peerName).")
-                .font(.system(size: 12.5))
-                .padding(.bottom, 8)
+                .font(scale.metaFont)
+                .padding(.bottom, scale.space[2])
             ForEach(warnings, id: \.self) { warning in
                 HStack(alignment: .top, spacing: 6) {
                     Icon(name: "alert", size: 12, color: theme.color("warn"))
@@ -115,27 +116,27 @@ struct HostSSHSetupSheet: View {
     /// trace): short messages size to fit, long ones scroll inside a bounded box.
     private func failureMessage(_ message: String) -> some View {
         let text = Text(message)
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .foregroundColor(theme.color("warn"))
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
+            .padding(scale.space[2])
         return ViewThatFits(in: .vertical) {
             text.fixedSize(horizontal: false, vertical: true)
             ScrollView { text }
         }
         .frame(maxHeight: 320)
         .background(theme.color("bg-0"))
-        .overlay(RoundedRectangle(cornerRadius: 6)
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
             .strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func dimText(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.bottom, 4)
+            .padding(.bottom, scale.space[1])
     }
 
     private func buttons<Trailing: View>(@ViewBuilder _ trailing: () -> Trailing) -> some View {
@@ -145,7 +146,7 @@ struct HostSSHSetupSheet: View {
                 .disabled(isBusy)
             trailing()
         }
-        .padding(.top, 16)
+        .padding(.top, scale.space[4])
     }
 
     private var trimmedDestination: String {
@@ -257,32 +258,33 @@ struct HostLog: Identifiable {
 struct HostLogSheet: View {
     let log: HostLog
     let onDismiss: () -> Void
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("\(log.name) host log")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 8)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                .padding(.bottom, scale.space[2])
             ScrollView {
                 Text(log.text.isEmpty ? "The log is empty." : log.text)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(scale.space[2])
             }
             .defaultScrollAnchor(.bottom)
             .frame(height: 420)
             .background(theme.color("bg-0"))
-            .overlay(RoundedRectangle(cornerRadius: 6)
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5))
             HStack {
                 Spacer()
                 AlasButton(title: "Close", style: .primary, action: onDismiss)
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 720)
         .background(theme.color("bg-1"))
     }

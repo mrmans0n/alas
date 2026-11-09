@@ -285,3 +285,6 @@ Alas/Sources/Remote/Native/NativePeerConsoleView.swift
 Alas/Sources/Remote/Native/NativePeerTabBar.swift
 Alas/Sources/Remote/Native/NativePeerTranscriptScroller.swift
 Alas/Sources/Remote/Native/NativePeerNewSessionSheet.swift
+Alas/Sources/Remote/Settings/RemoteServerPane.swift
+Alas/Sources/Remote/Settings/HostSSHSetupSheet.swift
+Alas/Sources/Remote/Pairing/RemotePairingApprovalView.swift

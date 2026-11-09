@@ -98,6 +98,7 @@ struct RemotePairingApprovalCard: View {
     let allow: () -> Void
     let decline: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -105,14 +106,14 @@ struct RemotePairingApprovalCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
                     Text(presentation.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if entry.phase == .pending {
                         Button(action: decline) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(scale.caption.font(weight: .semibold))
                                 .foregroundStyle(theme.color("fg-muted"))
                                 .frame(width: 32, height: 32)
                                 .contentShape(Rectangle())
@@ -122,13 +123,13 @@ struct RemotePairingApprovalCard: View {
                     }
                 }
                 Text(presentation.detail)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if entry.phase == .pending {
                     HStack {
                         Text("\(presentation.remainingSeconds)s remaining")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-muted"))
                             .accessibilityLabel("\(presentation.remainingSeconds) seconds remaining to decide")
                         Spacer()
@@ -138,18 +139,18 @@ struct RemotePairingApprovalCard: View {
                             .accessibilityLabel("Allow these Macs to view and control each other's sessions")
                     }
                     .foregroundStyle(theme.color("accent"))
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .disabled(!presentation.allowsDecision)
                 }
             }
             .foregroundStyle(theme.color("fg"))
             .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("accent").opacity(0.12).background(theme.color("bg-1")))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.color("accent").opacity(0.3), lineWidth: 0.75))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("accent").opacity(0.3), lineWidth: 0.75))
             .compositingGroup()
-            .clipShape(.rect(cornerRadius: 8))
+            .clipShape(.rect(cornerRadius: scale.radius.medium))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("peer-pairing-approval-card")
         }
