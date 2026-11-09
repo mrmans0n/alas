@@ -284,8 +284,34 @@ public enum ACPAttachmentStaging: Sendable {
             .first
     }
 
+    /// Removes what staging put directly in `directory`: images named
+    /// `<sha256>.<ext>` and PDF folders named `<sha256>`. Anything else stays,
+    /// such as the folder of a worktree whose path is under this one's, and
+    /// the directory itself goes only once it is empty. A missing directory
+    /// is nothing to remove.
+    public static func removeStaged(in directory: URL) throws {
+        let fileManager = FileManager.default
+        let names: [String]
+        do {
+            names = try fileManager.contentsOfDirectory(atPath: directory.path)
+        } catch CocoaError.fileReadNoSuchFile {
+            return
+        }
+        for name in names {
+            let hash = name.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            guard isSHA256Hex(hash) else { continue }
+            try fileManager.removeItem(at: directory.appendingPathComponent(name))
+        }
+        if try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty {
+            try fileManager.removeItem(at: directory)
+        }
+    }
+
+    private static func isSHA256Hex(_ text: Substring) -> Bool {
+        text.utf8.count == 64 && text.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    }
+
     private static func isStagedShape(hash: Substring, name: Substring) -> Bool {
-        hash.utf8.count == 64 && name.hasSuffix(".pdf")
-            && hash.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+        name.hasSuffix(".pdf") && isSHA256Hex(hash)
     }
 }

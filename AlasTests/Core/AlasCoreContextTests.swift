@@ -94,7 +94,24 @@ struct AlasCoreContextTests {
         }
         #expect(text.contains("hello from feature"))
 
+        // PDFs are staged by worktree id, images by the checkout's folder name.
+        let attachments = Paths.acpAttachmentsDir(forWorktreeId: worktree.id)
+        let images = Paths.acpAttachmentsRoot.appendingPathComponent(worktree.path.lastPathComponent)
+        defer {
+            try? FileManager.default.removeItem(at: attachments)
+            try? FileManager.default.removeItem(at: images)
+        }
+        let hash = String(repeating: "a", count: 64)
+        try Paths.ensureDirectoryExists(attachments.appendingPathComponent(hash))
+        try Data("pdf".utf8).write(to: attachments.appendingPathComponent("\(hash)/spec.pdf"))
+        try Paths.ensureDirectoryExists(images)
+        try Data("png".utf8).write(to: images.appendingPathComponent("\(hash).png"))
+        // The folder of a worktree whose path is under this one's.
+        let nested = attachments.appendingPathComponent("nested")
+        try Paths.ensureDirectoryExists(nested)
+
         try await context.archiveWorktree(worktree)
+        #expect(FileManager.default.fileExists(atPath: attachments.path), "archiving keeps staged attachments")
         #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
         #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
         #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")
@@ -122,6 +139,9 @@ struct AlasCoreContextTests {
         #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
         #expect(context.runRecords.records(worktreeID: worktree.id).isEmpty)
         #expect(try await context.runHistory.store?.entry(id: record.id) == nil, "the deleted worktree's history goes with it")
+        let left = try FileManager.default.contentsOfDirectory(atPath: attachments.path)
+        #expect(left == ["nested"], "so do its staged attachments, but not a nested worktree's folder")
+        #expect(!FileManager.default.fileExists(atPath: images.path))
     }
 
     /// A script that ran but never reported its exit status still ran, so

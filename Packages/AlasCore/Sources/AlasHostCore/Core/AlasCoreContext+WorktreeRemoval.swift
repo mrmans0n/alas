@@ -5,6 +5,7 @@ import AlasFoundation
 import AlasModel
 import AlasPlatform
 import AlasCode
+import AlasACP
 import AlasAgents
 @_spi(Testing) import AlasIntegrations
 
@@ -173,6 +174,17 @@ extension AlasCoreContext {
         }
 
         await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
+        // The chat attachments staged for its sessions go with it; rows of
+        // its transcripts that still name them show them as missing.
+        for folder in stagedAttachmentFolders(of: worktree) {
+            do {
+                try ACPAttachmentStaging.removeStaged(in: folder)
+            } catch {
+                removalLogger.error(
+                    "Could not remove staged attachments at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
         if case .staged(let ticket) = outcome {
             do {
                 try environment.launchWorktreeCleanup(ticket)
@@ -188,6 +200,25 @@ extension AlasCoreContext {
             }
         }
         return .removed
+    }
+
+    /// The folders chat attachments are staged in for `worktree`: PDFs by its
+    /// id, images by its checkout's folder name. A folder another worktree
+    /// also maps to stays: another SSH host's checkout at the same path, or a
+    /// checkout with the same folder name elsewhere.
+    private func stagedAttachmentFolders(of worktree: Worktree) -> [URL] {
+        let others = projects.projects
+            .flatMap { projects.worktrees(projectId: $0.id) }
+            .filter { $0.id != worktree.id || $0.projectId != worktree.projectId }
+        let name = worktree.path.lastPathComponent
+        var folders: [URL] = []
+        if !others.contains(where: { $0.id == worktree.id }) {
+            folders.append(Paths.acpAttachmentsDir(forWorktreeId: worktree.id))
+        }
+        if !others.contains(where: { $0.path.lastPathComponent == name }) {
+            folders.append(Paths.acpAttachmentsRoot.appendingPathComponent(name, isDirectory: true))
+        }
+        return folders
     }
 
     // MARK: - Archive
