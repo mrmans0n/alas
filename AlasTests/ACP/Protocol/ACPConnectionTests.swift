@@ -32,7 +32,7 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer", "recommendedConfigValue", "commandPresentation", "loadReplayEnd"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
@@ -42,6 +42,9 @@ struct ACPConnectionTests {
             #expect(meta["agentFileChangeReport"] as? [String: Int] == ["version": 1])
             #expect(meta["permissionPresentation"] as? [String: Int] == ["version": 1])
             #expect(meta["questionCustomAnswer"] as? [String: Int] == ["version": 1])
+            #expect(meta["recommendedConfigValue"] as? [String: Int] == ["version": 1])
+            #expect(meta["commandPresentation"] as? [String: Int] == ["version": 1])
+            #expect(meta["loadReplayEnd"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -71,6 +74,21 @@ struct ACPConnectionTests {
         }
         let outcome = try await ACPConnection(client: mock).initialize()
         #expect(outcome.settlesAtResult == supported)
+    }
+
+    @Test("the load replay end is expected only when advertised", arguments: [
+        (#"{"version":1}"#, true),
+        (#"{"version":2}"#, true),
+        (#"{"version":0}"#, false),
+        ("true", false),
+    ])
+    func loadReplayEndNegotiation(advertisement: String, supported: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"loadReplayEnd":\#(advertisement)}}"#.utf8)
+        }
+        let outcome = try await ACPConnection(client: mock).initialize()
+        #expect(outcome.supportsLoadReplayEnd == supported)
     }
 
     @Test("hook review requires managed launch, verified release and neutral capability", arguments: [

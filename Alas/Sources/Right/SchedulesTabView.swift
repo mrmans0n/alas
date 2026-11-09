@@ -10,6 +10,7 @@ struct SchedulesTabView: View {
     let worktree: Worktree
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var editing: EditTarget?
     @State private var now = Date()
     @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -47,7 +48,7 @@ struct SchedulesTabView: View {
                 }
             }
             .padding(.top, PaneBandLayout.outerVertical)
-            .padding(.bottom, 12)
+            .padding(.bottom, scale.space[3])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(ticker) { now = $0 }
@@ -114,14 +115,14 @@ struct SchedulesTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Text(isMainWorktree ? "PROJECT SCHEDULES" : "SCHEDULES")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
             Text("\(schedules.count)")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5).padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                 .background(theme.color("seg-pill-bg"))
                 .clipShape(Capsule())
                 .foregroundColor(theme.color("fg-muted"))
@@ -169,34 +170,34 @@ struct SchedulesTabView: View {
     }
 
     private func notice(_ text: String, tone: String, icon: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Icon(name: icon, size: 11, color: theme.color(tone))
-                .padding(.top, 1)
+                .padding(.top, scale.space[0])
             Text(text)
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color(tone))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             Icon(name: "clock", size: 22, color: theme.color("fg-faint"))
             Text("No schedules yet")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text("Run a script on a timer, or open a fresh worktree with an agent every morning.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
             Button("New Schedule") { editing = .new }
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 24)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[5])
         .accessibilityIdentifier("schedules-empty-state")
     }
 }
@@ -208,6 +209,7 @@ private struct ScheduleCard: View {
     let onEdit: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
@@ -218,26 +220,26 @@ private struct ScheduleCard: View {
         let scheduleState = state.runScheduler.state(for: schedule.id)
         let isPaused = state.runScheduler.isPaused(schedule)
         let isRunning = state.runScheduler.isRunning(schedule)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 RunScheduleStatusDot(tone: tone(scheduleState, isRunning: isRunning), isActive: isRunning)
                 Text(schedule.name)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color(schedule.isEnabled ? "fg" : "fg-dim"))
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Button {
                     state.runScheduler.runNow(id: schedule.id)
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: scale.space[1]) {
                         Icon(name: "play", size: 10, color: theme.color(isRunning ? "fg-faint" : "accent"))
                         Text(isRunning ? "Running" : "Run Now")
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                     }
                     .foregroundStyle(theme.color(isRunning ? "fg-faint" : "accent"))
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, scale.space[2])
                     .frame(height: 24)
-                    .background(isRunning ? .clear : theme.color("accent-soft"), in: RoundedRectangle(cornerRadius: 5))
+                    .background(isRunning ? .clear : theme.color("accent-soft"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.toolbarControl)
@@ -248,55 +250,55 @@ private struct ScheduleCard: View {
             }
 
             Text(RunSchedulePresentation.triggerLabel(schedule.trigger))
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
-                .padding(.leading, 13)
+                .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
             Text(actionLabel)
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(2)
-                .padding(.leading, 13)
-            HStack(spacing: 4) {
+                .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
+            HStack(spacing: scale.space[1]) {
                 Icon(name: "terminal", size: 9, color: theme.color("fg-faint"))
                 Text("\(targetLabel) · \(hostLabel)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .padding(.leading, 13)
+            .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
             Text(lastOutcomeLabel(scheduleState))
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(outcomeColor(scheduleState.lastOutcome))
                 .lineLimit(2)
-                .padding(.leading, 13)
+                .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
             Text("Next: " + RunSchedulePresentation.nextFireLabel(
                 scheduleState.nextFireAt,
                 now: now,
                 isEnabled: schedule.isEnabled,
                 isPaused: isPaused
             ))
-            .font(.system(size: 10.5))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.leading, 13)
+            .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
             if let missed = scheduleState.lastMissed {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     Icon(name: "exclamationmark.triangle", size: 9, color: theme.color("warn"))
                     Text(RunSchedulePresentation.missedLabel(missed))
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(2)
                 }
-                .padding(.leading, 13)
+                .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
             }
             if !scheduleState.firings.isEmpty {
                 history(scheduleState.firings)
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .rightPaneCardChrome(accent: accentColor(scheduleState, isRunning: isRunning), isHovering: hovering)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-card-\(schedule.id)")
@@ -338,18 +340,18 @@ private struct ScheduleCard: View {
     /// Past firings, collapsed by default. The card's job is the next run; the
     /// history is for the question you only ask after something looked wrong.
     private func history(_ firings: [RunScheduleFiring]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Button {
                 isShowingHistory.toggle()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     Icon(
                         name: isShowingHistory ? "chev-down" : "chev-right",
                         size: 8,
                         color: theme.color("fg-faint")
                     )
                     Text(RunSchedulePresentation.historyLabel(firings))
-                        .font(.system(size: 10.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 .contentShape(Rectangle())
@@ -364,18 +366,18 @@ private struct ScheduleCard: View {
                 }
             }
         }
-        .padding(.top, 2)
-        .padding(.leading, 13)
+        .padding(.top, scale.space[0])
+        .padding(.leading, RunScheduleStatusDot.size + scale.space[2])
     }
 
     private func firingRow(_ firing: RunScheduleFiring) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: scale.space[0]) {
             Text(RunSchedulePresentation.outcomeLabel(firing.outcome))
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(outcomeColor(firing.outcome))
                 .lineLimit(2)
             Text(RunSchedulePresentation.firingTimeLabel(firing))
-                .font(.system(size: 9.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
             ForEach(firing.runs, id: \.runID) { run in
                 runLink(run)
@@ -385,7 +387,7 @@ private struct ScheduleCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 8)
+        .padding(.leading, scale.space[2])
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-firing-\(firing.id)")
     }
@@ -400,10 +402,10 @@ private struct ScheduleCard: View {
             Button {
                 state.openScheduleFiringRun(run)
             } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: scale.space[1]) {
                     Icon(name: "doc.text", size: 8, color: theme.color("accent"))
                     Text(label)
-                        .font(.system(size: 9.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("accent"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -416,7 +418,7 @@ private struct ScheduleCard: View {
             .accessibilityIdentifier("schedule-firing-run-\(run.runID)")
         } else {
             Text(label)
-                .font(.system(size: 9.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -429,15 +431,15 @@ private struct ScheduleCard: View {
     private func agentReport(_ report: RunScheduleFiring.AgentReport, key: String) -> some View {
         let isExpanded = expandedReports.contains(key)
         let heading = "\(report.agentName) in \(report.branch)"
-        return VStack(alignment: .leading, spacing: 1) {
+        return VStack(alignment: .leading, spacing: scale.space[0]) {
             if let project = state.visibleProjectForWorktree(report.worktreeID) {
                 Button {
                     state.focusGlobalWorktree(id: report.worktreeID, projectId: project.id)
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: scale.space[1]) {
                         Icon(name: "sparkle", size: 8, color: theme.color("accent"))
                         Text(heading)
-                            .font(.system(size: 9.5))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("accent"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -448,13 +450,13 @@ private struct ScheduleCard: View {
                 .help("Open \(report.branch), where the session is")
             } else {
                 Text(heading)
-                    .font(.system(size: 9.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Text(report.text)
-                .font(.system(size: 9.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(isExpanded ? nil : 3)
                 .textSelection(.enabled)
@@ -539,6 +541,9 @@ private struct ScheduleCard: View {
 }
 
 private struct RunScheduleStatusDot: View {
+    /// Diameter; cards indent their detail lines by this plus the title spacing.
+    static let size: CGFloat = 7
+
     let tone: RunStatusTone
     let isActive: Bool
 
@@ -548,7 +553,7 @@ private struct RunScheduleStatusDot: View {
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 7, height: 7)
+            .frame(width: Self.size, height: Self.size)
             .opacity(isActive && pulsing ? 0.35 : 1)
             .animation(
                 isActive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,

@@ -31,6 +31,8 @@ struct BehindChip: View {
     var ref: String? = nil
 
     @Environment(\.theme) private var theme
+
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     /// Pure text composition: just `↓N` (e.g. "↓3"). `↓` reads as "commits
@@ -68,7 +70,7 @@ struct BehindChip: View {
                     .frame(width: 9, height: 9)
             }
             Text(Self.displayText(count: count))
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .lineLimit(1)
         }
         // Take the width the text needs instead of being compressed (and
@@ -76,7 +78,7 @@ struct BehindChip: View {
         .fixedSize()
         .foregroundColor(highlighted ? tint.opacity(0.8) : tint)
         .accessibilityLabel("\(count) commit\(count == 1 ? "" : "s") behind \(ref ?? "upstream")")
-        .padding(.horizontal, 6).padding(.vertical, 1)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
         .background(tint.opacity(highlighted ? 0.2 : 0.12))
         .clipShape(Capsule())
     }
@@ -383,12 +385,13 @@ struct CommitsSectionView: View {
 struct CommitHistoryEmptyRow: View {
     let text: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -396,19 +399,20 @@ struct CommitHistoryEmptyRow: View {
 struct CommitHistoryDividerRow: View {
     let label: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 8) {
             Rectangle().fill(theme.color("line")).frame(height: 1)
             Text(label)
-                .font(.system(size: 10, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
                 .textCase(.uppercase)
                 .tracking(0.4)
             Rectangle().fill(theme.color("line")).frame(height: 1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 }
 
@@ -418,32 +422,33 @@ struct CommitHistoryFooterRow: View {
     let hasOlderCommits: Bool
     let onLoadOlder: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     @ViewBuilder
     var body: some View {
         if isLoading {
             HStack(spacing: 6) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
-                Text("Loading…").font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
+                Text("Loading…").font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 8)
+            .padding(.vertical, scale.space[2])
         } else if canLoadMore {
             Button(action: onLoadOlder) {
                 Text("↓ Load older commits")
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("accent"))
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, scale.space[2])
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         } else if hasOlderCommits {
             Text("End of history")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-faint"))
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 8)
+                .padding(.vertical, scale.space[2])
         }
     }
 }

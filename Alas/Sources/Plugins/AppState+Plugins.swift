@@ -174,7 +174,15 @@ extension AppState {
                 }
             },
             worktreeLocation: { [weak self] id in self?.host.worktrees.location(of: id, projectID: project.id) },
-            usageHistory: core.usageHistory)
+            usageHistory: core.usageHistory,
+            stackInventory: { [weak self] refresh in
+                guard let self else { return .unavailable }
+                return await self.pluginStackInventory(projectID: project.id, refresh: refresh)
+            },
+            openStack: { [weak self] request in
+                guard let self else { return "Alas is shutting down." }
+                return await self.openPluginStack(request, projectID: project.id)
+            })
     }
 
     /// Starts a plugin task on the scheduled-run path: a new worktree, created without changing

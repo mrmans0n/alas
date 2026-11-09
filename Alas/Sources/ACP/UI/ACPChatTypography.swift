@@ -1,3 +1,4 @@
+import AlasCore
 import AppKit
 import SwiftUI
 
@@ -13,9 +14,12 @@ struct ACPChatTypography: Equatable {
     /// inside a prompt bubble, where `##` should not outrank the body.
     private(set) var flattensHeadings = false
 
-    init(fontFamily: String, fontSize: Int) {
+    /// `density` defaults to `.compact`, which adds no offset, so callers
+    /// that do not pass it keep the saved font size as is.
+    init(fontFamily: String, fontSize: Int, density: UIDensity = .compact) {
         self.fontFamily = fontFamily
-        self.baseSize = CGFloat(max(8, min(64, fontSize)))
+        let offset = DesignScale.resolved(for: density).chatFontOffset
+        self.baseSize = max(8, min(64, CGFloat(fontSize) + offset))
     }
 
     func flatteningHeadings() -> ACPChatTypography {

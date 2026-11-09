@@ -46,7 +46,7 @@ extension EnvironmentValues {
 
 struct RepoGroupView: View {
     /// Leading inset that nests worktree rows under their repo header.
-    static let worktreeIndent: CGFloat = 26
+    static let worktreeIndent: CGFloat = 16
 
     let project: ProjectConfig
     /// Resolves the icon to display for a project, which may come from the
@@ -119,6 +119,7 @@ struct RepoGroupView: View {
     var isFiltering = false
     var highlightedWorktreeId: String? = nil
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.sidebarWorktreeDropTargets) private var dropTargets
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
@@ -140,21 +141,21 @@ struct RepoGroupView: View {
                     .padding(.bottom, index == worktrees.count - 1 ? Self.groupMargin : 0)
                     // Worktrees are nested under their repo by indentation alone.
                     .padding(.leading, Self.worktreeIndent)
-                    .padding(.trailing, 6)
+                    .padding(.trailing, scale.space[1])
                     // Scroll target for the sidebar filter's highlight.
                     .id(wt.id)
             }
             if !isFiltering {
                 ForEach(alsoInNotes, id: \.self) { note in
                     Text(note)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 3)
-                        .padding(.leading, Self.worktreeIndent + 8)
-                        .padding(.trailing, 6)
+                        .padding(.vertical, scale.space[0])
+                        .padding(.leading, Self.worktreeIndent + scale.space[2])
+                        .padding(.trailing, scale.space[1])
                         .help("This directory belongs to one project at a time.")
                 }
             }
@@ -169,33 +170,34 @@ struct RepoGroupView: View {
         // same row. Don't wrap the row in a parent Button — that nests the
         // + inside another button's hit region and clicking the + can also
         // fire the collapse action.
-        HStack(spacing: 7) {
-            HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
+            // The chevron's frame ends one step before the project icon, which
+            // starts where the worktree rows' glyphs do.
+            HStack(spacing: scale.space[2]) {
                 Icon(name: isCollapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                     .frame(width: 12, height: 14)
                     .contentShape(Rectangle())
                 ProjectIconView(icon: icon(project), fallbackName: project.name, size: .repoHeader)
                     .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
                 Text(project.name)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(-0.12)
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 if let host = project.host {
                     HStack(spacing: 3) {
                         if hostStatus.isOffline(host) {
                             Image(systemName: "bolt.horizontal.circle")
-                                .font(.system(size: 9))
+                                .font(scale.captionFont)
                                 .foregroundColor(.orange)
                         }
                         Text(host)
                     }
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
+                    .padding(.horizontal, scale.space[1])
+                    .padding(.vertical, 1) // design-literal: fits the chip inside a header line
                     .background(theme.color("bg-4"))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     .help(hostStatus.isOffline(host)
                         ? "Host \(host) is unreachable"
                         : "Remote project on \(host) (SSH)")
@@ -206,15 +208,10 @@ struct RepoGroupView: View {
             .onTapGesture { if !isFiltering { collapsed.toggle() } }
             headerAccessory
         }
-        .padding(5)
+        .padding(.horizontal, scale.space[1])
+        .padding(.vertical, scale.space[2])
         // A project with no filter matches stays in place, dimmed.
         .opacity(isFiltering && worktrees.isEmpty ? 0.45 : 1)
-        .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
-        }
-        .padding(.top, 3)
         .contentShape(Rectangle())
         .nativeContextMenu(mountsWhileHovered: true) {
             Button("Edit Project…", action: onEditProject)

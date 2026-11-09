@@ -4,6 +4,7 @@ import AppKit
 import SwiftUI
 
 struct ComputerUsePane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @State private var granted: Set<ComputerUsePermission>
@@ -20,10 +21,10 @@ struct ComputerUsePane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Computer Use").font(.system(size: 18, weight: .semibold))
+                Text("Computer Use").font(SettingsPaneStyle.titleFont)
                 Text("Let agents see and operate other apps on this Mac. They work in the background and never move your cursor.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Computer Use") {
                     SettingsRow(
@@ -49,14 +50,14 @@ struct ComputerUsePane: View {
 
                 SettingsGroup(title: "Always allowed apps") {
                     Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools. Approving an app lets agents click and type in it, not just see it. For Electron and Chrome-based apps, Alas turns on their accessibility support, which can make them use a bit more memory.")
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 8)
+                        .padding(.bottom, scale.space[2])
                     let bundleIDs = state.config.computerUse.alwaysAllowedApps
                     if bundleIDs.isEmpty {
                         Text("No apps yet. Choose \"Always allow\" when an agent asks.")
-                            .font(.system(size: 12.5))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                     } else {
                         ForEach(bundleIDs, id: \.self) { bundleID in
@@ -73,13 +74,13 @@ struct ComputerUsePane: View {
                 if isAdHoc {
                     SettingsGroup(title: "Development build") {
                         Text("This build is ad-hoc signed, so macOS forgets these permissions every time it is rebuilt. See \"Local signing for dev builds\" in AGENTS.md.")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .onAppear(perform: refresh)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -97,7 +98,7 @@ struct ComputerUsePane: View {
             detail: {
                 if needsRelaunch {
                     Text("macOS applies Screen Recording after \(AppRelaunch.appName) restarts.")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -105,7 +106,7 @@ struct ComputerUsePane: View {
         ) {
             if isGranted {
                 Text("Granted")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             } else if needsRelaunch {
                 AlasButton(title: "Relaunch \(AppRelaunch.appName)") {
@@ -132,12 +133,12 @@ struct ComputerUsePane: View {
         ) {
             if isWatchingInput {
                 Text("On")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             } else {
                 HStack(spacing: 8) {
                     Text("Off — Alas can't tell when you're using an app")
-                        .font(.system(size: 12.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                     AlasButton(title: "Grant…") {
                         ComputerUseUserInput.requestListenAccess()

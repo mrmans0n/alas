@@ -285,7 +285,8 @@ enum NativePeerComposerState {
                 .init(id: $0.id, name: $0.name, description: $0.description,
                       kind: $0.kind.flatMap(ACPModeKind.init(rawValue:)))
             },
-            currentId: chip.currentId)
+            currentId: chip.currentId,
+            recommendedId: chip.recommendedId)
     }
 
     private static func presentation(_ value: String) -> ACPParameterChipPresentation {

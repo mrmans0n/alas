@@ -150,7 +150,7 @@ extension ACPTranscriptCoreTextRowView {
         case .expansionToggle:
             // A native tool call or thought is always collapsed; a group
             // header draws either state.
-            if case .toolGroupHeader(_, _, let expanded) = content {
+            if case .toolGroupHeader(_, _, let expanded, _) = content {
                 actions.toggleExpanded?(!expanded)
             } else {
                 actions.toggleExpanded?(true)
@@ -304,7 +304,7 @@ extension ACPTranscriptCoreTextRowView {
     func textPosition(at point: NSPoint, inside: Bool = false) -> TextSelection.Position? {
         guard let (markdown, origin) = markdown else { return nil }
         let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
-        if inside, !CGRect(x: 0, y: 0, width: markdown.width, height: markdown.height).contains(local) { return nil }
+        if inside, !CGRect(x: 0, y: 0, width: markdown.wideWidth, height: markdown.height).contains(local) { return nil }
         // In a table, the cell under the point: its start above its lines, its end below them.
         if let cell = Self.tableCell(at: local, in: markdown) {
             guard let line = cell.lines.first(where: { local.y < $0.origin.y + $0.height }) else {
@@ -603,15 +603,17 @@ extension ACPTranscriptCoreTextRowView {
     /// top of the content, as `ACPMessageGutter` does.
     func positionActions() {
         guard let actionsButton, lastMeasuredWidth != nil else { return }
-        let column = columnRect
-        let x = column.maxX + ACPMessageGutterLayout.laneWidth - 8 - ACPMessageGutterLayout.menuWidth
+        guard let lastMeasuredWidth else { return }
+        let rowLayout = layout(forWidth: lastMeasuredWidth)
+        let column = rowLayout.column
+        let x = rowLayout.actionsEdge + ACPMessageGutterLayout.laneWidth - 8 - ACPMessageGutterLayout.menuWidth
         let size = NSSize(width: ACPMessageGutterLayout.menuWidth, height: ACPMessageGutterLayout.menuWidth)
         actionsButton.frame = NSRect(origin: NSPoint(x: x, y: -2), size: size)
         let createdAt = actions.menu?.createdAt
         let showsInline = createdAt != nil
             && ACPTranscriptRowContent.showsInlineTimestamp(
                 availableRowContentWidth: column.width,
-                availableTrailingGutterWidth: (lastMeasuredWidth ?? 0) - column.maxX
+                availableTrailingGutterWidth: rowLayout.trailingGutter
             )
         guard showsInline, let createdAt, let theme else {
             actionsTimestamp?.removeFromSuperview()

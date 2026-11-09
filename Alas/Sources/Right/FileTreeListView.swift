@@ -52,6 +52,8 @@ struct FileTreeListView: View {
 
     @Environment(\.theme) private var theme
 
+    @Environment(\.designScale) private var scale
+
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
         12 + CGFloat(depth * 14)
     }
@@ -98,7 +100,7 @@ struct FileTreeListView: View {
                                 fallbackColor: folderColor(for: terminal, open: open)
                             )
                             Text(chain.displayName)
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(scale.body.font)
                                 .foregroundColor(rowForeground(for: terminal))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -120,8 +122,8 @@ struct FileTreeListView: View {
                             }
                         }
                         .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                        .padding(.trailing, isBookmarkRoot ? 4 : 12)
-                        .padding(.vertical, 4)
+                        .padding(.trailing, isBookmarkRoot ? scale.space[1] : scale.space[3])
+                        .padding(.vertical, scale.space[1])
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .opacity(isOffGit(terminal) ? 0.72 : 1.0)
                         .overlay(alignment: .leading) {
@@ -147,7 +149,7 @@ struct FileTreeListView: View {
                     .buttonStyle(.plain)
                     if isBookmarkRoot {
                         removeBookmarkButton(for: node)
-                            .padding(.trailing, 12)
+                            .padding(.trailing, scale.space[3])
                     }
                     }
                     .contextMenu { contextMenu(for: terminal, expansionPath: expansionPath) }
@@ -185,7 +187,7 @@ struct FileTreeListView: View {
                     HStack(spacing: 6) {
                         FileTypeIconView(filename: node.name, size: 18)
                         Text(node.name)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(scale.body.font)
                             .foregroundColor(rowForeground(for: node))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -199,8 +201,8 @@ struct FileTreeListView: View {
                         }
                     }
                     .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                    .padding(.trailing, isBookmarkRoot ? 4 : 12)
-                    .padding(.vertical, 4)
+                    .padding(.trailing, isBookmarkRoot ? scale.space[1] : scale.space[3])
+                    .padding(.vertical, scale.space[1])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(isOffGit(node) ? 0.72 : 1.0)
                     .overlay(alignment: .leading) {
@@ -215,7 +217,7 @@ struct FileTreeListView: View {
                 .buttonStyle(.plain)
                 if isBookmarkRoot {
                     removeBookmarkButton(for: node)
-                        .padding(.trailing, 12)
+                        .padding(.trailing, scale.space[3])
                 }
                 }
                 .contextMenu { contextMenu(for: node) }
@@ -240,7 +242,7 @@ struct FileTreeListView: View {
             let parent = node.path.split(separator: "/").dropLast().joined(separator: "/")
             if !parent.isEmpty {
                 Text(parent)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -413,39 +415,39 @@ struct FileTreeListView: View {
 
     private func visibilityPill(_ node: FileTreeNode) -> some View {
         Text(node.visibility.rawValue)
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
             .background(theme.color("bg-4").opacity(0.75))
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     private var submodulePill: some View {
         Text("submodule")
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundColor(theme.color("submodule"))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
             .background(theme.color("submodule").opacity(0.18))
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     private func ghostRail(depth: Int) -> some View {
         Rectangle()
             .fill(theme.color("fg-faint").opacity(0.55))
             .frame(width: 2)
-            .padding(.leading, CGFloat(8 + depth * 14))
-            .padding(.vertical, 4)
+            .padding(.leading, Self.rowLeadingPadding(depth: depth) - scale.space[1])
+            .padding(.vertical, scale.space[1])
     }
 
     private func treeMessage(_ text: String, depth: Int) -> some View {
         Text(text)
-            .font(.system(size: 11, design: .monospaced))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-faint"))
             .padding(.leading, Self.messageLeadingPadding(depth: depth))
-            .padding(.trailing, 12)
-            .padding(.vertical, 4)
+            .padding(.trailing, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -8,6 +8,8 @@ struct ACPFileEditCard: View {
     /// buttons that do nothing.
     let onOpenDiff: ((String) -> Void)?
     @Environment(\.theme) private var theme
+    @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
+    @Environment(\.designScale) private var scale
     @State private var expanded = false
 
     private var hasDiffContent: Bool {
@@ -21,8 +23,9 @@ struct ACPFileEditCard: View {
                 diffPanel
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        // A collapsed card is one line in the reading column; only its diff breaks out.
+        .frame(maxWidth: expanded ? nil : proseMaxWidth, alignment: .leading)
     }
 
     private var header: some View {
@@ -36,22 +39,22 @@ struct ACPFileEditCard: View {
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.glyphFont)
                         .foregroundStyle(theme.color("fg-faint"))
                         .frame(width: 12)
                         .opacity(hasDiffContent ? 1 : 0.3)
 
                     ZStack {
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: scale.radius.small)
                             .fill(theme.color("accent").opacity(0.18))
                         Image(systemName: "pencil")
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("accent"))
                     }
                     .frame(width: 18, height: 18)
 
                     Text("Edit")
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .tracking(0.6)
                         .textCase(.uppercase)
                         .foregroundStyle(theme.color("accent"))
@@ -59,13 +62,12 @@ struct ACPFileEditCard: View {
                     FileChip(path: edit.path, lines: nil, iconSystemName: nil)
 
                     Text("+\(edit.added) -\(edit.removed)")
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
 
                     Spacer(minLength: 6)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(theme.color("bg-1").opacity(0.5))
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             }
             .buttonStyle(.plain)
 
@@ -74,12 +76,12 @@ struct ACPFileEditCard: View {
                     onOpenDiff(edit.path)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("accent"))
-                .padding(.horizontal, 10).padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             }
         }
-        .background(theme.color("bg-1").opacity(0.5))
+        .background(theme.color("bg-2").opacity(0.5))
     }
 
     @ViewBuilder
@@ -99,6 +101,8 @@ private struct _InlineDiffPanel: View {
     let relativePath: String
     let onShowAll: ((String) -> Void)?
     @Environment(\.theme) private var theme
+    @Environment(\.acpMarkdownProseMaxWidth) private var proseMaxWidth
+    @Environment(\.designScale) private var scale
     @State private var diff: ParsedDiff?
     @State private var loading = true
 
@@ -112,7 +116,7 @@ private struct _InlineDiffPanel: View {
                         .frame(width: 16, height: 16)
                     Spacer()
                 }
-                .padding(12)
+                .padding(scale.space[3])
                 .background(theme.color("bg-2"))
             } else if let diff, !diff.hunks.isEmpty {
                 InlineDiffView(
@@ -123,9 +127,9 @@ private struct _InlineDiffPanel: View {
                 )
             } else {
                 Text("No changes")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
-                    .padding(12)
+                    .padding(scale.space[3])
                     .frame(maxWidth: .infinity, alignment: .center)
                     .background(theme.color("bg-2"))
             }

@@ -527,9 +527,11 @@ struct RemoteServerPane: View {
     }
 
     /// What the paired Mac's agents may do here. Acts on the device the peer
-    /// reaches this Mac with, so it waits for reciprocal pairing to finish.
+    /// reaches this Mac with, or, for a host that paired here inbound-only
+    /// and has none, on its record. A device that never proved its identity
+    /// cannot be allowed.
     private func agentAccessRow(for peer: RemotePeer) -> some View {
-        let access = peer.localDeviceId.flatMap { state.remotePairing.device(id: $0)?.agentAccess }
+        let access = state.remotePeers.agentAccess(of: peer)
         let desc: String? = if access == nil {
             "Pair again to allow this"
         } else if access == .autoRun {
@@ -747,6 +749,8 @@ struct RemoteServerPane: View {
             return "That Mac answered with a key it couldn't prove it holds. Nothing was paired."
         case .identityRebindRefused:
             return "You're already paired with that Mac under different key material, so nothing was changed. If it was reinstalled, forget the existing peer first, then pair again."
+        case .scopeUnsupported:
+            return "That Mac's Alas is too old to grant the limited access asked for. Update Alas there, then pair again."
         }
     }
 

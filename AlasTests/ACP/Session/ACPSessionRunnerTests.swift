@@ -1612,6 +1612,65 @@ struct ACPSessionRunnerTests {
         #expect(row.titleSource == .placeholder)
     }
 
+    @Test("a held load replay applies only at the end event of its own load")
+    func heldLoadReplayAppliesAtItsEndEvent() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        var ends = 0
+        runner.onLoadReplayEnd = { ends += 1 }
+        runner.holdLoadReplay(untilEndOf: "load-2")
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("replayed"))))
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-1")))
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: nil)))
+        try await waitUntil { runner.heldLoadReplayCountForTesting == 3 }
+        #expect(session.transcript.messages.isEmpty)
+        #expect(!runner.loadReplayEndReceived)
+
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-2")))
+        try await waitUntil { runner.loadReplayEndReceived }
+        #expect(session.transcript.messages.count == 1)
+
+        // A second end event, and the response-time fallbacks, change nothing.
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-2")))
+        try await waitUntil { runner.observedUpdateCountForTesting == 5 }
+        runner.releaseHeldLoadReplay()
+        runner.discardHeldLoadReplay()
+        #expect(session.transcript.messages.count == 1)
+        #expect(runner.observedUpdateCountForTesting == 5)
+        #expect(ends == 1)
+    }
+
+    @Test("a held load replay without an end event applies at the response, or is dropped when the load fails",
+          arguments: [true, false])
+    func heldLoadReplayWithoutEndEvent(loadSucceeds: Bool) async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        runner.holdLoadReplay(untilEndOf: "load-1")
+        runner.start()
+        defer { runner.stop() }
+        mock.emit(.init(
+            sessionId: "s", update: .agentMessageChunk(.text("replayed")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }))
+        try await waitUntil { runner.heldLoadReplayCountForTesting == 1 }
+
+        if loadSucceeds {
+            runner.releaseHeldLoadReplay()
+        } else {
+            runner.discardHeldLoadReplay()
+        }
+
+        #expect(session.transcript.messages.count == (loadSucceeds ? 1 : 0))
+        // Applied or dropped, the replay is consumed: a broker does not resend it.
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 1)
+        // Dropped updates still count, so later ones keep the yielded watermark.
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(title: "Live"))))
+        try await waitUntil { runner.observedUpdateCountForTesting == 2 }
+        #expect(runner.heldLoadReplayCountForTesting == 0)
+    }
+
     @Test("session_info_update applies during load replay suppression")
     func sessionInfoUpdateAppliesDuringLoadReplaySuppression() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -6172,6 +6231,45 @@ struct ACPSessionRunnerTests {
         #expect(completions.first?.lastAgentText == expected)
     }
 
+    enum DroppedOnApply: CaseIterable, Sendable { case loadReplay, completedOutput }
+
+    /// Buffered text that `apply` will drop is not quoted either: a replayed
+    /// chunk, or one that would reopen output already complete.
+    @Test(arguments: DroppedOnApply.allCases)
+    func completionDoesNotQuoteBufferedTextApplyWillDrop(_ dropped: DroppedOnApply) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            session: session, onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run {
+                session.apply(agentChunk("Parser done.", id: "m1"))
+                switch dropped {
+                case .loadReplay:
+                    runner.suppressLoadReplay(throughYieldedUpdateCount: runner.observedUpdateCountForTesting + 1)
+                case .completedOutput:
+                    session.markCompletedOutputBoundary()
+                    session.allowsStreamingBoundaryCrossing = false
+                }
+            }
+            mock.emit(.init(sessionId: "s", update: agentChunk(" Parser done again.", id: "m1")))
+            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: ACPSessionRunner.blocks(text: "do it", attachments: []),
+                queuedItemId: nil,
+                onPromptFinished: { _ in continuation.resume(returning: ()) }
+            )
+        }
+
+        #expect(completions.first?.lastAgentText == "Parser done.")
+    }
+
     @Test("completion never quotes an agent message from an earlier turn")
     func completionDoesNotQuotePriorTurnText() async throws {
         var completions: [ACPTurnCompletion] = []
@@ -8283,5 +8381,14 @@ private final class DurableAcknowledgementRecorder: @unchecked Sendable {
         lock.lock()
         count += 1
         lock.unlock()
+    }
+}
+
+extension ACPSessionUpdate {
+    /// The adapter's client-neutral end of a `session/load` replay.
+    static func loadReplayEnd(id: String?) -> ACPSessionUpdate {
+        var end: [String: Any] = ["version": 1]
+        if let id { end["id"] = id }
+        return .sessionInfoUpdate(.init(metadata: AnyCodable(["loadReplayEnd": end])))
     }
 }

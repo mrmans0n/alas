@@ -390,6 +390,20 @@ struct ChangesTabViewTests {
         #expect(fallback?.reviewAction == nil)
     }
 
+    @Test(arguments: [
+        (HarnessService.AggregatedState?.some(.awaiting), true),
+        (.some(.running), false),
+        (.some(.failed), false),
+        (.some(.limited), false),
+        (nil, false),
+    ])
+    func reviewStepsBackOnlyWhileAnAgentAwaitsTheUser(
+        state: HarnessService.AggregatedState?,
+        quiets: Bool
+    ) {
+        #expect(ChangesTabView.quietsReview(harnessState: state) == quiets)
+    }
+
     @Test func regularGitOperationDisablesGGPreparationMutations() {
         let reason = ChangesTabView.ggPreparationMutationDisabledReason(
             contextIsActive: true,

@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 struct ACPComposerChips {
     let theme: Theme
+    let scale: DesignScale
     let chipState: ACPChipState
     let configOptions: [ACPConfigOption]
     let onSelect: (ChipSpec, String) -> Void
@@ -49,14 +50,14 @@ struct ACPComposerChips {
 
     private func fastModeIcon(isEnabled: Bool) -> some View {
         Image(systemName: ACPComposerControlPresentation.fastModeIconName(isEnabled: isEnabled))
-            .font(.system(size: 12, weight: .bold))
+            .font(scale.meta.font(weight: .bold))
             .foregroundStyle(fastModeFg(isEnabled: isEnabled))
             .frame(width: 28, height: 24)
             .background(
-                RoundedRectangle(cornerRadius: 6).fill(fastModeBg(isEnabled: isEnabled))
+                RoundedRectangle(cornerRadius: scale.radius.medium).fill(fastModeBg(isEnabled: isEnabled))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(fastModeBorder(isEnabled: isEnabled), lineWidth: 0.75)
             )
     }
@@ -211,15 +212,15 @@ struct ACPComposerChips {
             onConfigValue(option.id, .boolean(!isEnabled))
         } label: {
             Text(name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(booleanOptionFg(isEnabled: isEnabled))
-                .padding(.horizontal, 9)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 6).fill(booleanOptionBg(isEnabled: isEnabled))
+                    RoundedRectangle(cornerRadius: scale.radius.medium).fill(booleanOptionBg(isEnabled: isEnabled))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(booleanOptionBorder(isEnabled: isEnabled), lineWidth: 0.75)
                 )
         }
@@ -278,7 +279,8 @@ struct ACPComposerChips {
             items: spec.options.map {
                 ACPSelectChip.Item(
                     id: $0.id, name: $0.name, description: $0.description,
-                    icon: $0.kind.map { .system($0.iconSystemName) })
+                    icon: $0.kind.map { .system($0.iconSystemName) },
+                    badge: $0.id == spec.recommendedId ? "Recommended" : nil)
             },
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,
@@ -303,6 +305,7 @@ struct ACPComposerChips {
 /// gradient; that styling diverges from the handoff.
 struct ACPAutoRunToggle: View {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     let isEnabled: Bool
     let isDisabled: Bool
     let help: String
@@ -311,14 +314,14 @@ struct ACPAutoRunToggle: View {
     var body: some View {
         Button(action: onToggle) {
             Image(systemName: ACPComposerControlPresentation.autoRunIconName(isEnabled: isEnabled))
-                .font(.system(size: 12, weight: .bold))
+                .font(scale.meta.font(weight: .bold))
                 .foregroundStyle(foreground)
                 .frame(width: 28, height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 6).fill(background)
+                    RoundedRectangle(cornerRadius: scale.radius.medium).fill(background)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(border, lineWidth: 0.75)
                 )
         }

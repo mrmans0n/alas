@@ -141,6 +141,7 @@ struct ImagePreviewInfo {
 
 /// A decoded image above a footer with its name, pixel size and byte count.
 struct ImagePreviewBody: View {
+    @Environment(\.designScale) private var scale
     let info: ImagePreviewInfo
     let name: String
     /// The local file behind the footer's Open with System and Reveal in Finder; nil hides them.
@@ -156,22 +157,22 @@ struct ImagePreviewBody: View {
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
             }
-            .padding(18)
+            .padding(scale.space[4])
             footer
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text(name)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(scale.meta.font(weight: .medium, design: .monospaced))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Text("|")
                 .foregroundColor(theme.color("fg-faint"))
             Text(info.metadata)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
             Spacer()
@@ -182,7 +183,7 @@ struct ImagePreviewBody: View {
                     .buttonStyle(.borderless)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 28)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .top)
@@ -191,6 +192,7 @@ struct ImagePreviewBody: View {
 
 /// A centered icon, title and detail standing in for a file's preview.
 struct FilePreviewMessage: View {
+    @Environment(\.designScale) private var scale
     let title: String
     let detail: String
     let icon: String
@@ -207,15 +209,15 @@ struct FilePreviewMessage: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: icon)
-                .font(.system(size: 30))
+                .font(.system(size: 30)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-faint"))
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: hero title
                 .foregroundColor(theme.color("fg"))
             Text(detail)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(3)
                 .multilineTextAlignment(.center)
@@ -223,10 +225,10 @@ struct FilePreviewMessage: View {
                 .frame(maxWidth: 420)
             if let onOpenWithSystem {
                 Button("Open with System") { onOpenWithSystem() }
-                    .padding(.top, 4)
+                    .padding(.top, scale.space[1])
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

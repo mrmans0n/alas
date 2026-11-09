@@ -195,7 +195,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -215,7 +215,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -1181,6 +1181,68 @@ struct RemoteServerIntegrationTests {
             Issue.record("expected sessionList, got \(reply) — an oversized challenge must never be signed")
             return
         }
+    }
+
+    /// A request the server sends back reaches only the device that
+    /// acknowledged the route, after the proof that device asked for, and
+    /// even through a delegation-only gateway, whose filters cover what a
+    /// client asks for. Its answer comes back with the device that sent it.
+    @Test func aRequestSentBackReachesOnlyTheDeviceThatAcknowledgedTheRoute() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let macKey = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        let code = pairing.beginPairing()
+        let mac = try pairing.redeemPeer(
+            code: code, deviceName: "Mac", peerServerId: "srv-mac", peerPublicKey: macKey.publicKey,
+            proof: macKey.redeemProof(code: code, serverId: "srv-mac"), scope: .delegation)
+        #expect(pairing.device(id: mac.deviceId)?.scope == .delegation)
+        let other = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Other", peerServerId: "srv-other")
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            host: nil,
+            identity: { RemoteServerIdentity(serverId: "srv-host", name: "Host") },
+            signer: RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        )
+        var replies: [(String, Int?, HostServerMessage)] = []
+        server.onPeerHostReply = { replies.append(($0, $1, $2)) }
+        try server.start(port: 0)
+        defer { server.stop() }
+        try await eventually("the server binds a port") { server.port != nil }
+        let port = try #require(server.port)
+        let wsURL = try #require(URL(string: "ws://127.0.0.1:\(port)/ws"))
+        let reverse = HostProtocolCapability.delegationReverseV1
+        let macSocket = URLSession.shared.webSocketTask(with: wsURL, protocols: [mac.token])
+        let otherSocket = URLSession.shared.webSocketTask(with: wsURL, protocols: [other.token])
+        macSocket.resume()
+        otherSocket.resume()
+        defer {
+            macSocket.cancel(with: .goingAway, reason: nil)
+            otherSocket.cancel(with: .goingAway, reason: nil)
+        }
+        _ = try await receiveServerMessage(macSocket) // hello
+        _ = try await receiveServerMessage(otherSocket)
+        try await macSocket.send(.data(JSONEncoder().encode(RemoteClientMessage.helloAck(
+            protocolVersion: RemoteProtocolVersion.current, challenge: RemoteIdentityCrypto.randomChallenge(),
+            capabilities: [reverse]))))
+        try await otherSocket.send(.data(JSONEncoder().encode(RemoteClientMessage.helloAck(
+            protocolVersion: RemoteProtocolVersion.current))))
+        try await eventually("the route is acknowledged") { server.route(toDevice: mac.deviceId, acknowledging: reverse) != nil }
+
+        let request = HostClientMessage(id: 7, request: .delegation(.outbox(after: 0)))
+        #expect(server.send(.peerHost(request), toDevice: mac.deviceId, acknowledging: reverse))
+        #expect(!server.send(.peerHost(request), toDevice: other.deviceId, acknowledging: reverse))
+        guard case .identityProof = try await receiveServerMessage(macSocket) else {
+            Issue.record("the proof must come first")
+            return
+        }
+        #expect(try await receiveServerMessage(macSocket) == .peerHost(request))
+
+        try await macSocket.send(.data(JSONEncoder().encode(RemoteClientMessage.peerHost(.response(id: 7, result: .done)))))
+        try await eventually("the answer reaches the server") { !replies.isEmpty }
+        #expect(replies.first?.0 == mac.deviceId)
+        // Tagged with the socket's route, so a reply from an older one is told apart.
+        #expect(replies.first?.1 == server.route(toDevice: mac.deviceId, acknowledging: reverse))
+        #expect(replies.first?.2 == .response(id: 7, result: .done))
     }
 
     @Test func aConnectionOpenedAfterFederationIsSetSeesPeerRows() async throws {

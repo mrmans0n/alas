@@ -699,6 +699,30 @@ final class NativePeerSessions {
         }
     }
 
+    /// Whether the selected session's agent misses an adapter its host can install.
+    func offersAdapterInstall(for issue: RemoteAgentIssue?) -> Bool {
+        guard let selectedSessionId, let row = selectedRow,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return false }
+        return Self.offersAdapterInstall(
+            agentID: row.agentId, issue: issue,
+            hostInstalls: federation.peerSupports(PeerAdapterInstallCapability.v1, serverId: id.serverId)
+        )
+    }
+
+    /// Only a missing adapter Alas manages is installable, and only by a host
+    /// that serves `installAdapter`.
+    nonisolated static func offersAdapterInstall(agentID: String, issue: RemoteAgentIssue?, hostInstalls: Bool) -> Bool {
+        hostInstalls && issue?.kind == "needsSetup" && ACPManagedAdapterDescriptor.descriptor(for: agentID) != nil
+    }
+
+    /// Asks the host to install the selected session's adapter; the outcome
+    /// arrives as the session's agent issue.
+    @discardableResult
+    func installAdapter() -> Bool {
+        routeWhileOnline { .installAdapter(sessionId: $0) }
+    }
+
     var selectedRow: RemoteSessionSummary? {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.flatMap(\.sessions).first { $0.id == selectedSessionId }

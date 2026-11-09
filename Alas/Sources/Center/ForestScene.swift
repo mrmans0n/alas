@@ -301,6 +301,7 @@ final class ForestFlock {
 /// Settings > Advanced > Previews: steps through loading, empty, and an open
 /// tab so the take-off transitions can be seen without creating worktrees.
 struct ForestScenesPreview: View {
+    @Environment(\.designScale) private var scale
     let onExit: () -> Void
     @State private var stage = 0
     @Environment(\.theme) private var theme
@@ -322,13 +323,13 @@ struct ForestScenesPreview: View {
                 }
             }
             .animation(.takeOff, value: stage)
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 AlasButton(title: ["Finish loading", "Open a tab", "Restart"][stage], icon: "forward", style: .normal) {
                     stage = (stage + 1) % 3
                 }
                 AlasButton(title: "Exit preview", icon: "xmark", style: .normal, action: onExit)
             }
-            .padding(12)
+            .padding(scale.space[3])
         }
     }
 }

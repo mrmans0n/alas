@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MergeConflictTabView: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let worktree: Worktree
     let tabState: MergeConflictTabState
@@ -216,14 +217,14 @@ struct MergeConflictTabView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
             Spacer()
             Button("Reload") {
                 Task { await model.load() }
             }
             .buttonStyle(.bordered)
         }
-        .padding(10)
+        .padding(scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-2"))
     }

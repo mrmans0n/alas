@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodeLanguageDetailView: View {
+    @Environment(\.designScale) private var scale
     @State private var model: CodeLanguageDetailModel
     let isNew: Bool
     private let defaultInlayHints: InlayHintSettings
@@ -22,14 +23,14 @@ struct CodeLanguageDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(model.entry.language.isEmpty ? "Add language" : "Edit \(model.entry.language)")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 12)
+                .font(SettingsPaneStyle.titleFont)
+                .padding(.bottom, scale.space[3])
 
             if isNew {
                 Text("Start from a known LSP")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 6)
+                    .padding(.bottom, scale.space[2])
 
                 AlasField(
                     text: $prefillQuery,
@@ -37,7 +38,7 @@ struct CodeLanguageDetailView: View {
                     monospaced: false,
                     leadingIcon: "magnifyingglass"
                 )
-                .padding(.bottom, 6)
+                .padding(.bottom, scale.space[2])
 
                 let results = MasonSnapshot.shared.search(prefillQuery)
                 if !results.isEmpty {
@@ -46,29 +47,29 @@ struct CodeLanguageDetailView: View {
                             Button(action: { applyPrefill(pkg) }) {
                                 HStack(spacing: 8) {
                                     Text(pkg.displayName)
-                                        .font(.system(size: 12.5))
+                                        .font(scale.metaFont)
                                     Text("·")
                                         .foregroundColor(theme.color("fg-faint"))
                                     Text(pkg.languages.joined(separator: ", "))
-                                        .font(.system(size: 11.5))
+                                        .font(scale.metaFont)
                                         .foregroundColor(theme.color("fg-dim"))
                                     Spacer()
                                 }
-                                .padding(.vertical, 4)
+                                .padding(.vertical, scale.space[1])
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                    .padding(.bottom, 12)
+                    .padding(.bottom, scale.space[3])
                 } else if !prefillQuery.isEmpty {
                     Text("No matches")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.bottom, 12)
+                        .padding(.bottom, scale.space[3])
                 }
 
-                Divider().padding(.bottom, 12)
+                Divider().padding(.bottom, scale.space[3])
             }
 
             SettingsRow(name: "Language ID") {
@@ -93,12 +94,12 @@ struct CodeLanguageDetailView: View {
                     get: { model.entry.args.joined(separator: "\n") },
                     set: { model.entry.args = $0.split(separator: "\n").map(String.init) }
                 ))
-                .font(.system(size: 12, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 60)
-                .padding(8)
+                .padding(scale.space[2])
                 .background(theme.color("bg-0"))
-                .overlay(RoundedRectangle(cornerRadius: 6)
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             SettingsRow(name: "Root markers", desc: "One per line.") {
@@ -106,12 +107,12 @@ struct CodeLanguageDetailView: View {
                     get: { model.entry.rootMarkers.joined(separator: "\n") },
                     set: { model.entry.rootMarkers = $0.split(separator: "\n").map(String.init) }
                 ))
-                .font(.system(size: 12, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 60)
-                .padding(8)
+                .padding(scale.space[2])
                 .background(theme.color("bg-0"))
-                .overlay(RoundedRectangle(cornerRadius: 6)
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             SettingsRow(name: "Enabled") {
@@ -129,9 +130,9 @@ struct CodeLanguageDetailView: View {
 
             if let validation = validationMessage {
                 Text(validation)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("warn"))
-                    .padding(.top, 8)
+                    .padding(.top, scale.space[2])
             }
 
             HStack(spacing: 8) {
@@ -145,9 +146,9 @@ struct CodeLanguageDetailView: View {
                 )
                     .disabled(validationMessage != nil)
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 560)
         .background(theme.color("bg-1"))
     }

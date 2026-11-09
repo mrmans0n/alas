@@ -36,6 +36,7 @@ struct FilesBookmarksPane: View {
     let onToggleCollapsed: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var rootPaths: Set<String> { Set(bookmarks.map(FileBookmarks.path(for:))) }
@@ -50,7 +51,7 @@ struct FilesBookmarksPane: View {
                             row(for: bookmark)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
             }
         }
@@ -63,16 +64,16 @@ struct FilesBookmarksPane: View {
                 onToggleCollapsed()
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 Icon(name: "star.fill", size: 9, color: theme.color("fg-faint"))
                     .frame(width: 12, height: 12)
                 Text("BOOKMARKS")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
                 Text("\(bookmarks.count)")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .semibold))
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(theme.color("seg-pill-bg"))
                     .clipShape(Capsule())
                     .foregroundColor(theme.color("fg-muted"))
@@ -139,16 +140,16 @@ struct FilesBookmarksPane: View {
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         let path = FileBookmarks.path(for: bookmark)
-        return HStack(spacing: 6) {
+        return HStack(spacing: scale.space[2]) {
             leading()
             Text(FilesBookmarksPane.leafName(of: path))
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let parent = FilesBookmarksPane.parentPath(of: path) {
                 Text(parent)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -167,8 +168,8 @@ struct FilesBookmarksPane: View {
             .help("Remove from Bookmarks")
         }
         .padding(.leading, FileTreeListView.rowLeadingPadding(depth: 0))
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.trailing, scale.space[3])
+        .padding(.vertical, scale.space[1])
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(0.72)
     }

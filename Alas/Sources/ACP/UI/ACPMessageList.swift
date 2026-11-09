@@ -55,15 +55,14 @@ struct ACPMessageList: View {
     /// Opens a plan's file by its path on the session's host.
     var onOpenPlanFile: (String) -> Void = { _ in }
     var reportedChangesActions: ACPReportedChangesActions? = nil
+    /// Height of an invisible spacer at the tail of the transcript stack, as
+    /// tall as everything stacked on the composer. Scrolling THAT element to
+    /// the viewport bottom keeps the streaming caret / last message above the
+    /// composer instead of behind it.
+    var composerSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
-    /// Height of an invisible spacer at the tail of the transcript stack. The
-    /// composer pill plus its outer padding occupies roughly this much
-    /// vertical space, so by scrolling THAT element to the viewport
-    /// bottom we guarantee the streaming caret / last message sits
-    /// above the composer instead of behind it.
-    private let composerSpacerHeight: CGFloat = 220
     private let goToNewestButtonSize: CGFloat = 32
     private let goToNewestButtonComposerGap: CGFloat = 12
 
@@ -112,7 +111,8 @@ struct ACPMessageList: View {
                 visualAidActions: visualAidActions,
                 failureIncidentActions: failureIncidentActions,
                 onOpenPlanFile: onOpenPlanFile,
-                reportedChangesActions: reportedChangesActions
+                reportedChangesActions: reportedChangesActions,
+                composerSpacerHeight: composerSpacerHeight
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail
@@ -158,7 +158,7 @@ struct ACPMessageList: View {
         .help("Go to newest message")
         .padding(.trailing, 20)
         .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
-            composerSpacerHeight: composerSpacerHeight + session.backgroundTrayHeight,
+            composerSpacerHeight: composerSpacerHeight,
             gap: goToNewestButtonComposerGap
         ))
         .transition(.opacity.combined(with: .scale(scale: 0.94)))

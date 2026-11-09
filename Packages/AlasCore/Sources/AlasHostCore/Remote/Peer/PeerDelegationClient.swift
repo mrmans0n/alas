@@ -3,10 +3,26 @@ import AlasModel
 import AlasACP
 import AlasAgents
 
+/// A Mac this host can reach only over that Mac's own link to it: one that
+/// paired here inbound-only and proved its key doing so.
+public struct PeerReverseRoute: Equatable, Sendable {
+    public let peer: FederatedPeerInfo
+    /// Whether its link is up and acknowledged
+    /// `HostProtocolCapability.delegationReverseV1`, which stands for every
+    /// capability delegation needs.
+    public let isOpen: Bool
+
+    public init(peer: FederatedPeerInfo, isOpen: Bool) {
+        self.peer = peer
+        self.isOpen = isOpen
+    }
+}
+
 /// Sends a paired Mac's host the delegation requests the orchestration
 /// coordinator makes, and maps what comes back to `ACPPeerError`. A peer that
 /// cannot carry the request gets none: it is unreachable when its link is not
-/// proven and online, and outdated when it lacks `host.delegation.v1`.
+/// proven and online, and outdated when it lacks `host.delegation.v1`. A Mac
+/// this host has no link to is reached over the Mac's own, when it offers it.
 @MainActor
 public final class PeerDelegationClient: ACPDelegationPeers {
     /// `start` answers once the child's row exists, which is quick; the
@@ -17,21 +33,34 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     static let discoverTimeout: Duration = .seconds(10)
 
     private let links: FederatedPeerLinks
+    private let reverseRoutes: @MainActor () -> [PeerReverseRoute]
     private let channel: @MainActor (String) -> PeerHostChannel?
 
     public var onOutboxChanged: (@MainActor (_ serverId: String) -> Void)?
     public var onAvailabilityChanged: (@MainActor (_ serverId: String) -> Void)?
 
-    public init(links: FederatedPeerLinks, channel: @escaping @MainActor (String) -> PeerHostChannel?) {
+    /// `channel` finds a peer's channel whichever way it is reached.
+    public init(
+        links: FederatedPeerLinks, reverseRoutes: @escaping @MainActor () -> [PeerReverseRoute] = { [] },
+        channel: @escaping @MainActor (String) -> PeerHostChannel?
+    ) {
         self.links = links
+        self.reverseRoutes = reverseRoutes
         self.channel = channel
     }
 
     public var peers: [ACPDelegationPeerInfo] {
-        links.helloPeers.map { peer in
+        let outbound = links.helloPeers.map { peer in
             ACPDelegationPeerInfo(
                 name: Self.label(peer.name, serverId: peer.serverId), serverId: peer.serverId, state: Self.state(of: peer.state),
                 supportsDelegation: links.peerSupports(HostProtocolCapability.delegationV1, serverId: peer.serverId)
+            )
+        }
+        let listed = Set(outbound.map(\.serverId))
+        return outbound + reverseRoutes().filter { !listed.contains($0.peer.serverId) }.map { route in
+            ACPDelegationPeerInfo(
+                name: Self.label(route.peer.name, serverId: route.peer.serverId), serverId: route.peer.serverId,
+                state: route.isOpen ? .online : .offline, supportsDelegation: route.isOpen
             )
         }
     }
@@ -112,10 +141,10 @@ public final class PeerDelegationClient: ACPDelegationPeers {
         }
     }
 
-    public func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
-        await ask(serverId, .outbox(after: after)) { response in
-            guard case .outbox(let entries, let hasMore) = response else { return nil }
-            return ACPPeerOutboxPage(entries: entries, hasMore: hasMore)
+    public func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+        await ask(serverId, .outbox(after: after, store: store)) { response in
+            guard case .outbox(let entries, let hasMore, let answered) = response else { return nil }
+            return ACPPeerOutboxPage(entries: entries, hasMore: hasMore, store: answered)
         }
     }
 
@@ -137,6 +166,12 @@ public final class PeerDelegationClient: ACPDelegationPeers {
         _ serverId: String, _ request: HostRequest, timeout: Duration? = nil
     ) async -> Result<HostResponse, ACPPeerError> {
         guard let carrying = links.sessionCarryingPeers.first(where: { $0.serverId == serverId }) else {
+            if let route = reverseRoutes().first(where: { $0.peer.serverId == serverId }) {
+                // Open means it acknowledged every capability this needs.
+                let name = Self.label(route.peer.name, serverId: serverId)
+                guard route.isOpen, let channel = channel(serverId) else { return .failure(.unreachable(peer: name)) }
+                return await perform(request, on: channel, timeout: timeout, peer: name)
+            }
             let known = links.helloPeers.first { $0.serverId == serverId }
             return .failure(known.map { Self.state(of: $0.state) } == .revoked
                 ? .revoked(peer: name(of: serverId))
@@ -147,13 +182,21 @@ public final class PeerDelegationClient: ACPDelegationPeers {
             return .failure(.outdated(peer: name))
         }
         guard let channel = channel(serverId) else { return .failure(.unreachable(peer: name)) }
+        return await perform(request, on: channel, timeout: timeout, peer: name)
+    }
+
+    private func perform(
+        _ request: HostRequest, on channel: PeerHostChannel, timeout: Duration?, peer name: String
+    ) async -> Result<HostResponse, ACPPeerError> {
         let response = await channel.request(request, timeout: timeout)
         guard case .failure(let error) = response else { return .success(response) }
         return .failure(Self.map(error, peer: name))
     }
 
     private func name(of serverId: String) -> String {
-        links.helloPeers.first { $0.serverId == serverId }.map { Self.label($0.name, serverId: serverId) } ?? serverId
+        let name = links.helloPeers.first { $0.serverId == serverId }?.name
+            ?? reverseRoutes().first { $0.peer.serverId == serverId }?.peer.name
+        return name.map { Self.label($0, serverId: serverId) } ?? serverId
     }
 
     /// What agents here call a peer, in the list and in what a request says.
@@ -166,6 +209,7 @@ public final class PeerDelegationClient: ACPDelegationPeers {
     static func map(_ error: HostError, peer: String) -> ACPPeerError {
         switch error {
         case .session(.notFound): .notFound
+        case .peerIdentityUnproven: .unproven(peer: peer)
         case .failed(let message) where message == PeerHostChannel.unansweredMessage
             || message == FederatedSessionsProvider.peerUnavailableMessage:
             .unreachable(peer: peer)

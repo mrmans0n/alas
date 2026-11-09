@@ -199,14 +199,15 @@ extension AlasCoreContext {
     }
 
     /// What a summary says about the Mac that delegated `sessionID`: its
-    /// device's name, or "another Mac" once it has been forgotten.
+    /// device's name, else its peer record's, or "another Mac" once it has
+    /// been forgotten.
     @_spi(AppHost) public func delegatedFromName(of sessionID: String) -> String? {
         delegatedPeerOrigins[sessionID].map(peerMacName(serverId:))
     }
 
     @_spi(AppHost) public func peerMacName(serverId: String) -> String {
         let device = delegationPairing()?.devices.first { $0.kind == .alasInstance && $0.peerServerId == serverId }
-        return device?.name ?? "another Mac"
+        return device?.name ?? delegationPeerRecordName(serverId) ?? "another Mac"
     }
 
     /// A child that runs on a paired Mac, as its parent's tab shows it.

@@ -120,6 +120,7 @@ enum StartupRecoveryPaneCompletionPolicy {
 }
 
 struct CenterPaneView: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let worktree: Worktree
     /// Set by Workspace navigation for a focused checkout member. It remains
@@ -799,7 +800,7 @@ struct CenterPaneView: View {
             .animation(.takeOff, value: tabs.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomTrailing) {
-                VStack(alignment: .trailing, spacing: 8) {
+                VStack(alignment: .trailing, spacing: scale.space[2]) {
                     InAppNotificationStack(store: state.inAppNotifications, worktreeID: worktree.id)
                         .frame(maxWidth: 360)
                         .onAppear {
@@ -820,7 +821,7 @@ struct CenterPaneView: View {
                         }
                     }
                 }
-                .padding(12)
+                .padding(scale.space[3])
                 .padding(.bottom, approvalNotificationInset)
                 .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
             }

@@ -1565,8 +1565,8 @@ struct ACPSessionManagerTests {
         #expect(session.agentState != .disconnected)
     }
 
-    @Test("queue force send during attach sends after ready")
-    func queueForceSendDuringAttachSendsAfterReady() async throws {
+    @Test("queue force send during attach sends after ready", arguments: [false, true])
+    func queueForceSendDuringAttachSendsAfterReady(previewEnabled: Bool) async throws {
         let gate = AsyncGate()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-force-send-spawning-\(UUID()).sqlite")
@@ -1586,6 +1586,7 @@ struct ACPSessionManagerTests {
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            experimentalACP2Enabled: { previewEnabled },
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
@@ -1601,9 +1602,8 @@ struct ACPSessionManagerTests {
         #expect(client.sent.contains(where: { $0.method == "session/prompt" }) == false)
         await gate.release()
         await attachTask.value
-        for _ in 0 ..< 50 where !client.sent.contains(where: { $0.method == "session/prompt" }) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        #expect(await awaitCondition { client.sent.contains { $0.method == "session/prompt" } })
+        #expect(session.runtimeKind == .v1)
 
         #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
     }

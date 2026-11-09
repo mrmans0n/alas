@@ -130,93 +130,57 @@ struct WorktreeRowHeightTests {
         #expect(!WorktreeRowView.showsProgress(operationState: .creating))
     }
 
-    @Test func rowHeightIsStableWithAndWithoutBadge() throws {
-        let withoutBadge = try renderHeight(harnessSummary: nil)
-        let withBadge = try renderHeight(harnessSummary: .init(
-            sessions: [.init(id: "s1", state: .running, agent: .claude)],
-            state: .running,
+    /// An empty row, an agent waiting, and every piece of metadata at once.
+    enum RowContent: CaseIterable {
+        case nothing, waitingAgent, everything
+    }
+
+    /// The filter's keyboard cursor draws through the same path as the pointer.
+    @Test(arguments: RowContent.allCases, [DesignScale.comfortable, DesignScale.compact])
+    func hoverAndSelectionNeverChangeTheRowHeight(content: RowContent, scale: DesignScale) throws {
+        let atRest = try renderHeight(content, isSelected: false, scale: scale)
+        let hovered = try renderHeight(content, isSelected: false, isHighlighted: true, scale: scale)
+        let selected = try renderHeight(content, isSelected: true, scale: scale)
+        let selectedHovered = try renderHeight(content, isSelected: true, isHighlighted: true, scale: scale)
+
+        #expect(atRest >= Int(scale.sidebarRowMinHeight))
+        #expect(Set([atRest, hovered, selected, selectedHovered]).count == 1)
+    }
+
+    private func agentSummary(_ state: HarnessService.AggregatedState) -> HarnessService.WorktreeHarnessSummary {
+        .init(
+            sessions: [.init(id: "s1", state: state, agent: .claude)],
+            state: state,
             agent: .claude,
             primarySessionId: "s1",
-            runningSessionCount: 1,
-            awaitingSessionCount: 0
-        ))
-
-        #expect(withoutBadge == withBadge)
-    }
-
-    @Test func rowHeightIsStableAcrossBadgeStates() throws {
-        let running = try renderHeight(harnessSummary: .init(
-            sessions: [.init(id: "s1", state: .running, agent: .claude)],
-            state: .running,
-            agent: .claude,
-            primarySessionId: "s1",
-            runningSessionCount: 1,
-            awaitingSessionCount: 0
-        ))
-        let awaiting = try renderHeight(harnessSummary: .init(
-            sessions: [.init(id: "s1", state: .awaiting, agent: .claude)],
-            state: .awaiting,
-            agent: .claude,
-            primarySessionId: "s1",
-            runningSessionCount: 0,
-            awaitingSessionCount: 1
-        ))
-
-        #expect(running == awaiting)
-    }
-
-    @Test func diffBarAndCountsKeepTheTwoLineHeightAtNarrowWidths() throws {
-        let withoutDiff = try renderHeight(harnessSummary: nil)
-        let withDiff = try renderHeight(harnessSummary: nil, addedLines: 412, deletedLines: 88)
-        #expect(withDiff == withoutDiff)
-    }
-
-    @Test func rowHeightIsStableWithActiveGGIndicator() throws {
-        let inactive = try renderHeight(harnessSummary: nil)
-        let active = try renderHeight(
-            harnessSummary: nil,
-            ggMenuModel: GGWorktreeMenuModel(
-                selectedMode: .on,
-                context: .active(stackName: "feature"),
-                hasStackSummary: false
-            )
+            runningSessionCount: state == .running ? 1 : 0,
+            awaitingSessionCount: state == .awaiting ? 1 : 0
         )
-
-        #expect(inactive == active)
     }
 
-    @Test func rowHeightIsStableWithAndWithoutGGStackMarker() throws {
-        let withoutStack = try renderHeight(harnessSummary: nil, stackSummary: nil)
-        let withStack = try renderHeight(
-            harnessSummary: nil,
-            ggMenuModel: .init(selectedMode: .on, context: .active(stackName: "feature"), hasStackSummary: true),
-            stackSummary: GGStackSummary(merged: 2, total: 3)
+    private func renderHeight(_ content: RowContent, isSelected: Bool, isHighlighted: Bool = false, scale: DesignScale) throws -> Int {
+        let hasStack = content == .everything
+        let hasDiff = content == .everything
+        let hasCommits = content == .everything
+        let hasWorkspaceLink = content == .everything
+        let harnessSummary: HarnessService.WorktreeHarnessSummary? = switch content {
+        case .waitingAgent: agentSummary(.awaiting)
+        case .everything: agentSummary(.running)
+        case .nothing: nil
+        }
+        let ggIsActive = hasStack
+        let ggMenuModel = GGWorktreeMenuModel(
+            selectedMode: ggIsActive ? .on : .inherit,
+            context: ggIsActive ? .active(stackName: "feature") : .inactive(reason: .policyOff),
+            hasStackSummary: hasStack
         )
+        let stackSummary = hasStack ? GGStackSummary(merged: 2, total: 3) : nil
+        let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation? = hasWorkspaceLink
+            ? .init(name: "Workspace Release", state: .active, checkoutID: UUID(), memberID: UUID())
+            : nil
+        let addedLines = hasDiff ? 412 : 0
+        let deletedLines = hasDiff ? 88 : 0
 
-        #expect(withoutStack == withStack)
-    }
-    @Test func rowHeightIsStableWithWorkspaceCheckout() throws {
-        let withoutWorkspaceCheckout = try renderHeight(harnessSummary: nil)
-        let withWorkspaceCheckout = try renderHeight(
-            harnessSummary: nil,
-            workspaceCheckout: .init(name: "Workspace Release", state: .active, checkoutID: UUID(), memberID: UUID())
-        )
-
-        #expect(withoutWorkspaceCheckout == withWorkspaceCheckout)
-    }
-
-    private func renderHeight(
-        harnessSummary: HarnessService.WorktreeHarnessSummary?,
-        ggMenuModel: GGWorktreeMenuModel = GGWorktreeMenuModel(
-            selectedMode: .inherit,
-            context: .inactive(reason: .policyOff),
-            hasStackSummary: false
-        ),
-        stackSummary: GGStackSummary? = nil,
-        workspaceCheckout: WorktreeWorkspaceCheckoutPresentation? = nil,
-        addedLines: Int = 0,
-        deletedLines: Int = 0
-    ) throws -> Int {
         let worktree = Worktree(
             id: "wt-1",
             projectId: "p1",
@@ -233,13 +197,30 @@ struct WorktreeRowHeightTests {
         if let stackSummary {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = stackSummary
         }
+        // A commit count only shows on a clean row, once its count has loaded.
+        let commitQuery = WorktreeRowView.CommitQuery(
+            path: worktree.path,
+            branch: worktree.branch,
+            baseBranch: "main",
+            preferLocal: true,
+            revision: 0
+        )
+        if hasCommits {
+            WorktreeStatusStore.shared.apply([worktree.path.path: .clean])
+            WorktreeRowView.loadedCommitCounts[commitQuery.identity] = .init(
+                query: commitQuery,
+                commits: GitService.BranchCommitCount(count: 2, baseRef: "main")
+            )
+        }
         defer {
             GGStackSummaryStore.shared.summaries.removeAll()
+            WorktreeStatusStore.shared.prune(keepingPaths: [])
+            WorktreeRowView.loadedCommitCounts[commitQuery.identity] = nil
         }
 
         let view = WorktreeRowView(
             worktree: worktree,
-            isSelected: false,
+            isSelected: isSelected,
             isMain: false,
             upstreamStatus: nil,
             operationState: nil,
@@ -261,9 +242,12 @@ struct WorktreeRowHeightTests {
             onRetryLaunch: {},
             onRetryDelete: {},
             onSetGGWorktreeMode: { _ in },
-            workspaceCheckout: workspaceCheckout
+            workspaceCheckout: workspaceCheckout,
+            commitQuery: hasCommits ? commitQuery : nil,
+            isHighlighted: isHighlighted
         )
         .environment(\.theme, try ThemeStore().current)
+        .environment(\.designScale, scale)
 
         let controller = NSHostingController(rootView: view)
         controller.view.frame = NSRect(x: 0, y: 0, width: 260, height: 200)

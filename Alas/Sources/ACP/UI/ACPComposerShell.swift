@@ -241,8 +241,15 @@ struct ACPComposer: View {
     let contextProviders: [String]
     /// Renders the session recap strip at the top of the pill.
     let recapCoordinator: SessionSummaryCoordinator?
+    /// The transcript's tail spacer, which the bottom shim matches.
+    let tailSpacerHeight: CGFloat
+    /// Reports the height of the bottom placement's stack (banner, tray, pill).
+    let onStackHeightChange: (CGFloat) -> Void
+    /// Opens a skill command's `SKILL.md`; nil where the host cannot.
+    let openSkill: ((ACPPromptSuggestion) -> Void)?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var inputFocused = false
     @State private var hasText: Bool = false
     @State private var composerNotice: String?
@@ -274,8 +281,13 @@ struct ACPComposer: View {
         pluginPrompts: [ACPPromptSuggestion] = [],
         contextProviders: [String] = [],
         recapCoordinator: SessionSummaryCoordinator? = nil,
+        tailSpacerHeight: CGFloat = ACPComposerMetrics.restingTailSpacerHeight,
+        onStackHeightChange: @escaping (CGFloat) -> Void = { _ in },
+        openSkill: ((ACPPromptSuggestion) -> Void)? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
+        self.tailSpacerHeight = tailSpacerHeight
+        self.onStackHeightChange = onStackHeightChange
         self._session = ObservedObject(wrappedValue: session)
         self._composer = ObservedObject(wrappedValue: session.composer)
         self.manager = manager
@@ -303,6 +315,7 @@ struct ACPComposer: View {
         self.pluginPrompts = pluginPrompts
         self.contextProviders = contextProviders
         self.recapCoordinator = recapCoordinator
+        self.openSkill = openSkill
     }
 
     var body: some View {
@@ -311,7 +324,7 @@ struct ACPComposer: View {
             VStack(spacing: 0) {
                 noticeBanner
                 composerRow
-                    .padding(.top, 28)
+                    .padding(.top, scale.space[5])
                     .padding(
                         .bottom,
                         ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 0)
@@ -340,15 +353,11 @@ struct ACPComposer: View {
     @ViewBuilder
     private var noticeBanner: some View {
         if let notice = session.activeNotice {
-            HStack {
-                Spacer(minLength: 0)
+            ACPTranscriptColumnLayout(readingMax: contentMaxWidth, role: .composer) {
                 ACPSessionNoticeBanner(notice: notice) {
                     session.dismissActiveNotice()
                 }
-                .frame(maxWidth: contentMaxWidth)
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 24)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
             .animation(.easeOut(duration: 0.15), value: session.activeNotice)
         }
@@ -377,40 +386,50 @@ struct ACPComposer: View {
                     }
                 }
             )
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
         }
     }
 
     private var composerRow: some View {
-        HStack {
-            Spacer(minLength: 0)
+        ACPTranscriptColumnLayout(readingMax: contentMaxWidth, role: .composer) {
             VStack(spacing: 0) {
                 backgroundTaskTray
                 pill
             }
-            .frame(maxWidth: contentMaxWidth)
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 24)
     }
 
     private func composerLayout(bottomInset: CGFloat) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            noticeBanner
-            composerRow
-                .padding(.top, 28)
-                .padding(.bottom, bottomInset)
+            // Measured from the top of whatever shows, so the transcript's
+            // tail spacer clears the banner and tray as well as the pill.
+            VStack(spacing: 0) {
+                if session.activeNotice != nil {
+                    noticeBanner
+                        .padding(.bottom, scale.space[5])
+                }
+                composerRow
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                onStackHeightChange(height)
+            }
+            .padding(.bottom, bottomInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(bottomShim.opacity(placement == .bottom ? 1 : 0))
+        // Only as tall as the transcript's tail spacer: anything taller veils
+        // the rows above the composer, the permission card above all.
+        .background(alignment: .bottom) {
+            bottomShim
+                .frame(height: tailSpacerHeight)
+                .opacity(placement == .bottom ? 1 : 0)
+        }
     }
 
     private var bottomShim: some View {
         // Very gentle bottom shim — just enough that the pill doesn't
-        // sit on a hard edge of transcript text. The transcript itself
-        // has 240pt of bottom padding so most content stays above the
-        // pill; this gradient only touches the last ~80pt.
+        // sit on a hard edge of transcript text. The transcript's tail
+        // spacer keeps the end of the content above the pill.
         LinearGradient(
             stops: [
                 .init(color: .clear, location: 0.0),
@@ -429,17 +448,17 @@ struct ACPComposer: View {
             }
             if let composerNotice {
                 Text(composerNotice)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("del"))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
             }
             if !contextProviders.isEmpty {
                 Label("Context from \(contextProviders.joined(separator: ", "))", systemImage: "puzzlepiece.extension")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[1])
                     .background(theme.color("bg-3").opacity(0.85), in: Capsule())
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help("These plugins add text to every prompt you send. The agent sees it; the transcript doesn't.")
@@ -499,14 +518,20 @@ struct ACPComposer: View {
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion]
                         + (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
-                        + pluginPrompts
+                        + pluginPrompts,
+                configOptions: session.availableConfigOptions,
+                onCommandAction: { configId, value in
+                    apply(configOptionId: configId, value: .string(value))
+                },
+                onOpenSkill: openSkill
             )
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)
             .onChange(of: isMirror) { _, mirror in
                 if mirror { dictation.stop() }
             }
-            .frame(minHeight: 44, maxHeight: 140)
+            // Hugs its content from two lines up to the field's own maximum.
+            .fixedSize(horizontal: false, vertical: true)
             .onAppear {
                 hasText = composer.draft.hasContent
                 dictation.onTranscriptUpdate = { text, isFinal in
@@ -549,13 +574,14 @@ struct ACPComposer: View {
                     ViewThatFits(in: .horizontal) {
                         expandedToolbar(showShortcuts: true)
                         expandedToolbar(showShortcuts: false)
+                        twoRowToolbar
                         compactToolbar
                     }
                 }
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, scale.space[0])
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
         .acpComposerPill(focused: inputFocused)
     }
 
@@ -568,12 +594,12 @@ struct ACPComposer: View {
                     Task { await manager.takeOver(sessionId: session.id) }
                 } label: {
                     Text("Take over")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundStyle(theme.color("fg"))
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, scale.space[3])
                         .frame(height: 26)
-                        .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+                        .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
@@ -614,37 +640,95 @@ struct ACPComposer: View {
         .layoutPriority(1)
     }
 
+    /// Tools, then the configuration cluster, then the action, each group
+    /// with a wider gap around it than inside it.
     private func expandedToolbar(showShortcuts: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[3]) {
             if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
-            contextUsageButton
-            if dictation.state != .unavailable { micButton }
-            attachButton
-            chips.fastModeToggle()
-            autoRunToggle
-            if let thinking = session.chipState.thinking {
-                chips.thinkingChip(thinking).fixedSize(horizontal: true, vertical: false)
+            HStack(spacing: scale.space[2]) {
+                contextUsageButton
+                if dictation.state != .unavailable { micButton }
+                attachButton
+                toolToggles
             }
-            ForEach(chips.parameterChips) { parameter in
-                chips.parameterChip(parameter).fixedSize(horizontal: true, vertical: false)
-            }
-            ForEach(chips.booleanConfigOptions) { option in
-                chips.booleanConfigToggle(option).fixedSize(horizontal: true, vertical: false)
-            }
-            if let providerName = session.currentProviderDisplayName {
-                providerPill(providerName).fixedSize(horizontal: true, vertical: false)
-            }
-            if let status = visibleAuthStatus {
-                authStatusPill(status).fixedSize(horizontal: true, vertical: false)
-            }
-            if let mode = session.chipState.mode {
-                chips.modeChip(mode).fixedSize(horizontal: true, vertical: false)
-            }
-            if let models = session.chipState.models {
-                chips.modelChip(models).fixedSize(horizontal: true, vertical: false)
-            }
+            configurationCluster
             actionButton
+        }
+    }
+
+    /// For a narrow pane: every control stays on screen when one row cannot hold
+    /// them. Mode, auto-run and the others have no keyboard route, so they only
+    /// move into the Options popover when even two rows do not fit.
+    private var twoRowToolbar: some View {
+        VStack(spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
+                Spacer(minLength: 0)
+                toolToggles
+                configurationCluster
+                    .padding(.leading, scale.space[1])
+            }
+            HStack(spacing: scale.space[2]) {
+                contextUsageButton
+                if dictation.state != .unavailable { micButton }
+                attachButton
+                Spacer(minLength: 0)
+                actionButton
+            }
+        }
+    }
+
+    /// On/off switches, which sit with the other tool buttons.
+    @ViewBuilder
+    private var toolToggles: some View {
+        chips.fastModeToggle()
+        autoRunToggle
+    }
+
+    /// The pickers that configure the next turn, close together on one tray
+    /// so they read as a single group apart from the tools and the action.
+    @ViewBuilder
+    private var configurationCluster: some View {
+        if hasConfigurationChips {
+            HStack(spacing: scale.space[0]) {
+                configurationChips
+            }
+            .padding(scale.space[0])
+            .background(
+                RoundedRectangle(cornerRadius: scale.radius.medium + scale.space[0])
+                    .fill(theme.color("bg-3").opacity(0.35))
+            )
+        }
+    }
+
+    private var hasConfigurationChips: Bool {
+        session.chipState.thinking != nil || !chips.parameterChips.isEmpty || !chips.booleanConfigOptions.isEmpty
+            || session.currentProviderDisplayName != nil || visibleAuthStatus != nil
+            || session.chipState.mode != nil || session.chipState.models != nil
+    }
+
+    @ViewBuilder
+    private var configurationChips: some View {
+        if let thinking = session.chipState.thinking {
+            chips.thinkingChip(thinking).fixedSize(horizontal: true, vertical: false)
+        }
+        ForEach(chips.parameterChips) { parameter in
+            chips.parameterChip(parameter).fixedSize(horizontal: true, vertical: false)
+        }
+        ForEach(chips.booleanConfigOptions) { option in
+            chips.booleanConfigToggle(option).fixedSize(horizontal: true, vertical: false)
+        }
+        if let providerName = session.currentProviderDisplayName {
+            providerPill(providerName).fixedSize(horizontal: true, vertical: false)
+        }
+        if let status = visibleAuthStatus {
+            authStatusPill(status).fixedSize(horizontal: true, vertical: false)
+        }
+        if let mode = session.chipState.mode {
+            chips.modeChip(mode).fixedSize(horizontal: true, vertical: false)
+        }
+        if let models = session.chipState.models {
+            chips.modelChip(models).fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -678,44 +762,45 @@ struct ACPComposer: View {
     private var shortcutHint: some View {
         HStack(spacing: 6) {
             kbdLabel("⏎")
-            Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+            Text("send").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
             kbdLabel("⇧⏎")
-            Text("newline").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+            Text("newline").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
     private func kbdLabel(_ s: String) -> some View {
         Text(s)
-            .font(.system(size: 10, design: .monospaced))
+            .font(scale.caption.font(weight: .regular, design: .monospaced))
             .fontWeight(.semibold)
             .foregroundStyle(theme.color("fg"))
-            .padding(.horizontal, 5).padding(.vertical, 1)
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, 1) // design-literal: fits the key cap inside a hint line
             .background(theme.color("bg-0").opacity(0.7))
-            .clipShape(RoundedRectangle(cornerRadius: 3))
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func providerPill(_ name: String) -> some View {
         Text("Provider: \(name)")
-            .font(.system(size: 11, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Provider, \(name)")
             .help("Provider selected by the adapter")
     }
 
     private func authStatusPill(_ status: ACPAuthStatus) -> some View {
         Text(status.label)
-            .font(.system(size: 11, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Signed in, \(status.label)")
             .help(Self.authStatusHoverText(status))
     }
@@ -737,7 +822,7 @@ struct ACPComposer: View {
     // MARK: - Auto-run pill (was in the toolbar)
 
     private var chips: ACPComposerChips {
-        ACPComposerChips(theme: theme, chipState: session.chipState,
+        ACPComposerChips(theme: theme, scale: scale, chipState: session.chipState,
                          configOptions: session.availableConfigOptions,
                          onSelect: { apply(spec: $0, selectedId: $1) },
                          onConfigValue: { apply(configOptionId: $0, value: $1) })
@@ -801,11 +886,11 @@ struct ACPComposer: View {
             actions.presentImagePicker?()
         } label: {
             Image(systemName: offersPDFs ? "paperclip" : "photo")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+                .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(offersPDFs ? "Attach image or PDF" : "Attach image")
@@ -904,6 +989,7 @@ struct ACPComposerOptionsButton: View {
     var onOpen: () -> Void = {}
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var isPresented = false
     private let controlWidth: CGFloat = 164
 
@@ -931,15 +1017,15 @@ struct ACPComposerOptionsButton: View {
                         .frame(width: 5, height: 5)
                 }
                 Text("Options")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(scale.glyph.font(weight: .bold))
             }
             .foregroundStyle(theme.color("fg"))
-            .padding(.horizontal, 9)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3")))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3")))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
@@ -948,14 +1034,14 @@ struct ACPComposerOptionsButton: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Session settings")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-muted"))
-                        .padding(.bottom, 3)
+                        .padding(.bottom, scale.space[1])
                     ForEach(items, id: \.self) { item in
                         row(item)
                     }
                 }
-                .padding(12)
+                .padding(scale.space[3])
             }
             .frame(width: 310)
             .frame(maxHeight: 370)
@@ -1029,7 +1115,7 @@ struct ACPComposerOptionsButton: View {
                 .frame(width: controlWidth)
         }
         .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
+        .font(scale.meta.font(weight: .medium))
     }
 
     @ViewBuilder
@@ -1082,16 +1168,16 @@ struct ACPComposerOptionsButton: View {
             Button(action: action) {
                 HStack(spacing: 6) {
                     Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .frame(width: 14)
                     Text(isEnabled ? "On" : "Off")
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(foreground)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, scale.space[2])
                 .frame(width: controlWidth, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(background))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.75))
+                .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(background))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(border, lineWidth: 0.75))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
@@ -1100,7 +1186,7 @@ struct ACPComposerOptionsButton: View {
             .help(help ?? title)
         }
         .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
+        .font(scale.meta.font(weight: .medium))
     }
 
     private func infoRow(_ title: String, value: String) -> some View {
@@ -1112,16 +1198,49 @@ struct ACPComposerOptionsButton: View {
                 .lineLimit(1)
         }
         .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
+        .font(scale.meta.font(weight: .medium))
+    }
+}
+
+/// Sizes the transcript's tail spacer works from.
+enum ACPComposerMetrics {
+    /// An empty composer with a one-row toolbar: 12pt insets, a 44pt field, 6pt
+    /// spacing and the 26pt action button.
+    static let restingPillHeight: CGFloat = 100
+    /// Room the end of the transcript keeps above whatever sits on the composer.
+    static let tailSpacerClearance: CGFloat = 10
+    /// The gap between a /btw card docked above the composer and the composer.
+    static let sideQuestionCardGap: CGFloat = 8
+
+    /// The transcript's tail spacer, as tall as everything stacked on its bottom
+    /// edge: the bottom inset and the composer stack (notice banner, background
+    /// tray and pill, measured; never less than a resting pill), plus a little
+    /// clearance. A docked /btw card is not counted: the greedy composer above
+    /// it pushes the card to the top of the chat, away from the tail.
+    static func tailSpacerHeight(composerStack: CGFloat) -> CGFloat {
+        let bottomInset = ACPComposerPlacement.bottomInset(for: .bottom, containerHeight: 0)
+        return bottomInset + max(composerStack, restingPillHeight) + tailSpacerClearance
+    }
+
+    /// The tail spacer before anything has been measured.
+    static let restingTailSpacerHeight = tailSpacerHeight(composerStack: 0)
+}
+
+extension View {
+    /// The one drop shadow raised transcript surfaces share. A border does most
+    /// of the separating; this only lifts them off the transcript.
+    func acpElevation(darkMode: Bool) -> some View {
+        shadow(color: .black.opacity(darkMode ? 0.25 : 0.08), radius: 6, y: 2)
     }
 }
 
 /// The floating pill that frames the composer: tinted gradient under a
-/// material, hairline border that warms when focused, and a soft drop
-/// shadow. Shared with the mirrored peer composer.
+/// material, a hairline border that strengthens while focused, and the shared
+/// drop shadow. Shared with the mirrored peer composer.
 struct ACPComposerPillChrome: ViewModifier {
     let focused: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     func body(content: Content) -> some View {
         content
@@ -1132,7 +1251,7 @@ struct ACPComposerPillChrome: ViewModifier {
                 // Material goes closest to the content; the tint sits
                 // behind it.
                 ZStack {
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .fill(
                             LinearGradient(
                                 colors: [theme.color("bg-2").opacity(0.55),
@@ -1140,19 +1259,16 @@ struct ACPComposerPillChrome: ViewModifier {
                                 startPoint: .top, endPoint: .bottom
                             )
                         )
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .fill(.ultraThinMaterial)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(
-                        focused ? theme.color("add").opacity(0.7) : theme.color("line"),
-                        lineWidth: 0.75
-                    )
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(focused ? theme.color("add").opacity(0.7) : theme.color("line"), lineWidth: 0.75)
             )
-            .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+            .acpElevation(darkMode: theme.darkMode)
     }
 }
 

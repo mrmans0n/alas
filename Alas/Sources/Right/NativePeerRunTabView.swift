@@ -17,6 +17,7 @@ struct NativePeerRunTabView: View {
     let openPreview: (URL, String) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var scripts: [HostRunScript]?
     /// The `serverId|worktreeID` whose listing answered, so a worktree shows
     /// the skeleton until its first answer but a refresh does not.
@@ -92,15 +93,15 @@ struct NativePeerRunTabView: View {
         VStack(spacing: 10) {
             Icon(name: "play", size: 22, color: theme.color("fg-faint"))
             Text("No run scripts yet")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
             Text("Add a script to \(RunScriptStore.repoScriptsRelativeDir) on \(hostName) to build, test, or serve this worktree.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 20) // design-literal: empty-state inset sits between the 16 and 24 scale steps
     }
 
     private func perform(_ action: RunRowAction, on row: PeerRuns.Row) {
@@ -162,29 +163,30 @@ private struct PeerRunOutputSheet: View {
     let onClose: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(output.scriptName)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg"))
             switch output.presentation {
             case .document(let text, let isTruncated):
                 if isTruncated {
                     Text("Only the end of the output was kept.")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-faint"))
                 }
                 ScrollView {
                     Text(text)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg"))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             case .unavailable:
                 Text("This run's output was not kept.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -194,7 +196,7 @@ private struct PeerRunOutputSheet: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(16)
+        .padding(scale.space[4])
         .frame(minWidth: 520, idealWidth: 640, minHeight: 360, idealHeight: 480)
     }
 }

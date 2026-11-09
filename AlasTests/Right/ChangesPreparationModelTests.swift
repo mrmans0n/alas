@@ -202,7 +202,7 @@ struct ChangesPreparationModelTests {
             readinessActions: []
         )
 
-        #expect(model.reviewAction?.title == "Review current changes")
+        #expect(model.reviewAction?.title == "Review changes")
         #expect(model.draftAction?.title == "Draft commit")
         #expect(model.ggActions.isEmpty)
     }
@@ -214,7 +214,7 @@ struct ChangesPreparationModelTests {
             capabilities: stagedOnlyCapabilities
         )
 
-        #expect(model.primaryAction?.title == "Review current changes")
+        #expect(model.primaryAction?.title == "Review changes")
         #expect(model.ggActions.map(\.kind) == [.newStackCommit, .commitAndSync, .amendCurrent, .absorbIntoStack])
         #expect(model.ggActions.map(\.title) == ["New stack commit", "Commit & sync", "Amend current", "Absorb into stack"])
         #expect(model.ggActions.allSatisfy { $0.isEnabled })

@@ -7,6 +7,7 @@ struct AiSplitButton: View {
     let onGenerate: () -> Void
 
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     /// Agent the button runs: the pinned one, or the first on Automatic.
     /// Nil for None or an agent missing from `availableAgents`.
@@ -34,12 +35,12 @@ struct AiSplitButton: View {
                         Spinner(lineWidth: 1.5, duration: 0.7)
                             .frame(width: 12, height: 12)
                     } else {
-                        Text("✨").font(.system(size: 11))
+                        Text("✨").font(scale.metaFont)
                     }
                     Text(primaryLabel)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
                 .foregroundColor(primaryDisabled ? theme.color("fg-faint") : theme.color("fg"))
                 .background(theme.color("bg-3"))
             }
@@ -79,7 +80,7 @@ struct AiSplitButton: View {
                 Button("None") { selectedToolId = AppConfig.Changes.disabledAIToolID }
             } label: {
                 Icon(name: "chev-down", size: 9, color: theme.color("fg-faint"))
-                    .padding(.horizontal, 7).padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
                     .background(theme.color("bg-3"))
             }
             .menuStyle(.borderlessButton)
@@ -87,6 +88,6 @@ struct AiSplitButton: View {
             .fixedSize()
             .help("Select AI agent")
         }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 }

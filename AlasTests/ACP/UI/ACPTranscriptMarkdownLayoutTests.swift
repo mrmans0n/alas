@@ -8,7 +8,9 @@ import Testing
 @Suite struct ACPTranscriptMarkdownLayoutTests {
     private var theme: Theme { try! Theme.loadBundled(id: "cool-slate") }
 
-    @Test(arguments: ["![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
+    @Test(arguments: [
+        "![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```",
+    ])
     func unsupportedBlocksFallBack(source: String) {
         #expect(ACPTranscriptMarkdownLayout.make(source: source, width: 400, theme: theme, typography: .default) == nil)
     }
@@ -43,10 +45,10 @@ import Testing
         #expect(colors.count > 1)
     }
 
-    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2", "let a = 1\n"], [11, 13, 16])
-    func codeBlockHeightMatchesTheSwiftUIBlock(code: String, fontSize: Int) throws {
+    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2", "let a = 1\n"], [(11, UIDensity.compact), (13, .compact), (13, .comfortable), (16, .compact)])
+    func codeBlockHeightMatchesTheSwiftUIBlock(code: String, font: (size: Int, density: UIDensity)) throws {
         let language = "swift"
-        let typography = ACPChatTypography(fontFamily: "", fontSize: fontSize)
+        let typography = ACPChatTypography(fontFamily: "", fontSize: font.size, density: font.density)
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```\(language)\n\(code)\n```", width: 500, theme: theme, typography: typography))
         let host = NSHostingView(rootView: CodeBlockView(language: language, code: code, typography: typography)
             .environment(\.theme, theme).frame(width: 500))
@@ -69,6 +71,140 @@ import Testing
         host.frame.size = host.fittingSize
         host.layoutSubtreeIfNeeded() // the SwiftUI table reads its viewport width on the next pass
         #expect(abs(layout.height - host.fittingSize.height) < 1)
+    }
+
+    /// A native row must be as tall as the SwiftUI row it replaces when a message
+    /// finishes, with prose held to the reading column and code and tables past it.
+    /// Every width at the default size; 12 and 15pt, where line heights round
+    /// differently, at a narrow and a wide one.
+    @Test(arguments: [UIDensity.comfortable, .compact], [
+        (13, CGFloat(640)), (13, 880), (13, 1_200), (13, 1_600),
+        (12, 640), (12, 1_200), (15, 640), (15, 1_200),
+    ])
+    func rowHeightMatchesTheSwiftUIRow(density: UIDensity, size: (fontSize: Int, rowWidth: CGFloat)) throws {
+        let rowWidth = size.rowWidth
+        let wideLine = "let row = InvoiceRow(id: invoice.id, title: invoice.title, branch: branch.name, width: width.rounded(), isPinned: false)"
+        let source = """
+        # A heading
+
+        A paragraph long enough to wrap onto more than one line at every width in this test, \
+        which it does by going on for rather longer than any sensible first sentence would, \
+        and then carrying on for a while after that so that even the widest column has to wrap.
+
+        ```swift
+        \(wideLine)
+        return heights[key]
+        ```
+
+        | Scenario | Rows | p95 | Worst frame | What changed in this run |
+        |---|---|---|---|---|
+        | Before the fix | 1,240 | 31.4 ms | 88 ms | Nothing yet, this is the slow path we started from |
+        | With identity keys | 14 | 7.1 ms | 12 ms | Keys use identity and a bucketed width |
+        """
+        let scale = DesignScale.resolved(for: density)
+        let typography = ACPChatTypography(fontFamily: "", fontSize: size.fontSize, density: density)
+        let columns = ACPChatLayout.transcriptColumns(rowWidth: rowWidth, readingMax: scale.readingColumnMax)
+
+        let row = ACPTranscriptCoreTextRowView(frame: .zero)
+        row.configure(
+            content: .agent(markdown: source, commentary: false), contentMaxWidth: scale.readingColumnMax,
+            inToolCallGroup: false, theme: theme, typography: typography, scale: scale
+        )
+        let measured = row.measuredHeight(forWidth: rowWidth)
+        let drawn = try #require(row.layout(forWidth: rowWidth).items.compactMap { item -> ACPTranscriptMarkdownLayout? in
+            if case .markdown(let markdown, _, _) = item { return markdown }
+            return nil
+        }.first)
+        #expect(drawn.width == columns.readingWidth)
+        #expect(drawn.backgrounds.first { $0.header != nil }?.rect.width == columns.breakoutWidth)
+        #expect(drawn.tables.first?.rect.width == columns.breakoutWidth)
+
+        // A wrapped code line hangs under its first line; the SwiftUI block
+        // below breaks at the same narrowed width, or the heights would differ.
+        let codeBlock = try #require(drawn.texts.firstIndex { $0.hasPrefix("let row") })
+        let codeLines = drawn.lines.filter { $0.block == codeBlock }
+        let code = drawn.texts[codeBlock] as NSString
+        let lineStartX = try #require(codeLines.first?.origin.x)
+        let continues = codeLines.map { $0.range.location > 0 && code.character(at: $0.range.location - 1) != 0x0A }
+        for (line, isContinuation) in zip(codeLines, continues) {
+            #expect(line.origin.x == lineStartX + (isContinuation ? scale.codeHangingIndent : 0))
+        }
+        if rowWidth == 640 { #expect(continues.contains(true)) }
+
+        let host = NSHostingView(rootView: ACPTranscriptColumnLayout(readingMax: scale.readingColumnMax, role: .breakout) {
+            ACPMarkdownText(raw: source, typography: typography)
+                .environment(\.acpMarkdownProseMaxWidth, scale.readingColumnMax)
+        }
+        .environment(\.theme, theme).environment(\.designScale, scale).frame(width: rowWidth))
+        host.frame.size = host.fittingSize
+        host.layoutSubtreeIfNeeded() // the SwiftUI table reads its viewport width on the next pass
+        #expect(abs(measured - host.fittingSize.height) <= 1, "native \(measured), SwiftUI \(host.fittingSize.height)")
+    }
+
+    @Test(arguments: [
+        // A pane that fits everything centers the reading column.
+        (CGFloat(1_600), CGFloat(560), CGFloat(520), CGFloat(560), CGFloat(960)),
+        // A pane too tight for that moves it left so the breakout width still fits.
+        (880, 560, 100, 560, 720),
+        // A narrow pane has one column.
+        (480, 560, 60, 360, 360),
+        // A reading column as wide as the breakout gives one right edge.
+        (880, 720, 80, 720, 720),
+    ])
+    func transcriptColumnsKeepTheBreakoutWidth(
+        rowWidth: CGFloat, readingMax: CGFloat, minX: CGFloat, reading: CGFloat, breakout: CGFloat
+    ) {
+        #expect(ACPChatLayout.transcriptColumns(rowWidth: rowWidth, readingMax: readingMax)
+            == .init(minX: minX, readingWidth: reading, breakoutWidth: breakout))
+    }
+
+    private func column(_ minWidth: CGFloat, _ idealWidth: CGFloat, numeric: Bool = false) -> ACPTranscriptMarkdownLayout.TableColumn {
+        .init(minWidth: minWidth, idealWidth: idealWidth, isNumeric: numeric)
+    }
+
+    @Test func spareTableWidthGoesToProseColumns() {
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(
+            [column(40, 60, numeric: true), column(50, 100)], available: 300.5
+        )
+        #expect(widths == [60, 240])
+    }
+
+    @Test func tightTableShareBeyondLongestWordFollowsWhatColumnsWant() {
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths(
+            [column(50, 50, numeric: true), column(60, 460)], available: 310.5
+        )
+        #expect(widths == [50, 260])
+    }
+
+    @Test func tableThatCannotFitShrinksToTheWidth() {
+        let widths = ACPTranscriptMarkdownLayout.tableColumnWidths([column(100, 200), column(200, 400)], available: 150.5)
+        #expect(widths == [50, 100])
+    }
+
+    @Test(arguments: [
+        (["1,240", "96", "14"], true),
+        (["2.1 s", "0.4 s"], true),
+        (["31 ms", "", "—"], true),
+        (["$12", "+5%", "−3", "`42`"], true),
+        (["14", "Rebuild the cache"], false),
+        (["2026-11-07"], false),
+        (["", "-"], false),
+    ])
+    func numericColumns(cells: [String], expected: Bool) {
+        #expect(ACPTranscriptMarkdownLayout.isNumericColumn(cells) == expected)
+    }
+
+    @Test func numericColumnsAlignRightAndProseGetsTheWidth() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| Step | Rows | What it changes |\n|---|---|---|\n| Verify | 1,240 | Checks each invoice total against the source ledger |",
+            width: 720, theme: theme, typography: .default
+        ))
+        let xs = try #require(layout.tables.first?.columnXs)
+        #expect(xs.count == 2)
+        #expect(xs[1] - xs[0] < 720 - xs[1])
+        let number = try #require(layout.lines.first { $0.block.map { layout.texts[$0] } == "1,240" })
+        let numberWidth = CGFloat(CTLineGetTypographicBounds(number.line, nil, nil, nil))
+        #expect(abs(number.origin.x + numberWidth + ACPTranscriptMarkdownLayout.tableCellHorizontalPadding - xs[1]) <= 1)
     }
 
     @Test func raggedRowsKeepTheirColumns() throws {

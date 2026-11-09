@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LocalTextModelSettings: View {
+    @Environment(\.designScale) private var scale
     let state: AppState
     @Environment(\.theme) private var theme
     @State private var showingDownloadConsent = false
@@ -16,46 +17,46 @@ struct LocalTextModelSettings: View {
                 HStack(alignment: .top, spacing: 12) {
                     Icon(name: "cpu", size: 20, color: theme.color("fg-muted"))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Qwen3").font(.system(size: 12.5, weight: .semibold))
+                        Text("Qwen3").font(scale.titleFont)
                         Text("4B parameters · 4-bit · \(Self.downloadSize)")
-                            .font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                            .font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-dim"))
                     }
                     Spacer()
-                    Text(modelStatus).font(.system(size: 10.5, weight: .medium))
+                    Text(modelStatus).font(scale.captionFont)
                         .foregroundStyle(theme.color(state.localTextModelAvailable ? "add" : "fg-dim"))
                 }
-                Text("Optional download").font(.system(size: 10.5, weight: .medium))
+                Text("Optional download").font(scale.captionFont)
                     .foregroundStyle(theme.color("fg-dim"))
                 Text("Required for session summaries and next-prompt suggestions, and provides fallback for the other built-in helpers when applicable. Feature preferences remain separate.")
-                    .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                    .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
                 modelActions
                 if !state.localTextSupported {
                     Text("Local inference requires Apple silicon with a supported Metal GPU. You can still remove existing model files.")
-                        .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                        .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                 }
                 if let error = state.localTextModelSettingsError {
-                    Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    Text(error).font(scale.metaFont).foregroundStyle(theme.color("warn"))
                     if state.localTextModelDisableSavePending {
                         AlasButton(title: "Retry Save") { Task { await state.retryLocalTextModelSettings() } }
                             .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
                     }
                 }
                 if let failure = state.localTextRemovalFailure {
-                    Text(failure.settingsMessage).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    Text(failure.settingsMessage).font(scale.metaFont).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Removal") { Task { await state.removeLocalTextModel() } }
                         .disabled(!state.canRemoveLocalTextModel)
                 }
             }
-            .padding(14)
-            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .padding(scale.space[4])
+            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
             Text("Local inference can use several GB of memory. Some process memory may remain allocated after the model unloads.")
-                .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 8)
+                .padding(.top, scale.space[2])
         }
-        .padding(.bottom, 20)
+        .padding(.bottom, scale.space[5])
         .task { await state.inspectLocalTextModelOnSettingsAppearance() }
         .alert("Download the local model?", isPresented: $showingDownloadConsent) {
             Button("Download and Allow") { Task { await state.downloadLocalTextModel() } }
@@ -89,19 +90,19 @@ struct LocalTextModelSettings: View {
         switch state.localTextModelState {
         case .unavailable:
             Text("The bundled model manifest is unavailable. Reinstall Alas to restore it.")
-                .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                .font(scale.metaFont).foregroundStyle(theme.color("warn"))
         case .notInstalled:
             AlasButton(title: "Download…") { showingDownloadConsent = true }
                 .disabled(downloadDisabled)
         case .downloading(let received, let expected):
             Text("Available Apple Intelligence helpers keep working while the model downloads.")
-                .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
             ProgressView(value: Double(received), total: Double(max(expected, 1)))
                 .accessibilityLabel("Model download")
                 .accessibilityValue("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
             HStack {
                 Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
-                    .font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                    .font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-dim"))
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle) { Task { await state.cancelLocalTextDownload() } }
                     .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
@@ -109,7 +110,7 @@ struct LocalTextModelSettings: View {
         case .verifying:
             HStack {
                 ProgressView().controlSize(.small).accessibilityLabel("Verifying model files")
-                Text("Verifying model files…").font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                Text("Verifying model files…").font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle) { Task { await state.cancelLocalTextDownload() } }
                     .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
@@ -117,9 +118,9 @@ struct LocalTextModelSettings: View {
         case .ready:
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Use local model").font(.system(size: 12.5, weight: .medium))
+                    Text("Use local model").font(scale.emphasisFont)
                     Text("Allow these helpers to use the installed model.")
-                        .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                        .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                 }
                 Spacer()
                 AlasToggle(on: Binding(
@@ -133,7 +134,7 @@ struct LocalTextModelSettings: View {
             AlasButton(title: "Remove…", style: .subtle) { showingRemovalConfirmation = true }
                 .disabled(!state.canRemoveLocalTextModel)
         case .failed(let failure):
-            Text(failure.settingsMessage).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+            Text(failure.settingsMessage).font(scale.metaFont).foregroundStyle(theme.color("warn"))
             HStack {
                 AlasButton(title: "Retry Download…") { showingDownloadConsent = true }
                     .disabled(downloadDisabled)

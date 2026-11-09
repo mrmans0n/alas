@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ShortcutsPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @State private var searchText = ""
@@ -20,11 +21,11 @@ struct ShortcutsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Shortcuts").font(.system(size: 18, weight: .semibold))
+                Text("Shortcuts").font(SettingsPaneStyle.titleFont)
                 Text("Customize keyboard shortcuts. Click a chip and press a new combo.")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .padding(.bottom, scale.space[3])
 
                 searchField
 
@@ -45,9 +46,9 @@ struct ShortcutsPane: View {
                         .buttonStyle(.borderless)
                         .foregroundColor(theme.color("fg-muted"))
                 }
-                .padding(.top, 16)
+                .padding(.top, scale.space[4])
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .onDisappear { stopRecorder() }
         .confirmationDialog(
@@ -63,16 +64,16 @@ struct ShortcutsPane: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
             TextField("Search…", text: $searchText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(scale.metaFont)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(.bottom, 12)
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .padding(.bottom, scale.space[3])
     }
 
     @ViewBuilder
@@ -114,12 +115,12 @@ struct ShortcutsPane: View {
             Button("Cancel") { pendingConflict = nil }
                 .buttonStyle(.borderless)
         }
-        .font(.system(size: 11.5))
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .font(scale.metaFont)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         // "danger-soft" is not a theme token; use del at low opacity (same
         // pattern as InlineErrorStrip).
         .background(theme.color("del").opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     // MARK: - Filtering

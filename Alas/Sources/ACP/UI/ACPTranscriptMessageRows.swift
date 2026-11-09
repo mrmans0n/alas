@@ -100,19 +100,20 @@ struct ACPReportedChangesButton: View {
     let presentation: ACPReportedChangesPresentation
     let actions: ACPReportedChangesActions
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var isPresented = false
 
     var body: some View {
         Button { isPresented.toggle() } label: {
             Text(verbatim: presentation.title)
-                .font(.system(size: ACPTranscriptCoreTextRowView.reportedChangesFontSize))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
                 .lineLimit(1)
-                .padding(.horizontal, ACPTranscriptCoreTextRowView.toolTargetHorizontalPadding)
+                .padding(.horizontal, scale.space[1])
                 .padding(.vertical, ACPTranscriptCoreTextRowView.toolTargetVerticalPadding)
                 .background(
                     theme.color("bg-2"),
-                    in: RoundedRectangle(cornerRadius: ACPTranscriptCoreTextRowView.toolTargetCornerRadius)
+                    in: RoundedRectangle(cornerRadius: scale.radius.small)
                 )
         }
         .buttonStyle(.plain)
@@ -127,6 +128,7 @@ struct ACPReportedChangesPopover: View {
     let presentation: ACPReportedChangesPresentation
     let actions: ACPReportedChangesActions
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var rows: [ACPReportedPathRow] = []
 
     private var stateText: String? {
@@ -140,11 +142,11 @@ struct ACPReportedChangesPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Reported changes")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundStyle(theme.color("fg"))
             ForEach([presentation.caveat, presentation.truncationNotice, stateText].compactMap { $0 }, id: \.self) { text in
                 Text(verbatim: text)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -159,7 +161,7 @@ struct ACPReportedChangesPopover: View {
                 .frame(maxHeight: 280)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(width: 420, alignment: .leading)
         // By identity, so a report landing while the popover is open shows its paths.
         .task(id: presentation) {
@@ -181,7 +183,7 @@ struct ACPReportedChangesPopover: View {
                 if let openDiff = actions.openDiff {
                     Button("Open Git diff") { openDiff(relativePath) }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                         .fixedSize()
                         .help("Opens the file's current Git state, not this turn's change.")
@@ -194,7 +196,7 @@ struct ACPReportedChangesPopover: View {
                         .foregroundStyle(theme.color("fg-dim"))
                         .textSelection(.enabled)
                     Text("Outside this worktree")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 Spacer(minLength: 0)
@@ -214,7 +216,7 @@ struct ACPReportedChangesPopover: View {
 
     private func pathText(_ text: String) -> some View {
         Text(verbatim: text)
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .lineLimit(1)
             .truncationMode(.middle)
     }
@@ -248,6 +250,7 @@ private struct ACPUserReferenceSummaryItem: View {
     @State private var showsCard = false
     @Environment(\.openURL) private var openURL
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let model = ACPUpstreamReferenceCardModel.make(
@@ -260,7 +263,7 @@ private struct ACPUserReferenceSummaryItem: View {
                 Image(systemName: model.kind == .issue ? "smallcircle.filled.circle" : "arrow.triangle.pull")
                     .foregroundStyle(Color(nsColor: ACPUpstreamReferenceChipStyle.tint(for: model.kind)))
                 Text(reference.spelling)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 if let title = model.title {
                     Text(title)
                         .lineLimit(1)
@@ -271,11 +274,11 @@ private struct ACPUserReferenceSummaryItem: View {
                         .foregroundStyle(Color(nsColor: badge.color))
                 }
             }
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(theme.color("bg-2").opacity(0.8), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
+            .background(theme.color("bg-2").opacity(0.8), in: RoundedRectangle(cornerRadius: scale.radius.medium))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -304,17 +307,21 @@ private struct ACPUserReferenceSummaryItem: View {
 /// peer transcript so a forwarded prompt reads exactly like a local one.
 struct ACPUserBubbleChrome: ViewModifier {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+            cornerRadii: .init(
+                topLeading: scale.radius.medium, bottomLeading: scale.radius.medium,
+                bottomTrailing: scale.radius.small, topTrailing: scale.radius.medium
+            )
         )
     }
 
     func body(content: Content) -> some View {
         content
-            .padding(.vertical, 9)
-            .padding(.horizontal, 13)
+            .padding(.vertical, scale.space[2])
+            .padding(.horizontal, scale.space[3])
             .background(
                 LinearGradient(
                     colors: [
@@ -325,7 +332,6 @@ struct ACPUserBubbleChrome: ViewModifier {
                 )
             )
             .clipShape(shape)
-            .overlay(shape.strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
     }
 }
@@ -352,6 +358,7 @@ struct DelegatedPromptRow: View {
     /// Local like `ACPThoughtView.expanded`: a rebuilt row folds again.
     @State private var isExpanded = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     nonisolated static let foldLineThreshold = 12
     nonisolated static let foldCharacterThreshold = 900
@@ -374,12 +381,12 @@ struct DelegatedPromptRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Image(systemName: isFromChild ? "arrow.turn.down.left" : "arrow.turn.down.right")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                     Text(label)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                 }
                 .foregroundStyle(theme.color("fg-faint"))
-                .padding(.leading, 4)
+                .padding(.leading, scale.space[1])
                 VStack(alignment: .leading, spacing: 6) {
                     ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
                         .frame(maxHeight: isFolded ? foldedHeight : nil, alignment: .top)
@@ -397,8 +404,8 @@ struct DelegatedPromptRow: View {
                         foldToggle(lineCount: foldedLineCount)
                     }
                 }
-                .padding(.vertical, 9)
-                .padding(.horizontal, 13)
+                .padding(.vertical, scale.space[2])
+                .padding(.horizontal, scale.space[3])
                 .background(
                     LinearGradient(
                         colors: [theme.color("bg-3"), theme.color("bg-2")],
@@ -406,7 +413,6 @@ struct DelegatedPromptRow: View {
                     )
                 )
                 .clipShape(bubbleShape)
-                .overlay(bubbleShape.strokeBorder(theme.color("bg-5"), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             }
             .frame(maxWidth: contentMaxWidth * 0.84, alignment: .leading)
@@ -418,13 +424,19 @@ struct DelegatedPromptRow: View {
     /// The user bubble's shape mirrored: the tail corner is bottom-leading.
     private var bubbleShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            cornerRadii: .init(topLeading: 12, bottomLeading: 4, bottomTrailing: 12, topTrailing: 12)
+            cornerRadii: .init(
+                topLeading: scale.radius.medium, bottomLeading: scale.radius.small,
+                bottomTrailing: scale.radius.medium, topTrailing: scale.radius.medium
+            )
         )
     }
 
     private var foldedHeight: CGFloat {
+        // Each line is followed by the transcript's line spacing, so the fold
+        // ends between two lines instead of through one.
         let font = typography.appKitFont(size: typography.paragraphSize)
-        return ceil((font.ascender - font.descender + font.leading) * Self.foldedVisibleLines)
+        let lineHeight = font.ascender - font.descender + font.leading
+        return ceil((lineHeight + scale.transcriptLineSpacing) * Self.foldedVisibleLines)
     }
 
     /// Fades the last lines of a folded prompt; fully opaque otherwise.
@@ -442,10 +454,10 @@ struct DelegatedPromptRow: View {
         Button { isExpanded.toggle() } label: {
             HStack(spacing: 5) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                 Text(isExpanded ? "Collapse" : "Show full prompt · \(lineCount) line\(lineCount == 1 ? "" : "s")")
             }
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-dim"))
             .contentShape(Rectangle())
         }
@@ -487,6 +499,7 @@ struct ACPCommentaryRow: View {
     /// `ACPThoughtView.isLive`.
     var isLive: Bool = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -494,15 +507,15 @@ struct ACPCommentaryRow: View {
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
                 .acpNarrationShimmer(isActive: isLive, axis: .vertical)
-                .padding(.vertical, 2)
+                .padding(.vertical, scale.space[0])
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 7) {
                     Image(systemName: "hammer")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                     Text("Working…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("fg-faint"))
+                        .font(scale.metaFont)
+                        .foregroundStyle(theme.color("fg-dim"))
                 }
                 .acpNarrationShimmer(isActive: isLive)
                 AgentMessageRow(
@@ -511,6 +524,7 @@ struct ACPCommentaryRow: View {
                     buffer: buffer,
                     typography: typography
                 )
+                .acpInsetsProse(by: ACPTranscriptCoreTextRowView.laneBarWidth + ACPTranscriptCoreTextRowView.laneSpacing)
             }
         }
     }

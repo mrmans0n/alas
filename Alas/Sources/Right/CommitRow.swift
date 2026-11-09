@@ -43,6 +43,8 @@ struct CommitRow: View {
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+
+    @Environment(\.designScale) private var scale
     @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var shaHovering = false
     @State private var pendingRevert = false
@@ -54,11 +56,11 @@ struct CommitRow: View {
                     subjectLine
                     metaLine
                 }
-                .padding(.bottom, isLast ? 6 : 8)
+                .padding(.bottom, isLast ? scale.space[1] : scale.space[2])
             }
-            .padding(.leading, 18)
-            .padding(.trailing, 12)
-            .padding(.top, 4)
+            .padding(.leading, scale.space[4])
+            .padding(.trailing, scale.space[3])
+            .padding(.top, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -229,14 +231,14 @@ struct CommitRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let tag = commit.conventionalTag {
                 Text(tag)
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .font(scale.caption.font(weight: .bold, design: .monospaced))
                     .foregroundColor(tagLabelColor(tag))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(tagColor(tag).opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             Text(commit.subject)
-                .font(.system(size: 12))
+                .font(scale.body.font)
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
             if let stackEntry {
@@ -255,7 +257,7 @@ struct CommitRow: View {
     private var metaLine: some View {
         HStack(spacing: 6) {
             Text(commit.shortSha)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(shaHovering ? theme.color("accent") : theme.color("fg-faint"))
                 .onTapGesture { copySHA() }
                 .onHover { hovering in
@@ -266,10 +268,10 @@ struct CommitRow: View {
                 .dragOut { .commitSHA(commit.sha) }
             avatar
             Text(relativeTime(commit.date))
-                .font(.system(size: 10.5))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-faint"))
             Text("· \(commit.filesChanged) file\(commit.filesChanged == 1 ? "" : "s")")
-                .font(.system(size: 10.5))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-faint"))
             if shouldShowChangeSummary(additions: commit.insertions, deletions: commit.deletions) {
                 Text("+\(commit.insertions)").foregroundColor(theme.color("add"))
@@ -278,25 +280,25 @@ struct CommitRow: View {
             Spacer(minLength: 0)
             if let indicator = currentPositionIndicator {
                 Text(indicator.text)
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("accent"))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[0])
                     .background(theme.color("accent").opacity(0.12))
                     .clipShape(Capsule())
                     .accessibilityLabel(indicator.accessibilityLabel)
             }
         }
-        .font(.system(size: 10.5, design: .monospaced))
+        .font(scale.meta.font(design: .monospaced))
     }
 
     private var avatar: some View {
         Text(commit.authorInitials)
-            .font(.system(size: 8, weight: .bold))
+            .font(scale.caption.font(weight: .bold))
             .foregroundColor(.white)
-            .frame(width: 14, height: 14)
+            .frame(width: 16, height: 16)
             .background(authorColor(commit.author))
             .clipShape(Circle())
     }

@@ -128,6 +128,49 @@ struct ACPConfigOptionTests {
         #expect(json["value"] as? Bool == false)
     }
 
+    @Test("reads the recommendation only from a version 1 record", arguments: [
+        (#"{"recommendedConfigValue":{"version":1,"value":"high"}}"#, "high"),
+        (#"{"recommendedConfigValue":{"version":2,"value":"high"}}"#, nil),
+        (#"{"recommendedConfigValue":{"version":1,"value":3}}"#, nil),
+        (#"{"recommendedConfigValue":{"value":"high"}}"#, nil),
+        (#"{"recommendedConfigValue":true}"#, nil),
+        (#"{"jetbrains":{"air":{"version":1,"recommendedValue":"high"}}}"#, nil),
+        ("null", nil),
+    ] as [(String, String?)])
+    func decodesRecommendation(meta: String, expected: String?) throws {
+        let json = #"{"id":"effort","name":"Effort","type":"select","currentValue":"low","options":[],"_meta":\#(meta)}"#
+        let option = try JSONDecoder().decode(ACPConfigOption.self, from: Data(json.utf8))
+        #expect(option.recommendedValue == expected)
+        #expect(option.currentStringValue == "low")
+    }
+
+    @Test("a stored copy of an option carries no recommendation")
+    func encodingDropsRecommendation() throws {
+        let option = ACPConfigOption(
+            id: "effort", name: "Effort", currentValue: .string("low"),
+            options: [ACPConfigOptionItem(id: "low", name: "Low")], recommendedValue: "low")
+        let stored = try JSONDecoder().decode(ACPConfigOption.self, from: JSONEncoder().encode(option))
+        #expect(stored.recommendedValue == nil)
+        #expect(stored.currentStringValue == "low")
+    }
+
+    @Test("a set response replaces the recommendation and keeps the choice", arguments: [
+        "high" as String?, nil,
+    ])
+    func setResponseRefreshesRecommendation(refreshed: String?) throws {
+        let items = [ACPConfigOptionItem(id: "low", name: "Low"), ACPConfigOptionItem(id: "high", name: "High")]
+        let current = ACPConfigOption(
+            id: "effort", name: "Effort", currentValue: .string("low"), options: items, recommendedValue: "low")
+        let response = ACPConfigOption(
+            id: "effort", name: "Effort", currentValue: .string("high"), options: items, recommendedValue: refreshed)
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [response], configId: "effort", selectedValue: .string("low"), currentConfigOptions: [current]))
+
+        #expect(merged.first?.recommendedValue == refreshed)
+        #expect(merged.first?.currentStringValue == "low")
+    }
+
     @Test("successful set response preserves the selected config value")
     func mergeSuccessfulSetResponsePreservesSelectedValue() throws {
         let staleFast = ACPConfigOption(

@@ -280,8 +280,6 @@ struct RightPaneView: View {
             tab: rps.activeTab,
             panelTitle: panelTitle,
             branch: rps.currentBranch,
-            totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
-            totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
             activeAgentCount: agentRollup.active.count,
             waitingAgentCount: waitingAgentCount,
             runningScriptNames: runningScriptNames,

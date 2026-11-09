@@ -6,6 +6,7 @@ import SwiftUI
 /// structure so each prompt type only has to declare its title,
 /// description, draft binding, and the actions.
 struct PromptEditorBody: View {
+    @Environment(\.designScale) private var scale
     let windowTitle: String
     let title: String
     let description: String
@@ -21,29 +22,29 @@ struct PromptEditorBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(SettingsPaneStyle.titleFont)
                     Text(description)
-                        .font(.system(size: 12.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 PairedTextEditor(
                     text: $draftPrompt,
-                    font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                    font: scale.meta.monospacedNSFont(),
                     codeBlockStyle: .standard(
                         theme: theme,
-                        baseFont: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                        baseFont: scale.meta.monospacedNSFont(),
                         baseColor: .labelColor,
-                        monoSize: 12
+                        monoSize: scale.meta.size
                     )
                 )
                     .background(theme.color("bg-2"))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .stroke(theme.color("line-soft"), lineWidth: 0.5)
                     )
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5])
+            .padding(.vertical, scale.space[5])
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(theme.color("bg-1"))
             footer
@@ -66,9 +67,9 @@ struct PromptEditorBody: View {
                 TrafficLights()
                 Spacer()
             }
-            .padding(.leading, 16)
+            .padding(.leading, scale.space[4])
             Text(windowTitle)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
         }
         .frame(height: 44)
@@ -85,8 +86,8 @@ struct PromptEditorBody: View {
             AlasButton(title: "Cancel", style: .subtle, action: onCancel)
             AlasButton(title: "Save", style: .primary, action: onSave)
         }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 12)
+        .padding(.horizontal, scale.space[5])
+        .padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .top)
     }

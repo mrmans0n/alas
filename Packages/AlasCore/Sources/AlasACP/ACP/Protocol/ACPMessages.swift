@@ -296,6 +296,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let permissionPresentation: ACPPresentationContractDeclaration
     /// Asks our Claude and Codex adapter forks to link a free-text field to its question.
     public let questionCustomAnswer: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks to name the recommended model and effort.
+    public let recommendedConfigValue: ACPPresentationContractDeclaration
+    /// Asks our Claude and Codex adapter forks to mark skill commands with their
+    /// `SKILL.md` path and to name the command actions Alas can run.
+    public let commandPresentation: ACPPresentationContractDeclaration
+    /// Asks our Claude adapter fork to say when a `session/load` replay is whole.
+    public let loadReplayEnd: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -313,7 +320,10 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         sessionFailure: ACPSessionFailureDeclaration = .init(),
         agentFileChangeReport: ACPAgentFileChangeReportDeclaration = .init(),
         permissionPresentation: ACPPresentationContractDeclaration = .init(),
-        questionCustomAnswer: ACPPresentationContractDeclaration = .init()
+        questionCustomAnswer: ACPPresentationContractDeclaration = .init(),
+        recommendedConfigValue: ACPPresentationContractDeclaration = .init(),
+        commandPresentation: ACPPresentationContractDeclaration = .init(),
+        loadReplayEnd: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -331,11 +341,15 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.agentFileChangeReport = agentFileChangeReport
         self.permissionPresentation = permissionPresentation
         self.questionCustomAnswer = questionCustomAnswer
+        self.recommendedConfigValue = recommendedConfigValue
+        self.commandPresentation = commandPresentation
+        self.loadReplayEnd = loadReplayEnd
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
-        case agentFileChangeReport, permissionPresentation, questionCustomAnswer
+        case agentFileChangeReport, permissionPresentation, questionCustomAnswer, recommendedConfigValue
+        case commandPresentation, loadReplayEnd
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -364,6 +378,12 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
             ACPPresentationContractDeclaration.self, forKey: .permissionPresentation)) ?? .init()
         questionCustomAnswer = (try? c.decodeIfPresent(
             ACPPresentationContractDeclaration.self, forKey: .questionCustomAnswer)) ?? .init()
+        recommendedConfigValue = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .recommendedConfigValue)) ?? .init()
+        commandPresentation = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .commandPresentation)) ?? .init()
+        loadReplayEnd = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)) ?? .init()
     }
 }
 
@@ -461,9 +481,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let sessionFailure: ACPSessionFailureAdvertisement?
         /// Per-turn changed-file reports (our Claude and Codex adapter forks).
         public let agentFileChangeReport: ACPAgentFileChangeReportAdvertisement?
+        /// The end of a `session/load` replay (our Claude adapter fork).
+        public let loadReplayEnd: ACPPresentationContractDeclaration?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport, loadReplayEnd
             case asyncTasks = "async-tasks"
         }
 
@@ -482,6 +504,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             planFile = try? c.decodeIfPresent(ACPPlanFileAdvertisement.self, forKey: .planFile)
             sessionFailure = try? c.decodeIfPresent(ACPSessionFailureAdvertisement.self, forKey: .sessionFailure)
             agentFileChangeReport = try? c.decodeIfPresent(ACPAgentFileChangeReportAdvertisement.self, forKey: .agentFileChangeReport)
+            loadReplayEnd = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -862,6 +885,8 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     public var forkPoint: ACPForkPointTarget? = nil
     /// Read by our adapter forks on `session/prompt`; correlates the turn's file change report.
     public var agentFileChangeReportRequest: ACPAgentFileChangeReportRequest? = nil
+    /// Read by our Claude adapter fork on `session/load`; correlates the end of its replay.
+    public var loadReplayEnd: ACPLoadReplayEnd.Request? = nil
 
     public init(
         claudeCode: ClaudeCode? = nil,
@@ -961,11 +986,21 @@ public struct ACPPromptSuggestion: Codable, Equatable, Hashable, Sendable {
     public let command: String
     public let description: String?
     public let hint: String?
+    /// The adapter's `_meta.commandPresentation` record. Optional, so command
+    /// lists stored before it existed still decode; the next
+    /// `available_commands_update` replaces it.
+    public let presentation: ACPCommandPresentation?
 
-    public init(command: String, description: String?, hint: String? = nil) {
+    public init(
+        command: String,
+        description: String?,
+        hint: String? = nil,
+        presentation: ACPCommandPresentation? = nil
+    ) {
         self.command = command
         self.description = description
         self.hint = hint
+        self.presentation = presentation
     }
 }
 

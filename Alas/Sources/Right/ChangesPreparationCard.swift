@@ -18,10 +18,10 @@ enum ChangesPreparationCardText {
         return review + landing.detail
     }
 
-    static func reviewStats(fileCount: Int, additions: Int?, deletions: Int?) -> String {
-        let files = fileCount == 1 ? "1 file" : "\(fileCount) files"
-        guard let additions, let deletions else { return files }
-        return "\(files) · +\(additions) −\(deletions)"
+    /// The line totals sit on the Working Tree header just below, so the card
+    /// counts files only.
+    static func reviewStats(fileCount: Int) -> String {
+        fileCount == 1 ? "1 file" : "\(fileCount) files"
     }
 
     static func draftStats(stagedCount: Int, additions: Int, deletions: Int) -> String {
@@ -90,8 +90,12 @@ struct ChangesPreparationCard: View {
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
     let onDismissSyncFailure: () -> Void
     let onOpenGGLanding: () -> Void
+    /// Draws Review in the secondary style, so a question waiting in the chat
+    /// leads instead.
+    var quietsReview = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -106,24 +110,22 @@ struct ChangesPreparationCard: View {
             }
             if let error = model.mutationError {
                 Text(error)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("warn"))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("changes-preparation-gg-error")
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-1"))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
-        )
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        // Fill only: the buttons inside already carry their own edges, so an
+        // outline here would nest a third border.
+        .padding(.horizontal, scale.space[3])
+        .padding(.top, scale.space[2])
+        .padding(.bottom, scale.space[1])
         .accessibilityIdentifier("changes-preparation-card")
     }
 
@@ -147,7 +149,7 @@ struct ChangesPreparationCard: View {
                 }
             } else {
                 Text(model.ggStackStatus.map { "No local changes · \($0.text)" } ?? "No local changes")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
@@ -180,10 +182,10 @@ struct ChangesPreparationCard: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ChangesPreparationCardText.landingTitle(landing))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.emphasis.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
                     Text(ChangesPreparationCardText.landingDetail(landing))
-                        .font(.system(size: 10.5))
+                        .font(scale.captionFont.weight(.regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
@@ -191,17 +193,17 @@ struct ChangesPreparationCard: View {
             }
             Button(action: onOpenGGLanding) {
                 Text(ChangesPreparationCardText.openLandingTitle)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .frame(maxWidth: .infinity, minHeight: 30)
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
+                    .contentShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             .buttonStyle(.plain)
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(theme.color("bg-2").opacity(0.72))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
             )
             .changesPreparationAccessibilityIdentifier("changes-preparation-open-gg-landing")
@@ -218,11 +220,11 @@ struct ChangesPreparationCard: View {
                         .frame(width: 12, height: 12)
                         .accessibilityHidden(true)
                     Text(step.title)
-                        .font(.system(size: 11, weight: step.state == .current ? .semibold : .regular))
+                        .font(scale.meta.font(weight: step.state == .current ? .semibold : .regular))
                         .foregroundStyle(theme.color(step.state == .pending ? "fg-faint" : "fg"))
                     Spacer(minLength: 6)
                     Text(step.detail)
-                        .font(.system(size: 9.5))
+                        .font(scale.captionFont.weight(.regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
@@ -243,11 +245,11 @@ struct ChangesPreparationCard: View {
             Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 10, height: 10)
         case .complete:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 10))
+                .font(scale.captionFont)
                 .foregroundStyle(theme.color("add"))
         case .failed:
             Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 10))
+                .font(scale.captionFont)
                 .foregroundStyle(theme.color("warn"))
         }
     }
@@ -256,7 +258,7 @@ struct ChangesPreparationCard: View {
         HStack(spacing: 6) {
             Icon(name: "diff", size: 11, color: theme.color("fg-faint"))
             Text("Prepare")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
                 .textCase(.uppercase)
@@ -264,7 +266,7 @@ struct ChangesPreparationCard: View {
             if model.canDismissSyncFailure {
                 Button(action: onDismissSyncFailure) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.captionFont.weight(.semibold))
                         .foregroundStyle(theme.color("fg-faint"))
                         .frame(width: 16, height: 16)
                 }
@@ -275,33 +277,31 @@ struct ChangesPreparationCard: View {
     }
 
     private func primaryReviewButton(_ action: ChangesPreparationModel.ReviewAction) -> some View {
-        HStack(spacing: 1) {
+        let fill = quietsReview ? theme.color("bg-2").opacity(0.72) : theme.color("accent")
+        let ink = quietsReview ? theme.color("fg") : theme.color("bg-0")
+        return HStack(spacing: 1) {
             Button(action: onReviewChanges) {
                 HStack(spacing: 9) {
-                    Icon(name: "diff", size: 13, color: theme.color("bg-0"))
+                    Icon(name: "diff", size: 13, color: ink)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(action.title)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundColor(theme.color("bg-0"))
+                            .font(scale.emphasis.font(weight: .semibold))
+                            .foregroundColor(ink)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(ChangesPreparationCardText.reviewStats(
-                            fileCount: action.fileCount,
-                            additions: action.additions,
-                            deletions: action.deletions
-                        ))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("bg-0").opacity(0.72))
+                        Text(ChangesPreparationCardText.reviewStats(fileCount: action.fileCount))
+                        .font(scale.metaFont.monospacedDigit())
+                        .foregroundColor(ink.opacity(0.72))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 8)
-                    Icon(name: "chev-right", size: 11, color: theme.color("bg-0").opacity(0.72))
+                    Icon(name: "chev-right", size: 11, color: ink.opacity(0.72))
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, scale.space[3])
                 .frame(height: 44)
-                .background(theme.color("accent"))
+                .background(fill)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -311,9 +311,9 @@ struct ChangesPreparationCard: View {
             Menu {
                 reviewScopeMenuContent
             } label: {
-                Icon(name: "chev-down", size: 10, color: theme.color("bg-0").opacity(0.72))
+                Icon(name: "chev-down", size: 10, color: ink.opacity(0.72))
                     .frame(width: 26, height: 44)
-                    .background(theme.color("accent"))
+                    .background(fill)
                     .contentShape(Rectangle())
             }
             .menuStyle(.button)
@@ -324,7 +324,12 @@ struct ChangesPreparationCard: View {
             .accessibilityLabel(ChangesPreparationCardText.reviewScopeMenuTitle)
             .accessibilityIdentifier("changes-preparation-review-scope-menu")
         }
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("line").opacity(quietsReview ? 0.65 : 0), lineWidth: 0.75)
+        )
+        .animation(.easeOut(duration: 0.2), value: quietsReview)
     }
 
     /// The scopes, grouped local first and hosted requests after, then the
@@ -497,17 +502,15 @@ struct ChangesPreparationCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
                         Text(action.title)
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("fg"))
                             .lineLimit(2)
-                            .minimumScaleFactor(0.85)
                         Spacer(minLength: 0)
                     }
                     Text(ggSubtitle(for: action))
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
                 }
                 if action.isInFlight {
                     Spinner(lineWidth: 1.5, duration: 0.7)
@@ -515,9 +518,9 @@ struct ChangesPreparationCard: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, 7)
+            .padding(.horizontal, scale.space[2])
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
@@ -525,11 +528,11 @@ struct ChangesPreparationCard: View {
             $0.opacity(action.isEnabled || action.isInFlight ? 1 : 0.65)
         }
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .fill(theme.color("bg-2").opacity(0.72))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(action.disabledReason ?? action.title)
@@ -562,7 +565,7 @@ struct ChangesPreparationCard: View {
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(action.title)
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(
                             action.emphasis == .primary
                                 ? theme.color("bg-0")
@@ -571,7 +574,7 @@ struct ChangesPreparationCard: View {
                         .lineLimit(1)
                     if let detail = action.detail {
                         Text(detail)
-                            .font(.system(size: 10.5))
+                            .font(scale.captionFont.weight(.regular))
                             .foregroundColor(
                                 action.emphasis == .primary
                                     ? theme.color("bg-0").opacity(0.78)
@@ -582,9 +585,9 @@ struct ChangesPreparationCard: View {
                 }
                 Spacer(minLength: 4)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
@@ -592,7 +595,7 @@ struct ChangesPreparationCard: View {
             $0.opacity(action.isEnabled || action.isInFlight ? 1 : 0.65)
         }
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .fill(
                     action.emphasis == .primary
                         ? theme.color("accent")
@@ -600,7 +603,7 @@ struct ChangesPreparationCard: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(action.detail ?? action.title)
@@ -679,7 +682,7 @@ struct ChangesPreparationCard: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         Text(title)
-                            .font(.system(size: 11.5, weight: .semibold))
+                            .font(scale.meta.font(weight: .semibold))
                             .foregroundColor(theme.color("fg"))
                             .lineLimit(1)
                         if showsDot {
@@ -690,26 +693,26 @@ struct ChangesPreparationCard: View {
                     }
                     if let subtitle {
                         Text(subtitle)
-                            .font(.system(size: 10.5))
+                            .font(scale.captionFont.weight(.regular))
                             .foregroundColor(theme.color("fg-faint"))
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4 + trailingAccessoryWidth)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 40)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled || isInFlight ? 1 : 0.5)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .fill(theme.color("bg-2").opacity(0.72))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(help ?? title)

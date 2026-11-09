@@ -1682,8 +1682,8 @@ struct ACPSessionManagerAttachRestoreTests {
         ).brokerOperationKey)
     }
 
-    @Test("new session attaches the current project MCP plan")
-    func newSessionAttachesCurrentProjectMCPPlan() async throws {
+    @Test("new session attaches the current project MCP plan", arguments: [false, true])
+    func newSessionAttachesCurrentProjectMCPPlan(previewEnabled: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         scriptInitialize(client)
@@ -1691,11 +1691,12 @@ struct ACPSessionManagerAttachRestoreTests {
         let configuredServers = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
         let manager = manager(store: store, client: client, mcpProjectContextProvider: {
             MCPProjectContext(projectDirectory: "/tmp/project", configuredServers: configuredServers)
-        })
+        }, previewEnabled: previewEnabled)
         let session = manager.createSession(agentId: "claude")
 
         await manager.attach(to: session.id, freshlyCreated: true)
 
+        #expect(session.runtimeKind == .v1)
         let params = try #require(client.sent.last?.params as? ACPSessionNewParams)
         #expect(params.mcpServers == [.stdio(name: "filesystem", command: "mcp-files", args: [], env: [])])
         let summary = try #require(session.mcpAttachmentSummary)
@@ -2560,8 +2561,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpExternalStatus?.canInstallAdapterLocally == false)
     }
 
-    @Test("Codex-style load response without session id restores normally")
-    func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
+    @Test("Codex-style load response without session id restores normally", arguments: [false, true])
+    func codexStyleLoadResponseWithoutSessionIdRestoresNormally(previewEnabled: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
         let client = ACPMockClient()
@@ -2585,12 +2586,13 @@ struct ACPSessionManagerAttachRestoreTests {
             Issue.record("session/new should not be called when session/load succeeds without a sessionId")
             return Data("{}".utf8)
         }
-        let manager = manager(store: store, client: client)
+        let manager = manager(store: store, client: client, previewEnabled: previewEnabled)
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
+        #expect(session.runtimeKind == .v1)
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.remoteSessionId == "remote-old")
         #expect(session.currentModel == "gpt-5")
@@ -3886,6 +3888,38 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.configOptionValues == [
             "autoApprove": .boolean(false),
         ])
+    }
+
+    @Test("a failed apply keeps the live recommendation, and only the choice is stored")
+    func failedApplyKeepsLiveRecommendation() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            Data(#"""
+            {"configOptions":[{"id":"model","name":"Model","type":"select","category":"model","currentValue":"a",
+            "options":[{"value":"a","name":"A"},{"value":"b","name":"B"}],
+            "_meta":{"recommendedConfigValue":{"version":1,"value":"b"}}}]}
+            """#.utf8)
+        }
+        client.script(method: "session/set_config_option") { _ in
+            throw ACPClientError.noScript(method: "session/set_config_option")
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        #expect(session.chipState.models?.recommendedId == "b")
+
+        let update = try #require(manager.setConfigOption(for: session.id, configId: "model", value: .string("b")))
+        #expect(session.chipState.models?.recommendedId == "b")
+        await update.value
+        await manager.flushAllPersistence()
+
+        #expect(session.chipState.models?.currentId == "a")
+        #expect(session.chipState.models?.recommendedId == "b")
+        #expect(try store.loadSession(id: "local")?.configOptionValues == ["model": .string("a")])
     }
 
     @Test("failed config-option restoration retains valid saved values")
@@ -6886,12 +6920,14 @@ struct ACPSessionManagerAttachRestoreTests {
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         delegatedReasoningRefreshTimeout: Duration = .seconds(5),
         continueInterruptedSessions: Bool = false,
-        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        previewEnabled: Bool = false
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            experimentalACP2Enabled: { previewEnabled },
             continueInterruptedSessions: { continueInterruptedSessions },
             onQueueChanged: onQueueChanged,
             onTurnUsage: onTurnUsage,

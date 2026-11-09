@@ -38,7 +38,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 18), .unsupportedAPI(18)),
+        (manifest(api: 19), .unsupportedAPI(19)),
         (manifest(api: 16, #","requires":{"codeHost":"github"}"#), .needsNewerAPI(#""requires""#, api: 17)),
         (manifest(api: 17, #","requires":{"codeHost":"bitbucket"}"#), .invalidRequires(#"unknown codeHost "bitbucket"; use "github" or "gitlab""#)),
         (manifest(api: 17, #","requires":{"codeHots":"github"}"#), .invalidRequires(#"unknown key "codeHots""#)),
@@ -271,8 +271,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 17"),
-        (18, "requires plugin API 18; this Alas supports up to 17"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 18"),
+        (19, "requires plugin API 19; this Alas supports up to 18"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

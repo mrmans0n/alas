@@ -22,7 +22,8 @@ public protocol ACPDelegationPeers: AnyObject {
     /// Whether the peer began cancelling the child's running turn.
     func interrupt(serverId: String, sessionID: String) async -> Result<Bool, ACPPeerError>
     /// Outcomes after `after`. Asking also acknowledges everything up to it.
-    func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError>
+    /// `store` is the peer store `after` counts in, if known.
+    func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError>
     /// Told that `serverId` has outcomes waiting in its outbox.
     var onOutboxChanged: (@MainActor (_ serverId: String) -> Void)? { get set }
     /// Told that whether `serverId` can be reached may have changed.
@@ -41,6 +42,9 @@ public enum ACPPeerError: Error, Equatable, Sendable {
     case outdated(peer: String)
     /// This Mac's pairing with the peer was revoked or forgotten.
     case revoked(peer: String)
+    /// The peer cannot tell this Mac's pairing proved its identity, so it
+    /// refuses every delegation request until the two pair again.
+    case unproven(peer: String)
 }
 
 public enum ACPDelegationPeerState: String, Equatable, Sendable {
@@ -172,9 +176,12 @@ public struct ACPPeerStartReply: Equatable, Sendable {
 public struct ACPPeerOutboxPage: Equatable, Sendable {
     public let entries: [ACPPeerOutboxEntry]
     public let hasMore: Bool
+    /// The peer's store the entries count in; nil from an older peer.
+    public let store: String?
 
-    public init(entries: [ACPPeerOutboxEntry], hasMore: Bool) {
+    public init(entries: [ACPPeerOutboxEntry], hasMore: Bool, store: String? = nil) {
         self.entries = entries
         self.hasMore = hasMore
+        self.store = store
     }
 }

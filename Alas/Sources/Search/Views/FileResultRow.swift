@@ -34,9 +34,10 @@ struct FileResultRow: View {
             Highlighted(
                 text: parts.name,
                 indices: indicesIn(range: parts.dirLength..<result.relativePath.count)
-                    .map { $0 - parts.dirLength }
+                    .map { $0 - parts.dirLength },
+                monospaced: false
             )
-            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+            .font(.system(size: 12.5, weight: .medium))
             .foregroundColor(theme.color("fg"))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -51,7 +52,7 @@ struct FileResultRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if showsRepoBadge, let repoName {
                 Text(repoName)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
                     .background(theme.color("bg-3"))

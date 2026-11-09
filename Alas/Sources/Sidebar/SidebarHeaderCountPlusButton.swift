@@ -8,12 +8,13 @@ struct SidebarHeaderCountPlusButton: View {
     let help: String
     let action: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var plusHovering = false
 
     var body: some View {
         ZStack {
             Text("\(count)")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .monospacedDigit()
                 .opacity(rowHovering ? 0 : 1)
@@ -23,7 +24,7 @@ struct SidebarHeaderCountPlusButton: View {
                      color: plusHovering ? theme.color("fg") : theme.color("fg-faint"))
                     .frame(width: 18, height: 18)
                     .background(plusHovering ? theme.color("bg-4") : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             .buttonStyle(.plain)
             .sidebarHover { plusHovering = $0 }

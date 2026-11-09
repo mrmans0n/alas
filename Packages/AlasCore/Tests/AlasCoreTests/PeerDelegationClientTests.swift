@@ -92,6 +92,7 @@ struct PeerDelegationClientTests {
         (.failure(error: .failed(message: "The reply is too large.")), .refused("The reply is too large.")),
         (.failure(error: .failed(message: PeerHostChannel.unansweredMessage)), .unreachable(peer: "Mini")),
         (.failure(error: .failed(message: FederatedSessionsProvider.peerUnavailableMessage)), .unreachable(peer: "Mini")),
+        (.failure(error: .peerIdentityUnproven), .unproven(peer: "Mini")),
     ])
     func mapsHostFailures(response: HostResponse, error: ACPPeerError) async {
         peer.reply = response
@@ -116,10 +117,10 @@ struct PeerDelegationClientTests {
 
     @Test func outboxPageCarriesEntriesAndMore() async {
         let entry = ACPPeerOutboxEntry(seq: 4, messageId: "m", childSessionId: "c1", prompt: "done", kind: .prompt, createdAt: 9)
-        peer.reply = .delegation(.outbox(entries: [entry], hasMore: true))
-        let result = await client().outbox(serverId: "mini", after: 3)
-        #expect(result == .success(ACPPeerOutboxPage(entries: [entry], hasMore: true)))
-        #expect(peer.requests == [.delegation(.outbox(after: 3))])
+        peer.reply = .delegation(.outbox(entries: [entry], hasMore: true, store: "s-new"))
+        let result = await client().outbox(serverId: "mini", after: 3, store: "s-old")
+        #expect(result == .success(ACPPeerOutboxPage(entries: [entry], hasMore: true, store: "s-new")))
+        #expect(peer.requests == [.delegation(.outbox(after: 3, store: "s-old"))])
     }
 
     @Test(arguments: [

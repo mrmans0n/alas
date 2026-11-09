@@ -57,6 +57,7 @@ struct SectionHeader<Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
@@ -67,21 +68,21 @@ struct SectionHeader<Trailing: View>: View {
                     // and the button's accessibility value.
                     SectionHeaderIcon(
                         role: role,
-                        size: 10,
+                        size: scale.caption.size,
                         color: theme.color("fg-faint")
                     )
-                        .frame(width: 14, height: 14)
+                        .frame(width: scale.space[4], height: scale.space[4])
                         .accessibilityHidden(true)
                     Text(title.uppercased())
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .tracking(0.5)
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let count {
                         Text("\(count)")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .font(scale.caption.font(weight: .semibold))
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0] / 2)
                             .background(theme.color("seg-pill-bg"))
                             .clipShape(Capsule())
                             .foregroundColor(theme.color("fg-muted"))
@@ -92,7 +93,7 @@ struct SectionHeader<Trailing: View>: View {
                             Text("+\(stats.add)").foregroundColor(theme.color("add"))
                             Text("−\(stats.del)").foregroundColor(theme.color("del"))
                         }
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .font(scale.caption.font(weight: .semibold, design: .monospaced))
                     }
                 }
                 .contentShape(Rectangle())

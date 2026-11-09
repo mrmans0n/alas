@@ -33,7 +33,7 @@ struct ContentResultGroupView: View {
         let parts = splitPath(group.relativePath)
         return HStack(spacing: 10) {
             Text(parts.name)
-                .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundColor(theme.color("fg"))
             Text(parts.dir)
                 .font(.system(size: 11, design: .monospaced))

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChatPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -56,10 +57,10 @@ struct ChatPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Chat").font(.system(size: 18, weight: .semibold))
+                Text("Chat").font(SettingsPaneStyle.titleFont)
                 Text("Defaults for ACP chat sessions, composer behavior, and chat typography.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: GroupTitles.appearance) {
                     SettingsRow(name: "Show minimap") {
@@ -157,7 +158,7 @@ struct ChatPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .task {
             dictationLocales = ACPDictationLocaleFormatter.sortedByDisplayName(

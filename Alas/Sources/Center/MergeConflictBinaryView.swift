@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 struct MergeConflictBinaryView: View {
+    @Environment(\.designScale) private var scale
     let conflictedFile: ConflictedFile
     let worktreePath: URL
     let loadGeneration: Int
@@ -31,11 +32,11 @@ struct MergeConflictBinaryView: View {
     private func imageColumn(title: String, stage: Int) -> some View {
         VStack(spacing: 0) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .textCase(.uppercase)
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[1])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("bg-2"))
             ImageStageView(
@@ -49,17 +50,17 @@ struct MergeConflictBinaryView: View {
     }
 
     private var nonImageBanner: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: "doc.questionmark")
-                .font(.system(size: 36))
+                .font(.system(size: 36)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-dim"))
             Text("Binary conflict")
-                .font(.system(size: 14, weight: .semibold))
+                .font(scale.titleFont)
             Text("This file's contents can't be merged in the text editor.\nUse the right-pane Conflicts section to pick a side via Use ours / Use theirs, then Mark resolved here.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, scale.space[5])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))

@@ -101,7 +101,72 @@ struct HeadlessCLIRouterTests {
         #expect(delegation.channels.channel(for: "mac") == nil)
     }
 
-    /// A Mac that paired with this host and was never added here has no token.
+    private final class FakeRoutes: PeerDeviceRoutes {
+        var open: [String: Int] = [:]
+        private(set) var sent: [HostClientMessage] = []
+        var onAcknowledgedCapabilitiesChange: (@MainActor (String) -> Void)?
+        var onPeerHostReply: (@MainActor (String, Int?, HostServerMessage) -> Void)?
+        func route(toDevice deviceId: String, acknowledging capability: String) -> Int? {
+            capability == HostProtocolCapability.delegationReverseV1 ? open[deviceId] : nil
+        }
+        func send(_ message: RemoteServerMessage, toDevice deviceId: String, acknowledging capability: String) -> Bool {
+            guard route(toDevice: deviceId, acknowledging: capability) != nil, case .peerHost(let request) = message else { return false }
+            sent.append(request)
+            return true
+        }
+        /// Waits for request `id` and answers it as device `deviceId`.
+        func answer(_ id: Int, from deviceId: String, with result: HostResponse) async throws {
+            try await eventually { await MainActor.run { self.sent.contains { $0.id == id } } }
+            onPeerHostReply?(deviceId, open[deviceId], .response(id: id, result: result))
+        }
+    }
+
+    /// A Mac that paired with this host inbound-only, and proved its key doing
+    /// so, is reached over its own link once that link acknowledges the route:
+    /// requests go back down that device's socket, and only its answers count.
+    @Test func anInboundOnlyMacIsReachedOverItsOwnLinkOnceItAcknowledgesTheRoute() async throws {
+        let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d", name: "Laptop", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil, kind: .alasInstance,
+            peerServerId: "mac", peerPublicKey: "key", scope: .delegation
+        )]))
+        let links = RemotePeerManager(
+            store: MemoryPeerStore(peers: [RemotePeer(
+                id: "p", serverId: "mac", name: "Laptop", origins: [], token: "", localDeviceId: "d", addedAt: .distantPast
+            )]),
+            pairing: pairing, localIdentity: { .init(serverId: "", name: "", origins: []) },
+            makeConnection: { _, onEvent in FakeLink(emit: onEvent) }
+        )
+        let routes = FakeRoutes()
+        let delegation = HostPeerDelegation(links: links, routes: routes)
+        defer { delegation.stop() }
+        var available: [String] = []
+        delegation.client.onAvailabilityChanged = { available.append($0) }
+        links.connectAll()
+        #expect(delegation.client.peers == [
+            ACPDelegationPeerInfo(name: "Laptop", serverId: "mac", state: .offline, supportsDelegation: false),
+        ])
+
+        routes.open["d"] = 1
+        routes.onAcknowledgedCapabilitiesChange?("d")
+        try await routes.answer(1, from: "d", with: .snapshot(snapshot: HostSnapshot(
+            cursor: HostCursor(generation: UUID(), sequence: 0), projects: [], worktrees: [], workspaceCheckouts: [], runs: [],
+            sessions: []
+        )))
+        try await routes.answer(2, from: "d", with: .subscribed)
+        try await eventually { await MainActor.run { available == ["mac"] } }
+        #expect(delegation.client.peers.map(\.state) == [.online])
+
+        async let interrupted = delegation.client.interrupt(serverId: "mac", sessionID: "child")
+        try await eventually { await MainActor.run { routes.sent.count == 3 } }
+        routes.onPeerHostReply?("other", 1, .response(id: 3, result: .delegation(.interrupted(cancelRequested: false))))
+        // From an older socket of the same device, which the route has left.
+        routes.onPeerHostReply?("d", 0, .response(id: 3, result: .delegation(.interrupted(cancelRequested: false))))
+        try await routes.answer(3, from: "d", with: .delegation(.interrupted(cancelRequested: true)))
+        #expect(await interrupted == .success(true))
+    }
+
+    /// A Mac that paired with this host and was never added here has no token,
+    /// and one whose device never proved its key has no route back either.
     @Test func inboundOnlyPeerIsNotOfferedAsATarget() {
         let (delegation, dialled) = hostLinks([RemotePeer(
             id: "p", serverId: "mac", name: "Laptop", origins: ["http://laptop:1"], token: "", localDeviceId: "d", addedAt: .distantPast

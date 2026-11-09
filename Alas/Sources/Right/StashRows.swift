@@ -10,6 +10,7 @@ struct StashSummaryRow: View {
     let onDrop: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button(action: onToggle) {
@@ -17,12 +18,12 @@ struct StashSummaryRow: View {
                 Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
                     .frame(width: 14, height: 14)
                 Text(stash.subject.isEmpty ? stash.ref : stash.subject)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(stash.ref)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                 Spacer()
                 if loading { Spinner(lineWidth: 1.2, duration: 0.7).frame(width: 10, height: 10) }
@@ -33,7 +34,7 @@ struct StashSummaryRow: View {
                     Button("Drop…", role: .destructive, action: onDrop)
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 .menuStyle(.borderlessButton)
@@ -41,8 +42,8 @@ struct StashSummaryRow: View {
                 .fixedSize()
                 .help("Stash actions")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -61,13 +62,14 @@ struct StashFileRow: View {
     let dragPayload: () -> DragOutPayload?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 6) {
                 FileTypeIconView(filename: (file.path as NSString).lastPathComponent, size: 16)
                 Text((file.path as NSString).lastPathComponent)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.metaFont)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
@@ -75,10 +77,10 @@ struct StashFileRow: View {
                 if file.del > 0 { Text("-\(file.del)").foregroundColor(theme.color("del")) }
                 StatusBadge(status: file.status)
             }
-            .font(.system(size: 11, design: .monospaced))
-            .padding(.leading, 32)
-            .padding(.trailing, 12)
-            .padding(.vertical, 4)
+            .font(scale.meta.font(weight: .regular, design: .monospaced))
+            .padding(.leading, scale.space[5] + scale.space[2])
+            .padding(.trailing, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -89,15 +91,16 @@ struct StashFileRow: View {
 struct StashEmptyRow: View {
     let loading: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
             if loading { Spinner(lineWidth: 1.2, duration: 0.7).frame(width: 10, height: 10) }
             Text(loading ? "Loading stash files…" : "no files")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
         }
-        .padding(.leading, 32)
-        .padding(.vertical, 6)
+        .padding(.leading, scale.space[5] + scale.space[2])
+        .padding(.vertical, scale.space[2])
     }
 }

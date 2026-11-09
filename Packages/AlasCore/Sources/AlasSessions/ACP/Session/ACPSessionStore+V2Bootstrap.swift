@@ -30,7 +30,8 @@ extension ACPSessionStore {
             for table in ["acp_v2_update_streams", "acp_v2_inbound_streams", "acp_v2_submissions"] {
                 guard try db.query("SELECT 1 FROM \(table) WHERE session_id = ? LIMIT 1", bindings: [fence.sessionId]).isEmpty else { return false }
             }
-            let empty = row.acpBrokerId == nil && row.acpBrokerGeneration == nil && row.acpBrokerWireContextJSON == nil
+            let empty = row.acpBrokerId == nil && row.acpBrokerGeneration == nil && (row.acpBrokerWireContextJSON == nil || (row.runtimeKind == .v2FreshPreview
+                    && (try? ACPBrokerRestorePolicy.context(from: row.acpBrokerWireContextJSON)) == .rawV2))
                 && row.acpBrokerAcknowledgedCursor == 0
             let recordedContext = try? ACPBrokerRestorePolicy.context(from: row.acpBrokerWireContextJSON)
             let identical = row.acpBrokerId?.utf8.elementsEqual(state.brokerId.rawValue.utf8) == true
