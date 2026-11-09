@@ -101,6 +101,13 @@ PERMISSION_TOOL_CALL = tool_call(
 
 TRANSCRIPT_AFTER_PERMISSION = [
     {"sessionUpdate": "agent_message_chunk", "content": text(FINAL_REPLY)},
+    # A plan puts the plan pill in the toolbar; usage fills the context meter.
+    {"sessionUpdate": "plan", "entries": [
+        {"content": "Key the height cache on identity and width", "priority": "high", "status": "completed"},
+        {"content": "Regenerate the exports fixture", "priority": "medium", "status": "in_progress"},
+        {"content": "Verify invoice totals", "priority": "low", "status": "pending"},
+    ]},
+    {"sessionUpdate": "usage_update", "used": 61400, "size": 200000},
 ]
 
 # What a real agent advertises, so the composer toolbar has its usual chips.

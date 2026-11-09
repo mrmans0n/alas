@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPMessageList: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     @ObservedObject var transcript: ACPTranscript
     let contentMaxWidth: CGFloat
@@ -140,7 +141,7 @@ struct ACPMessageList: View {
             action()
         } label: {
             Image(systemName: "arrow.down")
-                .font(.system(size: 14, weight: .semibold))
+                .font(scale.titleFont)
                 .frame(width: goToNewestButtonSize, height: goToNewestButtonSize)
         }
         .buttonStyle(.plain)
@@ -156,7 +157,7 @@ struct ACPMessageList: View {
         )
         .accessibilityLabel("Go to newest message")
         .help("Go to newest message")
-        .padding(.trailing, 20)
+        .padding(.trailing, scale.space[4])
         .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
             composerSpacerHeight: composerSpacerHeight,
             gap: goToNewestButtonComposerGap

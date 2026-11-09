@@ -116,6 +116,7 @@ final class ACPSlashPickerModel: ObservableObject {
 /// the model/mode picker dropdowns: rounded glass background, mono
 /// command name on the left, dim description on the right.
 struct ACPSlashPickerView: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var model: ACPSlashPickerModel
     let onPick: (ACPPromptSuggestion) -> Void
     @Environment(\.theme) private var theme
@@ -127,10 +128,10 @@ struct ACPSlashPickerView: View {
                 LazyVStack(spacing: 0) {
                     if items.isEmpty {
                         Text("No matches")
-                            .font(.system(size: 11.5))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
                     } else {
                         // Identity is the command string, kept consistent
                         // across the ForEach `id:`, the row `.id()` and
@@ -147,7 +148,7 @@ struct ACPSlashPickerView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .onChange(of: model.selectedIndex) { _, new in
                 guard items.indices.contains(new) else { return }
@@ -159,15 +160,15 @@ struct ACPSlashPickerView: View {
     }
 
     private func row(_ s: ACPPromptSuggestion, isSelected: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text(s.command)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(scale.meta.font(weight: .medium, design: .monospaced))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             if let hint = s.hint, !hint.isEmpty {
                 Text("‹\(hint)›")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -176,7 +177,7 @@ struct ACPSlashPickerView: View {
             if let d = s.description, !d.isEmpty {
                 MarqueeText(
                     text: d,
-                    font: .system(size: 11),
+                    font: scale.metaFont,
                     color: theme.color("fg-faint"),
                     isActive: isSelected
                 )
@@ -184,9 +185,9 @@ struct ACPSlashPickerView: View {
             Spacer(minLength: 0)
             if model.isOn(s) == true {
                 Text("On")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("accent"))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(Capsule().fill(theme.color("accent").opacity(0.15)))
                     .help("Picking it turns it off")
             }
@@ -194,11 +195,11 @@ struct ACPSlashPickerView: View {
                 ACPAlasCommandBadge()
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 5)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
         .background(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .fill(isSelected ? theme.color("accent").opacity(0.25) : .clear)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, scale.space[1])
         )
     }
 }

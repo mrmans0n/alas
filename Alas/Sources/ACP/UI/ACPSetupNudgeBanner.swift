@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPSetupNudgeBanner: View {
+    @Environment(\.designScale) private var scale
     let agentID: String
     let agentDisplayName: String
     let targetHost: String?
@@ -35,12 +36,12 @@ struct ACPSetupNudgeBanner: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: leadingIcon)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(leadingTint)
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
             Spacer()
@@ -54,12 +55,12 @@ struct ACPSetupNudgeBanner: View {
             }
             Button { onDismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(bannerBg)
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)

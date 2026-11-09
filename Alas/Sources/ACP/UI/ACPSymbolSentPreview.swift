@@ -108,6 +108,7 @@ final class ACPSymbolSentHoverModel: ObservableObject {
 
 /// The popover of a sent symbol badge.
 struct ACPSymbolSentHoverView: View {
+    @Environment(\.designScale) private var scale
     @StateObject private var model: ACPSymbolSentHoverModel
     let root: URL
     let theme: Theme
@@ -134,7 +135,7 @@ struct ACPSymbolSentHoverView: View {
     /// Reserved whenever a snapshot exists, so a late note or toggle cannot
     /// change the popover's height.
     private var bar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             if model.sent != nil {
                 Picker("", selection: $model.shown) {
                     Text("Sent").tag(ACPSymbolSentPreview.Source.sent)
@@ -148,7 +149,7 @@ struct ACPSymbolSentHoverView: View {
             }
             if let note = model.preview.note {
                 Text(note.text)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)

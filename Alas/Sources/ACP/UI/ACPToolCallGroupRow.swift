@@ -35,7 +35,7 @@ struct ACPToolCallGroupHeaderRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             toggle
             if hiddenMemberCount > 0 {
                 // Expanding explicitly lifts the live cap (see
@@ -62,7 +62,7 @@ struct ACPToolCallGroupHeaderRow: View {
         Button {
             onToggle(!expanded)
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: summary.iconSystemName)
                     .font(scale.metaFont)
                     .frame(width: 16)
@@ -99,6 +99,7 @@ struct ACPToolCallGroupHeaderRow: View {
 /// as one visual unit while each card keeps an independent row identity
 /// and measured frame.
 struct ACPToolCallGroupMemberRow<Content: View>: View {
+    @Environment(\.designScale) private var scale
     @ViewBuilder let content: () -> Content
 
     init(@ViewBuilder content: @escaping () -> Content) {
@@ -111,13 +112,14 @@ struct ACPToolCallGroupMemberRow<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .acpInsetsProse(by: 7 + ACPTranscriptCoreTextRowView.laneBarWidth + ACPTranscriptCoreTextRowView.laneSpacing)
         }
-        .padding(.leading, 7)
+        .padding(.leading, scale.space[2])
     }
 }
 
 /// The shared bar + indent that marks a row as part of a tool-call bundle.
 /// Factored out so members (and subagent rows) line up exactly.
 struct ACPToolCallGroupLane<Content: View>: View {
+    @Environment(\.designScale) private var scale
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
 
@@ -126,11 +128,11 @@ struct ACPToolCallGroupLane<Content: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: scale.space[3]) {
             Rectangle()
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
-                .padding(.vertical, 2)
+                .padding(.vertical, scale.space[0])
             content()
         }
     }

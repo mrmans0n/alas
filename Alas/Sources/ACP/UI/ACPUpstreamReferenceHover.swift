@@ -73,6 +73,7 @@ struct ACPUpstreamReferenceCardModel: Equatable {
 }
 
 struct ACPUpstreamReferenceHoverCard: View {
+    @Environment(\.designScale) private var scale
     let reference: CodeHostReference
     @ObservedObject var store: ACPUpstreamReferenceStore
 
@@ -80,32 +81,32 @@ struct ACPUpstreamReferenceHoverCard: View {
         let model = ACPUpstreamReferenceCardModel.make(
             reference: reference, entry: store.entry(for: reference), now: Date()
         )
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: model.kind == .issue ? "smallcircle.filled.circle" : "arrow.triangle.pull")
                     .foregroundStyle(Color(nsColor: ACPUpstreamReferenceChipStyle.tint(for: model.kind)))
                 Text(model.spelling)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(scale.body.font(weight: .semibold, design: .monospaced))
                 if let badge = model.badge {
                     Text(badge.label)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundStyle(Color(nsColor: badge.color))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, scale.space[2])
+                        .padding(.vertical, scale.space[0])
                         .background(Capsule().fill(Color(nsColor: badge.color).opacity(0.18)))
                 }
             }
             if let title = model.title {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(model.detail)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(.secondary)
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(width: 340, alignment: .leading)
         .onAppear { store.ensureLoaded(reference) }
     }

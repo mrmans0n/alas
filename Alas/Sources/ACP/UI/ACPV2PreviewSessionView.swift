@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Explicit preview UI. The standard composer's queue and tool actions are absent.
 struct ACPV2PreviewSessionView: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     @ObservedObject var manager: ACPSessionManager
     let worktree: Worktree
@@ -19,7 +20,7 @@ struct ACPV2PreviewSessionView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text(session.runtimeKind == .v2FreshPreview ? "ACP v2 preview" : "Saved session unavailable")
                         .font(.headline)
                     Text(statusText).font(.caption).foregroundStyle(.secondary)
@@ -34,34 +35,34 @@ struct ACPV2PreviewSessionView: View {
                 }
                 Button("New standard session", action: onNewStandardSession)
             }
-            .padding(12)
+            .padding(scale.space[3])
             if presentation.viewOnly {
                 Text("Conversation may be incomplete. This saved display cannot resume or answer old requests.")
-                    .font(.callout).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.bottom, 8)
+                    .font(.callout).foregroundStyle(.secondary).padding(.horizontal, scale.space[3]).padding(.bottom, scale.space[2])
             }
             if let message = error ?? session.lastError {
                 Text(message).foregroundStyle(theme.color("warn")).textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.bottom, 8)
+                    .padding(.horizontal, scale.space[3]).padding(.bottom, scale.space[2])
             }
             if case .failed(let message) = session.hydrationState {
-                Text(message).foregroundStyle(theme.color("warn")).padding(12)
+                Text(message).foregroundStyle(theme.color("warn")).padding(scale.space[3])
             }
             transcript
             if !manager.v2PreviewPermissions(for: session.id).isEmpty {
                 ScrollView {
-                    VStack(spacing: 8) {
+                    VStack(spacing: scale.space[2]) {
                         ForEach(manager.v2PreviewPermissions(for: session.id)) { item in permission(item) }
-                    }.padding(12)
+                    }.padding(scale.space[3])
                 }.frame(maxHeight: 300)
             }
             if !presentation.viewOnly {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     TextEditor(text: $draft)
                         .font(.system(size: typography.baseSize))
                         .frame(minHeight: 54, maxHeight: 120)
                         .scrollContentBackground(.hidden)
-                        .padding(6)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line")))
+                        .padding(scale.space[2])
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line")))
                         .accessibilityLabel("Preview message, plain text only")
                     HStack {
                         Text("Text only. Send after the current turn ends.").font(.caption).foregroundStyle(.secondary)
@@ -70,7 +71,7 @@ struct ACPV2PreviewSessionView: View {
                             .keyboardShortcut(.return, modifiers: .command)
                             .disabled(!presentation.canSend || sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                }.padding(12)
+                }.padding(scale.space[3])
             }
         }
         .background(theme.color("bg-0"))
@@ -121,7 +122,7 @@ struct ACPV2PreviewSessionView: View {
     private func permission(_ item: ACPV2PreviewPermissionItem) -> some View {
         switch item.phase {
         case .awaitingDecision, .sending:
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ACPPermissionCard(content: .init(permission: item.permission, existingToolCall: matchingTool(item), worktreeRoot: worktree.path.path),
                     onChoose: { choice in decide(item, optionID: choice.optionId) },
                     statusText: item.phase == .sending ? "Sending choice" : nil)

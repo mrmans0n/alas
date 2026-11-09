@@ -68,13 +68,14 @@ struct ACPSessionForkPresentation: Equatable {
 }
 
 struct ACPSessionForkDivider: View {
+    @Environment(\.designScale) private var scale
     let presentation: ACPSessionForkPresentation
     let onOpenSource: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
+            HStack(spacing: scale.space[2]) {
                 Rectangle().fill(theme.color("line")).frame(height: 1)
                 Button(presentation.title, action: onOpenSource)
                     .buttonStyle(.plain)
@@ -84,7 +85,7 @@ struct ACPSessionForkDivider: View {
             }
             if let notice = presentation.notice {
                 Text(notice)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .multilineTextAlignment(.center)
             }

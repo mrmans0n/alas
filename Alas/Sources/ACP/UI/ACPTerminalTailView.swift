@@ -4,6 +4,7 @@ import SwiftUI
 /// parsed incrementally by `ACPTerminal`; this view receives a bounded tail
 /// at display rate. Max height is 300 px.
 struct ACPTerminalTailView: View {
+    @Environment(\.designScale) private var scale
     let terminalId: String
     let host: ACPTerminalHost
     @Environment(\.theme) private var theme
@@ -13,26 +14,27 @@ struct ACPTerminalTailView: View {
             TerminalLiveBody(terminal: terminal)
         } else {
             Text("Terminal output not retained across restart.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         }
     }
 }
 
 private struct TerminalLiveBody: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var terminal: ACPTerminal
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(parsedAttributed())
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                         .id("BOTTOM")
                 }
                 .frame(maxHeight: 300)
@@ -53,9 +55,9 @@ private struct TerminalLiveBody: View {
         var lowerBound = out.startIndex
         for run in runs where !run.text.isEmpty {
             let upperBound = out.characters.index(lowerBound, offsetBy: run.text.count)
-            var font = Font.system(size: 11.5, design: .monospaced)
+            var font = scale.meta.font(design: .monospaced)
             if run.attributes.bold {
-                font = .system(size: 11.5, weight: .bold, design: .monospaced)
+                font = scale.meta.font(weight: .bold, design: .monospaced)
             }
             if run.attributes.italic { font = font.italic() }
             out[lowerBound..<upperBound].font = font
@@ -77,7 +79,7 @@ private struct TerminalLiveBody: View {
 
     @ViewBuilder
     private func exitFooter(_ s: ACPTerminalExitStatus) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if let sig = s.signal {
                 Text("Killed (\(sig))")
                     .foregroundStyle(theme.color("fg-faint"))
@@ -86,8 +88,8 @@ private struct TerminalLiveBody: View {
                     .foregroundStyle(code == 0 ? theme.color("add") : theme.color("del"))
             }
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 12).padding(.bottom, 6)
+        .font(scale.metaFont)
+        .padding(.horizontal, scale.space[3]).padding(.bottom, scale.space[2])
     }
 }
 

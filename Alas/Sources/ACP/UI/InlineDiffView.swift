@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct InlineDiffView: View {
+    @Environment(\.designScale) private var scale
     let diff: ParsedDiff
     let relativePath: String
     let maxLines: Int
@@ -51,7 +52,7 @@ struct InlineDiffView: View {
                     Text(hunk.header)
                         .font(.system(size: Self.codeFontSize * 0.85, design: .monospaced))
                         .foregroundStyle(theme.color("fg-dim"))
-                        .padding(.horizontal, 14).padding(.vertical, 4)
+                        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
                         .background(theme.color("bg-2"))
                         .overlay(Divider().opacity(0.5), alignment: .bottom)
 
@@ -69,13 +70,13 @@ struct InlineDiffView: View {
 
             if truncated, let onShowAll {
                 Button(action: onShowAll) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: scale.space[1]) {
                         Text("Show all \(allLines.count) lines")
                         Image(systemName: "arrow.forward")
                     }
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("accent"))
-                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .buttonStyle(.plain)

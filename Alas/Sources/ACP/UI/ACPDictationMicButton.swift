@@ -3,6 +3,7 @@ import SwiftUI
 /// The composer's push-to-talk button, with language and microphone menus
 /// on right-click. Shared by the local and peer composers.
 struct ACPDictationMicButton: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var dictation: ACPDictationService
     let preferences: ACPDictationPreferences
     var onWillToggle: () -> Void = {}
@@ -19,7 +20,7 @@ struct ACPDictationMicButton: View {
             dictation.toggle()
         } label: {
             Image(systemName: ACPComposerControlPresentation.micIconName(for: dictation.state))
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(
                     dictation.state == .listening
                         ? ACPSelectChip.labelForeground(accent: theme.color("caution"), theme: theme)
@@ -27,14 +28,14 @@ struct ACPDictationMicButton: View {
                 )
                 .frame(width: 28, height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .fill(
                             dictation.state == .listening
                                 ? theme.color("caution").opacity(0.55)
                                 : theme.color("bg-3").opacity(0.7)
                         )
                 )
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Dictate")

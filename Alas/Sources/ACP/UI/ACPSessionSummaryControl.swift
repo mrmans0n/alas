@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPSessionSummaryControl: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var coordinator: SessionSummaryCoordinator
     @ObservedObject var session: ACPSession
     @ObservedObject private var composer: ACPComposerState
@@ -65,31 +66,31 @@ struct ACPSessionSummaryControl: View {
                 Task { await coordinator.refresh(session, mode: .manual) }
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 if coordinator.phase == .loading {
                     if reduceMotion {
                         Image(systemName: "hourglass")
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                     } else {
                         Spinner(lineWidth: 1.5)
                             .frame(width: 10, height: 10)
                     }
                 } else {
                     Image(systemName: "text.quote")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                 }
                 Text("Summarize Session")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
             }
             .foregroundStyle(theme.color(isLit ? "accent" : "fg-muted"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(
                 theme.color("accent").opacity(isLit ? 0.18 : 0.08),
-                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                in: RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                     .strokeBorder(theme.color("accent").opacity(isLit ? 0.5 : 0.25), lineWidth: 0.5)
             }
         }
