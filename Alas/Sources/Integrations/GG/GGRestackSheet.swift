@@ -26,7 +26,7 @@ struct GGRestackSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[3]) {
             Text("Restack")
-                .font(scale.title.font)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text(presentation.hasWork
                  ? "Review the rewrite plan before applying it."
                  : "This stack is already correctly based.")

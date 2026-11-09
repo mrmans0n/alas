@@ -93,7 +93,7 @@ struct GGReorderSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[3]) {
             Text("Reorder Stack")
-                .font(scale.title.font)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text("Drag commits within each mutable section.")
                 .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))

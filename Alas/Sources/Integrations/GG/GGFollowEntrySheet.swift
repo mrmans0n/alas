@@ -14,7 +14,7 @@ struct GGFollowEntrySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[3]) {
             Text(presentation.isEditing ? "Edit Followed Stack Entry" : "Follow Stack Entry")
-                .font(scale.title.font)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text("The tab tracks this commit's GG-ID across rebases, reorders, and amends.")
                 .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))
