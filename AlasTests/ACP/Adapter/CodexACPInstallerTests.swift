@@ -10,7 +10,7 @@ struct CodexACPInstallerTests {
         let installer = CodexACPInstaller(runner: { cmd, args in
             calls.append([cmd] + args)
             return (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
         try? await installer.install()
         #expect(calls == [
             ["npm", "install", "-g", "--force", "@alas-ide/codex-acp"],
@@ -18,6 +18,29 @@ struct CodexACPInstallerTests {
             ["npm", "uninstall", "-g", "@zed-industries/codex-acp"],
             ["npm", "rebuild", "-g", "@alas-ide/codex-acp"],
         ])
+    }
+
+    @Test("reinstall removes the adapter before installing so npm fetches every dependency")
+    func reinstallUninstallsFirst() async throws {
+        var calls: [[String]] = []
+        let installer = CodexACPInstaller(runner: { cmd, args in
+            calls.append([cmd] + args)
+            return (status: 0, stderr: "")
+        }, verify: { .ready })
+
+        try await installer.reinstall()
+
+        #expect(calls.first == ["npm", "uninstall", "-g", "@alas-ide/codex-acp"])
+        #expect(calls.dropFirst().first == ["npm", "install", "-g", "--force", "@alas-ide/codex-acp"])
+    }
+
+    @Test("install fails when npm succeeds but the adapter is still unusable")
+    func installReportsSkippedPlatformPackage() async {
+        let installer = CodexACPInstaller(
+            runner: { _, _ in (status: 0, stderr: "") },
+            verify: { .error(message: "npm did not install `@openai/codex-darwin-arm64`") })
+
+        await #expect(throws: ACPInstallError.self) { try await installer.install() }
     }
 
     @Test("install continues after a legacy uninstall fails")
@@ -28,7 +51,7 @@ struct CodexACPInstallerTests {
             return args == ["uninstall", "-g", "@agentclientprotocol/codex-acp"]
                 ? (status: 1, stderr: "missing")
                 : (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
 
         try await installer.install()
 

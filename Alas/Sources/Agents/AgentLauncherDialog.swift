@@ -802,7 +802,8 @@ struct AgentLauncherDialog: View {
         Task {
             defer { installingAdapters.remove(key) }
             do {
-                try await appState.acpAdapterInstallCoordinator.install(target: key.target, agentID: key.agentID)
+                try await appState.acpAdapterInstallCoordinator.install(
+                    target: key.target, agentID: key.agentID, mode: .reinstall)
             } catch {
                 if currentAdapterKey(agentID: agent.id) == key {
                     adapterInstallError = error.localizedDescription

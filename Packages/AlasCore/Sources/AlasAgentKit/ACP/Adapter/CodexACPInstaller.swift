@@ -9,9 +9,15 @@ import AlasACP
 public struct CodexACPInstaller: ACPAdapterInstaller {
     public let agentID = ACPManagedAdapterDescriptor.codex.agentID
     public let runner: (_ command: String, _ args: [String]) async throws -> (status: Int32, stderr: String)
+    /// Replaces the post-install setup check in tests.
+    private let verify: (() async -> ACPSetupResult)?
 
-    public init(runner: @escaping (String, [String]) async throws -> (status: Int32, stderr: String) = ClaudeCodeACPInstaller.defaultRunner) {
+    public init(
+        runner: @escaping (String, [String]) async throws -> (status: Int32, stderr: String) = ClaudeCodeACPInstaller.defaultRunner,
+        verify: (() async -> ACPSetupResult)? = nil
+    ) {
         self.runner = runner
+        self.verify = verify
     }
 
     public func installState() async -> ACPSetupResult {
@@ -34,5 +40,12 @@ public struct CodexACPInstaller: ACPAdapterInstaller {
         if rebuildStatus != 0 {
             throw ACPInstallError.nonZeroExit(rebuildStatus, stderr: rebuildStderr)
         }
+        let state = if let verify { await verify() } else { await installState() }
+        try ACPInstallError.requireReady(state)
+    }
+
+    public func reinstall() async throws {
+        _ = try? await runner("npm", ["uninstall", "-g", ACPManagedAdapterDescriptor.codex.packageName])
+        try await install()
     }
 }

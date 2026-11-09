@@ -89,9 +89,53 @@ struct ACPRemoteAdapterInstallerTests {
             ACPRemoteAdapterManagement.rollbackExitCode,
             ACPRemoteAdapterManagement.backupCleanupExitCode,
             ACPRemoteAdapterManagement.promotionLockExitCode,
+            ACPRemoteAdapterManagement.incompleteExitCode,
+            ACPRemoteAdapterManagement.stagedPayloadExitCode,
         ]
         #expect(codes.allSatisfy { $0 > ACPRemoteAdapterManagement.corruptExitCode })
         #expect(Set(codes).count == codes.count)
+    }
+
+    @Test("a staged install missing its platform package is never promoted")
+    func incompleteStageKeepsLiveAdapter() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let bin = home.appendingPathComponent("node/bin")
+        let live = home.appendingPathComponent(".alas/acp/codex")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+        let marker = live.appendingPathComponent("working")
+        try Data().write(to: marker)
+        // `npm --prefix <stage> install -g <package>` lays out a staged
+        // package; `node` reports the platform package npm skipped.
+        let scripts = [
+            "npm": """
+            #!/bin/sh
+            [ "$3" = install ] || exit 0
+            mkdir -p "$2/lib/node_modules/$5" "$2/bin"
+            printf '#!/bin/sh\\n' > "$2/bin/codex-acp"
+            chmod +x "$2/bin/codex-acp"
+            """,
+            "node": "#!/bin/sh\nprintf '%s\\n' '@openai/codex-linux-x64'\nexit 3\n",
+        ]
+        for (name, script) in scripts {
+            let file = bin.appendingPathComponent(name)
+            try Data(script.utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let command = ACPRemoteAdapterManagement.installCommand(
+            descriptor: .codex,
+            environment: .init(npmPath: bin.appendingPathComponent("npm").path,
+                               nodePath: bin.appendingPathComponent("node").path,
+                               binDirectory: bin.path),
+            transactionID: "transaction-1")
+
+        let result = try await Process.run(
+            "/bin/sh", args: ["-c", command], env: ["HOME": home.path, "PATH": "\(bin.path):/usr/bin:/bin"])
+
+        #expect(result.exitCode == ACPRemoteAdapterManagement.stagedPayloadExitCode)
+        #expect(result.stderr.contains("@openai/codex-linux-x64"))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
     }
 
     @Test("stderr is sanitized and bounded")
