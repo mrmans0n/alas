@@ -6,9 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+## [0.23.4] - 2026-11-09
 
-- Keep older merged requests out of the stack Ship popover once gg no longer lists them, using the current stack's order and positions instead of retained shepherd history.
+### ✨ Features
+
+- Let agents delegate child sessions to paired Macs and headless hosts, including inbound-only Macs, with per-peer consent, verified worktree bases, outage-aware waiting, and durable results returned to the parent (#2363, #2388).
+- Attach PDFs for supported Claude sessions from the composer, with per-message limits, visible refusal reasons, and prompt-size checks before destructive send actions (#2367).
+- Replace the experimental Device panel with a Devices tab for iOS simulators and worktree VMs, including simulator controls, screenshots, and driver handoff. Simulator support requires Xcode; agent control stays opt-in and uses private APIs validated with Xcode 26.6, with no Android or physical-device support (#2368).
+- Show richer permission reasons and option details, mark adapter-recommended models and reasoning effort, open agent skill files, and run negotiated command actions such as `/plan` (#2373, #2379, #2390).
+- Install missing managed adapters during SSH host setup or directly from a paired Mac, then reconnect the affected session (#2375, #2378).
+- Bring host worktrees' Changes tabs in line with local worktrees, with the shared Prepare workflow, unified history, and automatic refreshes (#2376).
+- Add Comfortable and Compact interface density options and apply the shared typography, spacing, radius, and control scale across the sidebar, chat, right pane, dialogs, Settings, center pane, review chrome, and shared search and controls (#2381, #2382, #2383, #2391, #2395, #2396, #2400, #2401, #2402, #2403, #2406, #2408).
+- Expose native gg stack inventory and Alas's native sync, rebase, and landing workflows to plugins, with ownership and fresh-state checks before mutations (#2389).
+- Restore ACP sessions held only by a remote agent while preserving replayed history and child-session context (#2397).
+- Show diff totals once in the Changes tab, keeping the branch name, Working Tree totals, and per-file totals readable (#2398).
+- Use agent-provided next-prompt suggestions when supported, while keeping the on-device model for other sessions (#2404).
+- Render transcript images and Mermaid diagrams inline across local, SSH, peer, and browser sessions, and open images in a zoomable viewer. Transcript paths may load readable images outside the worktree from the session machine; reads are image-validated and size-limited, and older peer hosts show a placeholder (#2405, #2409).
+
+### 🐛 Fixes
+
+- Keep SSH host setup from cleaning unrelated Homebrew state or upgrading a full app, detect stale casks, retry with a fresh probe, and fall back to the bundled host when safe (#2361).
+- Make Ship recover from stalled fixes, late pushes, CI reruns, and delivery failures, and show only gg's current stack in the Ship popover (#2365, #2410).
+- Preserve delegated final replies, require peers to prove their identity before attribution, limit new headless-host credentials to delegation traffic, resume result collection after database recreation, and prevent false lost-turn reports and mismatched completion quotes. Previously paired hosts must be forgotten and re-added to revoke their old full-access token (#2370, #2380, #2384, #2385, #2386).
+- Improve composer suggestions so they follow the latest turn, use the user's voice, avoid guessing unknown preferences, and survive memory pressure when supplied by the agent (#2374, #2407).
+- Remove duplicate background-task tooltip text and restore distinct colors, icons, and outlines for composer controls (#2392, #2394).
+- Apply the active light theme and interface density to sheets and alerts presented from the root view (#2399).
+
+### 🏗️ Internal
+
+- Add the dormant, fail-closed foundation for explicitly qualified local ACP v2 preview sessions, including ordered startup barriers, while keeping standard sessions on ACP v1 (#2364, #2369, #2387).
+- Update the Scala tree-sitter parser through 0.26.9, including fixes for typed lambdas and tuple-shaped `given` patterns (#2366, #2371, #2372).
+- Stabilize host shutdown tests under parallel load by waiting for shutdown's first suspension instead of repeatedly yielding (#2377).
+- Update the Rust `notify` dependency to 8.2.2 (#2393).
 
 ## [0.23.3] - 2026-11-06
 
