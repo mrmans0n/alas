@@ -45,7 +45,9 @@ public enum ACPAdapterPayloadCheck {
       seen.add(real);
       const manifest = readManifest(dir);
       const candidates = Object.keys((manifest && manifest.optionalDependencies) || {}).filter(isPlatformPackage);
-      if (candidates.length > 0 && !candidates.some((name) => resolvable(dir, name))) missing.add(candidates[0]);
+      if (candidates.length > 0 && !candidates.some((name) => resolvable(dir, name))) {
+        missing.add(candidates.find((name) => name.endsWith(suffix)) || candidates.sort()[0]);
+      }
       const modules = path.join(dir, 'node_modules');
       for (const entry of children(modules)) {
         if (entry.startsWith('@')) {
