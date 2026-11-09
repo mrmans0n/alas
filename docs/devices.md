@@ -16,6 +16,11 @@ simulator; Command shortcuts stay with Alas. The buttons next to the screen
 press Home, open the app switcher, lock the device, and start Siri. The
 toolbar saves a screenshot to the Desktop and shuts the simulator down.
 
+To run an app you built for the simulator, drop its `.app` onto the screen:
+Alas installs it, replacing an installed copy, and launches it. The screen
+outlines itself while the drag is one it can take; an app built for a device
+is refused.
+
 The screen keeps the device's real shape: its size and corner radius come
 from Xcode's device type and DeviceKit chrome files.
 
@@ -52,13 +57,18 @@ tools from the built-in `alas` MCP server:
 | `device_swipe` | Swipes in a direction, or between two screenshot points. |
 | `device_type` | Types ASCII text as key presses; `\n` presses Return. |
 | `device_button` | Presses Home, Lock, Siri, the side button, or opens the app switcher. |
+| `device_install` | Installs a built `.app` on a booted simulator and returns its bundle ID. |
+| `device_launch` | Launches an installed app, ending a running copy first. |
 
 While an agent works on a simulator, a pill on its screen says who is driving
-and the screen ignores your clicks and keys. Take over to use it yourself: the
-agent's calls then fail with `device_user_active` until you hand it back. With
-the setting off, every call fails with `device_disabled`. An agent's calls
-keep the simulator's stream running for a minute after its last call, so
-screenshots work with the Devices tab closed.
+and the screen ignores your clicks and keys. Take over to use it yourself. An
+agent's call made while you drive waits for you to hand the simulator back,
+for up to 50 seconds, and the pill says the agent is waiting; after that the
+call fails with `device_user_active` and the agent tries again later. Typing
+or a swipe already under way when you take over stops. With the setting off,
+every call fails with `device_disabled`. An agent's calls keep the
+simulator's stream running for a minute after its last call, so screenshots
+work with the Devices tab closed.
 
 Not yet: Android, physical devices, rotation, and device settings. The
 follow-up list is in `docs/plans/2026-11-04-device-panel-design.md`.

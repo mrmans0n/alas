@@ -29,7 +29,10 @@ extension SimulatorStreamClient: DeviceInput {}
 final class DeviceAgentControl {
     static let disabled =
         "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators."
-    static let userDriving = "device_user_active: The user is driving this device. Try again after they hand it back."
+    static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
+    static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
+    /// The agent cancelled the call, or its MCP server went away.
+    static let cancelled = "device_cancelled: The call was cancelled."
 
     private struct AgentCall {
         let sessionID: String
@@ -40,35 +43,59 @@ final class DeviceAgentControl {
     @ObservationIgnored private let input: DeviceInput
     @ObservationIgnored private let devices: () async throws -> [SimulatorDevice]
     @ObservationIgnored private let boot: (String) async throws -> Void
+    @ObservationIgnored private let install: (String, URL) async throws -> Void
+    @ObservationIgnored private let launch: (String, String) async throws -> Int32
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
+    /// How long a call waits for the user to hand a simulator back; under
+    /// Codex's 60-second limit on a tool call.
+    @ObservationIgnored private let holdLimit: Duration
+
+    /// A released call carries its input turn when it needs one.
+    private enum Hold: Sendable { case go(inputTurn: UUID?), timedOut, cancelled }
+    private struct HeldCall {
+        let id: UUID
+        let sessionID: String
+        let isInput: Bool
+        let resume: CheckedContinuation<Hold, Never>
+        let timer: Task<Void, Never>
+    }
 
     private var lastCalls: [String: AgentCall] = [:]
     private var inFlight: [String: Int] = [:]
     private var takenOver: Set<String> = []
+    /// Calls waiting for the user to hand each simulator back, in arrival order.
+    private var held: [String: [HeldCall]] = [:]
     @ObservationIgnored private var snapshots: [String: DeviceSnapshot] = [:]
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var screenshotSizes: [String: (width: Double, height: Double)] = [:]
     @ObservationIgnored private var leases: [String: (token: UUID, release: Task<Void, Never>)] = [:]
-    /// Devices with an input call running, and the calls waiting their turn, in order.
-    @ObservationIgnored private var inputBusy: Set<String> = []
-    @ObservationIgnored private var inputWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// Each device's input turns, in the order they were taken; the first runs.
+    @ObservationIgnored private var inputTurns: [String: [UUID]] = [:]
+    /// Calls waiting for their turn to come up.
+    @ObservationIgnored private var inputWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     init(
         input: DeviceInput,
         devices: @escaping () async throws -> [SimulatorDevice],
         boot: @escaping (String) async throws -> Void,
+        install: @escaping (String, URL) async throws -> Void,
+        launch: @escaping (String, String) async throws -> Int32,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        leaseWindow: Duration = .seconds(60)
+        leaseWindow: Duration = .seconds(60),
+        holdLimit: Duration = .seconds(50)
     ) {
         self.input = input
         self.devices = devices
         self.boot = boot
+        self.install = install
+        self.launch = launch
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
+        self.holdLimit = holdLimit
     }
 
     // MARK: Driver
@@ -88,6 +115,48 @@ final class DeviceAgentControl {
 
     func handBack(udid: String) {
         takenOver.remove(udid)
+        // Input turns are taken here, in arrival order: a released call still
+        // lists devices before it runs, and those listings can finish in any order.
+        for call in held.removeValue(forKey: udid) ?? [] {
+            call.timer.cancel()
+            call.resume.resume(returning: .go(inputTurn: call.isInput ? takeInputTurn(udid) : nil))
+        }
+    }
+
+    /// Sessions whose calls wait for the user to hand `udid` back, first to arrive first.
+    func waitingSessions(udid: String) -> [String] {
+        held[udid]?.map(\.sessionID) ?? []
+    }
+
+    /// Waits while the user drives `udid`: until they hand it back, the hold
+    /// limit passes, or the calling task is cancelled.
+    private func holdWhileTakenOver(_ udid: String, sessionID: String, isInput: Bool) async -> Hold {
+        guard takenOver.contains(udid) else { return .go(inputTurn: nil) }
+        guard !Task.isCancelled else { return .cancelled }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let limit = holdLimit
+                let timer = Task { [weak self] in
+                    await self?.sleep(limit)
+                    guard !Task.isCancelled else { return }
+                    self?.release(udid, id: id, as: .timedOut)
+                }
+                held[udid, default: []].append(HeldCall(
+                    id: id, sessionID: sessionID, isInput: isInput, resume: continuation, timer: timer
+                ))
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.release(udid, id: id, as: .cancelled) }
+        }
+    }
+
+    private func release(_ udid: String, id: UUID, as outcome: Hold) {
+        guard var calls = held[udid], let index = calls.firstIndex(where: { $0.id == id }) else { return }
+        let call = calls.remove(at: index)
+        held[udid] = calls.isEmpty ? nil : calls
+        call.timer.cancel()
+        call.resume.resume(returning: outcome)
     }
 
     private func userDriving(_ udid: String) -> Bool {
@@ -98,6 +167,22 @@ final class DeviceAgentControl {
 
     func perform(_ command: DeviceCommand, sessionID: String) async -> AlasCLIResponse {
         guard let udid = command.udid else { return await list() }
+        // Touches and keys from two calls must not interleave on one simulator,
+        // so input calls to a device run one at a time, in arrival order;
+        // installing and launching take their turn too.
+        let isInput = switch command {
+        case .tap, .swipe, .type, .button, .install, .launch: true
+        case .list, .open, .snapshot, .screenshot: false
+        }
+        var inputTurn: UUID?
+        switch await holdWhileTakenOver(udid, sessionID: sessionID, isInput: isInput) {
+        case .go(let turn): inputTurn = turn
+        case .timedOut: return .error(Self.stillDriving)
+        case .cancelled: return .error(Self.cancelled)
+        }
+        // Taken before the device listing below, whose calls can finish in any order.
+        if isInput, inputTurn == nil { inputTurn = takeInputTurn(udid) }
+        defer { if let inputTurn { endInputTurn(udid, inputTurn) } }
         let listed: [SimulatorDevice]
         do {
             listed = try await devices()
@@ -133,20 +218,11 @@ final class DeviceAgentControl {
         renewLease(udid)
         leased = true
 
-        // Touches and keys from two calls must not interleave on one simulator,
-        // so input calls to a device run one at a time, in order.
-        let isInput = switch command {
-        case .tap, .swipe, .type, .button: true
-        case .list, .open, .snapshot, .screenshot: false
+        if let inputTurn {
+            await waitForInputTurn(udid, inputTurn)
+            if Task.isCancelled { return .error(Self.cancelled) }
+            if userDriving(udid) { return .error(Self.userDriving) }
         }
-        if isInput {
-            await acquireInput(udid)
-            if userDriving(udid) {
-                releaseInput(udid)
-                return .error(Self.userDriving)
-            }
-        }
-        defer { if isInput { releaseInput(udid) } }
 
         switch command {
         case .list:
@@ -190,9 +266,9 @@ final class DeviceAgentControl {
             input.touch(udid: udid, phase: "begin", point: from)
             for step in 1...steps {
                 await sleep(.milliseconds(16))
-                if userDriving(udid) {
+                if userDriving(udid) || Task.isCancelled {
                     input.touch(udid: udid, phase: "end", point: current)
-                    return .error(Self.userDriving)
+                    return .error(Task.isCancelled ? Self.cancelled : Self.userDriving)
                 }
                 let fraction = Double(step) / Double(steps)
                 current = DeviceScreenPoint(
@@ -209,8 +285,13 @@ final class DeviceAgentControl {
                 return .error("device_type_unsupported: device_type types ASCII only; it can't type \"\(failure.character)\".")
             }
             let shift: UInt32 = 0xE1
-            for press in presses {
-                if userDriving(udid) { return .error(Self.userDriving) }
+            for (index, press) in presses.enumerated() {
+                if Task.isCancelled {
+                    return .error("device_cancelled: The call was cancelled after \(index) of \(presses.count) characters were typed.")
+                }
+                if userDriving(udid) {
+                    return .error("device_user_active: The user took over after \(index) of \(presses.count) characters were typed. Check the field before typing the rest.")
+                }
                 if press.shift { input.key(udid: udid, usage: shift, down: true) }
                 input.key(udid: udid, usage: press.usage, down: true)
                 input.key(udid: udid, usage: press.usage, down: false)
@@ -221,22 +302,50 @@ final class DeviceAgentControl {
         case .button(_, let name, let includeScreenshot):
             input.button(udid: udid, name: name.rawValue)
             return await finish(udid, includeScreenshot: includeScreenshot)
+        case .install(_, let appPath):
+            let app: SimulatorAppBundle
+            do {
+                app = try SimulatorAppBundle.read(URL(fileURLWithPath: appPath))
+            } catch let problem as SimulatorAppBundle.Problem {
+                return .error(problem.message(udid: udid))
+            } catch {
+                return .error("device_app_invalid: \(error.localizedDescription)")
+            }
+            do {
+                try await install(udid, app.url)
+            } catch {
+                return .error("device_install_failed: \(error.localizedDescription)")
+            }
+            return .text([Self.json(["bundle_id": app.bundleID, "name": app.name])])
+        case .launch(_, let bundleID):
+            do {
+                return .text([Self.json(["pid": Int(try await launch(udid, bundleID))])])
+            } catch SimulatorLaunchError.notInstalled {
+                return .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
+            } catch {
+                return .error("device_launch_failed: \(error.localizedDescription)")
+            }
         }
     }
 
-    private func acquireInput(_ udid: String) async {
-        if inputBusy.insert(udid).inserted { return }
-        await withCheckedContinuation { inputWaiters[udid, default: []].append($0) }
+    private func takeInputTurn(_ udid: String) -> UUID {
+        let turn = UUID()
+        inputTurns[udid, default: []].append(turn)
+        return turn
     }
 
-    /// Hands the device to the next waiting call, which keeps it marked busy.
-    private func releaseInput(_ udid: String) {
-        if var waiting = inputWaiters[udid], !waiting.isEmpty {
-            let next = waiting.removeFirst()
-            inputWaiters[udid] = waiting.isEmpty ? nil : waiting
-            next.resume()
-        } else {
-            inputBusy.remove(udid)
+    private func waitForInputTurn(_ udid: String, _ turn: UUID) async {
+        guard inputTurns[udid]?.first != turn else { return }
+        await withCheckedContinuation { inputWaiters[turn] = $0 }
+    }
+
+    /// Gives the device to the next turn; a call that hasn't started waiting
+    /// finds its turn first when it does.
+    private func endInputTurn(_ udid: String, _ turn: UUID) {
+        inputTurns[udid]?.removeAll { $0 == turn }
+        if inputTurns[udid]?.isEmpty == true { inputTurns[udid] = nil }
+        if let next = inputTurns[udid]?.first, let waiter = inputWaiters.removeValue(forKey: next) {
+            waiter.resume()
         }
     }
 

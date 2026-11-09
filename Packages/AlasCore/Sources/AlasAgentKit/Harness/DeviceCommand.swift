@@ -36,6 +36,9 @@ public enum DeviceCommand: Equatable, Sendable {
     case swipe(udid: String, gesture: Swipe, durationMs: Int, includeScreenshot: Bool)
     case type(udid: String, text: String, includeScreenshot: Bool)
     case button(udid: String, name: Button, includeScreenshot: Bool)
+    /// `appPath` is absolute; the MCP server resolves it against the worktree.
+    case install(udid: String, appPath: String)
+    case launch(udid: String, bundleID: String)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -48,6 +51,8 @@ public enum DeviceCommand: Equatable, Sendable {
         case .swipe: "device_swipe"
         case .type: "device_type"
         case .button: "device_button"
+        case .install: "device_install"
+        case .launch: "device_launch"
         }
     }
 
@@ -55,7 +60,8 @@ public enum DeviceCommand: Equatable, Sendable {
         switch self {
         case .list: nil
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
-             .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _):
+             .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
+             .install(let udid, _), .launch(let udid, _):
             udid
         }
     }
@@ -76,6 +82,8 @@ public enum DeviceCommand: Equatable, Sendable {
         var text: String?
         var name: String?
         var include_screenshot: Bool?
+        var app_path: String?
+        var bundle_id: String?
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -87,6 +95,8 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_swipe": ["udid", "direction", "from_x", "from_y", "to_x", "to_y", "duration_ms", "include_screenshot"],
         "device_type": ["udid", "text", "include_screenshot"],
         "device_button": ["udid", "name", "include_screenshot"],
+        "device_install": ["udid", "app_path"],
+        "device_launch": ["udid", "bundle_id"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -151,6 +161,16 @@ public enum DeviceCommand: Equatable, Sendable {
         case "device_type":
             guard let text = params.text, !text.isEmpty, text.utf8.count <= 4096 else { throw AlasCLIRequestError.malformed }
             return .type(udid: try udid(), text: text, includeScreenshot: includeScreenshot)
+        case "device_install":
+            guard let path = params.app_path, path.hasPrefix("/"), path.utf8.count <= 4096 else {
+                throw AlasCLIRequestError.malformed
+            }
+            return .install(udid: try udid(), appPath: path)
+        case "device_launch":
+            guard let bundleID = params.bundle_id, !bundleID.isEmpty, bundleID.utf8.count <= 255 else {
+                throw AlasCLIRequestError.malformed
+            }
+            return .launch(udid: try udid(), bundleID: bundleID)
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)

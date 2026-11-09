@@ -24,6 +24,8 @@ struct DeviceCommandTests {
          .swipe(udid: "U", gesture: .points(fromX: 1, fromY: 2, toX: 3, toY: 4), durationMs: 50, includeScreenshot: false)),
         ("device_type", #"{"udid":"U","text":" "}"#, .type(udid: "U", text: " ", includeScreenshot: false)),
         ("device_button", #"{"udid":"U","name":"home"}"#, .button(udid: "U", name: .home, includeScreenshot: false)),
+        ("device_install", #"{"udid":"U","app_path":"/b/Hello.app"}"#, .install(udid: "U", appPath: "/b/Hello.app")),
+        ("device_launch", #"{"udid":"U","bundle_id":"com.example.hello"}"#, .launch(udid: "U", bundleID: "com.example.hello")),
     ] as [(String, String, DeviceCommand)])
     func decodesEachActionWithDefaults(command: String, params: String, expected: DeviceCommand) throws {
         #expect(try decode(command, params) == .device(expected))
@@ -42,6 +44,10 @@ struct DeviceCommandTests {
         ("device_type", #"{"udid":"U","text":""}"#),
         ("device_button", #"{"udid":"U","name":"volume"}"#),
         ("device_open", #"{}"#),
+        ("device_install", #"{"udid":"U"}"#),
+        ("device_install", #"{"udid":"U","app_path":"relative/Hello.app"}"#),
+        ("device_launch", #"{"udid":"U","bundle_id":""}"#),
+        ("device_launch", #"{"udid":"U","bundle_id":"x","include_screenshot":true}"#),
     ])
     func refusesWhatAnActionDoesNotTake(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.malformed) { try decode(command, params) }

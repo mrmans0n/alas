@@ -484,6 +484,15 @@ pub enum DeviceCommand {
         name: String,
         include_screenshot: bool,
     },
+    /// `app_path` is absolute.
+    Install {
+        udid: String,
+        app_path: String,
+    },
+    Launch {
+        udid: String,
+        bundle_id: String,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -524,9 +533,11 @@ impl DeviceCommand {
             | DeviceCommand::Button {
                 include_screenshot, ..
             } => *include_screenshot,
-            DeviceCommand::List | DeviceCommand::Open { .. } | DeviceCommand::Snapshot { .. } => {
-                false
-            }
+            DeviceCommand::List
+            | DeviceCommand::Open { .. }
+            | DeviceCommand::Snapshot { .. }
+            | DeviceCommand::Install { .. }
+            | DeviceCommand::Launch { .. } => false,
         }
     }
 }
@@ -1199,6 +1210,12 @@ fn device_request(command: &DeviceCommand) -> Request {
             "device_button",
             json!({ "udid": udid, "name": name, "include_screenshot": include_screenshot }),
         ),
+        DeviceCommand::Install { udid, app_path } => {
+            ("device_install", json!({ "udid": udid, "app_path": app_path }))
+        }
+        DeviceCommand::Launch { udid, bundle_id } => {
+            ("device_launch", json!({ "udid": udid, "bundle_id": bundle_id }))
+        }
     };
     let mut request = Request::new(name);
     request.params = Some(params);
@@ -1680,7 +1697,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// closes the connection, so giving up sooner would cancel an approved call.
 pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// `device_open` may boot the simulator and wait for it (the app allows 300 s).
+/// `device_open` may boot the simulator and wait for it (the app allows 300 s);
+/// `device_install` may wait 50 s for the user to hand the simulator back, then
+/// take up to 90 s.
 pub const DEVICE_OPEN_READ_TIMEOUT: Duration = Duration::from_secs(330);
 
 /// The guest's own bound on a `vm_run` command when the call gives none.
@@ -1694,7 +1713,9 @@ const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
         Command::Computer(..) => COMPUTER_READ_TIMEOUT,
-        Command::Device(DeviceCommand::Open { .. }) => DEVICE_OPEN_READ_TIMEOUT,
+        Command::Device(DeviceCommand::Open { .. } | DeviceCommand::Install { .. }) => {
+            DEVICE_OPEN_READ_TIMEOUT
+        }
         Command::Device(..) => COMPUTER_READ_TIMEOUT,
         Command::VmRun {
             timeout_seconds, ..
@@ -2692,6 +2713,33 @@ mod tests {
             })
             .0,
             "device_type"
+        );
+        assert_eq!(
+            build(DeviceCommand::Install {
+                udid: udid(),
+                app_path: "/b/Hello.app".into()
+            }),
+            (
+                "device_install".into(),
+                serde_json::json!({ "udid": "U-1", "app_path": "/b/Hello.app" })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::Launch {
+                udid: udid(),
+                bundle_id: "com.example.hello".into()
+            }),
+            (
+                "device_launch".into(),
+                serde_json::json!({ "udid": "U-1", "bundle_id": "com.example.hello" })
+            )
+        );
+        assert_eq!(
+            read_timeout(&Command::Device(DeviceCommand::Install {
+                udid: udid(),
+                app_path: "/a.app".into()
+            })),
+            DEVICE_OPEN_READ_TIMEOUT
         );
         assert_eq!(
             read_timeout(&Command::Device(DeviceCommand::Open { udid: udid() })),
