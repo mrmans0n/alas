@@ -11,6 +11,43 @@ public enum ACPPlanFileReadResult: Equatable, Sendable {
     case unreachable(String)
 }
 
+/// The plan and context counters one ACP session's plan reviews bind to: the
+/// root's own, and each child's, since a child's plan updates and usage are
+/// its own. Runtime only; replayed history does not count.
+public struct ACPPlanReviewCounters: Equatable, Sendable {
+    /// How many live `plan_update`s that changed a plan id's content, and
+    /// `plan_removed`s, each plan id has received, with or without a row, so
+    /// a review of an older revision can tell it is stale. A repeated
+    /// identical snapshot is not a revision: Codex resends its final plan
+    /// right before asking to review it.
+    public private(set) var planRevisions: [String: Int] = [:]
+    /// How many times the agent reported an empty context (`usage_update`
+    /// with `used == 0`), as Claude does when it restarts with cleared
+    /// context after a plan is approved.
+    public private(set) var contextResetCount = 0
+    /// The content each plan id last received, for `planRevisions`.
+    private var planContents: [String: ACPPlanContent] = [:]
+
+    public init() {}
+
+    /// Counts one live update addressed to this session.
+    public mutating func count(_ update: ACPSessionUpdate) {
+        switch update {
+        case .planUpdate(let plan):
+            if planContents.updateValue(plan.content, forKey: plan.planId) != plan.content {
+                planRevisions[plan.planId, default: 0] += 1
+            }
+        case .planRemoved(let planId):
+            planContents[planId] = nil
+            planRevisions[planId, default: 0] += 1
+        case .usageUpdate(let info) where info.used == 0:
+            contextResetCount += 1
+        default:
+            break
+        }
+    }
+}
+
 /// What a parked plan review was asked about: this request, its plan and the
 /// plan text it carried, and the plan and context counters when it parked.
 /// An approval is only good for that binding.
@@ -20,9 +57,9 @@ public struct ACPPlanReviewBinding: Equatable, Sendable {
     public let planId: String?
     /// The SHA-256 hex digest of the inline plan text.
     public let digest: String?
-    /// `session.planRevisions[planId] ?? 0` when the review parked.
+    /// The asking session's `planRevisions[planId] ?? 0` when the review parked.
     public let planRevision: Int
-    /// `session.contextResetCount` when the review parked.
+    /// The asking session's `contextResetCount` when the review parked.
     public let contextResetCount: Int
 
     public init(requestID: JSONRPCID, toolCallId: String, planId: String?, digest: String?,

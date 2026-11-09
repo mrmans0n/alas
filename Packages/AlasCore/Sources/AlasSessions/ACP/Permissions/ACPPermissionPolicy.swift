@@ -113,11 +113,15 @@ public final class ACPPermissionPolicy {
     /// The options of the parked request, as offered.
     private var parkedOptions: [ACPPermissionOption] = []
     /// What the parked plan review was asked about; nil unless a plan review
-    /// is parked. One policy answers the root and its subagents, whose plan
-    /// updates and usage do not move the root's counters, so a subagent's
-    /// review goes stale only on a root context reset; the digest check and
-    /// the one-request binding still hold for it.
+    /// is parked. One policy answers the root and its subagents, so the
+    /// binding is judged by the counters of the session that asked.
     public private(set) var planReviewBinding: ACPPlanReviewBinding?
+    /// The ACP session id of the parked plan review's request.
+    private var planReviewSessionId: String?
+    /// The parked plan review's session's counters.
+    private var planReviewCounters: ACPPlanReviewCounters {
+        session.planReviewCounters(forSession: planReviewSessionId ?? "")
+    }
     /// Remembered answers this policy delivered, so the agent's next request
     /// gets them at once rather than only after their record lands.
     private var deliveredDecisions: [String: ACPPermissionDecision] = [:]
@@ -138,10 +142,12 @@ public final class ACPPermissionPolicy {
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
         parkedPlanReview = params.toolCall.isPlanReview
         parkedOptions = params.options
+        planReviewSessionId = parkedPlanReview ? params.sessionId : nil
+        let counters = planReviewCounters
         planReviewBinding = parkedPlanReview
             ? ACPPlanReviewBinding(
                 requestID: pendingRequestID ?? .number(0), params: params, planFileNegotiated: session.planFile != nil,
-                planRevisions: session.planRevisions, contextResetCount: session.contextResetCount)
+                planRevisions: counters.planRevisions, contextResetCount: counters.contextResetCount)
             : nil
         // Before any answer can go out: Claude sends the approved plan as
         // soon as it reads one, and that plan looks for this file.
@@ -189,7 +195,8 @@ public final class ACPPermissionPolicy {
     /// peer). Rejections are never refused, so the agent is never stuck.
     public func refusesApproval(optionKind: String, planDigest: String?) -> Bool {
         guard let binding = planReviewBinding, optionKind.hasPrefix("allow") else { return false }
-        if binding.isStale(planRevisions: session.planRevisions, contextResetCount: session.contextResetCount) {
+        let counters = planReviewCounters
+        if binding.isStale(planRevisions: counters.planRevisions, contextResetCount: counters.contextResetCount) {
             return true
         }
         return planDigest != nil && planDigest != binding.digest
@@ -227,6 +234,7 @@ public final class ACPPermissionPolicy {
         }
         // Kept past the clear below, to check again after the await.
         let approvedBinding = optionKind.hasPrefix("allow") ? planReviewBinding : nil
+        let approvedSessionId = planReviewSessionId ?? ""
         let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
         let cont = pendingContinuation
         pendingContinuation = nil
@@ -245,7 +253,8 @@ public final class ACPPermissionPolicy {
         // The plan or context may have changed while this awaited; the
         // request is no longer parked, so a stale approval cancels it.
         if let approvedBinding,
-           approvedBinding.isStale(planRevisions: session.planRevisions, contextResetCount: session.contextResetCount) {
+           case let counters = session.planReviewCounters(forSession: approvedSessionId),
+           approvedBinding.isStale(planRevisions: counters.planRevisions, contextResetCount: counters.contextResetCount) {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
         }
@@ -284,6 +293,7 @@ public final class ACPPermissionPolicy {
     private func clearParkedReview() {
         parkedOptions = []
         planReviewBinding = nil
+        planReviewSessionId = nil
         session.planReviewFiles = [:]
     }
 }
