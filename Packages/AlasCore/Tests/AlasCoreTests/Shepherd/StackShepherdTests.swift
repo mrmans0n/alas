@@ -459,11 +459,23 @@ struct StackShepherdTests {
         let unchanged = StackShepherdPolicy.statusEntries(of: record, stack: Self.stack([41, 42]), now: F.now)
         #expect(unchanged[1].shepherd?.fixAttempts == 2)
 
+        // Landed requests retain old positions across successive publishes.
+        // They must not become rows in the current stack again.
+        var landed = Self.record([39, 40])
+        for index in landed.entries.indices {
+            landed.entries[index].position = 1
+            landed.entries[index].shepherd.phase = .merged
+        }
+        record.entries.insert(contentsOf: landed.entries, at: 0)
+        let afterLanding = StackShepherdPolicy.statusEntries(of: record, stack: Self.stack([41, 42]), now: F.now)
+        #expect(afterLanding.map(\.requestNumber) == [41, 42])
+        #expect(afterLanding.map(\.position) == [1, 2])
+
         // No stack, or another one checked out: the record as of the last poll.
         let asRecorded = StackShepherdPolicy.statusEntries(of: record, stack: nil, now: F.now)
-        #expect(asRecorded.map(\.requestNumber) == [41, 42])
+        #expect(asRecorded.map(\.requestNumber) == [39, 40, 41, 42])
         let other = GGStack(name: "other", base: "main", totalCommits: 0, syncedCommits: 0, currentPosition: nil, behindBase: nil, entries: [])
-        #expect(StackShepherdPolicy.statusEntries(of: record, stack: other, now: F.now).map(\.requestNumber) == [41, 42])
+        #expect(StackShepherdPolicy.statusEntries(of: record, stack: other, now: F.now).map(\.requestNumber) == [39, 40, 41, 42])
     }
 
     /// A request closed and then reopened is a live entry again; left closed
