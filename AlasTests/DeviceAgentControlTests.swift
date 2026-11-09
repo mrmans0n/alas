@@ -90,7 +90,7 @@ struct DeviceAgentControlTests {
         let control = control(FakeInput(), installs: installs, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         async let installed = control.perform(.install(udid: "on", appPath: app.path), sessionID: "s")
-        await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await until { control.waitingSessions(udid: "on") == ["s"] }
         #expect(installs.calls.isEmpty)
         control.handBack(udid: "on")
         #expect(await installed == .text([#"{"bundle_id":"com.example.hello","name":"Hello"}"#]))
@@ -128,10 +128,12 @@ struct DeviceAgentControlTests {
         }
     }
 
-    /// Yields until `condition` holds; fails the test after 1000 tries.
-    private func until(_ condition: () -> Bool) async {
-        for _ in 0..<1000 where !condition() { await Task.yield() }
-        #expect(condition())
+    /// Yields until `condition` holds, and fails the test if it doesn't within
+    /// five seconds; the deadline only bounds the failure case.
+    private func until(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition(), ContinuousClock.now < deadline { await Task.yield() }
+        try #require(condition())
     }
 
     @Test(arguments: [
@@ -143,12 +145,12 @@ struct DeviceAgentControlTests {
         #expect(error(response)?.hasPrefix(code + ":") == true)
     }
 
-    @Test func aCallMadeWhileTheUserDrivesRunsAfterHandBack() async {
+    @Test func aCallMadeWhileTheUserDrivesRunsAfterHandBack() async throws {
         let input = FakeInput()
         let control = control(input, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
-        await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await until { control.waitingSessions(udid: "on") == ["s"] }
         control.handBack(udid: "on")
         #expect(await call == .ok)
         #expect(control.waitingSessions(udid: "on").isEmpty)
@@ -161,25 +163,37 @@ struct DeviceAgentControlTests {
         #expect(error(response) == DeviceAgentControl.stillDriving)
     }
 
-    @Test func heldCallsRunInArrivalOrder() async {
+    /// Released calls keep their order even when the first one's device listing
+    /// finishes last.
+    @Test func heldCallsRunInArrivalOrder() async throws {
         let input = FakeInput()
-        let control = control(input, sleep: Self.untilCancelled)
+        var listings = 0
+        let control = DeviceAgentControl(
+            input: input,
+            devices: {
+                listings += 1
+                let yields = listings == 1 ? 50 : 0
+                for _ in 0..<yields { await Task.yield() }
+                return [Self.booted]
+            },
+            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, sleep: Self.untilCancelled
+        )
         control.takeOver(udid: "on")
         async let first = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
-        await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await until { control.waitingSessions(udid: "on") == ["s"] }
         async let second = control.perform(.type(udid: "on", text: "b", includeScreenshot: false), sessionID: "t")
-        await until { control.waitingSessions(udid: "on") == ["s", "t"] }
+        try await until { control.waitingSessions(udid: "on") == ["s", "t"] }
         control.handBack(udid: "on")
         #expect(await (first, second) == (.ok, .ok))
         #expect(input.keys.filter(\.down).map(\.usage) == [0x04, 0x05])
     }
 
-    @Test func aCancelledHeldCallLeavesTheQueue() async {
+    @Test func aCancelledHeldCallLeavesTheQueue() async throws {
         let input = FakeInput()
         let control = control(input, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         let call = Task { await control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s") }
-        await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await until { control.waitingSessions(udid: "on") == ["s"] }
         call.cancel()
         #expect(error(await call.value) == DeviceAgentControl.cancelled)
         #expect(control.waitingSessions(udid: "on").isEmpty)
@@ -187,7 +201,7 @@ struct DeviceAgentControlTests {
         #expect(input.keys.isEmpty)
     }
 
-    @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async {
+    @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async throws {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
             input: FakeInput(), devices: { listed }, boot: { _ in },
@@ -195,7 +209,7 @@ struct DeviceAgentControlTests {
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
-        await until { !control.waitingSessions(udid: "on").isEmpty }
+        try await until { !control.waitingSessions(udid: "on").isEmpty }
         listed = [SimulatorDevice(udid: "on", name: "iPhone", runtimeName: "iOS 26.5", state: .shutdown)]
         control.handBack(udid: "on")
         #expect(error(await call)?.hasPrefix("device_not_booted:") == true)
