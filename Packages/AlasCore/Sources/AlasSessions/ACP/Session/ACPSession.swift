@@ -327,6 +327,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the current connection's agent sent the `agentFileChangeReport`
     /// advertisement. Runtime only; relearned on attach.
     @Tracked public var agentFileChangeReport: ACPAgentFileChangeReportCapability?
+    /// Whether a prompt can ask the current connection's agent for its turn's
+    /// predicted follow-up prompt. Runtime only; relearned on attach.
+    @Tracked public var supportsPredictedPrompt = false
+    /// The agent's predicted follow-up prompt of the latest prompt that asked.
+    public let agentPrediction = NextPromptAgentPrediction()
     /// The pending plan review's plan file, as read on the session's host,
     /// keyed by the request's `toolCallId`. Runtime only; cleared when the
     /// review is answered or cancelled.

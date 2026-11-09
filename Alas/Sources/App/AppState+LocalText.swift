@@ -49,7 +49,7 @@ extension AppState {
             await self.inspectLocalTextModel()
             guard permission == self.localTextPermissionGeneration, self.localTextModelAvailable else { return }
             if nextPromptGeneration == self.nextPromptSettingsGeneration {
-                self.nextPromptRuntimeEnabled = self.config.nextPromptSuggestionsEnabled && !self.nextPromptDisableSavePending
+                self.nextPromptRuntimeEnabled = self.nextPromptUsesLocalModel && !self.nextPromptDisableSavePending
             }
             if summaryGeneration == self.sessionSummarySettingsGeneration {
                 self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled && !self.sessionSummaryDisableSavePending
@@ -125,7 +125,7 @@ extension AppState {
     func updateLocalTextModelState(_ value: LocalTextModelState) {
         guard value != localTextModelState else { return }
         if localTextSupported {
-            if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled { nextPromptCoordinator.invalidateAll() }
+            if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled { invalidateLocalModelSuggestions() }
             if config.sessionSummariesEnabled || sessionSummariesRuntimeEnabled { sessionSummaryCoordinator.teardown() }
         }
         localTextModelGeneration &+= 1
@@ -232,7 +232,7 @@ extension AppState {
 
     private func restoreLocalTextFeatures(permission: UInt64) async {
         guard permission == localTextPermissionGeneration, localTextModelAvailable else { return }
-        if config.nextPromptSuggestionsEnabled, !nextPromptDisableSavePending { await retryNextPromptSuggestions() }
+        if nextPromptUsesLocalModel, !nextPromptDisableSavePending { await retryNextPromptSuggestions() }
         guard permission == localTextPermissionGeneration, localTextModelAvailable else { return }
         if config.sessionSummariesEnabled, !sessionSummaryDisableSavePending { await retrySessionSummarySettings() }
     }

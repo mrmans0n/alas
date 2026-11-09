@@ -47,7 +47,7 @@ struct NextPromptSettingsTests {
         persistence.config.nextPromptSuggestionsEnabled = true
         let state = makeState(fixture, persistence, supported: supported)
         // Wait for the one-shot startup inspection if the supported build scheduled it.
-        await state.localTextObservers.tasks.last?.value
+        await state.waitForLocalTextReadiness()
         #expect(await fixture.store.state == (supported ? .ready : .notInstalled))
         #expect(state.nextPromptRuntimeEnabled == supported)
         #expect(fixture.transport.requestCount == 0)
@@ -589,6 +589,39 @@ struct NextPromptSettingsTests {
         #expect(state.localTextModelState == .notInstalled)
         #expect(!state.nextPromptRuntimeEnabled)
         #expect(!state.sessionSummariesRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test("the agent as the source turns suggestions on without the local model, and switching back needs it again",
+          arguments: [NextPromptSource.agent, .automatic])
+    func agentSourceNeedsNoLocalModel(_ source: NextPromptSource) async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let state = makeState(fixture, SettingsStore(), supported: false, modelEnabled: false)
+        let session = ACPSession(id: "s", agentId: "test", worktreeId: "w", title: "Test")
+        session.agentState = .ready
+        session.supportsPredictedPrompt = true
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
+            promptID: session.allocatePromptID(), userMessageID: userID,
+            transcriptRevision: session.transcript.conversationRevision)
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+
+        await state.setNextPromptSource(source)
+        await state.enableNextPromptSuggestions()
+        #expect(state.config.nextPromptSuggestionsEnabled && state.nextPromptUsesAgent)
+        #expect(state.nextPromptSnapshot(session: session, turn: turn, environment: environment)?.id.source == .agent)
+
+        await state.setNextPromptSource(.onDevice)
+        #expect(!state.nextPromptUsesAgent)
+        #expect(state.nextPromptSnapshot(session: session, turn: turn, environment: environment) == nil)
+        #expect(fixture.transport.requestCount == 0)
         await state.shutdownLocalTextFeatures()
     }
 

@@ -88,6 +88,9 @@ public final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
+    /// Whether a user turn asks the agent for its predicted follow-up prompt:
+    /// suggestions are on with the agent as their source.
+    private let requestsPredictedPrompt: @MainActor () -> Bool
     /// Fires on the main actor once per `sendNow` prompt whose RPC settled
     /// while it was still the active prompt. Recovery-context prompts and
     /// superseded prompts do not fire.
@@ -417,6 +420,7 @@ public final class ACPSessionRunner {
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+         requestsPredictedPrompt: @escaping @MainActor () -> Bool = { false },
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
          onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
          onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
@@ -447,6 +451,7 @@ public final class ACPSessionRunner {
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.session = session
         self.onSuccessfulTurn = onSuccessfulTurn
+        self.requestsPredictedPrompt = requestsPredictedPrompt
         self.connection = connection
         self.persistence = resolvedPersistence
         self.sessionId = sessionId
@@ -1481,6 +1486,10 @@ public final class ACPSessionRunner {
                 promptActive: activePromptID != nil
             )).union(session.applyFileChangeReportUpdate(info))
             applySessionInfoTitle(info)
+            if !suppressingLoadReplay, let answer = ACPPredictedPrompt.answer(in: params.update),
+               session.agentPrediction.receive(answer) {
+                nextPromptLogger.notice("agent predicted \(answer.text?.count ?? 0) characters")
+            }
         } else {
             preAppliedSessionInfoDirty = nil
         }
@@ -5011,12 +5020,12 @@ extension ACPSessionRunner {
             }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
-            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?) in
+            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?, predictedPromptRequestID: String?) in
                 // Stopped, or its connection replaced, while symbol mentions
                 // resolved: this prompt is over and must not be recorded.
                 if self.activePromptID == promptID, self.stopped || !self.isConnectionCurrent() {
                     abandonUnrecordedPrompt()
-                    return (false, nil, nil)
+                    return (false, nil, nil, nil)
                 }
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -5031,7 +5040,7 @@ extension ACPSessionRunner {
                        !self.steerInProgress, self.activePromptID == nil {
                         onPromptFinished?(false)
                     }
-                    return (false, nil, nil)
+                    return (false, nil, nil, nil)
                 }
                 // Only now that nothing can refuse it before the row: a refused
                 // prompt starts no turn, so the Retry of an earlier failed one stands.
@@ -5064,6 +5073,21 @@ extension ACPSessionRunner {
                     ACPAgentFileChangeReportRequest.newRequestId()
                 } else {
                     nil
+                }
+                // Only a user's own turn can offer a suggestion when it ends,
+                // so only it asks the agent for one. Any prompt spends the
+                // previous turn's prediction.
+                let predictedPromptRequestID: String? = if normalUserTurn, delegatedSource == nil,
+                    self.session.forkRecord?.contextDeliveryPending != true,
+                    self.session.supportsPredictedPrompt, self.requestsPredictedPrompt() {
+                    ACPPredictedPrompt.newRequestID()
+                } else {
+                    nil
+                }
+                if let predictedPromptRequestID {
+                    self.session.agentPrediction.expect(promptID: promptID, requestID: predictedPromptRequestID)
+                } else {
+                    self.session.agentPrediction.reset()
                 }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
@@ -5101,7 +5125,7 @@ extension ACPSessionRunner {
                     self.persistQueue()
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, nil, fileChangeReportRequestId)
+                    return (true, nil, fileChangeReportRequestId, predictedPromptRequestID)
                 }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
@@ -5148,7 +5172,7 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, messageID, fileChangeReportRequestId)
+                    return (true, messageID, fileChangeReportRequestId, predictedPromptRequestID)
                 }
                 let recordedID = recordedUserMessageID
                     ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
@@ -5167,7 +5191,7 @@ extension ACPSessionRunner {
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                return (true, nil, fileChangeReportRequestId)
+                return (true, nil, fileChangeReportRequestId, predictedPromptRequestID)
             }
             guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
@@ -5278,6 +5302,7 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     fileChangeReportRequestId: promptRecording.fileChangeReportRequestId,
+                    predictedPromptRequestID: promptRecording.predictedPromptRequestID,
                     onRequestHandoff: onDispatchRegistered,
                     onTransportHandoff: { [weak self, promptHandoffs] in
                         promptHandoffs.mark(promptID)

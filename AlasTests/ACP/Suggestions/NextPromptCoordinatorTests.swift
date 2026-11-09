@@ -33,7 +33,9 @@ struct NextPromptCoordinatorTests {
             drain?.resume()
             drain = nil
         }
+        var unloads = 0
         func cancelAndUnload() async {
+            unloads += 1
             unloading = true
             unloadStarted?.resume()
             unloadStarted = nil
@@ -58,16 +60,25 @@ struct NextPromptCoordinatorTests {
         var composerEpoch: UInt64 = 0
         var settingsGeneration: UInt64 = 0
         var modelGeneration: UInt64 = 0
+        var source: NextPromptSource = .onDevice
         var eligible = true
         var coordinator: NextPromptCoordinator!
-        init(clock: NextPromptInference.Clock = .init()) {
-            coordinator = NextPromptCoordinator(engine: generator, clock: clock) { [weak self] _ in self?.snapshot }
+        /// With `agent`, requests go through the source router: the agent's
+        /// prediction store answers agent turns, `generator` the local ones.
+        init(clock: NextPromptInference.Clock = .init(), agent: NextPromptAgentPrediction? = nil) {
+            let engine: any NextPromptGenerating = if let agent {
+                NextPromptSourceRouter(onDevice: generator, agent: NextPromptAgentEngine { _ in agent })
+            } else {
+                generator
+            }
+            if agent != nil { source = .agent }
+            coordinator = NextPromptCoordinator(engine: engine, clock: clock) { [weak self] _ in self?.snapshot }
         }
         var id: NextPromptRequestID {
             .init(sessionID: sessionID, incarnation: incarnation, promptID: promptID,
                   transcriptRevision: transcriptRevision, draftRevision: draftRevision,
                   composerEpoch: composerEpoch, settingsGeneration: settingsGeneration,
-                  modelGeneration: modelGeneration)
+                  modelGeneration: modelGeneration, source: source)
         }
         var snapshot: NextPromptEligibilitySnapshot {
             .init(id: id, turns: [.init(user: "Compare these", assistant: "Here is the tradeoff")],
@@ -329,6 +340,80 @@ struct NextPromptCoordinatorTests {
         withExtendedLifetime(observation) {}
     }
 
+    @Test("the agent's prediction is offered whether it lands before or after the turn completes",
+          arguments: [true, false])
+    func agentPredictionIsOffered(answeredFirst: Bool) async throws {
+        let prediction = NextPromptAgentPrediction()
+        let fixture = Fixture(agent: prediction)
+        prediction.expect(promptID: fixture.promptID, requestID: "current")
+        #expect(!prediction.receive(.init(id: "earlier", text: "Stale.")))
+        if answeredFirst { prediction.receive(.init(id: "current", text: "Run the tests.")) }
+        fixture.coordinator.completed(fixture.turn)
+        let task = fixture.coordinator.generationTask
+        if !answeredFirst {
+            try await eventually("the engine waits") { prediction.isWaitedOnForTesting }
+            prediction.receive(.init(id: "current", text: "Run the tests."))
+        }
+        await task?.value
+
+        #expect(fixture.coordinator.takeOffer() == "Run the tests.")
+        #expect(fixture.generator.requests.isEmpty)
+    }
+
+    @Test("an agent turn without a prediction offers nothing and leaves the local model alone",
+          arguments: ["nothing predicted", "newer prompt", "never asked"])
+    func agentTurnWithoutPrediction(_ reason: String) async throws {
+        let prediction = NextPromptAgentPrediction()
+        let fixture = Fixture(agent: prediction)
+        if reason != "never asked" { prediction.expect(promptID: fixture.promptID, requestID: "current") }
+        fixture.coordinator.completed(fixture.turn)
+        let task = fixture.coordinator.generationTask
+        if reason != "never asked" { try await eventually("the engine waits") { prediction.isWaitedOnForTesting } }
+        switch reason {
+        case "nothing predicted": prediction.receive(.init(id: "current", text: nil))
+        case "newer prompt": prediction.expect(promptID: fixture.promptID + 1, requestID: "next")
+        default: break
+        }
+        await task?.value
+        await fixture.coordinator.shutdown()
+
+        #expect(fixture.coordinator.offer == nil)
+        #expect(fixture.generator.requests.isEmpty)
+        #expect(fixture.generator.unloads == 0)
+    }
+
+    @Test func theLocalModelsInvalidationLeavesTheAgentsOffer() async throws {
+        let prediction = NextPromptAgentPrediction()
+        let fixture = Fixture(agent: prediction)
+        prediction.expect(promptID: fixture.promptID, requestID: "current")
+        prediction.receive(.init(id: "current", text: "Run the tests."))
+        fixture.coordinator.completed(fixture.turn)
+        await fixture.coordinator.generationTask?.value
+
+        fixture.coordinator.invalidateAll(source: .onDevice)
+        #expect(fixture.coordinator.offer != nil)
+        fixture.coordinator.invalidateAll(source: .agent)
+        #expect(fixture.coordinator.offer == nil)
+    }
+
+    @Test func anAgentTurnWaitsPastTheLocalDeadlineButNotPastItsOwn() async throws {
+        let clock = ManualClock()
+        let prediction = NextPromptAgentPrediction()
+        let fixture = Fixture(clock: clock.clock, agent: prediction)
+        prediction.expect(promptID: fixture.promptID, requestID: "current")
+        fixture.coordinator.completed(fixture.turn)
+        try await eventually("the engine waits") { prediction.isWaitedOnForTesting }
+
+        clock.advance(NextPromptSource.onDevice.suggestionDeadline + .seconds(1))
+        await Task.yield()
+        #expect(fixture.coordinator.generationTask != nil)
+        clock.advance(NextPromptSource.agent.suggestionDeadline)
+        try await eventually("the deadline drops the turn") { fixture.coordinator.generationTask == nil }
+        prediction.receive(.init(id: "current", text: "Too late."))
+
+        #expect(fixture.coordinator.offer == nil)
+    }
+
     private func readySession(_ session: ACPSession = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")) -> (ACPSession, NextPromptCompletedTurn, NextPromptEligibilitySnapshot.Environment) {
         session.agentState = .ready
         let userID = session.recordUserPrompt(text: "Explain this", attachments: [])
@@ -411,6 +496,25 @@ struct NextPromptCoordinatorTests {
         #expect(coordinator.generationTask == nil)
         await coordinator.shutdown()
         withExtendedLifetime((observation, childObservation)) {}
+    }
+
+    @Test("an agent that predicts answers without the local model; otherwise automatic falls back to it",
+          arguments: [NextPromptSource.agent, .automatic], [true, false])
+    func agentSourceEligibility(source: NextPromptSource, agentPredicts: Bool) {
+        let (session, turn, initial) = readySession()
+        session.supportsPredictedPrompt = agentPredicts
+        var environment = initial
+        environment.source = source
+        environment.hasVerifiedModel = false
+        environment.isRuntimeAvailable = false
+        let snapshot = NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)
+        #expect((snapshot?.isEligible == true) == agentPredicts)
+        #expect(snapshot.map { $0.id.source == .agent } != false)
+
+        guard source == .automatic, !agentPredicts else { return }
+        environment = initial
+        environment.source = source
+        #expect(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)?.id.source == .onDevice)
     }
 
     @Test(arguments: ["enabled", "verified", "runtime", "app", "writer", "focus", "paste/drop/image", "blocked",

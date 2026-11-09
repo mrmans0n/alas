@@ -2606,9 +2606,11 @@ struct ACPSessionRunnerTests {
     /// A started, negotiated runner whose `session/prompt` opens `entered`, then answers `response` once `respond` opens.
     private func makeGatedPromptRunner(
         response: ACPResponse = ACPResponse(body: ACPSessionRunnerTests.succeededPrompt),
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        requestsPredictedPrompt: Bool = false
     ) async throws -> GatedPromptFixture {
-        let (runner, mock, session, store) = try await makeFailureRunner(onTurnCompleted: onTurnCompleted)
+        let (runner, mock, session, store) = try await makeFailureRunner(
+            onTurnCompleted: onTurnCompleted, requestsPredictedPrompt: requestsPredictedPrompt)
         runner.start()
         session.agentFileChangeReport = .init()
         let entered = AsyncGate()
@@ -2619,6 +2621,35 @@ struct ACPSessionRunnerTests {
             return response
         }
         return .init(runner: runner, mock: mock, session: session, store: store, entered: entered, respond: respond)
+    }
+
+    @Test("a user turn asks its agent for a prediction only when asked to and supported, and keeps only its own answer",
+          .timeLimit(.minutes(1)), arguments: [(true, true), (false, true), (true, false)])
+    func userTurnAsksForItsPrediction(requested: Bool, supported: Bool) async throws {
+        let fixture = try await makeGatedPromptRunner(requestsPredictedPrompt: requested)
+        defer { fixture.runner.stop() }
+        fixture.session.supportsPredictedPrompt = supported
+        let item = UUID()
+        fixture.session.enqueue(id: item, blocks: [.text("Fix the build")])
+        fixture.session.normalQueuedTurnIDs.insert(item)
+        fixture.runner.flushQueueIfIdle()
+        await fixture.entered.wait()
+        let promptID = fixture.session.nextPromptID - 1
+        let requestID = sentPrompts(fixture.mock).last.flatMap {
+            ($0.params as? ACPSessionPromptParams)?.meta?.promptSuggestions?.id
+        }
+        #expect((requestID != nil) == (requested && supported))
+
+        func answer(_ id: String, _ text: String) throws -> ACPSessionUpdateParams {
+            let meta = #"{"_meta":{"promptSuggestions":{"suggestions":[{"text":"\#(text)"}],"id":"\#(id)"}}}"#
+            return .init(sessionId: "s", update: .sessionInfoUpdate(
+                try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data(meta.utf8))))
+        }
+        fixture.mock.emit(try answer("earlier-prompt", "Stale."))
+        if let requestID { fixture.mock.emit(try answer(requestID, "Run the tests.")) }
+        await fixture.respond.open()
+
+        #expect(await fixture.session.agentPrediction.answer(for: promptID) == (requestID != nil ? "Run the tests." : nil))
     }
 
     private func emitReport(_ info: ACPSessionInfoUpdate, requestId: String, on fixture: GatedPromptFixture) async throws {
@@ -2812,7 +2843,8 @@ struct ACPSessionRunnerTests {
         coalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
-        onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil
+        onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
+        requestsPredictedPrompt: Bool = false
     ) async throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2836,6 +2868,7 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onAuthRequired: onAuthRequired,
             onSuccessfulTurn: onSuccessfulTurn,
+            requestsPredictedPrompt: { requestsPredictedPrompt },
             onTurnCompleted: onTurnCompleted,
             isConnectionCurrent: isConnectionCurrent,
             incomingUpdateCoalesceNanos: coalesceNanos

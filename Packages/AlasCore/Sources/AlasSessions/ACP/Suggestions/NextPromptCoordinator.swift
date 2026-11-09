@@ -35,6 +35,8 @@ public struct NextPromptEligibilitySnapshot: Sendable {
         public var composerEpoch: UInt64 = 0
         public var settingsGeneration: UInt64 = 0
         public var modelGeneration: UInt64 = 0
+        /// The configured source, resolved per session; the model gates apply only to the local one.
+        public var source: NextPromptSource = .onDevice
 
         public init(isEnabled: Bool = false, hasVerifiedModel: Bool = false, isRuntimeAvailable: Bool = false, isAppActive: Bool = false, isActiveVisibleWriter: Bool = false, hasComposerFocus: Bool = false, hasKeyWindow: Bool = false, hasPendingInput: Bool = false, isInputBlocked: Bool = false, hasSelection: Bool = false, hasMarkedText: Bool = false, isDictating: Bool = false, isPickerPresented: Bool = false, hasPromptWork: Bool = false, hasForkOrDelegationWork: Bool = false, composerEpoch: UInt64 = 0, settingsGeneration: UInt64 = 0, modelGeneration: UInt64 = 0) {
             self.isEnabled = isEnabled
@@ -75,7 +77,8 @@ public struct NextPromptEligibilitySnapshot: Sendable {
                               draftRevision: session.composerDraftRevision,
                               composerEpoch: environment.composerEpoch,
                               settingsGeneration: environment.settingsGeneration,
-                              modelGeneration: environment.modelGeneration),
+                              modelGeneration: environment.modelGeneration,
+                              source: environment.source.resolved(agentPredicts: session.supportsPredictedPrompt)),
                      turns: turns, isEligible: true)
     }
     /// Names the first live gate that blocks an offer, so diagnostics can say why none appeared.
@@ -84,8 +87,13 @@ public struct NextPromptEligibilitySnapshot: Sendable {
                                          environment: Environment) -> String? {
         let transcript = session.transcript
         guard environment.isEnabled else { return "disabled" }
-        guard environment.hasVerifiedModel else { return "model not verified" }
-        guard environment.isRuntimeAvailable else { return "runtime unavailable" }
+        switch environment.source.resolved(agentPredicts: session.supportsPredictedPrompt) {
+        case .onDevice, .automatic:
+            guard environment.hasVerifiedModel else { return "model not verified" }
+            guard environment.isRuntimeAvailable else { return "runtime unavailable" }
+        case .agent:
+            guard session.supportsPredictedPrompt else { return "agent offers no predictions" }
+        }
         guard environment.isAppActive else { return "app inactive" }
         guard environment.isActiveVisibleWriter else { return "not the active visible writer" }
         guard environment.hasComposerFocus else { return "composer unfocused" }
@@ -269,6 +277,20 @@ public final class NextPromptCoordinator: ChangeTracking {
         invalidate(incarnation: activeIncarnation)
     }
 
+    /// Drops the turns one engine is generating or offering; the other engine's
+    /// keep theirs. Pending turns resolve their engine when they are next considered.
+    public func invalidateAll(source: NextPromptSource) {
+        let affected = opportunities.values.filter { opportunity in
+            switch opportunity.state {
+            case .pending: false
+            case .generating(let id), .offered(let id, _): id.source == source
+            }
+        }
+        for opportunity in affected {
+            invalidate(incarnation: opportunity.turn.incarnation, reason: "\(source.rawValue) invalidated")
+        }
+    }
+
     public func invalidateAll() {
         let retained = opportunities.values.map(\.turn)
         for turn in retained { nextPromptLogger.notice("prompt \(turn.promptID) dropped: invalidate all") }
@@ -324,7 +346,7 @@ public final class NextPromptCoordinator: ChangeTracking {
         opportunities[turn.incarnation]?.state = .generating(current.id)
         let request = NextPromptRequest(id: current.id, turns: current.turns)
         let capturedEpoch = epoch
-        let deadline = clock.now().advanced(by: .seconds(15))
+        let deadline = clock.now().advanced(by: current.id.source.suggestionDeadline)
         let previousDrain = drainTask
         hasUsedEngine = true
         nextPromptLogger.notice("prompt \(turn.promptID) generating from \(current.turns.count) turns")

@@ -58,8 +58,10 @@ public struct NextPromptRequestID: Equatable, Sendable {
     public let composerEpoch: UInt64
     public let settingsGeneration: UInt64
     public let modelGeneration: UInt64
+    /// Which engine answers it.
+    public let source: NextPromptSource
 
-    public init(sessionID: String, incarnation: UUID, promptID: Int, transcriptRevision: UInt64, draftRevision: Int, composerEpoch: UInt64, settingsGeneration: UInt64, modelGeneration: UInt64) {
+    public init(sessionID: String, incarnation: UUID, promptID: Int, transcriptRevision: UInt64, draftRevision: Int, composerEpoch: UInt64, settingsGeneration: UInt64, modelGeneration: UInt64, source: NextPromptSource = .onDevice) {
         self.sessionID = sessionID
         self.incarnation = incarnation
         self.promptID = promptID
@@ -68,6 +70,19 @@ public struct NextPromptRequestID: Equatable, Sendable {
         self.composerEpoch = composerEpoch
         self.settingsGeneration = settingsGeneration
         self.modelGeneration = modelGeneration
+        self.source = source
+    }
+}
+
+extension NextPromptSource {
+    /// How long a completed turn waits for its suggestion. The local model
+    /// answers in seconds; the agent's prediction can be a model call of its
+    /// own (Codex samples at high effort).
+    public var suggestionDeadline: Duration {
+        switch self {
+        case .onDevice, .automatic: .seconds(15)
+        case .agent: .seconds(60)
+        }
     }
 }
 
