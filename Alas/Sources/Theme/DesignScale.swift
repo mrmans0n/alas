@@ -121,3 +121,13 @@ extension EnvironmentValues {
         set { self[DesignScaleKey.self] = newValue }
     }
 }
+
+/// The scale for SwiftUI roots hosted straight in AppKit (popovers, overlay
+/// panels, sheet windows). They are not children of the app's SwiftUI tree, so
+/// they never receive `\.designScale`, and wrapping their root in an
+/// `.environment` modifier would change the hosting controller's generic type.
+/// `RootView` keeps this in step with the saved density.
+@MainActor
+enum HostedDesignScale {
+    static var current = DesignScale.comfortable
+}

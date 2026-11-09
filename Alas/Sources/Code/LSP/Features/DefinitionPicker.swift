@@ -17,15 +17,16 @@ struct DefinitionPicker: View {
     let onChoose: (Int?) -> Void
 
     @State private var selection: Int = 0
+    private var scale: DesignScale { HostedDesignScale.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("\(entries.count) DEFINITIONS")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 6)
+                .padding(.horizontal, scale.space[3])
+                .padding(.top, scale.space[2])
+                .padding(.bottom, scale.space[2])
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { idx, entry in
@@ -43,7 +44,7 @@ struct DefinitionPicker: View {
             }
         }
         .frame(width: 380)
-        .padding(.bottom, 6)
+        .padding(.bottom, scale.space[2])
         .focusable()
         .onKeyPress(.upArrow)   { selection = max(0, selection - 1)
         return .handled }
@@ -59,17 +60,17 @@ struct DefinitionPicker: View {
         let snippet = targets.indices.contains(idx) ? snippetStore?.snippets[targets[idx]] ?? entry.snippet : entry.snippet
         return VStack(alignment: .leading, spacing: 2) {
             Text(entry.displayPath)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
             if !snippet.isEmpty {
                 Text(snippet)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, 6) // design-literal: row pitch feeds the popover height (36 per entry)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

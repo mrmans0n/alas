@@ -401,6 +401,7 @@ struct CodeActionPicker: View {
     let organizeImports: () -> Void
     let cancel: () -> Void
     @FocusState private var searchFocused: Bool
+    private var scale: DesignScale { HostedDesignScale.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -414,7 +415,7 @@ struct CodeActionPicker: View {
                                 if let reason = row.action.disabled?.reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
                                 else if let kind = row.action.kind { Text(kind).font(.caption).foregroundStyle(.secondary) }
                             }.frame(maxWidth: .infinity, alignment: .leading)
-                        }.buttonStyle(.plain).disabled(row.action.disabled != nil).padding(4)
+                        }.buttonStyle(.plain).disabled(row.action.disabled != nil).padding(scale.space[1])
                     }
                     if model.isLoading { ProgressView("Finding code actions…") }
                     else if let message = model.message { Text(message).foregroundStyle(.secondary) }
@@ -426,6 +427,6 @@ struct CodeActionPicker: View {
                 Spacer()
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
             }
-        }.padding(12).frame(width: 380).onAppear { searchFocused = true }
+        }.padding(scale.space[3]).frame(width: 380).onAppear { searchFocused = true }
     }
 }

@@ -103,6 +103,7 @@ struct WorkspaceEditPreview: View {
     let close: () -> Void
     var cancel: (() -> Void)? = nil
     @State private var selectedStep: Int = 0
+    private var scale: DesignScale { HostedDesignScale.current }
 
     private struct StepRow: Identifiable {
         let id: Int
@@ -116,7 +117,7 @@ struct WorkspaceEditPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Review workspace changes").font(.headline)
+                Text("Review workspace changes").font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                 Spacer()
                 Text("\(model.fileCount) files · \(model.plan.steps.count) operations").foregroundStyle(.secondary)
             }
@@ -130,7 +131,7 @@ struct WorkspaceEditPreview: View {
                                         Text((row.path as NSString).lastPathComponent)
                                         Spacer()
                                         Text(row.step.kind.rawValue.capitalized).font(.caption2)
-                                            .padding(.horizontal, 4).background(.quaternary, in: .rect(cornerRadius: 3))
+                                            .padding(.horizontal, scale.space[1]).background(.quaternary, in: .rect(cornerRadius: scale.radius.small))
                                     }
                                     Text(row.step.before.isOpen ? "Unsaved buffer" : "Disk").font(.caption).foregroundStyle(.secondary)
                                     if let destination = row.step.destination {
@@ -152,7 +153,7 @@ struct WorkspaceEditPreview: View {
                                     .foregroundStyle(line.prefix == "+" ? Color.green : line.prefix == "−" ? Color.red : Color.primary)
                                     .textSelection(.enabled)
                             }
-                        }.font(.system(.body, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                        }.font(.system(.body, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).padding(scale.space[2])
                     }
                 }.frame(minWidth: 350)
             }
@@ -174,6 +175,6 @@ struct WorkspaceEditPreview: View {
                 Button("Apply all") { Task { if await model.apply() { close() } } }
                     .keyboardShortcut(.defaultAction).disabled(model.isApplying || model.requiresRecovery)
             }
-        }.padding(16).frame(width: 820, height: 540)
+        }.padding(scale.space[4]).frame(width: 820, height: 540)
     }
 }
