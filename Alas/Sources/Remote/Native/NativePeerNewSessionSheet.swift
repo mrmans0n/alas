@@ -20,6 +20,7 @@ struct NativePeerNewSessionSheet: View {
     /// Nil is "Default": no effort is sent and the peer uses the agent's own.
     @State private var effortId: String?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     /// Chip item standing for "send nothing". Advertised ids that are empty
     /// are dropped from the lists, so this can never shadow a real option.
@@ -121,17 +122,17 @@ struct NativePeerNewSessionSheet: View {
                 }
                 if let selectedAgent, visibility?.showsDefaultsHint == true {
                     Text("Model and effort use \(selectedAgent.name)'s defaults until it has run once on \(peerName).")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
         if let hint = emptyHint {
-            Text(hint).font(.system(size: 11.5)).foregroundColor(theme.color("fg-muted"))
+            Text(hint).font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
         }
         if case .failed(let message) = request?.phase {
-            Text(message).font(.system(size: 11.5)).foregroundColor(theme.color("del"))
+            Text(message).font(scale.metaFont).foregroundColor(theme.color("del"))
         }
     }
 
@@ -156,7 +157,7 @@ struct NativePeerNewSessionSheet: View {
             )
         }
         if let message = NativePeerNewSession.branchValidationMessage(branch) {
-            Text(message).font(.system(size: 11.5)).foregroundColor(theme.color("del"))
+            Text(message).font(scale.metaFont).foregroundColor(theme.color("del"))
         }
     }
 
@@ -227,15 +228,15 @@ struct NativePeerNewSessionSheet: View {
             Spinner(lineWidth: 1.5, duration: 0.7, color: theme.color("fg-muted"))
                 .frame(width: 12, height: 12)
             Text(text)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 28)
         .background(theme.color("bg-1"))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func loadingChip(_ text: String) -> some View {
@@ -244,13 +245,13 @@ struct NativePeerNewSessionSheet: View {
             Spinner(lineWidth: 1.2, duration: 0.7, color: accent)
                 .frame(width: 10, height: 10)
             Text(text)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(accent)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 24)
-        .background(RoundedRectangle(cornerRadius: 6).fill(accent.opacity(0.18)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(accent.opacity(0.45), lineWidth: 0.75))
+        .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(accent.opacity(0.18)))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(accent.opacity(0.45), lineWidth: 0.75))
     }
 
     private var emptyHint: String? {
@@ -309,12 +310,12 @@ struct NativePeerNewSessionSheet: View {
 }
 
 /// A peer worktree picker in `ProjectPicker`'s style. The worktree's name
-/// leads in monospace and its branch follows muted, so the two never read
-/// as one label.
+/// leads and its branch follows muted, so the two never read as one label.
 private struct NativePeerWorktreePicker: View {
     @Binding var selection: String?
     let worktrees: [RemoteWorktreeOption]
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var open = false
 
     private var selected: RemoteWorktreeOption? { worktrees.first { $0.id == selection } }
@@ -325,29 +326,29 @@ private struct NativePeerWorktreePicker: View {
                 branchIcon
                 if let selected {
                     Text(selected.worktreeName)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     Text("on \(selected.branch)")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 } else {
                     Text("No worktrees")
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .background(theme.color("bg-1"))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .disabled(worktrees.isEmpty)
@@ -356,7 +357,7 @@ private struct NativePeerWorktreePicker: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(worktrees, id: \.id) { row($0) }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .frame(width: 360)
             .frame(maxHeight: 320)
@@ -365,7 +366,7 @@ private struct NativePeerWorktreePicker: View {
 
     private var branchIcon: some View {
         Image(systemName: "arrow.triangle.branch")
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundColor(theme.color("fg-muted"))
     }
 
@@ -376,18 +377,18 @@ private struct NativePeerWorktreePicker: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg"))
                     .opacity(option.id == selection ? 1 : 0)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(option.worktreeName)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     HStack(spacing: 4) {
                         branchIcon
                         Text(option.branch)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-muted"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -395,8 +396,8 @@ private struct NativePeerWorktreePicker: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

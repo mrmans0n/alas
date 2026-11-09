@@ -284,3 +284,4 @@ Alas/Sources/Remote/Native/NativePeerDocumentView.swift
 Alas/Sources/Remote/Native/NativePeerConsoleView.swift
 Alas/Sources/Remote/Native/NativePeerTabBar.swift
 Alas/Sources/Remote/Native/NativePeerTranscriptScroller.swift
+Alas/Sources/Remote/Native/NativePeerNewSessionSheet.swift
