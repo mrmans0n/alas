@@ -285,10 +285,11 @@ public enum ACPAttachmentStaging: Sendable {
     }
 
     /// Removes what staging put directly in `directory`: images named
-    /// `<sha256>.<ext>` and PDF folders named `<sha256>`. Anything else stays,
-    /// such as the folder of a worktree whose path is under this one's, and
-    /// the directory itself goes only once it is empty. A missing directory
-    /// is nothing to remove.
+    /// `<sha256>.<ext>` and PDF folders named `<sha256>` that hold only files.
+    /// Anything else stays, such as the folder of a worktree whose path is
+    /// under this one's (which holds PDF folders, even under a hash-shaped
+    /// name), and the directory itself goes only once it is empty. A missing
+    /// directory is nothing to remove.
     public static func removeStaged(in directory: URL) throws {
         let fileManager = FileManager.default
         let names: [String]
@@ -300,7 +301,14 @@ public enum ACPAttachmentStaging: Sendable {
         for name in names {
             let hash = name.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)[0]
             guard isSHA256Hex(hash) else { continue }
-            try fileManager.removeItem(at: directory.appendingPathComponent(name))
+            let entry = directory.appendingPathComponent(name)
+            if try entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                let children = try fileManager.contentsOfDirectory(
+                    at: entry, includingPropertiesForKeys: [.isDirectoryKey])
+                guard try children.allSatisfy({ try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory != true })
+                else { continue }
+            }
+            try fileManager.removeItem(at: entry)
         }
         if try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty {
             try fileManager.removeItem(at: directory)

@@ -106,9 +106,11 @@ struct AlasCoreContextTests {
         try Data("pdf".utf8).write(to: attachments.appendingPathComponent("\(hash)/spec.pdf"))
         try Paths.ensureDirectoryExists(images)
         try Data("png".utf8).write(to: images.appendingPathComponent("\(hash).png"))
-        // The folder of a worktree whose path is under this one's.
-        let nested = attachments.appendingPathComponent("nested")
-        try Paths.ensureDirectoryExists(nested)
+        // The folders of worktrees whose paths are under this one's, one with a hash-shaped name.
+        try Paths.ensureDirectoryExists(attachments.appendingPathComponent("nested"))
+        let hashNamed = String(repeating: "b", count: 64)
+        try Paths.ensureDirectoryExists(attachments.appendingPathComponent("\(hashNamed)/\(hash)"))
+        try Data("pdf".utf8).write(to: attachments.appendingPathComponent("\(hashNamed)/\(hash)/spec.pdf"))
 
         try await context.archiveWorktree(worktree)
         #expect(FileManager.default.fileExists(atPath: attachments.path), "archiving keeps staged attachments")
@@ -140,7 +142,7 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.records(worktreeID: worktree.id).isEmpty)
         #expect(try await context.runHistory.store?.entry(id: record.id) == nil, "the deleted worktree's history goes with it")
         let left = try FileManager.default.contentsOfDirectory(atPath: attachments.path)
-        #expect(left == ["nested"], "so do its staged attachments, but not a nested worktree's folder")
+        #expect(Set(left) == ["nested", hashNamed], "so do its staged attachments, but not nested worktrees' folders")
         #expect(!FileManager.default.fileExists(atPath: images.path))
     }
 
