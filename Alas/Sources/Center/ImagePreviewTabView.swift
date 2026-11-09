@@ -188,12 +188,13 @@ struct ImagePreviewBody: View {
 /// Native magnification handles trackpad pinches and scrolling even when hosted
 /// in a floating preview panel. The same viewport is used by image tabs.
 struct ZoomableImageView: View {
+    @Environment(\.designScale) private var scale
     let image: NSImage
     @State private var controls = ImageViewportControls()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(spacing: scale.space[3]) {
                 Button { controls.zoom(by: 0.8) } label: {
                     Label("Zoom out", systemImage: "minus.magnifyingglass")
                 }
@@ -206,7 +207,7 @@ struct ZoomableImageView: View {
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .padding(10)
+            .padding(scale.space[3])
             ImageViewport(image: image, controls: controls)
         }
     }
