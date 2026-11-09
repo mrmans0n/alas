@@ -49,27 +49,34 @@ struct MermaidDiagramBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MermaidDiagramBlockHeader(
-                showsSource: sourceDisclosure.showsSource,
-                toggleSource: { sourceDisclosure.toggle() },
-                copySource: copySource,
-                expand: expand
-            )
-            MermaidDiagramRenderContent(
-                source: source,
-                profile: profile,
-                outcome: renderState.outcome
-            )
+            if profile != .transcript {
+                MermaidDiagramBlockHeader(
+                    showsSource: sourceDisclosure.showsSource,
+                    toggleSource: { sourceDisclosure.toggle() },
+                    copySource: copySource,
+                    expand: expand
+                )
+            }
+            Button(action: expand) {
+                MermaidDiagramRenderContent(
+                    source: source,
+                    profile: profile,
+                    outcome: renderState.outcome
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open diagram")
             if let visibleSource = sourceDisclosure.visibleSource(source) {
                 MermaidDiagramSourceView(source: visibleSource)
             }
         }
-        .background(theme.color("bg-0").opacity(0.6))
+        .background(profile == .transcript ? Color.clear : theme.color("bg-0").opacity(0.6))
         .compositingGroup()
         .clipShape(.rect(cornerRadius: 6))
         .overlay {
             RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                .strokeBorder(profile == .transcript ? Color.clear : theme.color("line"), lineWidth: 0.5)
         }
         .onChange(of: theme) { _, newTheme in
             MermaidDiagramViewerController.shared.updateTheme(newTheme)
@@ -149,7 +156,7 @@ private struct MermaidDiagramRenderContent: View {
                 maxHeight: profile.maxEmbeddedHeight,
                 source: source
             )
-            .padding(12)
+            .padding(profile == .transcript ? 0 : 12)
             .frame(maxWidth: .infinity)
         case .failed(let failure):
             VStack(alignment: .leading, spacing: 6) {

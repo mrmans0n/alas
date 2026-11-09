@@ -465,7 +465,22 @@ struct CenterPaneView: View {
                                         allowsPaneFocus: allowsPaneFocus,
                                         onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
-                        if MarkdownFileType.supportsRichPreview(relativePath: s.isExternal
+                        let previewPath = s.externalAbsolutePath ?? s.relativePath
+                        if s.showsImagePreview {
+                            ImagePreviewTabView(
+                                worktreePath: worktree.path,
+                                relativePath: s.isExternal ? (previewPath as NSString).lastPathComponent : s.relativePath,
+                                externalAbsolutePath: s.externalAbsolutePath,
+                                onRevealInFiles: { path in
+                                    guard !s.isExternal else { return }
+                                    state.revealInFiles(
+                                        worktreeId: worktree.id, path: path,
+                                        opensPane: !effectiveRightPaneVisible
+                                    )
+                                },
+                                onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                            )
+                        } else if MarkdownFileType.supportsRichPreview(relativePath: s.isExternal
                                                                  ? (s.externalAbsolutePath ?? "")
                                                                  : s.relativePath) {
                             MarkdownTabView(worktreePath: worktree.path,

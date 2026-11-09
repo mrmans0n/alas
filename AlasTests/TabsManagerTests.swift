@@ -1125,18 +1125,62 @@ struct TabsManagerTests {
         #expect(state.relativePath == "Assets/logo.png")
     }
 
-    @Test func openImagePreviewReusesExistingTab() {
-        let worktreeId = "tabs-manager-reuse-image-preview"
-        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let mgr = TabsManager()
+    @Test(arguments: ["png", "jpg", "gif", "webp", "svg"])
+    func editorNavigationReusesImagePreview(ext: String) {
+        let worktreeId = "tabs-manager-reuse-image-preview-\(ext)"
+        let mgr = TabsManager(store: TestPersistenceStore())
+        let path = "Assets/logo.\(ext)"
 
-        let first = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+        let first = mgr.openImagePreview(worktreeId: worktreeId, relativePath: path)
         _ = mgr.appendTerminal(worktreeId: worktreeId, title: "main", sessionId: "s")
-        let second = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+        let second = mgr.openEditor(worktreeId: worktreeId, relativePath: path,
+                                    revealLine: ext == "png" ? 7 : nil, revealCharacter: nil)
 
+        guard case .imagePreview = second else {
+            Issue.record("Expected image preview for editor navigation")
+            return
+        }
         #expect(first.id == second.id)
         #expect(mgr.tabs(forWorktree: worktreeId).count == 2)
         #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func svgSourceStaysVisibleAfterRestoration(external: Bool, legacy: Bool) throws {
+        let mgr = TabsManager(store: TestPersistenceStore())
+        let worktreeID = "svg-source-reveal"
+        let tab = external
+            ? mgr.openExternalEditor(worktreeId: worktreeID, absoluteURL: URL(fileURLWithPath: "/tmp/logo.svg"),
+                                     revealLine: 7, revealCharacter: 2)
+            : mgr.openEditor(worktreeId: worktreeID, relativePath: "logo.svg",
+                             revealLine: 7, revealCharacter: 2)
+
+        guard case .editor(let state) = tab else {
+            Issue.record("Expected SVG source editor for a line reveal")
+            return
+        }
+        #expect(state.revealLine == 7)
+        #expect(!state.showsImagePreview)
+
+        mgr.consumeReveal(worktreeId: worktreeID, tabId: tab.id)
+
+        let consumed = try #require(mgr.editorTabState(worktreeId: worktreeID, tabId: tab.id))
+        #expect(consumed.revealLine == nil)
+        #expect(consumed.revealCharacter == nil)
+        var payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(consumed)) as? [String: Any])
+        if legacy { payload.removeValue(forKey: "prefersImageSource") }
+        let restored = try JSONDecoder().decode(EditorTabState.self, from: JSONSerialization.data(withJSONObject: payload))
+        #expect(!restored.showsImagePreview)
+    }
+
+    @Test func newExternalSVGWithoutSourceNavigationShowsImagePreview() throws {
+        let mgr = TabsManager(store: TestPersistenceStore())
+        let tab = mgr.openExternalEditor(worktreeId: "external-svg-preview",
+                                        absoluteURL: URL(fileURLWithPath: "/tmp/logo.svg"),
+                                        revealLine: nil, revealCharacter: nil)
+        let state = try #require(mgr.editorTabState(worktreeId: "external-svg-preview", tabId: tab.id))
+        let restored = try JSONDecoder().decode(EditorTabState.self, from: JSONEncoder().encode(state))
+        #expect(restored.showsImagePreview)
     }
 
     @Test func openImagePreviewCreatesSeparateTabsForDifferentPaths() {
