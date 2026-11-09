@@ -90,7 +90,7 @@ struct DeviceAgentControlTests {
         let control = control(FakeInput(), installs: installs, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         async let installed = control.perform(.install(udid: "on", appPath: app.path), sessionID: "s")
-        try await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await eventually("install is held") { control.waitingSessions(udid: "on") == ["s"] }
         #expect(installs.calls.isEmpty)
         control.handBack(udid: "on")
         #expect(await installed == .text([#"{"bundle_id":"com.example.hello","name":"Hello"}"#]))
@@ -128,14 +128,6 @@ struct DeviceAgentControlTests {
         }
     }
 
-    /// Yields until `condition` holds, and fails the test if it doesn't within
-    /// five seconds; the deadline only bounds the failure case.
-    private func until(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !condition(), ContinuousClock.now < deadline { await Task.yield() }
-        try #require(condition())
-    }
-
     @Test(arguments: [
         (DeviceCommand.snapshot(udid: "gone", query: nil, limit: 200), "device_not_found"),
         (.tap(udid: "off", target: .point(x: 1, y: 1), includeScreenshot: false), "device_not_booted"),
@@ -150,7 +142,7 @@ struct DeviceAgentControlTests {
         let control = control(input, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
-        try await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await eventually("call is held") { control.waitingSessions(udid: "on") == ["s"] }
         control.handBack(udid: "on")
         #expect(await call == .ok)
         #expect(control.waitingSessions(udid: "on").isEmpty)
@@ -180,9 +172,9 @@ struct DeviceAgentControlTests {
         )
         control.takeOver(udid: "on")
         async let first = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
-        try await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await eventually("first call is held") { control.waitingSessions(udid: "on") == ["s"] }
         async let second = control.perform(.type(udid: "on", text: "b", includeScreenshot: false), sessionID: "t")
-        try await until { control.waitingSessions(udid: "on") == ["s", "t"] }
+        try await eventually("both calls are held") { control.waitingSessions(udid: "on") == ["s", "t"] }
         control.handBack(udid: "on")
         #expect(await (first, second) == (.ok, .ok))
         #expect(input.keys.filter(\.down).map(\.usage) == [0x04, 0x05])
@@ -193,7 +185,7 @@ struct DeviceAgentControlTests {
         let control = control(input, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
         let call = Task { await control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s") }
-        try await until { control.waitingSessions(udid: "on") == ["s"] }
+        try await eventually("call is held") { control.waitingSessions(udid: "on") == ["s"] }
         call.cancel()
         #expect(error(await call.value) == DeviceAgentControl.cancelled)
         #expect(control.waitingSessions(udid: "on").isEmpty)
@@ -209,24 +201,30 @@ struct DeviceAgentControlTests {
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
-        try await until { !control.waitingSessions(udid: "on").isEmpty }
+        try await eventually("call is held") { !control.waitingSessions(udid: "on").isEmpty }
         listed = [SimulatorDevice(udid: "on", name: "iPhone", runtimeName: "iOS 26.5", state: .shutdown)]
         control.handBack(udid: "on")
         #expect(error(await call)?.hasPrefix("device_not_booted:") == true)
     }
 
-    @Test func typingStopsAtATakeoverAndSaysHowFarItGot() async {
+    /// A takeover, or the agent cancelling the call, stops typing between
+    /// keystrokes and says how far it got.
+    @Test(arguments: [false, true])
+    func typingStopsAndSaysHowFarItGot(cancelled: Bool) async {
         let input = FakeInput()
         var sleeps = 0
         var control: DeviceAgentControl!
+        var call: Task<AlasCLIResponse, Never>!
         // Counts only the pauses between keystrokes; the lease timer sleeps too.
         control = self.control(input) { duration in
             guard duration == .milliseconds(20) else { return }
             sleeps += 1
-            if sleeps == 2 { control.takeOver(udid: "on") }
+            guard sleeps == 2 else { return }
+            if cancelled { call.cancel() } else { control.takeOver(udid: "on") }
         }
-        let response = await control.perform(.type(udid: "on", text: "abcd", includeScreenshot: false), sessionID: "s")
-        #expect(error(response)?.hasPrefix("device_user_active:") == true)
+        call = Task { await control.perform(.type(udid: "on", text: "abcd", includeScreenshot: false), sessionID: "s") }
+        let response = await call.value
+        #expect(error(response)?.hasPrefix(cancelled ? "device_cancelled:" : "device_user_active:") == true)
         #expect(error(response)?.contains("2 of 4 characters") == true)
         #expect(input.keys.filter(\.down).count == 2)
     }

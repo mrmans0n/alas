@@ -2924,7 +2924,7 @@ fn dispatch_session_wait(
         timeout_ms,
     } = command
     else {
-        if matches!(command, Command::VmRun { .. }) {
+        if ends_with_its_connection(command) {
             return dispatch_while(env, command, still_pending);
         }
         let result = dispatch(env, command);
@@ -2974,6 +2974,14 @@ fn is_computer_call(command: &Command) -> bool {
     matches!(command, Command::Computer(computer, _) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
 }
 
+/// Calls the app stops when their connection closes (`endsWithItsClient`),
+/// which is how a cancelled one ends: a `vm_run`'s guest command, and a device
+/// call, which may be waiting for the user to hand the simulator back.
+fn ends_with_its_connection(command: &Command) -> bool {
+    matches!(command, Command::VmRun { .. })
+        || matches!(command, Command::Device(device) if *device != alas_client::DeviceCommand::List)
+}
+
 /// Process-unique ids for computer calls, so a cancellation can name one.
 fn next_computer_call_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -2996,7 +3004,8 @@ fn register_pending_call(
             computer.set_call_id(next_computer_call_id());
         }
     } else if preview_id_for_cancel(command).is_none()
-        && !matches!(command, Command::SessionWait { .. } | Command::VmRun { .. })
+        && !matches!(command, Command::SessionWait { .. })
+        && !ends_with_its_connection(command)
     {
         return None;
     }
@@ -3053,8 +3062,9 @@ fn cancellation_command_for_message(
     let command = pending.get(&key).cloned()?;
     // A wait has nothing to cancel in the app: dropping it from `pending`
     // stops its worker at the next slice (see `dispatch_session_wait`). A
-    // `vm_run` worker then closes its connection, which ends the run.
-    if matches!(command, Command::SessionWait { .. } | Command::VmRun { .. }) {
+    // `vm_run` or device worker then closes its connection, which ends the
+    // call in the app.
+    if matches!(command, Command::SessionWait { .. }) || ends_with_its_connection(&command) {
         pending.remove(&key);
         return None;
     }
@@ -4737,7 +4747,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_pending_session_wait_or_vm_run_drops_it_without_an_app_command() {
+    fn cancelling_a_pending_session_wait_vm_run_or_device_call_drops_it_without_an_app_command() {
         let commands = [
             Command::SessionWait {
                 session_ids: vec!["child".into()],
@@ -4749,6 +4759,12 @@ mod tests {
                 timeout_seconds: None,
                 vm: None,
             },
+            // So does a device call's, which the app may be holding for the user.
+            Command::Device(alas_client::DeviceCommand::Type {
+                udid: "U".into(),
+                text: "hello".into(),
+                include_screenshot: false,
+            }),
         ];
         for mut command in commands {
             let pending = std::sync::Mutex::new(std::collections::HashMap::new());

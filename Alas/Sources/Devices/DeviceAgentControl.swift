@@ -31,7 +31,8 @@ final class DeviceAgentControl {
         "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators."
     static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
     static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
-    static let cancelled = "device_cancelled: The call was cancelled while it waited for the user to hand the simulator back."
+    /// The agent cancelled the call, or its MCP server went away.
+    static let cancelled = "device_cancelled: The call was cancelled."
 
     private struct AgentCall {
         let sessionID: String
@@ -219,6 +220,7 @@ final class DeviceAgentControl {
 
         if let inputTurn {
             await waitForInputTurn(udid, inputTurn)
+            if Task.isCancelled { return .error(Self.cancelled) }
             if userDriving(udid) { return .error(Self.userDriving) }
         }
 
@@ -264,9 +266,9 @@ final class DeviceAgentControl {
             input.touch(udid: udid, phase: "begin", point: from)
             for step in 1...steps {
                 await sleep(.milliseconds(16))
-                if userDriving(udid) {
+                if userDriving(udid) || Task.isCancelled {
                     input.touch(udid: udid, phase: "end", point: current)
-                    return .error(Self.userDriving)
+                    return .error(Task.isCancelled ? Self.cancelled : Self.userDriving)
                 }
                 let fraction = Double(step) / Double(steps)
                 current = DeviceScreenPoint(
@@ -284,6 +286,9 @@ final class DeviceAgentControl {
             }
             let shift: UInt32 = 0xE1
             for (index, press) in presses.enumerated() {
+                if Task.isCancelled {
+                    return .error("device_cancelled: The call was cancelled after \(index) of \(presses.count) characters were typed.")
+                }
                 if userDriving(udid) {
                     return .error("device_user_active: The user took over after \(index) of \(presses.count) characters were typed. Check the field before typing the rest.")
                 }
