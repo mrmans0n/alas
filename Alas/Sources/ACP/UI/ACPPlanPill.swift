@@ -8,6 +8,7 @@ import SwiftUI
 /// `transcript.messages` only; `ACPSession` does not forward
 /// `transcript.objectWillChange`).
 struct ACPPlanPill: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var transcript: ACPTranscript
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,27 +42,27 @@ struct ACPPlanPill: View {
         Button {
             popoverOpen.toggle()
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 Text("Tasks")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                 Text(state.progressText)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .font(scale.caption.font(weight: .semibold, design: .monospaced))
                 Text("·")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
                 Text(state.currentStep)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 220, alignment: .leading)
             }
             .foregroundStyle(theme.color("accent"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(minWidth: 300, alignment: .leading)
             .frame(height: 24)
             .background(theme.color("accent").opacity(isLit ? 0.22 : 0.10))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous))
             .overlay {
                 taskOutline(state: state)
             }
@@ -80,7 +81,7 @@ struct ACPPlanPill: View {
 
     @ViewBuilder
     private func taskOutline(state: ACPPlanPillState) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
         shape
             .strokeBorder(
                 theme.color("accent").opacity(isLit ? 0.55 : (state.isAnimating ? 0.48 : 0.28)),

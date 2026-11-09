@@ -29,7 +29,7 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
     /// Not `target`: that name is taken by `NSCell.target`.
     let symbol: ACPSymbolReference.Target
     private static let iconSize: CGFloat = 13
-    private static let iconFont = NSFont.systemFont(ofSize: 8.5, weight: .bold)
+    private static let iconFont = NSFont.systemFont(ofSize: 8.5, weight: .bold) // design-literal: AppKit attachment cell font cannot read the environment
     private static let countFont = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
     static let pillFill = NSColor.appearanceAware(
         dark: NSColor.black.withAlphaComponent(0.28), light: NSColor.black.withAlphaComponent(0.05)

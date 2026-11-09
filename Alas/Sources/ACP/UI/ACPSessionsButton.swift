@@ -10,6 +10,7 @@ import SwiftUI
 /// disconnected; the at-a-glance signal that used to live as inline
 /// text next to the title.
 struct ACPSessionsButton: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     @ObservedObject var manager: ACPSessionManager
     let state: AppState
@@ -31,12 +32,12 @@ struct ACPSessionsButton: View {
         } label: {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color(isLit ? "fg" : "fg-muted"))
-                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
                     .background(theme.color("bg-3").opacity(isLit ? 1 : 0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 if session.agentState == .disconnected {
                     Circle()
                         .fill(theme.color("del"))
@@ -64,6 +65,7 @@ struct ACPSessionsButton: View {
 }
 
 private struct SessionsPopover: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     @ObservedObject var manager: ACPSessionManager
     let state: AppState
@@ -79,14 +81,14 @@ private struct SessionsPopover: View {
         VStack(spacing: 0) {
             currentSessionHeader
             if session.forkRecord?.phase == .ready {
-                HStack(spacing: 12) {
+                HStack(spacing: scale.space[3]) {
                     Button("Merge back") { mergeFork(archive: false) }
                     Button("Merge back and archive") { mergeFork(archive: true) }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("accent"))
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(mergingFork || session.hydrationState != .ready || manager.isMirror(sessionId: session.id))
                 .help("Send a conversation digest to the source chat after the fork's pending turns finish")
@@ -100,12 +102,12 @@ private struct SessionsPopover: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
+                    LazyVStack(alignment: .leading, spacing: scale.space[0]) {
                         ForEach(manager.recent, id: \.id) { row in
                             sessionRow(row)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
             }
             if !delegatedSessions.isEmpty {
@@ -126,62 +128,62 @@ private struct SessionsPopover: View {
 
     @ViewBuilder
     private var currentSessionHeader: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             EditableSessionTitle(session: session, manager: manager)
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.4))
     }
 
     @ViewBuilder
     private var disconnectedBanner: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Circle().fill(theme.color("del")).frame(width: 6, height: 6)
             Text("Disconnected")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("del"))
             Spacer()
             Button("Reconnect") { reconnect() }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.10))
     }
 
     private var recentsHeader: some View {
         HStack {
             Text("Recent sessions")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.4))
     }
 
     private var emptyState: some View {
         Text("No recent sessions for this worktree.")
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.vertical, 16)
+            .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[4])
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var delegatedHeader: some View {
         HStack {
             Text("Delegated sessions")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.4))
     }
 
@@ -192,27 +194,27 @@ private struct SessionsPopover: View {
                 onPick()
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: summary.relationship == "parent" ? "arrow.up.left" : "arrow.down.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
                     .frame(width: 14)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(summary.relationship == "parent" ? "Delegated by parent" : summary.role.map { "Child session · \($0)" } ?? "Child session")
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg"))
                         .lineLimit(1)
                     Text(ACPDelegatedSessionsPolicy.statusLabel(for: summary.state))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(summary.state == "failed" ? theme.color("del") : theme.color("fg-faint"))
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, scale.space[2])
         .help(summary.failure ?? ACPDelegatedSessionsPolicy.statusLabel(for: summary.state))
     }
 
@@ -233,37 +235,37 @@ private struct SessionsPopover: View {
             }
             onPick()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 if let agent = agentLookup(row.agentId) {
                     AgentLogoView(agent: agent).frame(width: 14, height: 14)
                 } else {
                     Circle().fill(theme.color("fg-faint")).frame(width: 6, height: 6)
                 }
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(row.title.isEmpty || row.title == "New session" ? "New session" : row.title)
-                        .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
+                        .font(scale.meta.font(weight: isCurrent ? .semibold : .regular))
                         .foregroundStyle(theme.color("fg"))
                         .lineLimit(1)
                     Text(relativeTime(epochSeconds: row.lastOpenedAt))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 Spacer(minLength: 0)
                 if isCurrent {
                     Text("now")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .tracking(0.4)
                         .textCase(.uppercase)
                         .foregroundStyle(theme.color("accent"))
                 }
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
             .background(isCurrent ? theme.color("accent").opacity(theme.darkMode ? 0.10 : 0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, scale.space[2])
     }
 
     private func relativeTime(epochSeconds: Int64) -> String {
@@ -298,6 +300,7 @@ private struct SessionsPopover: View {
 /// blur commits + persists. Lifted out of ACPToolbar so the popover
 /// can own session naming.
 private struct EditableSessionTitle: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let manager: ACPSessionManager
     @Environment(\.theme) private var theme
@@ -314,14 +317,14 @@ private struct EditableSessionTitle: View {
         if editing {
             TextField("Session title", text: $draft, onCommit: commit)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .focused($focused)
                 .frame(minWidth: 120, maxWidth: .infinity)
-                .padding(.horizontal, 6).padding(.vertical, 2)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
                 .background(theme.color("bg-0").opacity(0.7))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("accent").opacity(0.6), lineWidth: 0.75))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("accent").opacity(0.6), lineWidth: 0.75))
                 .onAppear {
                     draft = session.title
                     focused = true
@@ -333,7 +336,7 @@ private struct EditableSessionTitle: View {
                 .onExitCommand { editing = false }
         } else {
             Text(displayTitle)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)

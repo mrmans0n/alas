@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPHistorySidebar: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var manager: ACPSessionManager
     let agentLookup: (String) -> AgentDefinition?
     @State private var search: String = ""
@@ -12,12 +13,12 @@ struct ACPHistorySidebar: View {
     @State private var retainedIds: Set<ACPSession.ID> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             TextField("Search chats\u{2026}", text: $search)
                 .textFieldStyle(.roundedBorder)
-                .padding(8)
+                .padding(scale.space[2])
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: scale.space[0]) {
                     ForEach(filtered, id: \.id) { row in
                         rowView(row)
                     }
@@ -44,7 +45,7 @@ struct ACPHistorySidebar: View {
                 manager.retainSession(id: row.id)
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 if let agent = agentLookup(row.agentId) {
                     AgentLogoView(agent: agent).frame(width: 14, height: 14)
                 }
@@ -53,6 +54,6 @@ struct ACPHistorySidebar: View {
             }.contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8).padding(.vertical, 4)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
     }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 /// Footer affordance: a small context-usage ring that opens a details popover.
 /// Renders nothing until the agent emits a `usage_update` (graceful degradation).
 struct ACPContextUsageButton: View {
+    @Environment(\.designScale) private var scale
     let usage: ACPUsageInfo?
     let modelName: String?
     /// Per-model breakdown from the last `session/prompt` response's
@@ -53,7 +54,7 @@ struct ACPContextUsageButton: View {
                     // popover.
                     Button(action: { showDetails.toggle() }) {
                         Image(systemName: "chart.bar.doc.horizontal")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                     .buttonStyle(.plain)
@@ -76,26 +77,26 @@ struct ACPContextUsageButton: View {
 
     @ViewBuilder
     private var details: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if let modelName {
                 Text(modelName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
             }
             if let usage {
                 let ratio = contextRatio(used: usage.used, size: usage.size)
                 Text("\(formatContextTokens(usage.used)) / \(formatContextTokens(usage.size)) (\(contextPercent(ratio: ratio))%)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                 // A stale breakdown stays up while the new one loads, so the
                 // popover does not shrink back to the spinner and regrow.
                 if let breakdown {
                     ACPContextBreakdownView(breakdown: breakdown)
                 } else if loadingBreakdown {
-                    HStack(spacing: 6) {
+                    HStack(spacing: scale.space[2]) {
                         ProgressView().controlSize(.small)
                         Text("Measuring context…")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-muted"))
                     }
                 } else {
@@ -105,7 +106,7 @@ struct ACPContextUsageButton: View {
                 }
                 if let cost = usage.cost {
                     Text(formatCost(cost))
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-muted"))
                 }
             }
@@ -120,7 +121,7 @@ struct ACPContextUsageButton: View {
                 quotaSection(title: "Cumulative", quota: sessionQuotaTotal)
             }
         }
-        .padding(14)
+        .padding(scale.space[3])
         // A fixed width, not `minWidth`: the popover proposes its current
         // width, and `minWidth` would accept the narrow loading width and clip
         // the breakdown instead of growing the popover. For the same reason the
@@ -132,9 +133,9 @@ struct ACPContextUsageButton: View {
 
     @ViewBuilder
     private func quotaSection(title: String, quota: ACPPromptQuota) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-faint"))
             if quota.modelUsage.isEmpty {
                 // Adapter sent only the top-level token_count, no
@@ -153,11 +154,11 @@ struct ACPContextUsageButton: View {
     private func quotaRow(label: String, tokens: Int) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
             Spacer(minLength: 12)
             Text(formatContextTokens(tokens))
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
         }
     }
@@ -184,6 +185,7 @@ struct ACPContextUsageButton: View {
 /// Defrag-style view of what fills the context window: one square per 1% of
 /// the window, a legend, and per-item drill-down.
 struct ACPContextBreakdownView: View {
+    @Environment(\.designScale) private var scale
     let breakdown: ACPContextBreakdown
 
     @Environment(\.theme) private var theme
@@ -200,8 +202,8 @@ struct ACPContextBreakdownView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(alignment: .top, spacing: scale.space[3]) {
                 grid
                 legend
             }
@@ -229,7 +231,7 @@ struct ACPContextBreakdownView: View {
     }
 
     private func square(_ cell: ACPContextBreakdown.GridCell) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 2)
+        let shape = RoundedRectangle(cornerRadius: scale.radius.small)
         let fill = fillColor(category: cell.category)
         return shape
             .fill(theme.color("bg-4").opacity(0.35))
@@ -269,13 +271,13 @@ struct ACPContextBreakdownView: View {
                     GridRow {
                         legendSwatch(index: index)
                         Text(category.name)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg"))
                             .lineLimit(1)
                         tokenText(category.tokens)
                             .gridColumnAlignment(.trailing)
                         Text(percentText(category.tokens))
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .foregroundStyle(theme.color("fg-faint"))
                             .gridColumnAlignment(.trailing)
                     }
@@ -285,7 +287,7 @@ struct ACPContextBreakdownView: View {
     }
 
     private func legendSwatch(index: Int) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 2)
+        let shape = RoundedRectangle(cornerRadius: scale.radius.small)
         return Group {
             if let fill = fillColor(category: index) {
                 shape.fill(fill)
@@ -310,27 +312,27 @@ struct ACPContextBreakdownView: View {
         let sections = detailSections
         if !sections.isEmpty {
             Divider()
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text("Details")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
                 ForEach(sections, id: \.title) { section in
                     DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: scale.space[0]) {
                             ForEach(Array(section.rows.prefix(Self.maxDetailRows).enumerated()), id: \.offset) { _, row in
                                 detailRow(row)
                             }
                             if section.rows.count > Self.maxDetailRows {
                                 Text("\(section.rows.count - Self.maxDetailRows) more")
-                                    .font(.system(size: 11))
+                                    .font(scale.metaFont)
                                     .foregroundStyle(theme.color("fg-faint"))
                             }
                         }
-                        .padding(.leading, 4)
+                        .padding(.leading, scale.space[1])
                     } label: {
                         HStack {
                             Text(section.title)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg"))
                             Spacer(minLength: 12)
                             tokenText(section.tokens)
@@ -383,15 +385,15 @@ struct ACPContextBreakdownView: View {
     }
 
     private func detailRow(_ row: DetailRow) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Text(row.label)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let tag = row.tag {
                 Text(tag)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
             }
@@ -402,7 +404,7 @@ struct ACPContextBreakdownView: View {
 
     private func tokenText(_ tokens: Int) -> some View {
         Text(formatContextTokens(tokens))
-            .font(.system(size: 11, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .foregroundStyle(theme.color("fg-muted"))
     }
 }

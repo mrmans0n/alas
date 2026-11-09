@@ -39,6 +39,7 @@ struct StackShepherdSessionContext {
 /// The Ship popover for a gg stack worktree: every entry's request and the
 /// shepherd's state once bound, else Ship stack or Shepherd stack.
 struct StackShepherdPopover: View {
+    @Environment(\.designScale) private var scale
     let session: ACPSession
     @ObservedObject var transcript: ACPTranscript
     let worktree: Worktree
@@ -95,28 +96,28 @@ struct StackShepherdPopover: View {
         let presentation = context.presentation
         header(name: record.id.stackName, detail: "\(record.base) · \(record.remote.kind.displayName)")
         Divider().background(theme.color("line"))
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ForEach(record.entries.sorted { $0.position > $1.position }, id: \.requestNumber) { entry in
                 entryRow(entry, record: record, context: context)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         shipMoreSection(record: record)
         Divider().background(theme.color("line"))
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                 Image(systemName: presentation.badge.symbolName)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(presentation.badge.color(theme: theme))
                 Text(presentation.phaseLine)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Text("Attempt \(record.fixAttempts) of \(record.fixAttemptBudget)")
                 Stepper(
                     "Fix attempts",
@@ -132,7 +133,7 @@ struct StackShepherdPopover: View {
                 .help("Fix prompts each entry gets before the shepherd stops and asks for you")
                 Text("· Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
             }
-            .font(.system(size: 10.5))
+            .font(scale.caption.font(weight: .regular))
             .foregroundStyle(theme.color("fg-muted"))
             ShepherdSwitchRow(
                 title: "Auto-fix",
@@ -143,12 +144,12 @@ struct StackShepherdPopover: View {
                 state.stackShepherd.setAutoFix(isOn, for: record.id)
             }
             Text("The stack lands with Land in the stack drawer; the shepherd never merges it.")
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         Divider().background(theme.color("line"))
         footer(record: record)
     }
@@ -163,9 +164,9 @@ struct StackShepherdPopover: View {
             let through = StackShipPlan.snap(moreShipThrough, to: StackShipPlan.linePositions(in: heldBack))
             let shipped = heldBack.filter { $0.position <= through }.count
             Divider().background(theme.color("line"))
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 Text("Held back · \(heldBack.count)")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-dim"))
                     .textCase(.uppercase)
                 StackShipLinePicker(entries: heldBack, kind: record.remote.kind, shipThrough: $moreShipThrough, opensDrafts: moreOpensDrafts)
@@ -184,8 +185,8 @@ struct StackShepherdPopover: View {
                     : "Publish these entries with gg sync now and shepherd them with the rest")
                 .accessibilityLabel("Ship \(shipped) more entries")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
         }
     }
 
@@ -203,24 +204,24 @@ struct StackShepherdPopover: View {
     }
 
     private func header(name: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: GGStackIcon.systemName)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                 Text(name)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Text(detail)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .accessibilityElement(children: .combine)
     }
 
@@ -234,25 +235,25 @@ struct StackShepherdPopover: View {
             request: request,
             mergeGatePasses: context.gatePasses && !entry.shepherd.phase.isTerminal
         )
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+        return HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
             Image(systemName: presentation.badge.symbolName)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(presentation.badge.color(theme: theme))
             Text("\(entry.position)")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
             Link(number, destination: url)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 .foregroundStyle(theme.color("accent"))
                 .help("Open \(kind.reviewRequestLabel) \(number) in the browser")
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text(entry.title)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(presentation.phaseLine)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -263,7 +264,7 @@ struct StackShepherdPopover: View {
     }
 
     private func footer(record: StackShepherdRecord) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Button("Show stack") {
                 onClose()
                 state.rightPaneStore.activeState(worktreeId: worktree.id)?.activeTab = .changes
@@ -283,8 +284,8 @@ struct StackShepherdPopover: View {
             .help("Stop watching. The requests stay open.")
         }
         .controlSize(.small)
-        .font(.system(size: 11))
-        .padding(12)
+        .font(scale.metaFont)
+        .padding(scale.space[3])
     }
 
     // MARK: Unbound
@@ -324,18 +325,18 @@ struct StackShepherdPopover: View {
                 if picksEntries {
                     StackShipLinePicker(entries: entries, kind: kind, shipThrough: $shipThrough, opensDrafts: opensDrafts)
                 } else {
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         ForEach(entries.sorted { $0.position > $1.position }.prefix(Self.maxListedEntries)) { unboundEntryRow($0, kind: kind) }
                         if entries.count > Self.maxListedEntries {
                             Text("\(entries.count - Self.maxListedEntries) more")
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-dim"))
                         }
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
         }
         Divider().background(theme.color("line"))
         switch action {
@@ -353,20 +354,20 @@ struct StackShepherdPopover: View {
     }
 
     private func unboundEntryRow(_ entry: GGStackEntry, kind: CodeHostKind?) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text("\(entry.position)")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-faint"))
                 .frame(minWidth: 10, alignment: .trailing)
             Text(entry.title)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             if let number = entry.prNumber {
                 Text(verbatim: "\((kind ?? .github).reviewRequestNumberPrefix)\(number)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("add"))
             } else {
                 ShipPopoverChip(text: "unpublished")
@@ -376,9 +377,9 @@ struct StackShepherdPopover: View {
     }
 
     private func adoptRow(text: String, buttonTitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(text)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             AlasButton(title: buttonTitle, style: .primary, fillsWidth: true) {
@@ -388,7 +389,7 @@ struct StackShepherdPopover: View {
             .help("Watch every request in this stack from this session and send it the current problems")
             .accessibilityLabel(buttonTitle)
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     @ViewBuilder
@@ -401,7 +402,7 @@ struct StackShepherdPopover: View {
         let plan = picksEntries
             ? stack.map { StackShipPlan(shipThroughPosition: shipThrough, of: $0, opensDrafts: opensDrafts) } ?? .wholeStack
             : .wholeStack
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ShipPopoverStep(symbol: "sparkles") {
                 Text(shipsAll
                     ? "The agent folds its work into the stack and publishes every entry with gg sync; Alas shepherds them all."
@@ -411,8 +412,8 @@ struct StackShepherdPopover: View {
                 draftsSwitch(isOn: $opensDrafts)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         Divider().background(theme.color("line"))
         ShipPopoverFooter(
             title: shipsAll ? "Ship stack with agent" : "Ship \(shipped) of \(entries.count) entries with agent",
@@ -444,6 +445,7 @@ struct StackShepherdPopover: View {
 /// ships through it; the focused line also moves with the arrow keys, and
 /// VoiceOver adjusts it.
 struct StackShipLinePicker: View {
+    @Environment(\.designScale) private var scale
     /// Contiguous positions, in any order; listed top of the stack first.
     let entries: [GGStackEntry]
     /// Prefixes request numbers; nil reads as GitHub's `#`.
@@ -461,8 +463,8 @@ struct StackShipLinePicker: View {
     @State private var lineHovered = false
     @FocusState private var lineFocused: Bool
 
-    private static let rowHeight: CGFloat = 20
-    private static let rowSpacing: CGFloat = 5
+    private static let rowHeight: CGFloat = 20 // design-literal: row pitch feeds height math
+    private static let rowSpacing: CGFloat = 5 // design-literal: row pitch feeds height math
     private static let lineHeight: CGFloat = 14
     /// How far the line moves per row.
     private static let rowPitch = rowHeight + rowSpacing
@@ -520,20 +522,20 @@ struct StackShipLinePicker: View {
         return Button {
             withAnimation(animation) { shipThrough = entry.position }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text("\(entry.position)")
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     .frame(minWidth: 10, alignment: .trailing)
                 Text(entry.title)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 if entry.prNumber != nil {
                     Text(verbatim: state)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("add"))
                 } else {
                     ShipPopoverChip(text: state, tone: ships ? (opensDrafts ? "warn" : "accent") : nil)
@@ -541,10 +543,10 @@ struct StackShipLinePicker: View {
             }
             .opacity(ships ? 1 : 0.5)
             .frame(height: Self.rowHeight)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, scale.space[1])
             .background(
                 hovered == entry.position && dragTop == nil ? theme.color("bg-3") : .clear,
-                in: RoundedRectangle(cornerRadius: 4)
+                in: RoundedRectangle(cornerRadius: scale.radius.small)
             )
             .padding(.horizontal, -4)
             .contentShape(Rectangle())
@@ -563,16 +565,16 @@ struct StackShipLinePicker: View {
         // whole row-wide hit area.
         let isActive = lineHovered || lineFocused || dragTop != nil
         let accent = theme.color("accent")
-        return HStack(spacing: 6) {
+        return HStack(spacing: scale.space[2]) {
             Rectangle().frame(height: isActive ? 2 : 1.5)
-            HStack(spacing: 3) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "arrow.up.and.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(scale.glyphFont)
                 Text("ship below")
-                    .font(.system(size: 9.5, weight: .medium))
+                    .font(scale.glyph.font(weight: .medium))
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[0])
             // Opaque, so the label stays legible as it passes over rows.
             .background(Capsule().fill(theme.color("bg-1")))
             .background(Capsule().fill(accent.opacity(isActive ? 0.18 : 0)))

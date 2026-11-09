@@ -143,6 +143,7 @@ struct ACPConnectionRecoveryPresentation {
 }
 
 struct ACPConnectionRecoveryCard: View {
+    @Environment(\.designScale) private var scale
     let state: ACPConnectionRecoveryState
     let agentState: ACPSession.AgentState
     let startedAt: Date?
@@ -178,17 +179,17 @@ struct ACPConnectionRecoveryCard: View {
             restartInProgress: restartInProgress,
             now: now
         )
-        return HStack(spacing: 10) {
+        return HStack(spacing: scale.space[2]) {
             Image(systemName: presentation.symbolName)
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundStyle(statusColor)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text(presentation.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 Text(presentation.detail)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -201,12 +202,12 @@ struct ACPConnectionRecoveryCard: View {
                     .help(actionTitle)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.9))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(statusColor.opacity(0.45), lineWidth: 0.5)
         )
         .accessibilityElement(children: .contain)
@@ -222,6 +223,7 @@ struct ACPConnectionRecoveryCard: View {
 }
 
 struct ACPStalledConnectionButton: View {
+    @Environment(\.designScale) private var scale
     let startedAt: Date?
     let reconnectAvailable: Bool
     let restartInProgress: Bool
@@ -232,7 +234,7 @@ struct ACPStalledConnectionButton: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             if restartInProgress {
                 Label("Restarting connection…", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg-muted"))
             } else if let title = ACPStalledConnectionPresentation.actionTitle(
                 startedAt: startedAt,
@@ -274,27 +276,28 @@ enum ACPStalledConnectionPresentation {
 /// otherwise (spawning / disconnected / failed). Styled to sit next to
 /// `ACPPlanPill` without clashing.
 struct ACPRecoveryPill: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     @Environment(\.theme) private var theme
 
     var body: some View {
         if let label = label {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 statusDot(animating: isAnimating)
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous) // design-literal: capsule radius is half the 22pt pill height
                     .fill(theme.color("bg-1"))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous) // design-literal: capsule radius is half the 22pt pill height
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
             .help(helpText)

@@ -74,9 +74,9 @@ enum ACPBackgroundTaskPresentation {
     /// Top plus bottom padding around the tray content.
     static let verticalPadding: CGFloat = 10
     static let headerHeight: CGFloat = 22
-    static let rowHeight: CGFloat = 26
+    static let rowHeight: CGFloat = 26 // design-literal: row pitch feeds height math
     /// A failed stop shows up to two lines of error under its row.
-    static let rowErrorHeight: CGFloat = 32
+    static let rowErrorHeight: CGFloat = 32 // design-literal: row pitch feeds height math
     /// Expanded rows scroll beyond this height so a long list can't push the
     /// header off the top of a short chat.
     static let maxRowsHeight: CGFloat = 6 * rowHeight

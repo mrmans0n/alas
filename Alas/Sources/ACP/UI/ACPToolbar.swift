@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPToolbar: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let manager: ACPSessionManager
     let agentLookup: (String) -> AgentDefinition?
@@ -18,7 +19,7 @@ struct ACPToolbar: View {
     @State private var peerChildren: [AlasCoreContext.DelegatedPeerChild] = []
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             ACPSessionsButton(
                 session: session,
                 manager: manager,
@@ -80,17 +81,17 @@ struct ACPToolbar: View {
             Spacer(minLength: 0)
             if let onOpenPreview {
                 Button(action: onOpenPreview) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: scale.space[1]) {
                         Icon(name: "globe", size: 11)
                         Text("Preview")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                     }
                     .foregroundStyle(theme.color(previewHovered ? "fg" : "fg-muted"))
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, scale.space[2])
                     .frame(height: 22)
                     .background(
                         previewHovered ? theme.color("bg-3") : .clear,
-                        in: RoundedRectangle(cornerRadius: 5)
+                        in: RoundedRectangle(cornerRadius: scale.radius.small)
                     )
                     .contentShape(Rectangle())
                 }
@@ -113,7 +114,7 @@ struct ACPToolbar: View {
             }
             if let name = state.delegatedFromName(of: session.id) {
                 Text("From \(name)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(1)
             }
@@ -131,7 +132,7 @@ struct ACPToolbar: View {
                     }
                 } label: {
                     Text(menu.title)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .lineLimit(1)
                 }
                 .menuStyle(.borderlessButton)
@@ -154,7 +155,7 @@ struct ACPToolbar: View {
         .task(id: "\(session.id)-\(state.delegationRevision)") {
             peerChildren = await state.delegatedPeerChildren(ofParent: session.id)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 38)
         .background(

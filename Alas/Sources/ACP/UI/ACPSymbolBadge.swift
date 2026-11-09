@@ -5,6 +5,7 @@ import SwiftUI
 /// look. Click opens the symbol in the editor at the range that was sent;
 /// hover shows what was sent, or the code now.
 struct ACPSymbolBadge: View {
+    @Environment(\.designScale) private var scale
     let target: ACPSymbolReference.Target
     let snapshot: ACPSymbolSnapshot?
     /// Where the preview reads files; without it the badge has no preview.
@@ -69,35 +70,35 @@ struct ACPSymbolBadge: View {
             if sentTarget.includeCode {
                 Rectangle().fill(Color(nsColor: .controlAccentColor)).frame(width: 2)
             }
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 Text(target.kind.badgeLetter)
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(scale.caption.font(weight: .bold))
                     .foregroundStyle(Color(nsColor: target.kind.badgeLabelColor))
                     .frame(width: 13, height: 13)
-                    .background(Color(nsColor: target.kind.badgeBackground), in: RoundedRectangle(cornerRadius: 3))
+                    .background(Color(nsColor: target.kind.badgeBackground), in: RoundedRectangle(cornerRadius: scale.radius.small))
                 Text(label)
                     .font(Font(ACPMentionChipMetrics.labelFont))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .padding(.leading, 4)
-            .padding(.trailing, 6)
+            .padding(.leading, scale.space[1])
+            .padding(.trailing, scale.space[2])
             if let countText {
                 HStack(spacing: 0) {
                     Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 0.5)
                     Text(countText)
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, scale.space[1])
                 }
                 .background(Color(nsColor: ACPSymbolChipCell.countFill))
             }
         }
         .frame(height: 20)
         .background(Color(nsColor: ACPSymbolChipCell.pillFill))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .overlay(
-            RoundedRectangle(cornerRadius: 5).strokeBorder(
+            RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(
                 sentTarget.includeCode
                     ? Color(nsColor: NSColor.controlAccentColor.withAlphaComponent(0.6))
                     : Color(nsColor: .separatorColor),
