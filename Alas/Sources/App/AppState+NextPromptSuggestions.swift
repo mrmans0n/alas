@@ -37,7 +37,8 @@ extension AppState {
                 for await value in await runtime.states() {
                     guard !Task.isCancelled else { return }
                     guard let self else { return }
-                    if value == .unavailable || value == .retryRequired {
+                    // Only the local model's suggestions depend on its runtime.
+                    if value == .unavailable || value == .retryRequired, self.nextPromptUsesLocalModel {
                         self.nextPromptCoordinator.invalidateAll()
                     }
                     self.nextPromptInferenceState = value
