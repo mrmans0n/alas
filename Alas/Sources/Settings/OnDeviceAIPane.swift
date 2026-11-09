@@ -190,15 +190,16 @@ struct OnDeviceAIPane: View {
                         else { await state.disableNextPromptSuggestions() }
                     } }
                 ))
-                .disabled(!state.config.nextPromptSuggestionsEnabled && !state.localTextModelAvailable)
+                .disabled(!state.config.nextPromptSuggestionsEnabled
+                    && state.config.nextPromptSource == .onDevice && !state.localTextModelAvailable)
                 .accessibilityLabel("Next-prompt suggestions")
                 .accessibilityValue(state.config.nextPromptSuggestionsEnabled ? "On" : "Off")
-                Text(localFeatureDetail).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                Text(nextPromptDetail).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
                 if let error = state.nextPromptSettingsError {
                     Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Save") { Task { await state.retryNextPromptSuggestions() } }
                         .disabled(state.localTextRemovalInProgress)
-                } else if state.config.nextPromptSuggestionsEnabled && state.localTextModelAvailable {
+                } else if state.nextPromptUsesLocalModel && state.localTextModelAvailable {
                     if state.nextPromptInferenceState == .retryRequired || !state.nextPromptRuntimeEnabled {
                         Text("Suggestions are paused. Retry to resume.")
                             .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
@@ -209,7 +210,23 @@ struct OnDeviceAIPane: View {
                     }
                 }
             }
+            SettingsRow(name: "Suggest with", desc: "The agent's own prediction replaces the local model's. Codex spends an extra model call on each suggestion.") {
+                Picker("Suggest with", selection: Binding(
+                    get: { state.config.nextPromptSource },
+                    set: { source in Task { await state.setNextPromptSource(source) } }
+                )) {
+                    Text("On-device model").tag(NextPromptSource.onDevice)
+                    Text("The agent").tag(NextPromptSource.agent)
+                }
+                .labelsHidden()
+                .disabled(state.localTextRemovalInProgress)
+            }
         }
+    }
+
+    private var nextPromptDetail: String {
+        guard state.config.nextPromptSource == .agent else { return localFeatureDetail }
+        return "From the agent, for Claude and Codex sessions; other agents get none"
     }
 
     private var localFeatureDetail: String {

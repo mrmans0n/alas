@@ -4,6 +4,30 @@ import Foundation
 import os
 
 extension AppState {
+    /// Suggestions are on and the local model writes them.
+    var nextPromptUsesLocalModel: Bool {
+        config.nextPromptSuggestionsEnabled && config.nextPromptSource == .onDevice
+    }
+
+    /// Suggestions are on and the agent writes them; the local model stays out.
+    var nextPromptUsesAgent: Bool {
+        config.nextPromptSuggestionsEnabled && config.nextPromptSource == .agent
+    }
+
+    /// Tells every session manager whether user turns ask the agent for a prediction.
+    func applyPredictedPromptRequests() {
+        for manager in core.sessionManagers.values {
+            manager.requestsPredictedPrompts = nextPromptUsesAgent
+        }
+    }
+
+    /// The prediction store of the live session a request names.
+    func agentPrediction(for id: NextPromptRequestID) -> NextPromptAgentPrediction? {
+        guard let session = acpManager(forSession: id.sessionID)?.sessions[id.sessionID],
+              session.incarnation == id.incarnation else { return nil }
+        return session.agentPrediction
+    }
+
     func ensureNextPromptObserversStarted() {
         if config.nextPromptSuggestionsEnabled, !localTextObservers.nextPromptStarted {
             localTextObservers.nextPromptStarted = true
@@ -46,7 +70,8 @@ extension AppState {
     }
 
     func enableNextPromptSuggestions() async {
-        guard localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending,
+        let usesAgent = config.nextPromptSource == .agent
+        guard usesAgent || localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending,
               !localTextRemovalInProgress else { return }
         localTextRuntimeStarted = true
         let previous = config.nextPromptSuggestionsEnabled
@@ -58,6 +83,34 @@ extension AppState {
             nextPromptSettingsError = "Could not save next-prompt settings. Suggestions remain off."
             return
         }
+        applyPredictedPromptRequests()
+        ensureLocalTextObserversStarted()
+        // The agent's predictions need no local model, only the presentation.
+        guard !usesAgent else {
+            ensureNextPromptObserversStarted()
+            return
+        }
+        await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
+    }
+
+    /// Switches where suggestions come from. Takes effect from the next turn:
+    /// whatever the old source had in flight is dropped.
+    func setNextPromptSource(_ source: NextPromptSource) async {
+        guard source != config.nextPromptSource, !nextPromptShuttingDown, !localTextRemovalInProgress else { return }
+        let previous = config.nextPromptSource
+        beginNextPromptSettingsChange()
+        let generation = nextPromptSettingsGeneration
+        config.nextPromptSource = source
+        guard saveConfig() else {
+            config.nextPromptSource = previous
+            nextPromptSettingsError = "Could not save next-prompt settings."
+            return
+        }
+        applyPredictedPromptRequests()
+        if nextPromptUsesAgent { ensureNextPromptObserversStarted() }
+        await drainNextPromptWork()
+        guard generation == nextPromptSettingsGeneration, nextPromptUsesLocalModel, localTextSupported,
+              !nextPromptDisableSavePending else { return }
         ensureLocalTextObserversStarted()
         await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
@@ -68,7 +121,7 @@ extension AppState {
             await disableNextPromptSuggestions()
             return
         }
-        guard config.nextPromptSuggestionsEnabled, localTextSupported, !nextPromptShuttingDown else { return }
+        guard nextPromptUsesLocalModel, localTextSupported, !nextPromptShuttingDown else { return }
         beginNextPromptSettingsChange()
         let generation = nextPromptSettingsGeneration
         await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
@@ -80,7 +133,7 @@ extension AppState {
         await inspectLocalTextModel()
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown,
-              config.nextPromptSuggestionsEnabled, localTextModelAvailable,
+              nextPromptUsesLocalModel, localTextModelAvailable,
               !nextPromptDisableSavePending else { return }
         let modelGeneration = localTextModelGeneration
         await nextPromptInference.retryAfterFailure()
@@ -97,6 +150,7 @@ extension AppState {
         beginNextPromptSettingsChange()
         config.nextPromptSuggestionsEnabled = false
         nextPromptDisableSavePending = !saveConfig()
+        applyPredictedPromptRequests()
         nextPromptSettingsError = nextPromptDisableSavePending
             ? "Could not save disabling. Retry before quitting or suggestions may turn on again after relaunch."
             : nil
@@ -116,6 +170,7 @@ extension AppState {
     }
 
     func observeNextPromptSessions(_ manager: ACPSessionManager, owner: SessionOwnerID) {
+        manager.requestsPredictedPrompts = nextPromptUsesAgent
         localTextObservers.managers[owner] = manager.$sessions.sink { [weak self] sessions in
             guard let self else { return }
             for session in sessions.values where self.localTextObservers.sessions[session.incarnation] == nil {
@@ -230,8 +285,9 @@ extension AppState {
     }
 
     func nextPromptInputBlocked(owner: SessionOwnerID, sessionID: String) -> Bool {
-        guard !nextPromptShuttingDown, nextPromptRuntimeEnabled, localTextSupported,
-              config.nextPromptSuggestionsEnabled, NSApp.isActive,
+        guard !nextPromptShuttingDown,
+              nextPromptUsesAgent || (nextPromptUsesLocalModel && nextPromptRuntimeEnabled && localTextSupported),
+              NSApp.isActive,
               let manager = acpManager(for: owner), manager.isWriter(for: sessionID),
               let worktreeID = selectedWorktreeId else { return true }
         let sharedOwner = selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) }
@@ -266,7 +322,8 @@ extension AppState {
     func nextPromptSnapshot(session: ACPSession, turn: NextPromptCompletedTurn,
                             environment: NextPromptEligibilitySnapshot.Environment) -> NextPromptEligibilitySnapshot? {
         var environment = environment
-        environment.isEnabled = nextPromptRuntimeEnabled && config.nextPromptSuggestionsEnabled
+        environment.source = config.nextPromptSource
+        environment.isEnabled = nextPromptUsesAgent || (nextPromptRuntimeEnabled && nextPromptUsesLocalModel)
         environment.hasVerifiedModel = localTextModelState == .ready
         // Requests can queue behind a native drain. The async state observer
         // may still carry .unloading after enable/retry has established readiness;

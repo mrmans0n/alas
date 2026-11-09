@@ -303,6 +303,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let commandPresentation: ACPPresentationContractDeclaration
     /// Asks our Claude adapter fork to say when a `session/load` replay is whole.
     public let loadReplayEnd: ACPPresentationContractDeclaration
+    /// Lets a prompt ask our Claude and Codex adapter forks for the predicted
+    /// follow-up prompt of its turn; see `ACPPredictedPrompt`.
+    public let promptSuggestions: ACPPresentationContractDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -323,7 +326,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         questionCustomAnswer: ACPPresentationContractDeclaration = .init(),
         recommendedConfigValue: ACPPresentationContractDeclaration = .init(),
         commandPresentation: ACPPresentationContractDeclaration = .init(),
-        loadReplayEnd: ACPPresentationContractDeclaration = .init()
+        loadReplayEnd: ACPPresentationContractDeclaration = .init(),
+        promptSuggestions: ACPPresentationContractDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -344,12 +348,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.recommendedConfigValue = recommendedConfigValue
         self.commandPresentation = commandPresentation
         self.loadReplayEnd = loadReplayEnd
+        self.promptSuggestions = promptSuggestions
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure
         case agentFileChangeReport, permissionPresentation, questionCustomAnswer, recommendedConfigValue
-        case commandPresentation, loadReplayEnd
+        case commandPresentation, loadReplayEnd, promptSuggestions
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -384,6 +389,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
             ACPPresentationContractDeclaration.self, forKey: .commandPresentation)) ?? .init()
         loadReplayEnd = (try? c.decodeIfPresent(
             ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)) ?? .init()
+        promptSuggestions = (try? c.decodeIfPresent(
+            ACPPresentationContractDeclaration.self, forKey: .promptSuggestions)) ?? .init()
     }
 }
 
@@ -483,9 +490,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let agentFileChangeReport: ACPAgentFileChangeReportAdvertisement?
         /// The end of a `session/load` replay (our Claude adapter fork).
         public let loadReplayEnd: ACPPresentationContractDeclaration?
+        /// Predicted follow-up prompts on request (our Claude and Codex adapter forks).
+        public let promptSuggestions: ACPPresentationContractDeclaration?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport, loadReplayEnd
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile, sessionFailure, agentFileChangeReport, loadReplayEnd, promptSuggestions
             case asyncTasks = "async-tasks"
         }
 
@@ -505,6 +514,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             sessionFailure = try? c.decodeIfPresent(ACPSessionFailureAdvertisement.self, forKey: .sessionFailure)
             agentFileChangeReport = try? c.decodeIfPresent(ACPAgentFileChangeReportAdvertisement.self, forKey: .agentFileChangeReport)
             loadReplayEnd = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .loadReplayEnd)
+            promptSuggestions = try? c.decodeIfPresent(ACPPresentationContractDeclaration.self, forKey: .promptSuggestions)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -887,6 +897,9 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     public var agentFileChangeReportRequest: ACPAgentFileChangeReportRequest? = nil
     /// Read by our Claude adapter fork on `session/load`; correlates the end of its replay.
     public var loadReplayEnd: ACPLoadReplayEnd.Request? = nil
+    /// Read by our Claude and Codex adapter forks on `session/prompt`; asks for
+    /// the turn's predicted follow-up prompt. Not the session's commands.
+    public var promptSuggestions: ACPPredictedPrompt.Request? = nil
 
     public init(
         claudeCode: ClaudeCode? = nil,

@@ -165,7 +165,12 @@ final class AppState {
             scheduleCancellation: { action in _ = Task { await action() } }
         )
     }
-    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(
+        engine: NextPromptSourceRouter(
+            onDevice: nextPromptInference,
+            agent: NextPromptAgentEngine { [weak self] id in self?.agentPrediction(for: id) }
+        )
+    ) { [weak self] turn in
         self?.nextPromptSnapshot(for: turn)
     }
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
@@ -1948,6 +1953,8 @@ final class AppState {
         installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
+        // The agent as the suggestion source needs no local model.
+        if nextPromptUsesAgent { ensureNextPromptObserversStarted() }
         vmManager.isRemoteWorktree = { [weak self] worktreeID in
             RemotePath.isReserved(worktreeID)
                 || self?.projectAndWorktree(withWorktreeId: worktreeID)?.project.host != nil

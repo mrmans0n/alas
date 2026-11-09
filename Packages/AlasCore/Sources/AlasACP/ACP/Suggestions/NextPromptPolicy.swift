@@ -102,6 +102,20 @@ public enum NextPromptPolicy: Sendable {
         return suggestion
     }
 
+    /// The agent's prediction as the composer may offer it: one line of at
+    /// most 240 characters (the longest our adapters ask for), passing the
+    /// same safety rules as a local suggestion. Nil to offer nothing.
+    public static func acceptAgentPrediction(_ text: String, turns: [NextPromptTurn]) -> String? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 240,
+              !text.unicodeScalars.contains(where: {
+                  $0.value < 0x20 || (0x7F...0x9F).contains($0.value)
+                      || $0.value == 0x2028 || $0.value == 0x2029
+              }),
+              permitsOutput(text, turns: turns) else { return nil }
+        return text
+    }
+
     public static func permitsInput(_ turns: [NextPromptTurn]) -> Bool {
         guard let latest = turns.last else { return false }
         let userContext = turns.map(\.user).joined(separator: "\n")
