@@ -919,6 +919,9 @@ final class TabsManager {
             originatingRelativePath: originatingRelativePath,
             externalEditable: editable ? true : nil
         )
+        if ImageFileType.isTextBacked(relativePath: absPath) {
+            state.prefersImageSource = revealLine != nil || revealCharacter != nil
+        }
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
         }

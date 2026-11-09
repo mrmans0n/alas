@@ -990,7 +990,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var markdownSplitFraction: Double? = nil
 
     /// Retain source mode for text-backed images after navigation hints are consumed.
-    /// Optional so older persisted tabs continue to decode.
+    /// Nil preserves source mode for legacy editor tabs, which may have unsaved drafts.
     var prefersImageSource: Bool? = nil
 
     var isExternal: Bool { externalAbsolutePath != nil }
@@ -998,7 +998,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
 
     var showsImagePreview: Bool {
         let path = externalAbsolutePath ?? relativePath
-        let showsSource = prefersImageSource == true || revealLine != nil || revealCharacter != nil
+        let showsSource = prefersImageSource != false || revealLine != nil || revealCharacter != nil
         return ImageFileType.isSupported(relativePath: path)
             && (!ImageFileType.isTextBacked(relativePath: path) || !showsSource)
     }
