@@ -989,8 +989,19 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     /// per-tab. Nil → 0.5. Nil for non-markdown or non-split tabs.
     var markdownSplitFraction: Double? = nil
 
+    /// Retain source mode for text-backed images after navigation hints are consumed.
+    /// Nil preserves source mode for legacy editor tabs, which may have unsaved drafts.
+    var prefersImageSource: Bool? = nil
+
     var isExternal: Bool { externalAbsolutePath != nil }
     var isExternalEditable: Bool { externalEditable ?? false }
+
+    var showsImagePreview: Bool {
+        let path = externalAbsolutePath ?? relativePath
+        let showsSource = prefersImageSource != false || revealLine != nil || revealCharacter != nil
+        return ImageFileType.isSupported(relativePath: path)
+            && (!ImageFileType.isTextBacked(relativePath: path) || !showsSource)
+    }
 }
 
 struct DiffTabState: Codable, Equatable, Identifiable {

@@ -784,6 +784,11 @@ final class TabsManager {
         revealEndLine: Int? = nil,
         navigationResolvedRoot: URL? = nil
     ) -> Tab {
+        let hasRevealTarget = revealLine != nil || revealCharacter != nil
+        if ImageFileType.isSupported(relativePath: relativePath),
+           !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
+            return openImagePreview(worktreeId: worktreeId, relativePath: relativePath)
+        }
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
             && MarkdownFileType.supportsRichPreview(relativePath: relativePath)
         if var file = byWorktree[worktreeId],
@@ -914,6 +919,9 @@ final class TabsManager {
             originatingRelativePath: originatingRelativePath,
             externalEditable: editable ? true : nil
         )
+        if ImageFileType.isTextBacked(relativePath: absPath) {
+            state.prefersImageSource = revealLine != nil || revealCharacter != nil
+        }
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
         }
@@ -2200,6 +2208,9 @@ final class TabsManager {
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .editor(var s) = file.tabs[idx],
               s.revealLine != nil || s.revealEndLine != nil || s.revealCharacter != nil else { return }
+        if ImageFileType.isTextBacked(relativePath: s.externalAbsolutePath ?? s.relativePath) {
+            s.prefersImageSource = true
+        }
         s.revealLine = nil
         s.revealEndLine = nil
         s.revealCharacter = nil
