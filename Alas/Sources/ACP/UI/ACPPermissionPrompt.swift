@@ -158,11 +158,12 @@ struct ACPPermissionPrompt: View {
         if let pending = session.transcript.pendingPermission {
             // The parked params and the policy's binding belong together:
             // the policy binds the request it parks as `pendingPermission`.
+            let counters = session.planReviewCounters(forSession: pending.params.sessionId)
             if let review = ACPPlanReviewPresentation.make(
                 params: pending.params, planFileNegotiated: session.planFile != nil,
                 fileRead: session.planReviewFiles[pending.params.toolCall.toolCallId],
-                binding: policy.planReviewBinding, planRevisions: session.planRevisions,
-                contextResetCount: session.contextResetCount,
+                binding: policy.planReviewBinding, planRevisions: counters.planRevisions,
+                contextResetCount: counters.contextResetCount,
                 foregroundTurnActive: session.foregroundTurnActive()) {
                 ACPPlanReviewCard(
                     review: review,

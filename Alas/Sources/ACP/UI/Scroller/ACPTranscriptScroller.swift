@@ -1367,6 +1367,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             if let pendingPermission = transcript.pendingPermission, let policy = host.policy {
                 // The prompt observes only the session, so a Codex row's
                 // diffs landing after the request must rebuild it from here.
+                let planCounters = session.planReviewCounters(forSession: pendingPermission.params.sessionId)
                 let rowDiffs = session.toolCall(
                     id: pendingPermission.params.toolCall.toolCallId,
                     sessionId: pendingPermission.params.sessionId
@@ -1381,8 +1382,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             planReviewFile: session.planReviewFiles[pendingPermission.params.toolCall.toolCallId],
                             planRevision: ACPPlanReviewPresentation.planId(
                                 pendingPermission.params, planFileNegotiated: session.planFile != nil
-                            ).map { session.planRevisions[$0] ?? 0 },
-                            contextResetCount: session.contextResetCount,
+                            ).map { planCounters.planRevisions[$0] ?? 0 },
+                            contextResetCount: planCounters.contextResetCount,
                             foregroundTurnActive: session.foregroundTurnActive()
                         ),
                         host: host

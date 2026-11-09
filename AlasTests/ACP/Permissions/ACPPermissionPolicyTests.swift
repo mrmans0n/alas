@@ -369,6 +369,34 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .selected(optionId: "revise_plan"))
     }
 
+    @Test("a child's plan review goes stale on the child's own plan or context, not the root's",
+          arguments: [
+              (fromChild: true, update: ACPSessionUpdate.markdownPlan("item_1", "# Revised"), stale: true),
+              (fromChild: true, update: .usageUpdate(.init(used: 0, size: 1000, cost: nil)), stale: true),
+              (fromChild: false, update: .markdownPlan("item_1", "# Revised"), stale: false),
+              (fromChild: false, update: .usageUpdate(.init(used: 0, size: 1000, cost: nil)), stale: false),
+          ])
+    func childReviewUsesItsOwnCounters(fromChild: Bool, update: ACPSessionUpdate, stale: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Plan")))
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        let review = ACPToolCallPresentationTests.codexReview()
+        let params = ACPPermissionRequestParams(sessionId: "child-1", toolCall: review.toolCall, options: review.options)
+        async let decision = policy.evaluate(
+            scopeKey: "tool:Implement this plan?", options: params.options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+
+        if fromChild {
+            session.applySubagentUpdate(update, subagentSessionId: "child-1")
+        } else {
+            session.apply(update)
+        }
+
+        #expect(policy.refusesApproval(optionKind: "allow_once", planDigest: nil) == stale)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("a plan that changes while the answer is being authorized cancels an approval but not a rejection",
           arguments: [
               (optionId: "implement_plan", decision: ACPPermissionDecision.allow, delivered: false),
