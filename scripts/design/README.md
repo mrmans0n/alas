@@ -16,7 +16,8 @@ this checkout's Debug build; set `ALAS_DEV_APP` to use another. Set
 `agent`, `run` or `schedules` to open the right pane on that tab.
 Set `ALAS_CAPTURE_DIALOG` to `new-project`, `new-worktree`, `repo-selector`,
 `review-target`, `run-script`, `agent-launcher` or `file-search` to capture with
-that dialog open.
+that dialog open. Set `ALAS_CAPTURE_SETTINGS` to comma-separated Settings sections
+(`general,appearance,agents`) to also write `settings-<section>.png`.
 
 ## How it works
 

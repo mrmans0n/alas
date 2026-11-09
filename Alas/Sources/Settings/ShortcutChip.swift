@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ShortcutChip: View {
+    @Environment(\.designScale) private var scale
     let binding: ShortcutBinding?     // nil = unbound
     let isRecording: Bool
     let justModified: Bool
@@ -14,21 +15,21 @@ struct ShortcutChip: View {
     var body: some View {
         HStack(spacing: 4) {
             Text(label)
-                .font(.custom("JetBrainsMonoNF-Regular", size: 12))
+                .font(.custom("JetBrainsMonoNF-Regular", size: scale.meta.size))
                 .foregroundColor(textColor)
             if showClear {
                 Button(action: onClear) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.glyphFont)
                         .foregroundColor(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
-                .padding(.leading, 2)
+                .padding(.leading, scale.space[0])
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 5)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
         .background(background)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .overlay(border)
         .onHover { isHovering = $0 }
         .contentShape(Rectangle())
@@ -68,7 +69,7 @@ struct ShortcutChip: View {
 
     @ViewBuilder
     private var border: some View {
-        RoundedRectangle(cornerRadius: 5)
+        RoundedRectangle(cornerRadius: scale.radius.small)
             .strokeBorder(
                 justModified ? theme.color("accent") : Color.black.opacity(0.25),
                 lineWidth: justModified ? 1.5 : 0.5

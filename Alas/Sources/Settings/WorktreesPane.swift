@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WorktreesPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @State private var branchPrefixDraft: String?
     @Environment(\.theme) var theme
@@ -8,10 +9,10 @@ struct WorktreesPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Worktrees").font(.system(size: 18, weight: .semibold))
+                Text("Worktrees").font(SettingsPaneStyle.titleFont)
                 Text("How Alas creates and manages git worktrees on disk.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Location") {
                     SettingsRow(name: "Worktree root",
@@ -48,7 +49,7 @@ struct WorktreesPane: View {
                             AlasField(text: branchPrefixBinding, monospaced: true, disablesAutomaticTextSubstitutions: true)
                             if let prefixError = branchPrefixError {
                                 Text(prefixError)
-                                    .font(.system(size: 11))
+                                    .font(scale.metaFont)
                                     .foregroundColor(.red)
                             }
                         }
@@ -90,7 +91,7 @@ struct WorktreesPane: View {
                     SettingsGroup(title: "Archived worktrees") {
                         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
                             Text("Hidden from the sidebar but still on disk. Unarchive to restore, or delete to remove their files.")
-                                .font(.system(size: 11.5))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("fg-dim"))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             AlasButton(title: "Delete all", style: .subtle) {
@@ -98,7 +99,7 @@ struct WorktreesPane: View {
                             }
                             .disabled(state.isDeletingArchivedWorktrees)
                         }
-                        .padding(.bottom, 8)
+                        .padding(.bottom, scale.space[2])
                         ForEach(state.projects) { project in
                             let archived = state.projectsManager.archivedWorktrees(projectId: project.id)
                             if !archived.isEmpty {
@@ -121,7 +122,7 @@ struct WorktreesPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
     }
 
@@ -209,6 +210,7 @@ struct WorktreesPane: View {
 }
 
 private struct ArchivedProjectSection: View {
+    @Environment(\.designScale) private var scale
     let project: ProjectConfig
     let archived: [Worktree]
     let onUnarchive: (Worktree) -> Void
@@ -219,17 +221,17 @@ private struct ArchivedProjectSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(project.name)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-muted"))
-                .padding(.top, 4)
+                .padding(.top, scale.space[1])
             ForEach(archived) { wt in
                 HStack(alignment: .center, spacing: SettingsRowLayout.columnSpacing) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(wt.branch)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundColor(theme.color("fg"))
                         Text(RemotePath.display(wt.path.path))
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -241,7 +243,7 @@ private struct ArchivedProjectSection: View {
                     }
                     .disabled(isPending(wt))
                 }
-                .padding(.vertical, 10)
+                .padding(.vertical, scale.space[3])
                 .overlay(Divider().opacity(0.5), alignment: .top)
             }
         }

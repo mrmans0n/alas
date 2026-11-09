@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct OnDeviceAIPane: View {
+    @Environment(\.designScale) private var scale
     let state: AppState
     @Environment(\.theme) private var theme
     @State private var appleAvailability = LocalTextAppleAvailability.current()
@@ -9,22 +10,22 @@ struct OnDeviceAIPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("On-device AI").font(.system(size: 18, weight: .semibold))
+                Text("On-device AI").font(SettingsPaneStyle.titleFont)
                 Text("Built-in helpers that run on this Mac.")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
-                    .padding(.bottom, 20)
+                    .padding(.bottom, scale.space[5])
                 applePanel
                 helpers
                 LocalTextModelSettings(state: state)
                 localOnlyFeatures
                 Text("These built-in helpers process text on this Mac. Your coding agent is separate and follows its own provider settings. Generated text can be wrong; review it before acting.")
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 12)
+                    .padding(.top, scale.space[3])
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .foregroundStyle(theme.color("fg"))
         .onAppear { appleAvailability = .current() }
@@ -37,12 +38,12 @@ struct OnDeviceAIPane: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Icon(name: "sparkles", size: 15, color: theme.color("accent"))
-                Text("Apple Intelligence").font(.system(size: 12.5, weight: .semibold))
+                Text("Apple Intelligence").font(scale.titleFont)
                 Spacer()
-                Text(appleStatus).font(.system(size: 10.5, weight: .medium))
+                Text(appleStatus).font(scale.captionFont)
                     .foregroundStyle(theme.color(appleAvailability.isAvailable ? "add" : "fg-dim"))
             }
-            Text(appleDetail).font(.system(size: 11.5))
+            Text(appleDetail).font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
             if appleAvailability == .disabled || appleAvailability == .modelNotReady {
@@ -52,14 +53,14 @@ struct OnDeviceAIPane: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("accent"))
             }
         }
-        .padding(14)
-        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .padding(.bottom, 20)
+        .padding(scale.space[4])
+        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .padding(.bottom, scale.space[5])
         .accessibilityElement(children: .contain)
     }
 
@@ -105,15 +106,15 @@ struct OnDeviceAIPane: View {
                                    set: { state.setRunFailureBriefsEnabled($0) }))
             SettingsRow(name: "Conflict explanations", desc: "Explain a merge conflict when you request it.") {
                 Text(appleAvailability.isAvailable || state.localTextModelAvailable ? "Available on request" : "No model available")
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                 providerNote
             }
             if let error = state.onDeviceAIHelperSettingsError {
-                Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                Text(error).font(scale.metaFont).foregroundStyle(theme.color("warn"))
                 AlasButton(title: "Retry Save") { state.retryOnDeviceAIHelperSettings() }
             }
         }
-        .padding(.bottom, 20)
+        .padding(.bottom, scale.space[5])
     }
 
     private func helperPreference(_ name: String, description: String, selection: Binding<Bool>) -> some View {
@@ -126,7 +127,7 @@ struct OnDeviceAIPane: View {
     }
 
     private var providerNote: some View {
-        Text(helperProviderDetail).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+        Text(helperProviderDetail).font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-dim"))
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -151,14 +152,14 @@ struct OnDeviceAIPane: View {
                 .disabled(!state.config.sessionSummariesEnabled && !state.localTextModelAvailable)
                 .accessibilityLabel("Session summaries")
                 .accessibilityValue(state.config.sessionSummariesEnabled ? "On" : "Off")
-                Text(localFeatureDetail).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                Text(localFeatureDetail).font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-dim"))
                 if let error = state.sessionSummarySettingsError {
-                    Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    Text(error).font(scale.metaFont).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Save") { Task { await state.retrySessionSummarySettings() } }
                         .disabled(state.localTextRemovalInProgress)
                 } else if state.config.sessionSummariesEnabled && state.localTextModelAvailable && !state.sessionSummariesRuntimeEnabled {
                     Text("Summaries are paused. Retry to resume.")
-                        .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                        .font(scale.metaFont).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Inference") { Task { await state.retrySessionSummarySettings() } }
                 }
             }
@@ -193,19 +194,19 @@ struct OnDeviceAIPane: View {
                 .disabled(!state.config.nextPromptSuggestionsEnabled && !state.localTextModelAvailable)
                 .accessibilityLabel("Next-prompt suggestions")
                 .accessibilityValue(state.config.nextPromptSuggestionsEnabled ? "On" : "Off")
-                Text(localFeatureDetail).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                Text(localFeatureDetail).font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-dim"))
                 if let error = state.nextPromptSettingsError {
-                    Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    Text(error).font(scale.metaFont).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Save") { Task { await state.retryNextPromptSuggestions() } }
                         .disabled(state.localTextRemovalInProgress)
                 } else if state.config.nextPromptSuggestionsEnabled && state.localTextModelAvailable {
                     if state.nextPromptInferenceState == .retryRequired || !state.nextPromptRuntimeEnabled {
                         Text("Suggestions are paused. Retry to resume.")
-                            .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                            .font(scale.metaFont).foregroundStyle(theme.color("warn"))
                         AlasButton(title: "Retry Inference") { Task { await state.retryNextPromptSuggestions() } }
                     } else if state.nextPromptInferenceState == .failed {
                         Text("The last suggestion failed. We'll retry after the next reply.")
-                            .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                            .font(scale.metaFont).foregroundStyle(theme.color("fg-dim"))
                     }
                 }
             }

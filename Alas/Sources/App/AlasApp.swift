@@ -98,6 +98,7 @@ struct AlasApp: App {
 
         Window("Settings", id: "settings") {
             SettingsWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -105,6 +106,7 @@ struct AlasApp: App {
 
         Window("Commit Prompt", id: "commit-prompt-editor") {
             CommitPromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -112,6 +114,7 @@ struct AlasApp: App {
 
         Window("Review Request Prompt", id: "review-request-prompt-editor") {
             ReviewRequestPromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -119,6 +122,7 @@ struct AlasApp: App {
 
         Window("Merge: Resolve All Prompt", id: "merge-bulk-prompt-editor") {
             MergeBulkResolvePromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -126,6 +130,7 @@ struct AlasApp: App {
 
         Window("Merge: Single-File Prompt", id: "merge-single-prompt-editor") {
             MergeSingleResolvePromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -562,8 +567,13 @@ enum DesignCaptureBridge {
         DistributedNotificationCenter.default().addObserver(
             forName: notification, object: nil, queue: .main
         ) { note in
-            guard let target = note.object as? String, let name = localNotification(for: target) else { return }
-            NotificationCenter.default.post(name: name, object: nil)
+            guard let target = note.object as? String else { return }
+            if target.hasPrefix("settings:") {
+                let section = SettingsSection(rawValue: String(target.dropFirst("settings:".count)))
+                NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+            } else if let name = localNotification(for: target) {
+                NotificationCenter.default.post(name: name, object: nil)
+            }
         }
     }
 

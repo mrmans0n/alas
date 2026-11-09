@@ -4,6 +4,7 @@ import SwiftUI
 /// Settings › Worktrees › Virtual Machines: the disk base images, worktree VMs, orphaned VMs
 /// and downloaded installers use, with Delete, Clean up and Remove.
 struct WorktreeVMsSection: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @ObservedObject private var installer: GoldenImageInstaller
     @ObservedObject private var linuxInstaller: LinuxGoldenInstaller
@@ -32,21 +33,21 @@ struct WorktreeVMsSection: View {
         SettingsGroup(title: "Virtual Machines") {
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 12)).foregroundColor(theme.color("warn"))
+                    .font(scale.metaFont).foregroundColor(theme.color("warn"))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, scale.space[3])
             }
             if let loadError {
                 Text("Couldn't read the VM registry: \(Self.sentence(loadError))")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("warn"))
+                    .font(scale.metaFont).foregroundColor(theme.color("warn"))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, scale.space[3])
             } else if !loaded {
-                Spinner().frame(width: 16, height: 16).padding(.vertical, 10)
+                Spinner().frame(width: 16, height: 16).padding(.vertical, scale.space[3])
             } else if bundles.isEmpty && !showsCleanUp {
                 Text("No base images or VMs yet.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.vertical, 10)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.vertical, scale.space[3])
             }
             ForEach(bundles) { bundle in
                 bundleRow(bundle)
@@ -54,9 +55,9 @@ struct WorktreeVMsSection: View {
             if showsCleanUp { cleanUpRow }
             if installerBytes > 0 { installersRow }
             Text("Clones share blocks with their base image, so these sizes can add up to more than the disk used.")
-                .font(.system(size: 11.5)).foregroundColor(theme.color("fg-dim"))
+                .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
+                .padding(.top, scale.space[3])
         }
         .task { await refresh() }
         .alert("Delete this base image?", isPresented: present($confirmingGolden), presenting: confirmingGolden) { golden in
@@ -116,9 +117,9 @@ struct WorktreeVMsSection: View {
                 .foregroundColor(theme.color("accent"))
                 .vmDisabled(installBusy(.macOS) || installBusy(.linux))
         }
-        .font(.system(size: 12.5))
+        .font(scale.metaFont)
         .foregroundColor(theme.color("fg-dim"))
-        .padding(.vertical, 10)
+        .padding(.vertical, scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(Divider().opacity(0.5), alignment: .top)
     }
@@ -128,16 +129,16 @@ struct WorktreeVMsSection: View {
     ) -> some View {
         HStack(spacing: 12) {
             Text(title)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(tint ?? theme.color("fg"))
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 12)
             Text(Self.format(bytes))
-                .font(.system(size: 12.5).monospacedDigit())
+                .font(scale.metaFont.monospacedDigit())
                 .foregroundColor(tint ?? theme.color("fg-dim"))
             action()
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, scale.space[2])
         .overlay(Divider().opacity(0.5), alignment: .top)
     }
 
