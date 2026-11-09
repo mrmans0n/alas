@@ -3518,12 +3518,18 @@ function toolCard(tc) {
   const [iconName, scls] = TOOL_STATUS[tc.status] || [null, "run"];
   const status = iconName ? icon(iconName, "tool-status " + scls) : el("span", "tool-status " + scls, tc.status || "");
   card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", status);
-  for (const asset of tc.assets || []) {
+  appendToolImages(card, tc.assets);
+  return card;
+}
+
+function appendToolImages(card, assets) {
+  for (const asset of assets || []) {
     if (asset.kind !== "image" && !/^image\//i.test(asset.mimeType || "")) continue;
-    const image = el("img", "tool-image");
+    const image = document.createElement("img");
+    image.className = "tool-image";
     image.alt = asset.name || "Image";
-    if (asset.data && /^image\/[a-z0-9.+-]+$/i.test(asset.mimeType || "")) {
-      image.src = "data:" + asset.mimeType + ";base64," + asset.data;
+    if (asset.data) {
+      applyTranscriptImage(image, asset.data);
     } else if (isLocalTranscriptImage(asset.uri)) {
       image.dataset.transcriptImage = asset.uri;
     } else if (/^(https?:|data:image\/)/i.test(asset.uri || "")) {
@@ -3531,7 +3537,6 @@ function toolCard(tc) {
     } else { continue; }
     card.querySelector(".tool-body").append(image);
   }
-  return card;
 }
 
 function toolBody(tc) {

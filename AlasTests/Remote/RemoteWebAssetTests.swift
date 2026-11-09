@@ -64,6 +64,33 @@ struct RemoteWebAssetTests {
         #expect(result == true)
     }
 
+    // Exercises gateway serialization and browser image decoding together.
+    @MainActor
+    @Test(arguments: [false, true]) func embeddedToolImagesReachBrowserFromGateway(dataURI: Bool) async throws {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="
+        let image = ACPMessage.ToolCallAsset.image(data: dataURI ? nil : png,
+            uri: dataURI ? "data:image/png;base64," + png : nil, mimeType: "image/png")
+        let call = ACPMessage.ToolCall(toolCallId: "image", title: "Screenshot", status: "completed", assets: [image])
+        let json = try #require(RemoteSessionGateway.toWire(.toolCall(call), index: 0).json)
+        let webView = WKWebView(frame: .zero)
+        webView.loadHTMLString("<html><body><pre class='tool-body'></pre></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        for name in ["isLocalTranscriptImage", "applyTranscriptImage", "appendToolImages"] {
+            _ = try await webView.evaluateJavaScript(try javascriptSource(name))
+        }
+        let result = try await webView.callAsyncJavaScript("""
+            appendToolImages(document.body, JSON.parse(toolCallJSON).assets);
+            const image = document.querySelector('img');
+            if (!image) return false;
+            return await new Promise(resolve => {
+              const deadline = setTimeout(() => resolve(false), 3000);
+              image.addEventListener('load', () => { clearTimeout(deadline); resolve(image.naturalWidth === 1); }, {once:true});
+              image.addEventListener('error', () => { clearTimeout(deadline); resolve(false); }, {once:true});
+            });
+            """, arguments: ["toolCallJSON": json], contentWorld: .page) as? Bool
+        #expect(result == true)
+    }
+
     @Test func transcriptImageRepliesStayWithTheirSession() throws {
         let function = try javascriptFunction("createTranscriptImageLoader")
         let context = try #require(function.context)
