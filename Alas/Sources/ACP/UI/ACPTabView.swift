@@ -474,6 +474,7 @@ private struct ACPSessionView: View {
             manager: manager,
             parentID: sessionId,
             typography: chatTypography,
+            worktreeRoot: worktree.path.path,
             onInsert: insertSideAnswer,
             onKeep: {
                 state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
@@ -2027,6 +2028,8 @@ private struct ACPSideQuestionSlot: View {
     @ObservedObject var manager: ACPSessionManager
     let parentID: ACPSession.ID
     let typography: ACPChatTypography
+    /// The parent's worktree path, for relative paths in approval diffs.
+    let worktreeRoot: String
     let onInsert: (String) -> Void
     let onKeep: () -> Void
     /// The dock this slot renders; it shows nothing unless the card is docked here.
@@ -2075,6 +2078,7 @@ private struct ACPSideQuestionSlot: View {
             } ?? true,
             policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
             typography: typography,
+            worktreeRoot: worktreeRoot,
             onAsk: { text, completion in
                 if let side {
                     let accepted = manager.submit(

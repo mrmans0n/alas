@@ -30,6 +30,8 @@ struct ACPSideQuestionCard: View {
     /// runner answers it rather than the stopped one.
     let policy: () -> ACPPermissionPolicy?
     let typography: ACPChatTypography
+    /// The parent's worktree path, so approval diffs show relative paths.
+    var worktreeRoot: String? = nil
     let onAsk: ACPSideQuestionAsk
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
@@ -56,7 +58,8 @@ struct ACPSideQuestionCard: View {
                 onRemoveQueued: onRemoveQueued,
                 onCancelTurn: onCancelTurn,
                 inputActions: inputActions,
-                enforcesReadOnly: enforcesReadOnly
+                enforcesReadOnly: enforcesReadOnly,
+                worktreeRoot: worktreeRoot
             )
         } else {
             ACPSideQuestionCardChrome(
@@ -103,6 +106,7 @@ struct ACPSideQuestionCard: View {
         let onCancelTurn: () -> Void
         let inputActions: ACPSideQuestionInputActions
         let enforcesReadOnly: Bool
+        let worktreeRoot: String?
 
         @Environment(\.theme) private var theme
         @State private var expandedActivityIDs: Set<String> = []
@@ -296,6 +300,7 @@ struct ACPSideQuestionCard: View {
                             session: side,
                             policy: policy,
                             scopeKey: Self.scopeKey(for: transcript.pendingPermission),
+                            worktreeRoot: worktreeRoot,
                             typography: typography
                         )
                     }
