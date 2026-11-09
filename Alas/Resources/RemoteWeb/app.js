@@ -209,7 +209,7 @@ function onActiveOpen() {
   setStatus(connectedLabel(), "ok");
   hideGate();
   send({ type: "listSessions" });
-  if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+  resubscribe();   // re-sync images and transcript after reconnect
   replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
   replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
   if (createState.open) {
@@ -276,6 +276,7 @@ function refreshHubViews() {
 }
 
 function send(obj) { links.sendActive(obj); }
+const transcriptImageLoader = createTranscriptImageLoader(send, applyTranscriptImage);
 
 // --- pairing & switching -----------------------------------------------------
 
@@ -307,6 +308,7 @@ function pairingErrorMessage(err) {
 // Everything in app.js that belongs to ONE server. Runs before the active
 // link changes so the unsubscribe goes to the server that owns the session.
 function resetServerScopedState() {
+  transcriptImageLoader.reset();
   if (currentSession) showSessions();
   hideCreateSheet(true);
   worktreeCreation.disconnect();
@@ -514,6 +516,9 @@ function handle(msg) {
         expandedPathsRefreshHadFailure = true;
       }
       showFileError(fileAccessMessage(msg.reason, null));
+      break;
+    case "transcriptImage":
+      transcriptImageLoader.receive(msg);
       break;
     case "fileContents":
       if (msg.sessionId !== currentSession) break;
@@ -1295,6 +1300,7 @@ function clearSessionSheetsForOpen() {
 }
 
 function showSessions() {
+  transcriptImageLoader.reset();
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   resetVisualCards(false); visualDrafts.clear(); visualSubmitted.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers, drafts and answered flags
@@ -2179,6 +2185,7 @@ function applyPage(msg) {
 }
 
 function resubscribe() {
+  transcriptImageLoader.reset();
   if (currentSession) send({ type: "subscribe", sessionId: currentSession });
 }
 
@@ -3098,6 +3105,77 @@ function markdownDestinationEnd(text, start) {
   return -1;
 }
 
+// Requests are scoped to the session whose filesystem owns the path. Clearing
+// the loader on navigation also drops late replies from the previous server.
+function createTranscriptImageLoader(send, apply) {
+  const pending = new Map(), cache = new Map(), active = new Set();
+  let cachedCharacters = 0;
+  function pump() {
+    for (const [key, entry] of pending) {
+      if (active.size >= 4) break;
+      if (active.has(key)) continue;
+      active.add(key);
+      send({type: "readTranscriptImage", sessionId: entry.sessionId, path: entry.path});
+    }
+  }
+  return {
+    track(node, sessionId, path) {
+      const key = JSON.stringify([sessionId, path]);
+      if (cache.has(key)) { apply(node, cache.get(key)); return; }
+      if (pending.has(key)) { pending.get(key).nodes.add(node); return; }
+      pending.set(key, {sessionId, path, nodes: new Set([node])});
+      pump();
+    },
+    receive(message) {
+      const key = JSON.stringify([message.sessionId, message.path]);
+      const entry = pending.get(key);
+      if (!entry) return false;
+      pending.delete(key); active.delete(key);
+      pump();
+      if (message.type !== "transcriptImage" || typeof message.data !== "string") return true;
+      const data = message.data;
+      if (data.length > 14 * 1024 * 1024) return true;
+      while ((cachedCharacters + data.length > 16 * 1024 * 1024 || cache.size >= 32) && cache.size) {
+        const oldest = cache.keys().next().value;
+        cachedCharacters -= cache.get(oldest).length;
+        cache.delete(oldest);
+      }
+      cache.set(key, data); cachedCharacters += data.length;
+      entry.nodes.forEach(node => apply(node, data));
+      return true;
+    },
+    reset() { pending.clear(); active.clear(); cache.clear(); cachedCharacters = 0; }
+  };
+}
+
+function isLocalTranscriptImage(source) {
+  return typeof source === "string" && source.length > 0 &&
+    (/^file:/i.test(source) || !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source));
+}
+
+function transcriptImageMarkup(source, title, text) {
+  const escape = value => String(value || "").replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
+  return '<img data-transcript-image="' + escape(source) + '" alt="' + escape(text) + '" title="' + escape(title) + '">';
+}
+
+function applyTranscriptImage(node, data) {
+  // Cached replies can arrive while renderMessage is still building the row.
+  queueMicrotask(() => {
+    if (!node.isConnected) return;
+    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes]));
+    node.onload = node.onerror = () => URL.revokeObjectURL(url);
+    node.src = url;
+  });
+}
+
+function loadTranscriptImages(node, sessionId) {
+  if (!sessionId) return;
+  node.querySelectorAll("img[data-transcript-image]").forEach(image => {
+    transcriptImageLoader.track(image, sessionId, image.dataset.transcriptImage);
+  });
+}
+
 // Render markdown to sanitized HTML (agent/user prose is untrusted — DOMPurify
 // strips any script/event-handler injection). Falls back to escaped plain text
 // if the libraries didn't load.
@@ -3105,7 +3183,11 @@ function md(text) {
   if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
     const d = document.createElement("div"); d.textContent = text || ""; return d.innerHTML;
   }
-  return DOMPurify.sanitize(marked.parse(linkifyBareUrls(text), { gfm: true, breaks: true }));
+  const renderer = new marked.Renderer();
+  const defaultImage = renderer.image.bind(renderer);
+  renderer.image = (source, title, text) => isLocalTranscriptImage(source)
+    ? transcriptImageMarkup(source, title, text) : defaultImage(source, title, text);
+  return DOMPurify.sanitize(marked.parse(linkifyBareUrls(text), { gfm: true, breaks: true, renderer }));
 }
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
@@ -3139,6 +3221,7 @@ function renderMessage(m, sid, open) {
     node.dataset.sid = sid;
     if (open && open.has(sid)) setCardOpen(node, true);
   }
+  loadTranscriptImages(node, currentSession);
   return node;
 }
 
@@ -3435,6 +3518,19 @@ function toolCard(tc) {
   const [iconName, scls] = TOOL_STATUS[tc.status] || [null, "run"];
   const status = iconName ? icon(iconName, "tool-status " + scls) : el("span", "tool-status " + scls, tc.status || "");
   card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", status);
+  for (const asset of tc.assets || []) {
+    if (asset.kind !== "image" && !/^image\//i.test(asset.mimeType || "")) continue;
+    const image = el("img", "tool-image");
+    image.alt = asset.name || "Image";
+    if (asset.data && /^image\/[a-z0-9.+-]+$/i.test(asset.mimeType || "")) {
+      image.src = "data:" + asset.mimeType + ";base64," + asset.data;
+    } else if (isLocalTranscriptImage(asset.uri)) {
+      image.dataset.transcriptImage = asset.uri;
+    } else if (/^(https?:|data:image\/)/i.test(asset.uri || "")) {
+      image.src = asset.uri;
+    } else { continue; }
+    card.querySelector(".tool-body").append(image);
+  }
   return card;
 }
 

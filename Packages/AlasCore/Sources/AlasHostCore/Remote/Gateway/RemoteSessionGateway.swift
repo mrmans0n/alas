@@ -471,6 +471,13 @@ public final class RemoteSessionGateway {
                 candidates = found.mentions
             }
             send(.mentionCandidates(sessionId: id, query: query, candidates: candidates))
+        case .readTranscriptImage(let id, let path):
+            let key = "readTranscriptImage\u{0}\(id)\u{0}\(path)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            let reply = await hostCalls.inspection.remoteRead(.transcriptImage(path: path), sessionId: id)
+            let data: Data? = if case .fileBytes(_, _, let bytes, _) = reply { bytes } else { nil }
+            send(.transcriptImage(sessionId: id, path: path, data: data))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }

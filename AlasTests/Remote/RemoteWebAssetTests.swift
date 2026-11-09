@@ -18,14 +18,109 @@ struct RemoteWebAssetTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    private func javascriptFunction(_ name: String) throws -> JSValue {
+    private func javascriptSource(_ name: String) throws -> String {
         let source = try asset("app.js")
         let start = try #require(source.range(of: "function \(name)("))
         let end = try #require(source.range(of: "\n}", range: start.upperBound..<source.endIndex))
+        return String(source[start.lowerBound..<end.upperBound])
+    }
+
+    private func javascriptFunction(_ name: String) throws -> JSValue {
         let context = try #require(JSContext())
-        context.evaluateScript(String(source[start.lowerBound..<end.upperBound]))
+        context.evaluateScript(try javascriptSource(name))
         #expect(context.exception == nil)
         return try #require(context.objectForKeyedSubscript(name))
+    }
+
+    // WebKit image decoding and DOM access require the main thread.
+    @MainActor
+    @Test func browserRendersHostImageBytesInline() async throws {
+        let webView = WKWebView(frame: .zero)
+        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        _ = try await webView.evaluateJavaScript(try asset("marked.min.js"))
+        _ = try await webView.evaluateJavaScript(try asset("purify.min.js"))
+        _ = try await webView.evaluateJavaScript("function linkifyBareUrls(text) { return text; }")
+        for name in ["createTranscriptImageLoader", "isLocalTranscriptImage", "transcriptImageMarkup", "applyTranscriptImage", "loadTranscriptImages", "md"] {
+            _ = try await webView.evaluateJavaScript(try javascriptSource(name))
+        }
+        let result = try await webView.callAsyncJavaScript("""
+            const sent = [];
+            globalThis.transcriptImageLoader = createTranscriptImageLoader(x => sent.push(x), applyTranscriptImage);
+            document.body.innerHTML = md('![screenshot](/tmp/shot.png)');
+            const image = document.querySelector('img');
+            if (!image || image.getAttribute('src')) return false;
+            loadTranscriptImages(document.body, 'peer/session');
+            if (sent.length !== 1 || sent[0].type !== 'readTranscriptImage') return false;
+            const loaded = new Promise(resolve => {
+              const deadline = setTimeout(() => resolve(false), 3000);
+              image.addEventListener('load', () => { clearTimeout(deadline); resolve(image.naturalWidth === 1); }, {once:true});
+              image.addEventListener('error', () => { clearTimeout(deadline); resolve(false); }, {once:true});
+            });
+            transcriptImageLoader.receive({type:'transcriptImage', sessionId:'peer/session', path:'/tmp/shot.png',
+                data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=='});
+            return await loaded;
+            """, contentWorld: .page) as? Bool
+        #expect(result == true)
+    }
+
+    @Test func transcriptImageRepliesStayWithTheirSession() throws {
+        let function = try javascriptFunction("createTranscriptImageLoader")
+        let context = try #require(function.context)
+        context.evaluateScript("""
+            var sent = [], applied = [];
+            var loader = createTranscriptImageLoader(x => sent.push(x), (node, data) => applied.push([node, data]));
+            loader.track("first", "peer/a", "/tmp/shot.png");
+            loader.track("second", "peer/a", "/tmp/shot.png");
+            loader.receive({type:"transcriptImage", sessionId:"peer/b", path:"/tmp/shot.png", data:"wrong"});
+            """)
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("sent.length").toInt32() == 1)
+        #expect(context.evaluateScript("applied.length").toInt32() == 0)
+        context.evaluateScript("loader.receive({type:'transcriptImage', sessionId:'peer/a', path:'/tmp/shot.png', data:'png'});")
+        #expect(context.evaluateScript("JSON.stringify(applied)").toString() == "[[\"first\",\"png\"],[\"second\",\"png\"]]")
+        context.evaluateScript("loader.reset(); loader.receive({type:'transcriptImage', sessionId:'peer/a', path:'/tmp/shot.png', data:'late'});")
+        #expect(context.evaluateScript("applied.length").toInt32() == 2)
+        context.evaluateScript("loader.track('retry', 'peer/a', '/tmp/shot.png');")
+        #expect(context.evaluateScript("sent.length").toInt32() == 2)
+    }
+
+    @Test func browserReconnectRetriesInterruptedImages() throws {
+        let function = try javascriptFunction("createTranscriptImageLoader")
+        let context = try #require(function.context)
+        context.evaluateScript("""
+            var sent = [], currentSession = 'peer/session', everConnected = false, pendingFirstPairing = null;
+            var createState = {open:false};
+            function send(message) { sent.push(message); }
+            function clearEscalation() {} function setStatus() {} function connectedLabel() { return 'online'; }
+            function hideGate() {} function replayActiveDetailRequest() {} function replayActiveListRequest() {}
+            var transcriptImageLoader = createTranscriptImageLoader(send, () => {});
+            transcriptImageLoader.track('before', currentSession, '/tmp/shot.png');
+            """)
+        context.evaluateScript(try javascriptSource("resubscribe"))
+        context.evaluateScript(try javascriptSource("onActiveOpen"))
+        context.evaluateScript("onActiveOpen(); transcriptImageLoader.track('after', currentSession, '/tmp/shot.png');")
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("sent.filter(x => x.type === 'readTranscriptImage').length").toInt32() == 2)
+    }
+
+    @Test func browserQueuesEveryImageWithBoundedConcurrency() throws {
+        let function = try javascriptFunction("createTranscriptImageLoader")
+        let context = try #require(function.context)
+        context.evaluateScript("""
+            var requests = [], applied = [];
+            var loader = createTranscriptImageLoader(x => requests.push(x), (node, data) => applied.push(node));
+            for (let i = 0; i < 40; i++) loader.track(i, "session", "/tmp/shot-" + i + ".png");
+            """)
+        #expect(context.evaluateScript("requests.length").toInt32() == 4)
+        context.evaluateScript("""
+            while (requests.length) {
+              const request = requests.shift();
+              loader.receive({type:"transcriptImage", sessionId:request.sessionId, path:request.path, data:"png"});
+            }
+            """)
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("applied.length").toInt32() == 40)
     }
 
     // Cache-busting versions (`/app.js?v=N`) are bumped routinely. Tests derive

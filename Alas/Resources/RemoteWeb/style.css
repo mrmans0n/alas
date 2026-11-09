@@ -515,3 +515,5 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .visual-summary { color: var(--fg-muted); }
 .visual-note-summary { margin-top: 4px; color: var(--fg-dim); font-size: 13px; }
 .visual-error { margin-top: 8px; color: var(--del); font-size: 13px; }
+
+.md img, .tool-image { display: block; max-width: 100%; max-height: 480px; object-fit: contain; }

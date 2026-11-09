@@ -24,6 +24,7 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
     var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
     var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
+    var transcriptImageResult: RemoteFileBytesResult = .failure(reason: .notFound, byteSize: nil, message: nil)
     var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
     var changeListRequests: [(
         sessionId: String,
@@ -309,6 +310,9 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     }
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
         .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+    func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult {
+        transcriptImageResult
     }
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         fileContentsRequests.append((sessionId, path))
@@ -2963,6 +2967,17 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd", stage: "unstaged"))
         #expect(sent == [.fileDiffFailed(
             sessionId: "s1", path: "../etc/passwd", stage: "unstaged", reason: .pathRejected, message: nil)])
+    }
+
+    @Test(arguments: [false, true]) func browserImageRepliesAreSeparateFromEditorReplies(available: Bool) async {
+        let provider = FakeRemoteApp()
+        let bytes = Data([137, 80, 78, 71])
+        if available { provider.transcriptImageResult = .success(data: bytes) }
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
+        await gateway.handle(.readTranscriptImage(sessionId: "s1", path: "/tmp/shot.png"))
+        #expect(sent == [.transcriptImage(sessionId: "s1", path: "/tmp/shot.png", data: available ? bytes : nil)])
     }
 
     @Test func listFilesAndReadFileSendTreeAndContents() async {
