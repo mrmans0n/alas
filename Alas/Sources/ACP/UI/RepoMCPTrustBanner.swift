@@ -5,6 +5,7 @@ import SwiftUI
 /// "MCP servers and trust"). Approving attaches them to future sessions;
 /// declining keeps them off without nagging.
 struct RepoMCPTrustBanner: View {
+    @Environment(\.designScale) private var scale
     let pendingServers: [ProjectMCPServer]
     let approvalQueue: RepoHookApprovalQueue
     let onApproveAll: () -> Void
@@ -17,31 +18,31 @@ struct RepoMCPTrustBanner: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "lock.shield")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
             Text(Self.headline(serverCount: pendingServers.count))
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
                 .lineLimit(1)
             Spacer()
             Button("Review…") { showsReview = true }
                 .buttonStyle(.plain)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
             Button("Approve All") { onApproveAll() }
-                .font(.system(size: 11))
+                .font(scale.metaFont)
             Button {
                 onDeclineAll()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.6))
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -56,29 +57,29 @@ struct RepoMCPTrustBanner: View {
     var reviewSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Repo-defined MCP servers")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 4)
+                .font(.system(size: 16, weight: .semibold)) // design-literal: the one dialog title
+                .padding(.bottom, scale.space[1])
             Text("Defined by this repo's .alas/config.json. Nothing attaches until you approve it; decline keeps it off and silent.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
-                .padding(.bottom, 12)
+                .padding(.bottom, scale.space[3])
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     ForEach(pendingServers) { server in
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: scale.space[0]) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(server.name)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(scale.meta.font(weight: .semibold))
                                 Spacer()
                                 if let onApproveServer, let onDeclineServer {
-                                    HStack(spacing: 6) {
+                                    HStack(spacing: scale.space[2]) {
                                         Button("Approve") { onApproveServer(server) }
-                                            .font(.system(size: 10.5))
+                                            .font(scale.caption.font(weight: .regular))
                                         Button {
                                             onDeclineServer(server)
                                         } label: {
                                             Image(systemName: "xmark")
-                                                .font(.system(size: 9))
+                                                .font(scale.glyphFont)
                                         }
                                         .buttonStyle(.plain)
                                         .help("Decline \(server.name)")
@@ -86,12 +87,12 @@ struct RepoMCPTrustBanner: View {
                                 }
                             }
                             Text(Self.detail(for: server.transport))
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-muted"))
                                 .textSelection(.enabled)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, scale.space[2])
                         .overlay(alignment: .bottom) {
                             Rectangle()
                                 .fill(theme.color("line"))
@@ -99,7 +100,7 @@ struct RepoMCPTrustBanner: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             HStack {
                 Spacer()
@@ -112,9 +113,9 @@ struct RepoMCPTrustBanner: View {
                     showsReview = false
                 }
             }
-            .padding(.top, 12)
+            .padding(.top, scale.space[3])
         }
-        .padding(20)
+        .padding(scale.space[4])
         .frame(width: 420)
         .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
     }

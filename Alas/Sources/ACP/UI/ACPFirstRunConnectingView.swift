@@ -9,6 +9,7 @@ enum ACPFirstRunConnectingViewCopy {
 }
 
 struct ACPFirstRunConnectingView: View {
+    @Environment(\.designScale) private var scale
     let agentDisplayName: String
     let phase: ACPFirstRunConnectingPhase
     let connectionStartedAt: Date?
@@ -22,17 +23,17 @@ struct ACPFirstRunConnectingView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: scale.space[3]) {
             mark
-            VStack(spacing: 7) {
-                HStack(spacing: 10) {
+            VStack(spacing: scale.space[2]) {
+                HStack(spacing: scale.space[2]) {
                     Spinner().frame(width: 14, height: 14)
                     Text(ACPFirstRunConnectingViewCopy.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundStyle(theme.color("fg"))
                 }
                 Text(ACPFirstRunConnectingViewCopy.subtitle(agentDisplayName: agentDisplayName))
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
@@ -47,7 +48,7 @@ struct ACPFirstRunConnectingView: View {
             )
         }
         .frame(maxWidth: 640)
-        .padding(.horizontal, 28)
+        .padding(.horizontal, scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(.bottom, bottomInset)
         .accessibilityElement(children: .contain)
@@ -61,12 +62,12 @@ struct ACPFirstRunConnectingView: View {
 
     private var phaseChips: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 ForEach(ACPFirstRunConnectingPhase.allCases, id: \.self) { item in
                     phaseChip(item)
                 }
             }
-            VStack(spacing: 8) {
+            VStack(spacing: scale.space[2]) {
                 ForEach(ACPFirstRunConnectingPhase.allCases, id: \.self) { item in
                     phaseChip(item)
                 }
@@ -77,16 +78,16 @@ struct ACPFirstRunConnectingView: View {
     private func phaseChip(_ item: ACPFirstRunConnectingPhase) -> some View {
         let active = item == phase
         return Text(item.label)
-            .font(.system(size: 11.5, weight: active ? .semibold : .medium))
+            .font(scale.meta.font(weight: active ? .semibold : .medium))
             .foregroundStyle(active ? theme.color("fg") : theme.color("fg-muted"))
             .lineLimit(1)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .background(theme.color(active ? "bg-2" : "bg-1").opacity(active ? 0.72 : 0.48))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(active ? theme.color("accent-soft") : theme.color("line"), lineWidth: 0.6)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }

@@ -190,3 +190,10 @@ Alas/Sources/ACP/UI/ACPSymbolSentPreview.swift
 Alas/Sources/ACP/UI/ACPSymbolChipCell.swift
 Alas/Sources/ACP/UI/ACPUpstreamReferenceHover.swift
 Alas/Sources/ACP/UI/ACPHistorySidebar.swift
+Alas/Sources/ACP/UI/RepoMCPTrustBanner.swift
+Alas/Sources/ACP/UI/ACPSetupNudgeBanner.swift
+Alas/Sources/ACP/UI/ACPAuthNudgeBanner.swift
+Alas/Sources/ACP/UI/ACPNewChatEmptyStateView.swift
+Alas/Sources/ACP/UI/ACPConnectingPlaceholder.swift
+Alas/Sources/ACP/UI/ACPFirstRunConnectingView.swift
+Alas/Sources/ACP/UI/ACPV2PreviewSessionView.swift
