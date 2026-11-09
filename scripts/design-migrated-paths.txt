@@ -271,3 +271,5 @@ Alas/Sources/Search/Views/SearchEmptyState.swift
 Alas/Sources/Search/Views/SearchFooter.swift
 Alas/Sources/Search/Views/SearchInputRow.swift
 Alas/Sources/Search/Views/SearchKbd.swift
+Alas/Sources/Integrations/GG/GGInboxTabView.swift
+Alas/Sources/Integrations/GG/GGLandingTabView.swift
