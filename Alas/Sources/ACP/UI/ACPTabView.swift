@@ -647,7 +647,7 @@ private struct ACPSessionView: View {
     private var transcriptAndComposer: some View {
         HStack(spacing: 0) {
             GeometryReader { chatProxy in
-                let chatContentMaxWidth = ACPChatLayout.readingColumnWidth(scale: scale)
+                let chatContentMaxWidth = ACPChatLayout.readingColumnWidth(scale: scale, columnWidth: chatProxy.size.width)
                 let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
                     preferred: state.config.harness.acpShowMinimap,
                     availableWidth: chatProxy.size.width
