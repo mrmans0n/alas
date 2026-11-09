@@ -3541,8 +3541,9 @@ function appendToolImages(card, assets) {
 
 function toolBody(tc) {
   const rows = toolMetadataRows(tc);
-  if (typeof tc.content === "string" && tc.content) {
-    return rows.length ? rows.map(([key, value]) => `${key}: ${value}`).join("\n") + "\n\n" + tc.content : tc.content;
+  const content = RemoteChangesView.toolDiffText(tc.content, tc.diffs);
+  if (typeof content === "string" && content) {
+    return rows.length ? rows.map(([key, value]) => `${key}: ${value}`).join("\n") + "\n\n" + content : content;
   }
   if (!rows.length) {
     if (tc.status === "in_progress" || tc.status === "pending") return "Working…";

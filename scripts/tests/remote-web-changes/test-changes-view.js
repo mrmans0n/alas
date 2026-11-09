@@ -179,4 +179,23 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.metadataOnlyNotice(hunks, "should not surface"), "");
 }
 
+{
+  // A tool call's content that is exactly its patches' hunks gets one path
+  // line per file; anything else is shown as sent.
+  const diffs = [
+    { path: "/w/a.txt", patch: "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n" },
+    { path: "/w/b.txt", patch: "--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\r\n-x\r\n+y\r\n" },
+    { path: "/w/c.txt", patch: null }
+  ];
+  const content = "@@ -1 +1 @@\n-a\n+b\n@@ -1 +1 @@\r\n-x\r\n+y\r\nChange unavailable: /w/c.txt";
+  assert.equal(
+    view.toolDiffText(content, diffs),
+    "--- /w/a.txt\n@@ -1 +1 @@\n-a\n+b\n\n--- /w/b.txt\n@@ -1 +1 @@\r\n-x\r\n+y\r\n\n--- /w/c.txt\nChange unavailable: /w/c.txt"
+  );
+  assert.equal(view.toolDiffText(content + "\nApplied.", diffs), content + "\nApplied.");
+  assert.equal(view.toolDiffText("plain output", []), "plain output");
+  assert.equal(view.toolDiffText("plain output", undefined), "plain output");
+  assert.equal(view.toolDiffText(undefined, diffs), undefined);
+}
+
 console.log("remote-web-changes: ok");
