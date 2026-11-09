@@ -298,4 +298,15 @@ struct NextPromptPolicyTests {
         #expect(!NextPromptPolicy.permitsInput(turns))
         #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
     }
+
+    @Test("the agent's prediction is offered as one safe line", arguments: [
+        ("  Run the tests  ", "Run the tests"),
+        ("Run the tests\nand deploy", nil),
+        (String(repeating: "a", count: 241), nil),
+        ("Use ghp_123456789012345678901234567890123456", nil),
+    ] as [(String, String?)])
+    func agentPredictionAcceptance(text: String, expected: String?) {
+        let turns = [NextPromptTurn(user: "Fix the build", assistant: "Fixed it.")]
+        #expect(NextPromptPolicy.acceptAgentPrediction(text, turns: turns) == expected)
+    }
 }

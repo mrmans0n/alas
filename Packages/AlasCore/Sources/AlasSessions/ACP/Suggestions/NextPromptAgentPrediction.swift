@@ -64,6 +64,10 @@ public final class NextPromptAgentPrediction {
         }
     }
 
+#if DEBUG
+    public var isWaitedOnForTesting: Bool { !waiters.isEmpty }
+#endif
+
     private func finishWaiters(where shouldFinish: (Int) -> Bool) {
         for (key, waiter) in waiters where shouldFinish(waiter.promptID) {
             waiters[key] = nil
