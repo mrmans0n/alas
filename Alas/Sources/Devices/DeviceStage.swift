@@ -92,6 +92,10 @@ struct DeviceStage: View {
             case .user, .idle:
                 Text("You're driving")
                     .foregroundStyle(theme.color("fg"))
+                if let waiting = control.waitingSessions(udid: device.udid).first {
+                    Text("· \(agentName(waiting)) is waiting")
+                        .foregroundStyle(theme.color("fg-dim"))
+                }
                 Button("Hand back") { control.handBack(udid: device.udid) }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))

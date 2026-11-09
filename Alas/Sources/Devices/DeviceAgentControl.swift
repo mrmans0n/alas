@@ -29,7 +29,9 @@ extension SimulatorStreamClient: DeviceInput {}
 final class DeviceAgentControl {
     static let disabled =
         "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators."
-    static let userDriving = "device_user_active: The user is driving this device. Try again after they hand it back."
+    static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
+    static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
+    static let cancelled = "device_cancelled: The call was cancelled while it waited for the user to hand the simulator back."
 
     private struct AgentCall {
         let sessionID: String
@@ -43,10 +45,23 @@ final class DeviceAgentControl {
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
+    /// How long a call waits for the user to hand a simulator back; under
+    /// Codex's 60-second limit on a tool call.
+    @ObservationIgnored private let holdLimit: Duration
+
+    private enum Hold: Sendable { case go, timedOut, cancelled }
+    private struct HeldCall {
+        let id: UUID
+        let sessionID: String
+        let resume: CheckedContinuation<Hold, Never>
+        let timer: Task<Void, Never>
+    }
 
     private var lastCalls: [String: AgentCall] = [:]
     private var inFlight: [String: Int] = [:]
     private var takenOver: Set<String> = []
+    /// Calls waiting for the user to hand each simulator back, in arrival order.
+    private var held: [String: [HeldCall]] = [:]
     @ObservationIgnored private var snapshots: [String: DeviceSnapshot] = [:]
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var screenshotSizes: [String: (width: Double, height: Double)] = [:]
@@ -61,7 +76,8 @@ final class DeviceAgentControl {
         boot: @escaping (String) async throws -> Void,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        leaseWindow: Duration = .seconds(60)
+        leaseWindow: Duration = .seconds(60),
+        holdLimit: Duration = .seconds(50)
     ) {
         self.input = input
         self.devices = devices
@@ -69,6 +85,7 @@ final class DeviceAgentControl {
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
+        self.holdLimit = holdLimit
     }
 
     // MARK: Driver
@@ -88,6 +105,45 @@ final class DeviceAgentControl {
 
     func handBack(udid: String) {
         takenOver.remove(udid)
+        // In arrival order; input calls then queue for the device in the order they resume.
+        for call in held.removeValue(forKey: udid) ?? [] {
+            call.timer.cancel()
+            call.resume.resume(returning: .go)
+        }
+    }
+
+    /// Sessions whose calls wait for the user to hand `udid` back, first to arrive first.
+    func waitingSessions(udid: String) -> [String] {
+        held[udid]?.map(\.sessionID) ?? []
+    }
+
+    /// Waits while the user drives `udid`: until they hand it back, the hold
+    /// limit passes, or the calling task is cancelled.
+    private func holdWhileTakenOver(_ udid: String, sessionID: String) async -> Hold {
+        guard takenOver.contains(udid) else { return .go }
+        guard !Task.isCancelled else { return .cancelled }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let limit = holdLimit
+                let timer = Task { [weak self] in
+                    await self?.sleep(limit)
+                    guard !Task.isCancelled else { return }
+                    self?.release(udid, id: id, as: .timedOut)
+                }
+                held[udid, default: []].append(HeldCall(id: id, sessionID: sessionID, resume: continuation, timer: timer))
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.release(udid, id: id, as: .cancelled) }
+        }
+    }
+
+    private func release(_ udid: String, id: UUID, as outcome: Hold) {
+        guard var calls = held[udid], let index = calls.firstIndex(where: { $0.id == id }) else { return }
+        let call = calls.remove(at: index)
+        held[udid] = calls.isEmpty ? nil : calls
+        call.timer.cancel()
+        call.resume.resume(returning: outcome)
     }
 
     private func userDriving(_ udid: String) -> Bool {
@@ -98,6 +154,11 @@ final class DeviceAgentControl {
 
     func perform(_ command: DeviceCommand, sessionID: String) async -> AlasCLIResponse {
         guard let udid = command.udid else { return await list() }
+        switch await holdWhileTakenOver(udid, sessionID: sessionID) {
+        case .go: break
+        case .timedOut: return .error(Self.stillDriving)
+        case .cancelled: return .error(Self.cancelled)
+        }
         let listed: [SimulatorDevice]
         do {
             listed = try await devices()
@@ -209,8 +270,10 @@ final class DeviceAgentControl {
                 return .error("device_type_unsupported: device_type types ASCII only; it can't type \"\(failure.character)\".")
             }
             let shift: UInt32 = 0xE1
-            for press in presses {
-                if userDriving(udid) { return .error(Self.userDriving) }
+            for (index, press) in presses.enumerated() {
+                if userDriving(udid) {
+                    return .error("device_user_active: The user took over after \(index) of \(presses.count) characters were typed. Check the field before typing the rest.")
+                }
                 if press.shift { input.key(udid: udid, usage: shift, down: true) }
                 input.key(udid: udid, usage: press.usage, down: true)
                 input.key(udid: udid, usage: press.usage, down: false)

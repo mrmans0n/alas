@@ -151,7 +151,7 @@ struct ACPMCPPromptPreambleTests {
         "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.",
         "A stopped VM starts by itself on the first computer_* or vm_run call",
         "computer_vm_starting and computer_vm_slot_pending mean try again shortly",
-        "device_user_active means the user took over the device: wait for them to hand it back.",
+        "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later.",
     ] + vmPreferenceGuidance
 
     /// Worktree VMs need Apple silicon, so other builds have no VM to prefer.

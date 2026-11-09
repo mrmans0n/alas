@@ -899,7 +899,7 @@ const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 /// The buttons `device_button` presses.
 const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
 
-const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. `device_user_active` means they took over: wait for them to hand it back. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
+const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. While they drive it, a call waits up to 50 seconds for them to hand it back; `device_user_active` means it is still theirs: try again later. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
     let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });

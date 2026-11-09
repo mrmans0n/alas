@@ -336,7 +336,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + ". Call device_list, then device_open (it boots the simulator if needed). "
                         + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
                         + "x/y are pixels in the latest device_screenshot. "
-                        + "device_user_active means the user took over the device: wait for them to hand it back. "
+                        + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
                         + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
                 }
             }

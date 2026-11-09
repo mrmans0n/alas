@@ -65,6 +65,24 @@ struct DeviceAgentControlTests {
         return nil
     }
 
+    /// For the 50-second hold, suspends until the held call's timer task is
+    /// cancelled, which happens when the call is released; other sleeps return at once.
+    private static let untilCancelled: @MainActor (Duration) async -> Void = { duration in
+        guard duration == .seconds(50) else { return }
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        await withTaskCancellationHandler {
+            for await _ in stream {}
+        } onCancel: {
+            continuation.finish()
+        }
+    }
+
+    /// Yields until `condition` holds; fails the test after 1000 tries.
+    private func until(_ condition: () -> Bool) async {
+        for _ in 0..<1000 where !condition() { await Task.yield() }
+        #expect(condition())
+    }
+
     @Test(arguments: [
         (DeviceCommand.snapshot(udid: "gone", query: nil, limit: 200), "device_not_found"),
         (.tap(udid: "off", target: .point(x: 1, y: 1), includeScreenshot: false), "device_not_booted"),
@@ -74,14 +92,77 @@ struct DeviceAgentControlTests {
         #expect(error(response)?.hasPrefix(code + ":") == true)
     }
 
-    @Test func aTakeoverRefusesCallsUntilHandedBack() async {
+    @Test func aCallMadeWhileTheUserDrivesRunsAfterHandBack() async {
         let input = FakeInput()
-        let control = control(input)
+        let control = control(input, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
-        let refused = await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
-        #expect(error(refused)?.hasPrefix("device_user_active:") == true)
+        async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
+        await until { control.waitingSessions(udid: "on") == ["s"] }
         control.handBack(udid: "on")
-        #expect(await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s") == .ok)
+        #expect(await call == .ok)
+        #expect(control.waitingSessions(udid: "on").isEmpty)
+    }
+
+    @Test func aHeldCallGivesUpWhenTheHoldLimitPasses() async {
+        let control = control(FakeInput())
+        control.takeOver(udid: "on")
+        let response = await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
+        #expect(error(response) == DeviceAgentControl.stillDriving)
+    }
+
+    @Test func heldCallsRunInArrivalOrder() async {
+        let input = FakeInput()
+        let control = control(input, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        async let first = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
+        await until { control.waitingSessions(udid: "on") == ["s"] }
+        async let second = control.perform(.type(udid: "on", text: "b", includeScreenshot: false), sessionID: "t")
+        await until { control.waitingSessions(udid: "on") == ["s", "t"] }
+        control.handBack(udid: "on")
+        #expect(await (first, second) == (.ok, .ok))
+        #expect(input.keys.filter(\.down).map(\.usage) == [0x04, 0x05])
+    }
+
+    @Test func aCancelledHeldCallLeavesTheQueue() async {
+        let input = FakeInput()
+        let control = control(input, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        let call = Task { await control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s") }
+        await until { control.waitingSessions(udid: "on") == ["s"] }
+        call.cancel()
+        #expect(error(await call.value) == DeviceAgentControl.cancelled)
+        #expect(control.waitingSessions(udid: "on").isEmpty)
+        control.handBack(udid: "on")
+        #expect(input.keys.isEmpty)
+    }
+
+    @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async {
+        var listed = [Self.booted]
+        let control = DeviceAgentControl(
+            input: FakeInput(), devices: { listed }, boot: { _ in }, sleep: Self.untilCancelled
+        )
+        control.takeOver(udid: "on")
+        async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
+        await until { !control.waitingSessions(udid: "on").isEmpty }
+        listed = [SimulatorDevice(udid: "on", name: "iPhone", runtimeName: "iOS 26.5", state: .shutdown)]
+        control.handBack(udid: "on")
+        #expect(error(await call)?.hasPrefix("device_not_booted:") == true)
+    }
+
+    @Test func typingStopsAtATakeoverAndSaysHowFarItGot() async {
+        let input = FakeInput()
+        var sleeps = 0
+        var control: DeviceAgentControl!
+        // Counts only the pauses between keystrokes; the lease timer sleeps too.
+        control = self.control(input) { duration in
+            guard duration == .milliseconds(20) else { return }
+            sleeps += 1
+            if sleeps == 2 { control.takeOver(udid: "on") }
+        }
+        let response = await control.perform(.type(udid: "on", text: "abcd", includeScreenshot: false), sessionID: "s")
+        #expect(error(response)?.hasPrefix("device_user_active:") == true)
+        #expect(error(response)?.contains("2 of 4 characters") == true)
+        #expect(input.keys.filter(\.down).count == 2)
     }
 
     @Test func aTakeoverDuringAnAgentGestureEndsItAndRefuses() async {
