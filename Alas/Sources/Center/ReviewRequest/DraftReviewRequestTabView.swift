@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct DraftReviewRequestTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let worktreeId: String
     let tabState: DraftReviewRequestTabState
@@ -250,7 +251,7 @@ struct DraftReviewRequestTabView: View {
                 accessory: AnyView(
                     Toggle(isOn: $createAsDraft) {
                         Text("Draft")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                     }
                     .toggleStyle(.checkbox)
@@ -275,24 +276,24 @@ struct DraftReviewRequestTabView: View {
 
     @ViewBuilder
     private var editorMessages: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if let warning {
                 Text(warning)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("warn"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let validationMessage, tabState.createdURL == nil {
                 Text(validationMessage)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-dim"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let createdURL = tabState.createdURL {
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     Icon(name: "link", size: 11, color: theme.color("accent"))
                     Text(createdURL.absoluteString)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -305,8 +306,8 @@ struct DraftReviewRequestTabView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(
             LinearGradient(
                 colors: [theme.color("composer-bg-top"), theme.color("composer-bg-bot")],
@@ -342,33 +343,33 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var draftContextHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Text("Branch diff")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text("\(tabState.baseBranch) -> HEAD")
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
             if let context {
                 Text("\(context.commits.count) commits")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 Text("\(context.changedFiles.count) files")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 if let summary = draftReviewSession?.summary {
                     Text("+\(summary.totalAdditions)")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(scale.meta.font(weight: .medium, design: .monospaced))
                         .foregroundColor(theme.color("add"))
                     Text("-\(summary.totalDeletions)")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(scale.meta.font(weight: .medium, design: .monospaced))
                         .foregroundColor(theme.color("del"))
                 }
             }
             Spacer()
             if let reviewSessionLaunchError {
                 Text(reviewSessionLaunchError)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -395,8 +396,8 @@ struct DraftReviewRequestTabView: View {
             }
             .disabled(!Self.canLaunchReviewSession(targetMismatchMessage: targetMismatchMessage))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .lspServerLeases(
             lspLeases,
@@ -413,35 +414,35 @@ struct DraftReviewRequestTabView: View {
     private var draftCommitStrip: some View {
         if let context, !context.commits.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     ForEach(context.commits) { commit in
                         Button {
                             Clipboard.copy(commit.sha)
                         } label: {
-                            HStack(spacing: 6) {
+                            HStack(spacing: scale.space[2]) {
                                 Text(commit.shortSha)
-                                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                    .font(scale.caption.font(weight: .semibold, design: .monospaced))
                                     .foregroundColor(theme.color("accent"))
                                 Text(commit.subject)
-                                    .font(.system(size: 11))
+                                    .font(scale.metaFont)
                                     .foregroundColor(theme.color("fg-dim"))
                                     .lineLimit(1)
                             }
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
+                            .padding(.horizontal, scale.space[2])
+                            .padding(.vertical, scale.space[1])
                             .background(theme.color("bg-1"))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 6)
+                                RoundedRectangle(cornerRadius: scale.radius.medium)
                                     .stroke(theme.color("line"), lineWidth: 0.5)
                             )
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                         }
                         .buttonStyle(.plain)
                         .help("Copy commit SHA")
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, scale.space[4])
+                .padding(.vertical, scale.space[2])
             }
             .background(theme.color("bg-0"))
         }
@@ -486,9 +487,9 @@ struct DraftReviewRequestTabView: View {
                 }
             )
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: scale.space[2]) {
                 Text("No committed branch context.")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-dim"))
                 AlasButton(title: "Reload", icon: "arrow.clockwise") {
                     Task { await loadContext() }
@@ -499,18 +500,18 @@ struct DraftReviewRequestTabView: View {
     }
 
     private func stateMessage(_ title: String, detail: String?) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg-dim"))
             if let detail {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
                     .multilineTextAlignment(.center)
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

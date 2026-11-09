@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RevisionFollowControl: View {
+    @Environment(\.designScale) private var scale
     let presentation: RevisionFollowPresentation
     let worktreeID: String
     let tabID: TabID
@@ -20,7 +21,7 @@ struct RevisionFollowControl: View {
     @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             tether
 
             if isRefreshing {
@@ -32,7 +33,7 @@ struct RevisionFollowControl: View {
             switch presentation {
             case .paused(_, _, _, let message):
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("warn"))
                     .lineLimit(1)
                     .accessibilityIdentifier("\(accessibilityPrefix)-pending-checkout")
@@ -44,7 +45,7 @@ struct RevisionFollowControl: View {
                 }
             case .stalled(_, _, let message):
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("warn"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -57,7 +58,7 @@ struct RevisionFollowControl: View {
                 }
             case .failed(_, _, let message):
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -204,11 +205,11 @@ struct RevisionFollowControl: View {
     }
 
     private var editor: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             Text(editorRequest?.isEditing == true ? "Edit followed revision" : "Follow a revision")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
             Text("Enter a Git revision, such as HEAD~3.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             AlasField(
                 text: expression,
@@ -220,7 +221,7 @@ struct RevisionFollowControl: View {
             )
             if let error = editorRequest?.errorMessage, !error.isEmpty {
                 Text(error)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -233,7 +234,7 @@ struct RevisionFollowControl: View {
                     .disabled(editorRequest?.submissionExpression == nil || editorRequest?.isSubmitting == true)
             }
         }
-        .padding(14)
+        .padding(scale.space[4])
         .frame(width: 300)
     }
 
@@ -248,6 +249,7 @@ struct RevisionFollowControl: View {
 }
 
 struct RevisionTetherView: View {
+    @Environment(\.designScale) private var scale
     let expression: String?
     let resolvedSHA: String
     var candidateSHA: String?
@@ -255,11 +257,11 @@ struct RevisionTetherView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             chip(expression ?? resolvedSHA, color: expression == nil ? theme.color("fg-muted") : theme.color("accent"))
             if expression == nil {
                 Text("┄")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("line"))
             } else {
                 Rectangle()
@@ -269,7 +271,7 @@ struct RevisionTetherView: View {
             }
             if let candidateSHA {
                 Image(systemName: "link.slash")
-                    .font(.system(size: 9))
+                    .font(scale.glyph.font(weight: .regular))
                     .foregroundColor(theme.color("warn"))
                 chip(candidateSHA, color: theme.color("warn"))
             }
@@ -279,10 +281,10 @@ struct RevisionTetherView: View {
 
     private func chip(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(scale.caption.font(design: .monospaced))
             .foregroundColor(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[0])
             .background(color.opacity(0.12))
             .clipShape(Capsule())
     }

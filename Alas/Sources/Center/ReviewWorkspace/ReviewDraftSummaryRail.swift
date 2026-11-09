@@ -127,6 +127,7 @@ struct ReviewDraftSummaryInlineRowToken: Equatable {
 }
 
 struct ReviewDraftSummaryRail: View {
+    @Environment(\.designScale) private var scale
     let comments: [ReviewDraftComment]
     let bundle: ReviewFeedbackBundle
     @Binding var collapsed: Bool
@@ -285,7 +286,7 @@ struct ReviewDraftSummaryRail: View {
     private var inlineBody: some View {
         VStack(spacing: 0) {
             expandedHeader
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 ForEach(groupedComments) { group in
                     commentGroup(group)
                 }
@@ -293,13 +294,13 @@ struct ReviewDraftSummaryRail: View {
                     feedbackSection
                 }
             }
-            .padding(12)
+            .padding(scale.space[3])
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.5)
         )
         .accessibilityIdentifier(Self.inlineAccessibilityIdentifier)
@@ -316,8 +317,8 @@ struct ReviewDraftSummaryRail: View {
             expandedHeader
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        LazyVStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: scale.space[3]) {
+                        LazyVStack(alignment: .leading, spacing: scale.space[3]) {
                             ForEach(groupedComments) { group in
                                 commentGroup(group)
                             }
@@ -326,7 +327,7 @@ struct ReviewDraftSummaryRail: View {
                             feedbackSection
                         }
                     }
-                    .padding(10)
+                    .padding(scale.space[3])
                 }
                 .onAppear {
                     // `.onChange` only fires on a transition, so a focus set
@@ -355,9 +356,9 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private var collapsedBody: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             collapseButton
-                .padding(.top, 8)
+                .padding(.top, scale.space[2])
             activeCountPill(compact: true)
             collapsedActionButton(
                 id: "review-draft-summary-copy-prompt",
@@ -385,11 +386,11 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private var expandedHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
+            HStack(spacing: scale.space[2]) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text("Draft review")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg"))
                     activeCountPill(compact: false)
                 }
@@ -399,16 +400,16 @@ struct ReviewDraftSummaryRail: View {
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Button {
                     draftCommentActions.copyPrompt(bundle)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(canCopyPrompt ? theme.color("fg-muted") : theme.color("fg-faint"))
                         .frame(width: 28, height: 24)
                         .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canCopyPrompt)
@@ -455,8 +456,8 @@ struct ReviewDraftSummaryRail: View {
 
             sendStateView
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -466,11 +467,11 @@ struct ReviewDraftSummaryRail: View {
             collapsed.toggle()
         } label: {
             Image(systemName: collapsed ? "sidebar.right" : "sidebar.trailing")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 26, height: 24)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(collapsed ? "Expand draft review rail" : "Collapse draft review rail")
@@ -479,9 +480,9 @@ struct ReviewDraftSummaryRail: View {
 
     private func activeCountPill(compact: Bool) -> some View {
         Text(compact ? "\(activeCount)" : "\(activeCount) active")
-            .font(.system(size: compact ? 11 : 10.5, weight: .semibold, design: .monospaced))
+            .font((compact ? scale.meta : scale.caption).font(weight: .semibold, design: .monospaced))
             .foregroundColor(activeCount > 0 ? theme.color("warn") : theme.color("fg-faint"))
-            .padding(.horizontal, compact ? 0 : 7)
+            .padding(.horizontal, compact ? 0 : scale.space[2])
             .frame(width: compact ? 26 : nil, height: compact ? 22 : 20)
             .background((activeCount > 0 ? theme.color("warn") : theme.color("fg-muted")).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: compact ? 6 : 5))
@@ -492,7 +493,7 @@ struct ReviewDraftSummaryRail: View {
     private var sendStateView: some View {
         if let error = sendStatus.visibleSendError {
             Text(error)
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("del").opacity(0.75))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -504,15 +505,15 @@ struct ReviewDraftSummaryRail: View {
                     )
                 )
         } else if let latestHandoff = sendStatus.latestHandoff {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "checkmark.circle")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("add"))
                 Text("Sent to agent")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-muted"))
                 Text(latestHandoff.createdAt, style: .time)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
             }
             .lineLimit(1)
@@ -540,11 +541,11 @@ struct ReviewDraftSummaryRail: View {
             action()
         } label: {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
                 .frame(width: 26, height: 24)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -673,17 +674,17 @@ struct ReviewDraftSummaryRail: View {
 
     private func summaryActionIcon(systemName: String, enabled: Bool) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 12, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
             .frame(width: 28, height: 24)
             .background(theme.color("bg-3"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func commentGroup(_ group: CommentGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(group.path)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -696,9 +697,9 @@ struct ReviewDraftSummaryRail: View {
 
     @ViewBuilder
     private var feedbackSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             Text("GitHub feedback")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
                 .accessibilityIdentifier("review-summary-feedback-header")
                 .background(
@@ -711,14 +712,14 @@ struct ReviewDraftSummaryRail: View {
                 feedbackGroupView(group)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, scale.space[1])
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func feedbackGroupView(_ group: FeedbackGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(group.path)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -740,11 +741,11 @@ struct ReviewDraftSummaryRail: View {
         .accessibilityIdentifier("review-summary-feedback-\(item.id)")
         .id("review-summary-feedback-\(item.id)")
         .accessibilityLabel(feedbackAccessibilityLabel(for: item))
-        .padding(8)
+        .padding(scale.space[2])
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(isFocused ? theme.color("accent") : theme.color("line"), lineWidth: isFocused ? 1 : 0.5)
         )
         .background(
@@ -759,19 +760,19 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private func feedbackCardContent(_ item: DiffReviewInlineFeedback) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 Text(item.providerName)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("accent"))
                 if let author = item.author, !author.isEmpty {
                     Text(author)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 if let line = item.anchor.line {
                     Text("line \(line)")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                 }
                 Spacer(minLength: 0)
@@ -779,7 +780,7 @@ struct ReviewDraftSummaryRail: View {
             .lineLimit(1)
 
             Text(DiffReviewInlineFeedbackMarkdown.inlineMarkdown(item.bodyPreview))
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .lineLimit(6)
                 .truncationMode(.tail)
         }
@@ -804,7 +805,7 @@ struct ReviewDraftSummaryRail: View {
         let availability = draftCommentActions.availability(comment)
         let isFocused = comment.id == focusedDraftCommentID
 
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: scale.space[2]) {
             if editingCommentID == comment.id {
                 summaryCardContent(comment)
             } else {
@@ -820,7 +821,7 @@ struct ReviewDraftSummaryRail: View {
             }
 
             if availability.canEdit || availability.canDelete || availability.canResolve || availability.canDismiss {
-                HStack(spacing: 5) {
+                HStack(spacing: scale.space[1]) {
                     Spacer(minLength: 0)
                     if editingCommentID == comment.id {
                         commentActionButton(id: "save", commentID: comment.id, systemName: "checkmark", tooltip: "Save") {
@@ -856,12 +857,12 @@ struct ReviewDraftSummaryRail: View {
                 }
             }
         }
-        .padding(8)
+        .padding(scale.space[2])
         .id("review-draft-summary-comment-\(comment.id)")
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(isFocused ? theme.color("accent") : theme.color("line"), lineWidth: isFocused ? 1 : 0.5)
         )
         .background(
@@ -876,20 +877,20 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private func summaryCardContent(_ comment: ReviewDraftComment) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 Text(lineDescription(for: comment))
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(statusColor(for: comment))
                 if let stateLabel = stateLabel(for: comment) {
                     Text(stateLabel)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                 }
                 ForEach(providerStateLabels(for: comment).indices, id: \.self) { index in
                     let label = providerStateLabels(for: comment)[index]
                     Text(label.text)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(label.color)
                 }
                 Spacer(minLength: 0)
@@ -918,11 +919,11 @@ struct ReviewDraftSummaryRail: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 22, height: 20)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -1015,6 +1016,7 @@ struct ReviewDraftSummaryRail: View {
 }
 
 struct ReviewDraftSummaryCommentEditor: View {
+    @Environment(\.designScale) private var scale
     @Binding var text: String
     let accessibilityIdentifier: String
 
@@ -1034,7 +1036,7 @@ struct ReviewDraftSummaryCommentEditor: View {
         )
         .frame(minHeight: 62)
         .background(theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 }

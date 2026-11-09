@@ -71,6 +71,7 @@ struct ProviderReviewPublishConfirmationState: Equatable {
 }
 
 struct ReviewSessionTabView: View {
+    @Environment(\.designScale) private var scale
     let worktree: Worktree?
     let tabState: ReviewSessionTabState
     let appState: AppState?
@@ -276,19 +277,19 @@ struct ReviewSessionTabView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: scale.space[3]) {
                 Image(systemName: "text.badge.checkmark")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color("accent"))
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(headerRecord?.target.title ?? tabState.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(scale.titleFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                         .accessibilityLabel(headerRecord?.target.title ?? tabState.title)
                     if let sourceDescription = headerRecord?.target.sourceDescription {
                         Text(sourceDescription)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-muted"))
                             .lineLimit(1)
                     }
@@ -299,17 +300,17 @@ struct ReviewSessionTabView: View {
                 }
                 if let providerDescription = headerRecord?.target.providerDescription {
                     Text(providerDescription)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                 }
             }
             if showsTrackedRevisionRow {
-                trackedRevisionRow.padding(.top, 8)
+                trackedRevisionRow.padding(.top, scale.space[2])
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .lspServerLeases(lspLeases, inputs: lspLeaseInputs, manager: appState?.lsp)
         .background(
@@ -398,13 +399,13 @@ struct ReviewSessionTabView: View {
     }
 
     private func stateView(title: String, detail: String?, color: Color, showsRetry: Bool) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(color)
             if let detail, !detail.isEmpty {
                 Text(detail)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                     .multilineTextAlignment(.center)
             }
@@ -478,12 +479,12 @@ struct ReviewSessionTabView: View {
     }
 
     private func trackedRefreshErrorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("del"))
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
             Spacer(minLength: 8)
@@ -494,8 +495,8 @@ struct ReviewSessionTabView: View {
             .controlSize(.small)
             .accessibilityIdentifier("review-session-revision-error-retry")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.08))
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -513,26 +514,26 @@ struct ReviewSessionTabView: View {
     private func providerBanner(
         _ message: String, color: String, identifier: String, dismiss: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color(color))
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
             Spacer(minLength: 8)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
             }
             .buttonStyle(.plain)
             .foregroundColor(theme.color("fg-muted"))
             .help("Dismiss")
             .accessibilityIdentifier("\(identifier)-dismiss")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color(color).opacity(0.08))
         .overlay(alignment: .bottom) {
             Rectangle()

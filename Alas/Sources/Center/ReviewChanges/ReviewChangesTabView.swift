@@ -69,6 +69,7 @@ enum ReviewChangesLoadingPresentation {
 }
 
 struct ReviewChangesTabView: View {
+    @Environment(\.designScale) private var scale
     static let reviewSessionLauncherLabel = "Open review session"
 
     let worktree: Worktree
@@ -172,25 +173,25 @@ struct ReviewChangesTabView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Text("Review Changes")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg"))
             if let summary = session?.summary, summary.fileCount > 0 {
                 Text("\(summary.fileCount) files")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-dim"))
                 Text("+\(summary.totalAdditions)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(scale.meta.font(weight: .medium, design: .monospaced))
                     .foregroundColor(theme.color("add"))
                 Text("-\(summary.totalDeletions)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(scale.meta.font(weight: .medium, design: .monospaced))
                     .foregroundColor(theme.color("del"))
             }
             Spacer()
             if let reviewSessionLaunchError {
                 Text(reviewSessionLaunchError)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -232,8 +233,8 @@ struct ReviewChangesTabView: View {
                 diffPreferences.showWhitespace.wrappedValue.toggle()
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .lspServerLeases(
             lspLeases,
@@ -251,11 +252,11 @@ struct ReviewChangesTabView: View {
             layoutButton(.split, systemName: "rectangle.split.2x1")
             layoutButton(.stacked, systemName: "rectangle.split.1x2")
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
     }
@@ -266,11 +267,11 @@ struct ReviewChangesTabView: View {
             diffPreferences.layoutMode.wrappedValue = mode
         } label: {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
                 .background(active ? theme.color("bg-1") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(mode.title)
@@ -284,11 +285,11 @@ struct ReviewChangesTabView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
                 .frame(width: 26, height: 24)
                 .background(isActive ? theme.color("accent-soft") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -308,21 +309,21 @@ struct ReviewChangesTabView: View {
     }
 
     private func refreshErrorBanner(message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("del"))
             Text("Could not refresh changes")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 30)
         .background(theme.color("del").opacity(0.12))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
@@ -421,23 +422,23 @@ struct ReviewChangesTabView: View {
     }
 
     private func stateView(title: String, detail: String?, color: Color) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             if isLoading {
                 Spinner()
                     .frame(width: 18, height: 18)
             }
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(color)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

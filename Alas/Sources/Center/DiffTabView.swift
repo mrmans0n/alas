@@ -14,6 +14,7 @@ struct DiffLoadToken: Equatable {
 }
 
 struct DiffTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
@@ -89,7 +90,7 @@ struct DiffTabView: View {
                 )
             } else {
                 Text("Could not load image diff for \(relativePath)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -141,7 +142,7 @@ struct DiffTabView: View {
                 Text(error)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
                     .foregroundColor(theme.color("del"))
-                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-2"))
             }
@@ -262,28 +263,28 @@ struct DiffTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: scale.space[3]) {
             Button {
                 copyFeedback.copy(relativePath)
             } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: scale.space[3]) {
                     Text((relativePath as NSString).lastPathComponent)
                         .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                         .foregroundColor(theme.color("fg"))
                     if compareWithHEAD {
                         Text("HEAD")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .font(scale.caption.font(weight: .semibold))
+                            .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                             .background(theme.color("accent").opacity(0.16))
                             .foregroundColor(theme.color("accent"))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     } else if staged {
                         Text("STAGED")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .font(scale.caption.font(weight: .semibold))
+                            .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                             .background(theme.color("info").opacity(0.18))
                             .foregroundColor(theme.color("info"))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     }
                     Text("·").foregroundColor(theme.color("fg-faint"))
                     Text((relativePath as NSString).deletingLastPathComponent)
@@ -297,14 +298,14 @@ struct DiffTabView: View {
             .accessibilityLabel("Copy \(relativePath)")
             Spacer()
             if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[3]) {
                     Text("+\(totalAdd)").foregroundColor(theme.color("add"))
                     Text("−\(totalDel)").foregroundColor(theme.color("del"))
                 }
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1.5))
             }
             LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
                 }
@@ -313,7 +314,7 @@ struct DiffTabView: View {
                 }
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .lspServerLeases(
@@ -603,13 +604,13 @@ struct DiffTabView: View {
                         let fileLevel = context.fileLevelDraftComments
                         if !fileLevel.isEmpty {
                             reviewDraftCommentStack(fileLevel)
-                                .padding(.bottom, 10)
+                                .padding(.bottom, scale.space[3])
                         }
                         ForEach(context.groupData) { groupData in
                             reviewDiffGroup(groupData)
                         }
                     }
-                    .padding(10)
+                    .padding(scale.space[3])
                     .frame(minWidth: proxy.size.width, alignment: .topLeading)
                 }
                 .defaultScrollAnchor(.topLeading)
@@ -620,7 +621,7 @@ struct DiffTabView: View {
     }
 
     private var reviewDiffToolbar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             reviewLayoutSwitcher
             Spacer()
             reviewToolbarToggle(
@@ -638,7 +639,7 @@ struct DiffTabView: View {
                 diffPreferences.showWhitespace.wrappedValue = !diffPreferences.showWhitespace.wrappedValue
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -649,10 +650,10 @@ struct DiffTabView: View {
             reviewLayoutModeButton(.split, systemName: "rectangle.split.2x1", currentMode: currentMode)
             reviewLayoutModeButton(.stacked, systemName: "rectangle.split.1x2", currentMode: currentMode)
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.color("line"), lineWidth: 0.75))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line"), lineWidth: 0.75))
     }
 
     private func reviewLayoutModeButton(
@@ -664,15 +665,15 @@ struct DiffTabView: View {
         return Button {
             diffPreferences.layoutMode.wrappedValue = mode
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: systemName).font(.system(size: 11, weight: .semibold))
-                Text(mode.title).font(.system(size: 12, weight: .semibold))
+            HStack(spacing: scale.space[2]) {
+                Image(systemName: systemName).font(scale.meta.font(weight: .semibold))
+                Text(mode.title).font(scale.meta.font(weight: .semibold))
             }
             .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[3])
             .frame(height: 28)
             .background(active ? theme.color("bg-1") : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(mode.title)
@@ -686,11 +687,11 @@ struct DiffTabView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
                 .frame(width: 24, height: 22)
                 .background(isActive ? theme.color("accent-soft") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -736,9 +737,9 @@ struct DiffTabView: View {
                 }
             }
             .background(theme.color("bg-1"))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.color("line"), lineWidth: 0.75))
-            .padding(.bottom, 10)
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line"), lineWidth: 0.75))
+            .padding(.bottom, scale.space[3])
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 reviewHunkHeader(group)
@@ -758,15 +759,15 @@ struct DiffTabView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             .background(theme.color("bg-1"))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.color("line"), lineWidth: 0.75))
-            .padding(.bottom, 10)
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line"), lineWidth: 0.75))
+            .padding(.bottom, scale.space[3])
         }
     }
 
     private func reviewHunkHeader(_ group: DiffDisplayGroup) -> some View {
         let actions = stagedHunkActions(hunk: group.sourceHunk)
-        return HStack(spacing: 8) {
+        return HStack(spacing: scale.space[2]) {
             Text(group.header)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
                 .foregroundColor(theme.color("fg-muted"))
@@ -792,7 +793,7 @@ struct DiffTabView: View {
                 reviewHunkActionButton(systemName: "trash", tooltip: "Discard hunk", action: discard)
             }
         }
-        .padding(.horizontal, 13).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -804,7 +805,7 @@ struct DiffTabView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 22, height: 20)
         }
@@ -816,7 +817,7 @@ struct DiffTabView: View {
     private func reviewDraftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
         if !comments.isEmpty {
             let actions = makeDraftCommentActions()
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ForEach(comments) { comment in
                     ReviewDraftCommentCard(
                         comment: comment,
@@ -829,7 +830,7 @@ struct DiffTabView: View {
                     .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: fileID))
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
             .background(theme.color("bg-1"))
             .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
@@ -839,7 +840,7 @@ struct DiffTabView: View {
     private func reviewDraftCommentStack(_ comments: [ReviewDraftComment], rows: [DiffDisplayRow]) -> some View {
         if !comments.isEmpty {
             let actions = makeDraftCommentActions()
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ForEach(comments) { comment in
                     DiffFeedbackLaneView(
                         lane: DiffFeedbackLaneResolver.lane(for: comment),
@@ -855,11 +856,11 @@ struct DiffTabView: View {
                             onSelect: { _ in }
                         )
                         .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: fileID))
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, scale.space[4])
                     }
                 }
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, scale.space[3])
             .background(theme.color("bg-1"))
             .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
@@ -887,10 +888,10 @@ struct DiffTabView: View {
                 )
             )
         }
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: scale.space[2]) {
             if let composerContext {
                 Text(composerContext.headerText)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -915,49 +916,50 @@ struct DiffTabView: View {
             )
             .frame(minHeight: 64, maxHeight: 90)
             .background(theme.color("bg-2"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line"), lineWidth: 0.5))
             .accessibilityIdentifier("diff-review-draft-composer")
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 if composerContext?.codeSnippet != nil {
                     Button("Insert code") { insertCodeGeneration &+= 1 }
                         .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-muted"))
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, scale.space[2])
                         .frame(height: 24)
                         .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                         .accessibilityIdentifier("diff-review-draft-composer-insert-code")
                 }
                 Spacer(minLength: 0)
                 Button("Cancel") { clearPendingDraft() }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, scale.space[2])
                     .frame(height: 24)
                     .background(theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     .accessibilityIdentifier("diff-review-draft-composer-cancel")
                 Button("Save") { savePendingDraft() }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("bg-1"))
-                    .padding(.horizontal, 9)
+                    .padding(.horizontal, scale.space[2])
                     .frame(height: 24)
                     .background(theme.color("accent"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     .accessibilityIdentifier("diff-review-draft-composer-save")
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
         .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 }
 
 struct HunkView: View {
+    @Environment(\.designScale) private var scale
     let hunk: ParsedDiff.Hunk
     let fileExtension: String
     var codeFontFamily: String = ""
@@ -969,7 +971,7 @@ struct HunkView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text(hunk.header)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: headerFontSize))
                     .foregroundColor(theme.color("fg-dim"))
@@ -985,7 +987,7 @@ struct HunkView: View {
                     AlasButton(title: "Drop hunk...", style: .subtle, action: { onDropFromCommit?() })
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 4)
+            .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)

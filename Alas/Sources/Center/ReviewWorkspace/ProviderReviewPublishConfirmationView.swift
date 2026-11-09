@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProviderReviewPublishConfirmationView: View {
+    @Environment(\.designScale) private var scale
     let providerName: String
     let reviewIdentity: String
     let commentCount: Int
@@ -18,18 +19,18 @@ struct ProviderReviewPublishConfirmationView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             Text("Publish review")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                 .foregroundColor(theme.color("fg"))
 
             Text("\(providerName) \(reviewIdentity)")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
 
             if let account {
                 Text("Posts as \(account), the host's \(providerName) login.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
             }
 
@@ -49,13 +50,13 @@ struct ProviderReviewPublishConfirmationView: View {
             )
 
             Text(commentCountText)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
 
             if selectedDecision.requiresSummaryBody {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     Text("Review summary")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-muted"))
                     PairedTextEditor(
                         text: $summaryBody,
@@ -70,11 +71,11 @@ struct ProviderReviewPublishConfirmationView: View {
                         )
                     )
                         .frame(minHeight: 72)
-                        .padding(6)
+                        .padding(scale.space[2])
                         .background(theme.color("bg-0"))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: scale.radius.medium)
                                 .stroke(theme.color("line"), lineWidth: 0.75)
                         )
                         .accessibilityIdentifier("provider-review-publish-summary")
@@ -88,13 +89,13 @@ struct ProviderReviewPublishConfirmationView: View {
             }
 
             if !unpublishableMessages.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text("Unable to publish")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("warn"))
                     ForEach(unpublishableMessages, id: \.self) { message in
                         Text(message)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("warn"))
                             .fixedSize(horizontal: false, vertical: true)
                             .background(
@@ -105,15 +106,15 @@ struct ProviderReviewPublishConfirmationView: View {
                             )
                     }
                 }
-                .padding(8)
+                .padding(scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("warn").opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             }
 
             if let errorMessage, !errorMessage.isEmpty {
                 Text(errorMessage)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .fixedSize(horizontal: false, vertical: true)
                     .background(
@@ -124,7 +125,7 @@ struct ProviderReviewPublishConfirmationView: View {
                     )
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .disabled(isPublishing)
@@ -142,12 +143,12 @@ struct ProviderReviewPublishConfirmationView: View {
                     )
             }
         }
-        .padding(14)
+        .padding(scale.space[4])
         .frame(width: 420)
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
         .accessibilityIdentifier("provider-review-publish-confirmation")

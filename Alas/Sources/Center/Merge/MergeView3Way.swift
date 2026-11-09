@@ -325,6 +325,7 @@ final class MergeWordMarkCache {
 }
 
 private struct MergePaneHeader: View {
+    @Environment(\.designScale) private var scale
     let title: String
     let branch: String?
     let detail: String
@@ -332,30 +333,30 @@ private struct MergePaneHeader: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if let tint {
-                RoundedRectangle(cornerRadius: 2)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(tint)
                     .frame(width: 8, height: 8)
             }
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.6)
                 .foregroundColor(theme.color("fg-muted"))
             if let branch {
                 Text(branch)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer(minLength: 4)
             Text(detail)
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, scale.space[3])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-2"))
     }

@@ -20,6 +20,7 @@ enum OutdatedThreadsDrawerPresentation {
 }
 
 struct OutdatedThreadsDrawer: View {
+    @Environment(\.designScale) private var scale
     let threads: [ReviewThread]  // already filtered: isFileLevel || isOutdated
     let maxExpandedListHeight: CGFloat
     @State private var isExpanded = false
@@ -47,22 +48,22 @@ struct OutdatedThreadsDrawer: View {
                         isExpanded.toggle()
                     }
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("fg-dim"))
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                             .animation(.easeInOut(duration: 0.18), value: isExpanded)
                         Image(systemName: "bubble.left.and.bubble.right")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                         Text("Outdated & file-level (\(threads.count))")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundColor(theme.color("fg-dim"))
                         Spacer()
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[4])
+                    .padding(.vertical, scale.space[2])
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -75,7 +76,7 @@ struct OutdatedThreadsDrawer: View {
                                 OutdatedThreadRow(thread: thread)
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, scale.space[1])
                         .onGeometryChange(for: CGFloat.self) { proxy in
                             proxy.size.height
                         } action: { height in
@@ -105,33 +106,34 @@ struct OutdatedThreadsDrawer: View {
 }
 
 private struct OutdatedThreadRow: View {
+    @Environment(\.designScale) private var scale
     let thread: ReviewThread
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 if thread.isOutdated {
                     Text("Outdated")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, scale.space[1])
+                        .padding(.vertical, scale.space[0])
                         .background(theme.color("fg-dim").opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 if thread.isFileLevel {
                     Text("File-level")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, scale.space[1])
+                        .padding(.vertical, scale.space[0])
                         .background(theme.color("fg-dim").opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 if let path = thread.path {
                     Text(path)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -142,7 +144,7 @@ private struct OutdatedThreadRow: View {
                         NSWorkspace.shared.open(url)
                     } label: {
                         Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-dim"))
                     }
                     .buttonStyle(.plain)
@@ -151,19 +153,19 @@ private struct OutdatedThreadRow: View {
             }
             if let hunk = thread.diffHunk {
                 Text(hunk)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-muted"))
                     .lineLimit(3)
                     .truncationMode(.tail)
-                    .padding(6)
+                    .padding(scale.space[2])
                     .background(theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             let body = thread.body
             if !body.isEmpty {
                 if let author = thread.author {
                     Text(author)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(theme.color("accent"))
                 }
                 DiffReviewInlineFeedbackMarkdown.view(body)
@@ -174,8 +176,8 @@ private struct OutdatedThreadRow: View {
                     .textSelection(.enabled)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         Divider().overlay(theme.color("line").opacity(0.5))
     }
 }

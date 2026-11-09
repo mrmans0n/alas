@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DraftCommitTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let worktreeId: String
     let tabState: DraftCommitTabState
@@ -278,16 +279,16 @@ struct DraftCommitTabView: View {
                     error = nil
                 },
                 accessory: AnyView(
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         Toggle(isOn: $amend) {
-                            Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                            Text("Amend").font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                         }
                         .toggleStyle(.checkbox)
                         .disabled(mutationsDisabled || !canAmend)
                         .help(canAmend ? "" : "No previous commit to amend")
                         if let label = presentation.draftToggleLabel {
                             Toggle(label, isOn: $createReviewRequestAsDraft)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .toggleStyle(.checkbox)
                                 .disabled(!presentation.draftToggleEnabled)
                                 .help(presentation.draftToggleHelp)
@@ -309,21 +310,21 @@ struct DraftCommitTabView: View {
                     ? "Suggested on this Mac from the staged diff. Review it before committing." : nil
             )
             if let activity = publishActivityText {
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     ProgressView().controlSize(.small)
-                    Text(activity).font(.system(size: 11))
+                    Text(activity).font(scale.metaFont)
                     Spacer()
-                }.padding(.horizontal, 12).padding(.vertical, 6)
+                }.padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             } else if publishCheckpoint == nil, let reason = publishAvailability?.disabledReason {
-                Text(reason).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
+                Text(reason).font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
             }
             if amend && amendWarning {
                 Text("Amending a pushed commit will rewrite history.")
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("warn"))
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.top, scale.space[1])
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             stagedDiffBody
