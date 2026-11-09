@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LSPInstallProgressSheet: View {
+    @Environment(\.designScale) private var scale
     @Bindable var installer: LSPInstaller
     let approvalQueue: RepoHookApprovalQueue
     /// Called when the user dismisses the sheet via Close/Done. The argument
@@ -42,19 +43,19 @@ struct LSPInstallProgressSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(titleText)
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 8)
+                .font(SettingsPaneStyle.titleFont)
+                .padding(.bottom, scale.space[2])
 
             if !commandLine.isEmpty {
                 Text(commandLine)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(8)
+                    .padding(scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-0"))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5))
-                    .padding(.bottom, 12)
+                    .padding(.bottom, scale.space[3])
             }
 
             ScrollViewReader { proxy in
@@ -62,16 +63,16 @@ struct LSPInstallProgressSheet: View {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(installer.logLines.enumerated()), id: \.offset) { idx, line in
                             Text(line.isEmpty ? " " : line)
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(scale.meta.font(design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(idx)
                         }
                     }
-                    .padding(8)
+                    .padding(scale.space[2])
                 }
                 .frame(height: 280)
                 .background(theme.color("bg-0"))
-                .overlay(RoundedRectangle(cornerRadius: 6)
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .onChange(of: installer.logLines.count) { _, newCount in
                     guard newCount > 0 else { return }
@@ -92,9 +93,9 @@ struct LSPInstallProgressSheet: View {
                     }
                 }
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 600)
         .background(theme.color("bg-1"))
         // Always non-interactively-dismissible: Close/Done are the only

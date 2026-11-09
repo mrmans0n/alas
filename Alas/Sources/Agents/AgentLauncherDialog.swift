@@ -7,6 +7,7 @@ import SwiftUI
 /// session list under the dimmed strip rather than replacing the panel — ←→
 /// keeps roaming between agents from inside that second stage.
 struct AgentLauncherDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var appState: AppState
     let selectedWorktree: () -> Worktree?
     var selectedWorkspaceCheckout: () -> WorkspaceCheckout? = { nil }
@@ -62,13 +63,13 @@ struct AgentLauncherDialog: View {
                         if let chatAgent {
                             Divider()
                                 .background(theme.color("line"))
-                                .padding(.horizontal, 18)
-                                .padding(.top, 10)
+                                .padding(.horizontal, scale.space[4])
+                                .padding(.top, scale.space[3])
                             sessionRowList(agent: chatAgent)
                         }
                         hintLine
-                            .padding(.top, 10)
-                            .padding(.bottom, 16)
+                            .padding(.top, scale.space[3])
+                            .padding(.bottom, scale.space[4])
                     }
                     .frame(width: panelWidth)
                     .background(hiddenQueryField)
@@ -77,15 +78,15 @@ struct AgentLauncherDialog: View {
                     // the actual ⌘⇥ switcher instead of a solid card.
                     .background(theme.color("bg-1").opacity(0.78))
                     .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                             .strokeBorder(theme.color("line"), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
                     .overlay(alignment: .topLeading) {
                         if chatAgent != nil {
-                            backButton.padding(10)
+                            backButton.padding(scale.space[3])
                         }
                     }
                     .onTapGesture { }
@@ -286,11 +287,11 @@ struct AgentLauncherDialog: View {
                 color: theme.color("fg-muted")
             )
             Text(appState.agentLauncher.mode == .terminal ? "Terminal" : "Chat")
-                .font(.system(size: 11.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
         }
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .padding(.top, scale.space[4])
+        .padding(.bottom, scale.space[3])
     }
 
     /// Segmented control: terminal vs ACP chat. Styled to match the
@@ -301,15 +302,15 @@ struct AgentLauncherDialog: View {
             segment(.terminal, icon: "terminal", label: "Terminal")
             segment(.acp,      icon: "sparkle",  label: "Chat")
         }
-        .padding(2)
+        .padding(scale.space[0])
         .background(theme.color("seg-container-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .padding(.top, scale.space[4])
+        .padding(.bottom, scale.space[3])
     }
 
     private func segment(_ mode: AppConfig.LauncherMode,
@@ -323,22 +324,22 @@ struct AgentLauncherDialog: View {
                 Icon(name: icon, size: 11,
                      color: isOn ? theme.color("fg") : theme.color("fg-muted"))
                 Text(label)
-                    .font(.system(size: 11.5, weight: isOn ? .semibold : .medium))
+                    .font(scale.meta.font(weight: isOn ? .semibold : .medium))
                     .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-muted"))
             }
-            .padding(.horizontal, 9)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(
                 ZStack {
                     if isOn {
-                        RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-3"))
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: scale.radius.small).fill(theme.color("bg-3"))
+                        RoundedRectangle(cornerRadius: scale.radius.small)
                             .stroke(Color.white.opacity(0.04), lineWidth: 1)
                             .blendMode(.plusLighter)
                     }
                 }
             )
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .shadow(color: isOn ? Color.black.opacity(0.25) : .clear,
                     radius: 1, x: 0, y: 1)
             .contentShape(Rectangle())
@@ -424,8 +425,8 @@ struct AgentLauncherDialog: View {
                         .id(agent.id)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 4)
+                .padding(.horizontal, scale.space[4])
+                .padding(.vertical, scale.space[1])
                 // `minWidth` (not just the ScrollView's own frame) so a
                 // strip narrower than the panel centers instead of hugging
                 // the leading edge — a horizontal ScrollView otherwise
@@ -476,7 +477,7 @@ struct AgentLauncherDialog: View {
             if progress { ProgressView().controlSize(.small) }
             Text(text)
         }
-        .font(.system(size: 12))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-faint"))
         .frame(maxWidth: .infinity, minHeight: 88)
     }
@@ -484,7 +485,7 @@ struct AgentLauncherDialog: View {
     private func stripFailedStatus(_ message: String) -> some View {
         VStack(spacing: 6) {
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -492,22 +493,22 @@ struct AgentLauncherDialog: View {
                 Task { await loadSelectedAgentAvailability(force: true) }
             }
             .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundStyle(theme.color("accent"))
         }
         .frame(maxWidth: .infinity, minHeight: 88)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, scale.space[4])
     }
 
     private var stripEmptyState: some View {
         VStack(spacing: 4) {
             Text(emptyTitle)
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg-dim"))
             if appState.agentLauncher.mode == .acp,
                appState.agentLauncher.query.isEmpty {
                 Text("Enable an ACP-capable agent in Settings → Agents.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
             }
         }
@@ -551,20 +552,20 @@ struct AgentLauncherDialog: View {
     private var stage1Caption: some View {
         VStack(spacing: 3) {
             Text(stage1Title)
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(
                     appState.agentLauncher.query.isEmpty ? theme.color("fg") : theme.color("accent")
                 )
                 .lineLimit(1)
             if let subtitle = stage1Subtitle {
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 2)
+        .padding(.horizontal, scale.space[4])
+        .padding(.top, scale.space[0])
     }
 
     private var stage1Title: String {
@@ -588,16 +589,16 @@ struct AgentLauncherDialog: View {
         let query = appState.agentLauncher.query
         return VStack(spacing: 3) {
             Text(query.isEmpty ? agent.displayName : query)
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(query.isEmpty ? theme.color("fg") : theme.color("accent"))
                 .lineLimit(1)
             Text(sessionCaptionSubtitle)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 2)
+        .padding(.horizontal, scale.space[4])
+        .padding(.top, scale.space[0])
     }
 
     private var sessionCaptionSubtitle: String {
@@ -619,7 +620,7 @@ struct AgentLauncherDialog: View {
     private var backButton: some View {
         Button(action: backToAgents) {
             Image(systemName: "chevron.left")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(theme.color("bg-2")))
@@ -648,7 +649,7 @@ struct AgentLauncherDialog: View {
 
                 sessionDiscoveryState(agent: agent, discovered: discovered, capabilities: capabilities)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, scale.space[1])
         }
         .frame(minHeight: 180, maxHeight: 320)
     }
@@ -675,9 +676,9 @@ struct AgentLauncherDialog: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))
             }
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-faint"))
-            .padding(.horizontal, 14)
+            .padding(.horizontal, scale.space[4])
             .frame(minHeight: 38)
         case .ready:
             if discovered.isEmpty {
@@ -746,10 +747,10 @@ struct AgentLauncherDialog: View {
                         if loadingMore { ProgressView().controlSize(.small) }
                         Text(loadingMore ? "Loading…" : "Load more")
                     }
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("accent"))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, scale.space[4])
                     .frame(height: 32)
                 }
                 .buttonStyle(.plain)
@@ -786,9 +787,9 @@ struct AgentLauncherDialog: View {
                     .foregroundStyle(theme.color("accent"))
             }
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-faint"))
-        .padding(.horizontal, 14)
+        .padding(.horizontal, scale.space[4])
         .frame(minHeight: 38)
     }
 
@@ -851,9 +852,9 @@ struct AgentLauncherDialog: View {
             if progress { ProgressView().controlSize(.small) }
             Text(text)
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-faint"))
-        .padding(.horizontal, 14)
+        .padding(.horizontal, scale.space[4])
         .frame(minHeight: 38)
     }
 
@@ -895,13 +896,13 @@ struct AgentLauncherDialog: View {
             if discoveryModel?.canListLinkedWorktrees == true {
                 filterChip("This worktree", isOn: !filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = false }
                 filterChip("All worktrees", isOn: filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = true }
-                Divider().frame(height: 12).padding(.horizontal, 6)
+                Divider().frame(height: 12).padding(.horizontal, scale.space[2])
             }
             filterChip("Active", isOn: !filter.showArchived) { $0.showArchived = false }
             filterChip("Archived", isOn: filter.showArchived) { $0.showArchived = true }
             Spacer()
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, scale.space[4])
         .frame(height: 30)
     }
 
@@ -926,10 +927,10 @@ struct AgentLauncherDialog: View {
             }
         } label: {
             Text(title)
-                .font(.system(size: 11, weight: isOn ? .semibold : .regular))
+                .font(scale.meta.font(weight: isOn ? .semibold : .regular))
                 .foregroundStyle(theme.color(isOn ? "accent" : "fg-muted"))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[0])
                 .background(Capsule().fill(isOn ? theme.color("accent").opacity(0.14) : Color.clear))
         }
         .buttonStyle(.plain)
@@ -968,10 +969,10 @@ struct AgentLauncherDialog: View {
 
     private var hintLine: some View {
         Text(hintText)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
     }
 
     private var hintText: String {
@@ -1319,6 +1320,7 @@ struct ACPSessionDeletionRequest: Identifiable {
 }
 
 private struct AgentSessionLauncherRow: View {
+    @Environment(\.designScale) private var scale
     let title: String
     let detail: String
     let systemImage: String?
@@ -1335,17 +1337,17 @@ private struct AgentSessionLauncherRow: View {
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundStyle(isEnabled ? theme.color("fg") : theme.color("fg-faint"))
                         .lineLimit(1)
                     Text(detail)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
             .frame(height: 44)
             .background(isSelected ? theme.color("bg-3") : .clear)
             .contentShape(Rectangle())
@@ -1360,7 +1362,7 @@ private struct AgentSessionLauncherRow: View {
             Spinner().frame(width: 12, height: 12)
         } else if let systemImage {
             Image(systemName: systemImage)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(isEnabled ? theme.color("fg-muted") : theme.color("fg-faint"))
         } else {
             Color.clear
@@ -1372,6 +1374,7 @@ private struct AgentSessionLauncherRow: View {
 /// so the fallback (no vendor asset) can be wrapped in its own rounded chip
 /// while real vendor artwork renders edge-to-edge.
 private struct AgentSwitcherTile<Logo: View>: View {
+    @Environment(\.designScale) private var scale
     let label: String
     let size: CGFloat
     let isSelected: Bool
@@ -1384,9 +1387,9 @@ private struct AgentSwitcherTile<Logo: View>: View {
     var body: some View {
         logo()
             .frame(width: size, height: size)
-            .padding(8)
+            .padding(scale.space[2])
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                     .fill(isSelected ? theme.color("bg-3") : .clear)
             )
             .opacity(isDimmed ? 0.4 : 1)

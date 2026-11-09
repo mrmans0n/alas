@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct FileSnapshotTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let state: FileSnapshotTabState
     var codeFontFamily: String = ""
@@ -29,18 +30,18 @@ struct FileSnapshotTabView: View {
     private var loadKey: String { "\(worktreePath.path)\u{0}\(state.ref)\u{0}\(state.relativePath)" }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: scale.space[3]) {
             Text((state.relativePath as NSString).lastPathComponent)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
 
             Text(state.ref)
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("info").opacity(0.18))
                 .foregroundColor(theme.color("info"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
 
             Text("·")
                 .foregroundColor(theme.color("fg-faint"))
@@ -51,8 +52,8 @@ struct FileSnapshotTabView: View {
 
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 

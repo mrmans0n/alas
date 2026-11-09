@@ -244,6 +244,7 @@ private final class IssueCompletionWindowController {
 }
 
 private struct IssueCompletionPopup: View {
+    @Environment(\.designScale) private var scale
     let state: IssueAutocompleteModel.State
     let suggestions: [CodeHostIssueSuggestion]
     let selectedIndex: Int
@@ -271,10 +272,10 @@ private struct IssueCompletionPopup: View {
         }
         .background(Color(nsColor: NSColor(theme.color("bg-1"))))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     @ViewBuilder
@@ -291,24 +292,24 @@ private struct IssueCompletionPopup: View {
             EmptyView()
             }
         }
-        .font(.system(size: 12))
+        .font(scale.metaFont)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, scale.space[3])
     }
 
     private func suggestionRow(_ suggestion: CodeHostIssueSuggestion, selected: Bool) -> some View {
         HStack(spacing: 8) {
             Text("#\(suggestion.number)")
-                .font(.system(size: 12, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .frame(width: 52, alignment: .trailing)
             Text(suggestion.title)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 28)
         .background(selected ? Color.accentColor.opacity(0.24) : .clear)
     }

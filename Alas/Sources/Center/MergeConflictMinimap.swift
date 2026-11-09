@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MergeConflictMinimap: View {
+    @Environment(\.designScale) private var scale
     let conflictCount: Int          // unresolved
     let resolvedCount: Int          // initialConflictCount - conflictCount
     let currentConflictIndex: Int?
@@ -8,7 +9,7 @@ struct MergeConflictMinimap: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: scale.space[0]) {
             // Resolved ticks (green, not clickable)
             ForEach(0..<resolvedCount, id: \.self) { _ in
                 Rectangle()
@@ -30,8 +31,8 @@ struct MergeConflictMinimap: View {
             }
             Spacer()
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 3)
+        .padding(.vertical, scale.space[2])
+        .padding(.horizontal, scale.space[1])
         .background(theme.color("bg-1"))
         .overlay(Divider(), alignment: .leading)
     }

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChangesPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
@@ -9,10 +10,10 @@ struct ChangesPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Changes").font(.system(size: 18, weight: .semibold))
+                Text("Changes").font(SettingsPaneStyle.titleFont)
                 Text("AI-generated commit messages and merge-conflict resolution.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Comparison base") {
                     SettingsRow(
@@ -155,7 +156,7 @@ struct ChangesPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .task {
             // Wait for the login-shell PATH first, same as the startup probe
@@ -233,13 +234,13 @@ struct ChangesPane: View {
             HStack(spacing: 6) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
                 Text("Installing…")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
         case .failed(let message):
             HStack(spacing: 8) {
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("warn"))
                     .lineLimit(2)
                 AlasButton(title: "Retry", style: .normal) { ggInstall.install() }
@@ -247,7 +248,7 @@ struct ChangesPane: View {
         case .idle, .succeeded:
             if let version = GGAvailability.shared.version {
                 Text("gg \(version)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-muted"))
             } else {
                 AlasButton(title: "Install gg…", style: .normal) { ggInstall.install() }
@@ -270,19 +271,20 @@ struct ChangesPane: View {
 }
 
 private struct PromptStatusChip: View {
+    @Environment(\.designScale) private var scale
     let label: String
     @Environment(\.theme) var theme
 
     var body: some View {
         Text(label)
-            .font(.system(size: 11, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundColor(theme.color("fg-muted"))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(theme.color("bg-2"))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
             )
     }

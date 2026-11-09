@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodePane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -27,10 +28,10 @@ struct CodePane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Code").font(.system(size: 18, weight: .semibold))
+                Text("Code").font(SettingsPaneStyle.titleFont)
                 Text("Syntax highlighting and language servers for editor panes.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Appearance") {
                     SettingsRow(name: "Theme",
@@ -137,7 +138,7 @@ struct CodePane: View {
                 }
                 .id(languageListRevision)
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .sheet(item: $selected) { entry in
             CodeLanguageDetailView(
@@ -221,7 +222,7 @@ struct CodePane: View {
             label = "Blocked by Gatekeeper"
             color = theme.color("warn")
         }
-        return Text(label).font(.system(size: 10.5)).foregroundColor(color)
+        return Text(label).font(scale.caption.font(weight: .regular)).foregroundColor(color)
     }
 
     @ViewBuilder

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct BinaryPreviewTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let relativePath: String
     let onRevealInFiles: (String) -> Void
@@ -40,25 +41,25 @@ struct BinaryPreviewTabView: View {
     }
 
     private var placeholder: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: "doc.fill")
-                .font(.system(size: 30))
+                .font(.system(size: 30)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-faint"))
             Text((relativePath as NSString).lastPathComponent)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: hero title
                 .foregroundColor(theme.color("fg"))
             Text("Binary file")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             if !isRemote {
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[2]) {
                     Button("Open with System") { FileSystemOpen.open(url: absoluteURL) }
                     Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteURL) }
                 }
-                .padding(.top, 4)
+                .padding(.top, scale.space[1])
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

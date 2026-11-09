@@ -14,6 +14,12 @@ Each capture writes `window.png`, `sidebar.png`, `transcript.png` and `right-pan
 this checkout's Debug build; set `ALAS_DEV_APP` to use another. Set
 `ALAS_CAPTURE_DENSITY=compact` to capture Compact. Set `ALAS_CAPTURE_RIGHT_TAB` to `files`,
 `agent`, `run` or `schedules` to open the right pane on that tab.
+Set `ALAS_CAPTURE_DIALOG` to `new-project`, `new-worktree`, `repo-selector`,
+`review-target`, `run-script`, `agent-launcher` or `file-search` to capture with
+that dialog open. Set `ALAS_CAPTURE_SETTINGS` to comma-separated Settings sections
+(`general,appearance,agents`) to also write `settings-<section>.png`. Set `ALAS_CAPTURE_CLI` to an `alas`
+CLI command (`open {wt}/src/billing/Invoice.swift`, `review`) to run it in the
+selected worktree first; `{wt}` is that worktree's path.
 
 ## How it works
 

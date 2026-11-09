@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProjectAgentSettingsView: View {
+    @Environment(\.designScale) private var scale
     @Binding var scripts: ProjectStartupScripts
     let agents: [AgentDefinition]
     let globalAgentID: String?
@@ -44,35 +45,35 @@ struct ProjectAgentSettingsView: View {
                 if scripts.agentSelection == .global {
                     if let repoDefaultAgentName {
                         Text("Repo default: \(repoDefaultAgentName) (from .alas/config.json). Falls back to Settings > Agents.")
-                            .font(.system(size: 11.5))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-dim"))
                     } else {
                         Text("Follows Settings > Agents. Currently \(globalName).")
-                            .font(.system(size: 11.5))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-dim"))
                     }
                 } else if case .agent = scripts.agentSelection, selectedAgent?.isEnabled != true {
                     Text("This agent is unavailable. Enable or install it in Settings > Agents, or choose another agent.")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
             }
             Text("Used for new worktrees and preselected when starting a new agent session in this repository. You can choose a different agent when launching.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
             if scripts.agentSelection != .none {
                 Divider()
                 if scripts.agentSelection == .global {
                     Text("Bypass permissions: \(globalUseBypass ? "on" : "off") · inherited from global settings")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-dim"))
                 } else {
                     Toggle("Bypass permissions", isOn: $scripts.worktreeAgentUseBypassPermissions)
                         .toggleStyle(.checkbox)
                         .disabled(selectedAgent?.bypassPermissionsFlag == nil)
                     Text("Applies when the selected agent supports bypassing permissions.")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
             }

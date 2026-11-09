@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct FileHistoryTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let state: FileHistoryTabState
     let onSelectCommit: (CommitInfo) -> Void
@@ -33,12 +34,12 @@ struct FileHistoryTabView: View {
     @ViewBuilder
     private var content: some View {
         if let error {
-            VStack(spacing: 8) {
+            VStack(spacing: scale.space[2]) {
                 Text("Could not load file history")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("del"))
                 Text(error)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(4)
@@ -46,7 +47,7 @@ struct FileHistoryTabView: View {
                     Task { await load() }
                 }
             }
-            .padding(24)
+            .padding(scale.space[5])
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !loaded {
             Spinner()
@@ -54,7 +55,7 @@ struct FileHistoryTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if commits.isEmpty {
             Text("No committed history for \(state.relativePath)")
-                .font(.system(size: 13))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -70,7 +71,7 @@ struct FileHistoryTabView: View {
                         )
                     }
                 }
-                .padding(.top, 10)
+                .padding(.top, scale.space[2])
             }
         }
     }
@@ -99,30 +100,31 @@ struct FileHistoryTabView: View {
 /// A file history's header: its name, a "History" badge and its directory, with a close button when
 /// `onClose` is set.
 struct FileHistoryHeader: View {
+    @Environment(\.designScale) private var scale
     let relativePath: String
     var onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Text((relativePath as NSString).lastPathComponent)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg"))
 
             Text("History")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.14))
                 .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
 
             if !directoryPath.isEmpty {
                 Text("·")
                     .foregroundColor(theme.color("fg-faint"))
                 Text(directoryPath)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -134,8 +136,8 @@ struct FileHistoryHeader: View {
                 ToolbarBtn(icon: "x", tooltip: "Close history", action: onClose)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 

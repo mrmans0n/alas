@@ -10,6 +10,7 @@ enum SettingsRowLayout {
 }
 
 struct SettingsRow<Control: View, Detail: View>: View {
+    @Environment(\.designScale) private var scale
     let name: String
     var desc: String? = nil
     /// Makes the name/description text selectable (diagnostics, URLs, paths).
@@ -22,11 +23,11 @@ struct SettingsRow<Control: View, Detail: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.system(size: 12.5, weight: .medium))
+                Text(name).font(scale.emphasisFont)
                     .textSelection(if: selectable)
                     .foregroundColor(theme.color("fg"))
                 if let desc {
-                    Text(desc).font(.system(size: 11.5))
+                    Text(desc).font(scale.metaFont)
                         .textSelection(if: selectable)
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
@@ -34,14 +35,14 @@ struct SettingsRow<Control: View, Detail: View>: View {
                 detail()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+            .padding(.top, scale.space[1])
             VStack(alignment: .leading, spacing: 6) {
                 control()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10)
+        .padding(.vertical, scale.space[3])
         .overlay(Divider().opacity(0.5), alignment: .top)
     }
 }

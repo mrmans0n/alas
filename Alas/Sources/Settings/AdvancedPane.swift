@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AdvancedPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @State private var pendingAction: CleanupAction?
@@ -10,10 +11,10 @@ struct AdvancedPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Advanced").font(.system(size: 18, weight: .semibold))
+                Text("Advanced").font(SettingsPaneStyle.titleFont)
                 Text("Experimental options and maintenance actions.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
 #if DEBUG
                 SettingsGroup(title: "Experiments") {
@@ -31,7 +32,7 @@ struct AdvancedPane: View {
                     SettingsGroup(title: "Workspaces") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
-                                .font(.system(size: 11.5))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("warn"))
                             AlasButton(title: "Discard Quarantined Workspace State", icon: "trash", style: .normal) {
                                 Task { @MainActor in
@@ -39,7 +40,7 @@ struct AdvancedPane: View {
                                 }
                             }
                         }
-                        .padding(.top, 8)
+                        .padding(.top, scale.space[2])
                     }
                 }
                 SettingsGroup(title: "Previews") {
@@ -82,12 +83,12 @@ struct AdvancedPane: View {
 
                 if let cleanupMessage {
                     Text(cleanupMessage)
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.top, 8)
+                        .padding(.top, scale.space[2])
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .alert(
             pendingAction?.title ?? "",

@@ -4,6 +4,7 @@ import SwiftUI
 /// supported hook-capable agent is detected and its hook is not installed.
 /// Dismissal is per-agent and persisted in `AppConfig.harness.dismissedHookInstallNudges`.
 struct AgentHookInstallNudgeBanner: View {
+    @Environment(\.designScale) private var scale
     let appState: AppState
     let terminalTab: TerminalTabState
 
@@ -40,15 +41,15 @@ struct AgentHookInstallNudgeBanner: View {
     }
 
     private func bannerRow(nudge: HookInstallNudge) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "info.circle")
                 .foregroundColor(theme.color("fg-dim"))
             Text(nudge.title)
-                .font(.system(size: 12.5))
+                .font(scale.metaFont)
             Spacer()
             if let status = installStatus {
                 Text(status)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             AlasButton(title: nudge.actionTitle, style: .normal) {
@@ -60,8 +61,8 @@ struct AgentHookInstallNudgeBanner: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1"))
         .overlay(
             Rectangle()

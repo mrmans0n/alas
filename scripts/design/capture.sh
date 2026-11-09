@@ -8,6 +8,12 @@
 # ALAS_DEV_APP overrides the app; by default this checkout's Debug build is used.
 # ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules) opens the right pane on
 # that tab instead of Changes.
+# ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
+# run-script, agent-launcher, file-search) opens that dialog before the capture.
+# ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
+# settings-<section>.png with Settings open on each.
+# ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
+# where {wt} is the selected worktree) runs before the capture.
 # ALAS_CAPTURE_EXPECT_SIZE (such as 1648x1063, in points) fails the capture when
 # the window has another size. The size is also written to window-size.txt.
 set -euo pipefail
@@ -237,6 +243,37 @@ visit_worktrees() {
 }
 (visit_worktrees)
 
+# ALAS_CAPTURE_CLI runs one alas CLI command in the selected worktree before
+# the capture, such as "open {wt}/src/billing/Invoice.swift" or "review".
+if [[ -n "${ALAS_CAPTURE_CLI:-}" ]]; then
+  (
+    cd "$profile/fixture/lantern"
+    export ALAS_SOCKET_PATH="$runtime_dir/hooks/pid-$app_pid"
+    # The seed's selected worktree, where the transcript lives.
+    selected_path="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spaces"][0]["lastSelectedWorktreeId"])' "$profile/seed/spaces.json")"
+    cd "$selected_path"
+    "$cli" wt switch "$(git -C "$selected_path" branch --show-current)" >/dev/null
+    /bin/sleep 1
+    # {wt} stands for the selected worktree's path.
+    read -ra cli_args <<<"${ALAS_CAPTURE_CLI//\{wt\}/$selected_path}"
+    "$cli" "${cli_args[@]}" >/dev/null || echo "warning: alas ${ALAS_CAPTURE_CLI} failed" >&2
+  )
+  /bin/sleep 2
+fi
+
+# ALAS_CAPTURE_DIALOG opens a dialog through the Debug build's capture bridge
+# (DesignCaptureBridge in AlasApp.swift) once the worktrees are visited.
+if [[ -n "${ALAS_CAPTURE_DIALOG:-}" ]]; then
+  /usr/bin/swift - "$ALAS_CAPTURE_DIALOG" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+  /bin/sleep 1.5
+fi
+
 # Ready once two captures a second apart match. Status indicators keep pulsing,
 # so captures are compared as thumbnails with a small tolerance.
 shot="$(mktemp -d)"
@@ -299,5 +336,52 @@ write("sidebar.png", x: 0, width: sidebar)
 write("transcript.png", x: sidebar, width: window.width - sidebar - rightPane)
 write("right-pane.png", x: window.width - rightPane, width: rightPane)
 SWIFT
+
+# ALAS_CAPTURE_SETTINGS opens Settings on that section through the capture
+# bridge and writes settings.png from its own window.
+if [[ -n "${ALAS_CAPTURE_SETTINGS:-}" ]]; then
+  open_settings() {
+    /usr/bin/swift - "settings:$1" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+  }
+  settings_window() {
+    swift - "$app_pid" "$window_id" <<'SWIFT' 2>/dev/null
+import CoreGraphics
+let pid = Int(CommandLine.arguments[1])!, main = Int(CommandLine.arguments[2])!
+let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+let ids = windows.compactMap { w -> (Int, Int)? in
+    guard w["kCGWindowOwnerPID"] as? Int == pid, w["kCGWindowLayer"] as? Int == 0,
+          let id = w["kCGWindowNumber"] as? Int, id != main,
+          let b = w["kCGWindowBounds"] as? [String: Any],
+          let width = b["Width"] as? Int, let height = b["Height"] as? Int, width > 300, height > 300 else { return nil }
+    return (id, width * height)
+}
+if let m = ids.max(by: { $0.1 < $1.1 }) { print(m.0) }
+SWIFT
+  }
+  has_settings_window() { [[ -n "$(settings_window)" ]]; }
+  settings_id=""
+  IFS=',' read -ra settings_sections <<<"$ALAS_CAPTURE_SETTINGS"
+  for section in "${settings_sections[@]}"; do
+    open_settings "$section"
+    if [[ -z "$settings_id" ]]; then
+      if ! wait_for 15 has_settings_window; then
+        echo "warning: Settings never opened; no settings captures" >&2
+        break
+      fi
+      settings_id="$(settings_window)"
+      if command -v aerospace >/dev/null; then
+        aerospace move-node-to-workspace --window-id "$settings_id" "$capture_workspace" 2>/dev/null || true
+      fi
+    fi
+    /bin/sleep 2
+    /usr/sbin/screencapture -x -o "-l$settings_id" "$out_dir/settings-$section.png"
+  done
+fi
 
 echo "captured $3 at ${window_size}pt to $out_dir"

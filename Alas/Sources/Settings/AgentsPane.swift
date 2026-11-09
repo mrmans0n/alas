@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AgentsPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     var onNavigate: (SettingsSection) -> Void = { _ in }
@@ -31,23 +32,23 @@ struct AgentsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Agents").font(.system(size: 18, weight: .semibold))
+                Text("Agents").font(SettingsPaneStyle.titleFont)
                 Text("CLI agents Alas can detect, launch on worktree create, and use for AI commit messages.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text("AVAILABLE AGENTS")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .tracking(0.6)
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.bottom, 14)
+                        .padding(.bottom, scale.space[4])
                     cardGrid
                     Text("Is your agent not on the list? [Browse the ACP registry](alas-agents:registry) or [add it manually](alas-agents:custom).")
-                        .font(.system(size: 12.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                         .tint(theme.color("accent"))
-                        .padding(.top, 12)
+                        .padding(.top, scale.space[3])
                         .environment(\.openURL, OpenURLAction { url in
                             if url.absoluteString == "alas-agents:registry" {
                                 registryBrowser = RegistryBrowserRequest()
@@ -57,7 +58,7 @@ struct AgentsPane: View {
                             return .handled
                         })
                 }
-                .padding(.bottom, 18)
+                .padding(.bottom, scale.space[4])
 
                 SettingsGroup(title: "Agent defaults") {
                     SettingsRow(
@@ -118,7 +119,7 @@ struct AgentsPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .onAppear { piAdapterState = PiMCPAdapterInspector.state() }
         .sheet(item: $editing) { target in
@@ -201,6 +202,7 @@ struct AgentsPane: View {
 }
 
 private struct AgentCard: View {
+    @Environment(\.designScale) private var scale
     let agent: AgentDefinition
     let installed: Bool
     let onTap: () -> Void
@@ -213,7 +215,7 @@ private struct AgentCard: View {
                 HStack(spacing: 8) {
                     AgentLogoView(agent: agent)
                     Text(agent.displayName)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                     statusPill
                     Spacer(minLength: 0)
@@ -225,19 +227,19 @@ private struct AgentCard: View {
                     .opacity(installed ? 1 : 0.4)
                 }
                 Text(agent.resolvedBinary)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .padding(12)
+            .padding(scale.space[3])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .stroke(theme.color("line-soft"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
     }
@@ -257,10 +259,10 @@ private struct AgentCard: View {
 
     private func pill(text: String, fg: Color) -> some View {
         Text(text)
-            .font(.system(size: 10))
+            .font(scale.caption.font(weight: .regular))
             .foregroundColor(fg)
-            .padding(.horizontal, 6).padding(.vertical, 2)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
             .background(fg.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 }

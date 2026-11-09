@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct AgentEditView: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let target: AgentsPane.EditTarget
     let onDismiss: () -> Void
@@ -80,8 +81,8 @@ struct AgentEditView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(headerTitle)
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 12)
+                .font(SettingsPaneStyle.titleFont)
+                .padding(.bottom, scale.space[3])
 
             SettingsRow(name: "Name") {
                 AlasField(text: $draft.displayName, monospaced: false)
@@ -105,7 +106,7 @@ struct AgentEditView: View {
             if draft.isBuiltin {
                 SettingsRow(name: "Default binary") {
                     Text(draft.binary)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                 }
             }
@@ -166,12 +167,12 @@ struct AgentEditView: View {
                     desc: "Added to the agent's own instructions and project rules. Applies to new sessions."
                 ) {
                     TextEditor(text: $sessionInstructions)
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .scrollContentBackground(.hidden)
                         .frame(height: 72)
-                        .padding(8)
+                        .padding(scale.space[2])
                         .background(theme.color("bg-0"))
-                        .overlay(RoundedRectangle(cornerRadius: 6)
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                             .strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
             }
@@ -184,16 +185,16 @@ struct AgentEditView: View {
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
                         TextEditor(text: $sessionHooks)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .scrollContentBackground(.hidden)
                             .frame(height: 72)
-                            .padding(8)
+                            .padding(scale.space[2])
                             .background(theme.color("bg-0"))
-                            .overlay(RoundedRectangle(cornerRadius: 6)
+                            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                                 .strokeBorder(theme.color(sessionHooksError == nil ? "line" : "del"), lineWidth: 0.5))
                         if let sessionHooksError {
                             Text(sessionHooksError)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("del"))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -218,9 +219,9 @@ struct AgentEditView: View {
                 )
                 .disabled(!canSave)
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 560)
         .background(theme.color("bg-1"))
         .confirmationDialog(
