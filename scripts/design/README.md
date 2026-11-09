@@ -20,6 +20,8 @@ that dialog open. Set `ALAS_CAPTURE_SETTINGS` to comma-separated Settings sectio
 (`general,appearance,agents`) to also write `settings-<section>.png`. Set `ALAS_CAPTURE_CLI` to an `alas`
 CLI command (`open {wt}/src/billing/Invoice.swift`, `review`) to run it in the
 selected worktree first; `{wt}` is that worktree's path.
+Set `ALAS_CAPTURE_CENTER` to `gg-inbox` or `gg-landing` to open that gg tab (the inbox of
+the demo project, or a landing in progress for its `invoice-export` stack).
 
 ## How it works
 
@@ -35,6 +37,23 @@ selected worktree first; `{wt}` is that worktree's path.
   `fake-acp-agent.py` replays the transcript and asks for a permission.
 
 To change what the transcript shows, edit `fake-acp-agent.py`.
+
+## Scripted gg
+
+`fake-gg.py` stands in for git-gud, so the gg screens have demo data. The profile
+installs it as `<profile>/bin/gg` and sets `$SHELL` to `<profile>/bin/shell` for the
+launch: Alas reads its PATH from `$SHELL`, and that wrapper gives it a PATH with the
+fake first, so the user's own gg is never found. It answers `--version`, the
+`--help` capability probes, `ls --json` (the stack of the current branch, or the
+directory of all stacks), `ls --all --json`, `ls --remote --json` and `inbox`
+(`--jsonl` and `--json`). Anything else exits 1 with a message and changes nothing.
+The demo repo carries a gg config (`.git/gg/config.json`, branch username `nacho`),
+which turns the gg screens on. Edit the stacks at the top of `fake-gg.py`.
+
+The gg-landing capture seeds `GGLandingStore` with the events `gg land --jsonl`
+would emit; no land runs. The stack drawer in the Changes tab reads "Unavailable":
+the stacks' commits are not in the demo repo, and adding them would change every
+other capture.
 
 ## Routes tried
 
