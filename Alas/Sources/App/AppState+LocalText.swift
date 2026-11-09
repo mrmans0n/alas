@@ -79,7 +79,7 @@ extension AppState {
             pressure.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.invalidateAllNextPromptContexts()
+                    self.relieveNextPromptMemoryPressure()
                     self.sessionSummaryCoordinator.teardown()
                     Task { await self.localTextInference.cancelAndUnload() }
                 }
