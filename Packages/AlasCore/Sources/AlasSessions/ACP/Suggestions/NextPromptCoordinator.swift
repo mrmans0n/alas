@@ -35,7 +35,7 @@ public struct NextPromptEligibilitySnapshot: Sendable {
         public var composerEpoch: UInt64 = 0
         public var settingsGeneration: UInt64 = 0
         public var modelGeneration: UInt64 = 0
-        /// Which engine would answer; the model gates apply only to the local one.
+        /// The configured source, resolved per session; the model gates apply only to the local one.
         public var source: NextPromptSource = .onDevice
 
         public init(isEnabled: Bool = false, hasVerifiedModel: Bool = false, isRuntimeAvailable: Bool = false, isAppActive: Bool = false, isActiveVisibleWriter: Bool = false, hasComposerFocus: Bool = false, hasKeyWindow: Bool = false, hasPendingInput: Bool = false, isInputBlocked: Bool = false, hasSelection: Bool = false, hasMarkedText: Bool = false, isDictating: Bool = false, isPickerPresented: Bool = false, hasPromptWork: Bool = false, hasForkOrDelegationWork: Bool = false, composerEpoch: UInt64 = 0, settingsGeneration: UInt64 = 0, modelGeneration: UInt64 = 0) {
@@ -78,7 +78,7 @@ public struct NextPromptEligibilitySnapshot: Sendable {
                               composerEpoch: environment.composerEpoch,
                               settingsGeneration: environment.settingsGeneration,
                               modelGeneration: environment.modelGeneration,
-                              source: environment.source),
+                              source: environment.source.resolved(agentPredicts: session.supportsPredictedPrompt)),
                      turns: turns, isEligible: true)
     }
     /// Names the first live gate that blocks an offer, so diagnostics can say why none appeared.
@@ -87,8 +87,8 @@ public struct NextPromptEligibilitySnapshot: Sendable {
                                          environment: Environment) -> String? {
         let transcript = session.transcript
         guard environment.isEnabled else { return "disabled" }
-        switch environment.source {
-        case .onDevice:
+        switch environment.source.resolved(agentPredicts: session.supportsPredictedPrompt) {
+        case .onDevice, .automatic:
             guard environment.hasVerifiedModel else { return "model not verified" }
             guard environment.isRuntimeAvailable else { return "runtime unavailable" }
         case .agent:

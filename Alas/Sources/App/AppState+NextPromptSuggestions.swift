@@ -4,14 +4,15 @@ import Foundation
 import os
 
 extension AppState {
-    /// Suggestions are on and the local model writes them.
+    /// Suggestions are on and the local model may write them: always on-device,
+    /// or automatically for sessions whose agent predicts nothing.
     var nextPromptUsesLocalModel: Bool {
-        config.nextPromptSuggestionsEnabled && config.nextPromptSource == .onDevice
+        config.nextPromptSuggestionsEnabled && config.nextPromptSource != .agent
     }
 
-    /// Suggestions are on and the agent writes them; the local model stays out.
+    /// Suggestions are on and agents that predict write them.
     var nextPromptUsesAgent: Bool {
-        config.nextPromptSuggestionsEnabled && config.nextPromptSource == .agent
+        config.nextPromptSuggestionsEnabled && config.nextPromptSource != .onDevice
     }
 
     /// Tells every session manager whether user turns ask the agent for a prediction.
@@ -37,8 +38,10 @@ extension AppState {
                 for await value in await runtime.states() {
                     guard !Task.isCancelled else { return }
                     guard let self else { return }
-                    // Only the local model's suggestions depend on its runtime.
-                    if value == .unavailable || value == .retryRequired, self.nextPromptUsesLocalModel {
+                    // Only the local model's suggestions depend on its runtime; under
+                    // automatic, the agents' suggestions must survive its failures.
+                    if value == .unavailable || value == .retryRequired,
+                       self.nextPromptUsesLocalModel, self.config.nextPromptSource == .onDevice {
                         self.nextPromptCoordinator.invalidateAll()
                     }
                     self.nextPromptInferenceState = value
@@ -71,8 +74,9 @@ extension AppState {
     }
 
     func enableNextPromptSuggestions() async {
-        let usesAgent = config.nextPromptSource == .agent
-        guard usesAgent || localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending,
+        // Without a supported local model, automatic still gets the agents' predictions.
+        let usesLocalModel = config.nextPromptSource != .agent && localTextSupported
+        guard usesLocalModel || config.nextPromptSource != .onDevice, !nextPromptShuttingDown, !nextPromptDisableSavePending,
               !localTextRemovalInProgress else { return }
         localTextRuntimeStarted = true
         let previous = config.nextPromptSuggestionsEnabled
@@ -87,10 +91,8 @@ extension AppState {
         applyPredictedPromptRequests()
         ensureLocalTextObserversStarted()
         // The agent's predictions need no local model, only the presentation.
-        guard !usesAgent else {
-            ensureNextPromptObserversStarted()
-            return
-        }
+        if nextPromptUsesAgent { ensureNextPromptObserversStarted() }
+        guard usesLocalModel else { return }
         await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
 
@@ -324,7 +326,9 @@ extension AppState {
                             environment: NextPromptEligibilitySnapshot.Environment) -> NextPromptEligibilitySnapshot? {
         var environment = environment
         environment.source = config.nextPromptSource
-        environment.isEnabled = nextPromptUsesAgent || (nextPromptRuntimeEnabled && nextPromptUsesLocalModel)
+        environment.isEnabled = config.nextPromptSource.resolved(agentPredicts: session.supportsPredictedPrompt) == .agent
+            ? nextPromptUsesAgent
+            : nextPromptRuntimeEnabled && nextPromptUsesLocalModel
         environment.hasVerifiedModel = localTextModelState == .ready
         // Requests can queue behind a native drain. The async state observer
         // may still carry .unloading after enable/retry has established readiness;

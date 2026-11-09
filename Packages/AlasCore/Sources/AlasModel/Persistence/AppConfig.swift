@@ -92,7 +92,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var sideQuestionDock: ACPSideQuestionDockPreferences = .init()
     public var nextPromptSuggestionsEnabled: Bool = false
     /// Where next-prompt suggestions come from while they are on.
-    public var nextPromptSource: NextPromptSource = .onDevice
+    public var nextPromptSource: NextPromptSource = .automatic
     public var sessionSummariesEnabled: Bool = false
     public var sessionRecapThreshold: SessionRecapThreshold = .twoHours
     public var runFailureBriefsEnabled: Bool = true
@@ -1213,7 +1213,7 @@ extension AppConfig {
         sideQuestionDock =
             (try? c.decodeIfPresent(ACPSideQuestionDockPreferences.self, forKey: .sideQuestionDock)) ?? .init()
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
-        nextPromptSource = (try? c.decode(NextPromptSource.self, forKey: .nextPromptSource)) ?? .onDevice
+        nextPromptSource = (try? c.decode(NextPromptSource.self, forKey: .nextPromptSource)) ?? .automatic
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         sessionRecapThreshold = (try? c.decode(SessionRecapThreshold.self, forKey: .sessionRecapThreshold)) ?? .twoHours
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true

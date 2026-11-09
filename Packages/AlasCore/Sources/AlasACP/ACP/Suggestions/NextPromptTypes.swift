@@ -80,7 +80,7 @@ extension NextPromptSource {
     /// own (Codex samples at high effort).
     public var suggestionDeadline: Duration {
         switch self {
-        case .onDevice: .seconds(15)
+        case .onDevice, .automatic: .seconds(15)
         case .agent: .seconds(60)
         }
     }

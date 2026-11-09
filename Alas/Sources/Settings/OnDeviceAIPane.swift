@@ -210,11 +210,12 @@ struct OnDeviceAIPane: View {
                     }
                 }
             }
-            SettingsRow(name: "Suggest with", desc: "The agent's own prediction replaces the local model's. Codex spends an extra model call on each suggestion.") {
+            SettingsRow(name: "Suggest with", desc: "Automatic uses the agent's own prediction when it offers one and the local model otherwise. Codex spends an extra model call on each suggestion.") {
                 Picker("Suggest with", selection: Binding(
                     get: { state.config.nextPromptSource },
                     set: { source in Task { await state.setNextPromptSource(source) } }
                 )) {
+                    Text("Automatic").tag(NextPromptSource.automatic)
                     Text("On-device model").tag(NextPromptSource.onDevice)
                     Text("The agent").tag(NextPromptSource.agent)
                 }
@@ -225,8 +226,13 @@ struct OnDeviceAIPane: View {
     }
 
     private var nextPromptDetail: String {
-        guard state.config.nextPromptSource == .agent else { return localFeatureDetail }
-        return "From the agent, for Claude and Codex sessions; other agents get none"
+        switch state.config.nextPromptSource {
+        case .onDevice: return localFeatureDetail
+        case .agent: return "From the agent, for Claude and Codex sessions; other agents get none"
+        case .automatic:
+            guard state.localTextSupported else { return "From the agent, for Claude and Codex sessions; other agents get none" }
+            return "From the agent for Claude and Codex sessions. Other agents: \(localFeatureDetail)"
+        }
     }
 
     private var localFeatureDetail: String {

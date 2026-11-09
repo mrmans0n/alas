@@ -484,17 +484,23 @@ struct NextPromptCoordinatorTests {
         withExtendedLifetime((observation, childObservation)) {}
     }
 
-    @Test("the agent as the source needs the agent's predictions, not the local model", arguments: [true, false])
-    func agentSourceEligibility(agentPredicts: Bool) {
+    @Test("an agent that predicts answers without the local model; otherwise automatic falls back to it",
+          arguments: [NextPromptSource.agent, .automatic], [true, false])
+    func agentSourceEligibility(source: NextPromptSource, agentPredicts: Bool) {
         let (session, turn, initial) = readySession()
         session.supportsPredictedPrompt = agentPredicts
         var environment = initial
-        environment.source = .agent
+        environment.source = source
         environment.hasVerifiedModel = false
         environment.isRuntimeAvailable = false
         let snapshot = NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)
         #expect((snapshot?.isEligible == true) == agentPredicts)
         #expect(snapshot.map { $0.id.source == .agent } != false)
+
+        guard source == .automatic, !agentPredicts else { return }
+        environment = initial
+        environment.source = source
+        #expect(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)?.id.source == .onDevice)
     }
 
     @Test(arguments: ["enabled", "verified", "runtime", "app", "writer", "focus", "paste/drop/image", "blocked",

@@ -47,7 +47,7 @@ struct NextPromptSettingsTests {
         persistence.config.nextPromptSuggestionsEnabled = true
         let state = makeState(fixture, persistence, supported: supported)
         // Wait for the one-shot startup inspection if the supported build scheduled it.
-        await state.localTextObservers.tasks.last?.value
+        await state.waitForLocalTextReadiness()
         #expect(await fixture.store.state == (supported ? .ready : .notInstalled))
         #expect(state.nextPromptRuntimeEnabled == supported)
         #expect(fixture.transport.requestCount == 0)
@@ -592,8 +592,9 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test("the agent as the source turns suggestions on without the local model, and switching back needs it again")
-    func agentSourceNeedsNoLocalModel() async throws {
+    @Test("the agent as the source turns suggestions on without the local model, and switching back needs it again",
+          arguments: [NextPromptSource.agent, .automatic])
+    func agentSourceNeedsNoLocalModel(_ source: NextPromptSource) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
@@ -612,7 +613,7 @@ struct NextPromptSettingsTests {
         environment.isActiveVisibleWriter = true
         environment.hasComposerFocus = true
 
-        await state.setNextPromptSource(.agent)
+        await state.setNextPromptSource(source)
         await state.enableNextPromptSuggestions()
         #expect(state.config.nextPromptSuggestionsEnabled && state.nextPromptUsesAgent)
         #expect(state.nextPromptSnapshot(session: session, turn: turn, environment: environment)?.id.source == .agent)
