@@ -449,7 +449,7 @@ extension EnvironmentValues {
     @Entry var acpTrustedImageRoot: URL? = nil
 }
 
-/// `![alt](source)` on its own line, drawn like a Mermaid block: full width,
+/// `![alt](source)` on its own line, clickable and full width,
 /// never upscaled, capped at the transcript diagram height. Sources resolve
 /// through the tool-call asset rules, so only files inside the worktree and
 /// `data:` URIs load; anything else stays a labelled row.
@@ -467,7 +467,9 @@ private struct ACPMarkdownImageBlockView: View {
                 cacheKey: asset.thumbnailCacheKey(trustedRoot: trustedRoot),
                 loadImage: { asset.loadedImage(trustedRoot: trustedRoot) }
             ) { image in
-                chrome(asset) {
+                Button {
+                    ACPImagePreview.shared.show(image, title: asset.displayTitle)
+                } label: {
                     MermaidFittedDiagramLayout(
                         intrinsicSize: image.size,
                         maxHeight: MermaidPresentationProfile.transcript.maxEmbeddedHeight
@@ -478,56 +480,21 @@ private struct ACPMarkdownImageBlockView: View {
                             .aspectRatio(contentMode: .fit)
                             .accessibilityLabel(asset.displayTitle)
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help("Open image")
+                .frame(maxWidth: .infinity)
             } placeholder: {
-                chrome(asset) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 120)
-                }
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 120)
             } failure: {
                 unavailable(asset)
             }
         } else {
             unavailable(asset)
-        }
-    }
-
-    private func chrome(
-        _ asset: ACPMessage.ToolCallAsset,
-        @ViewBuilder content: () -> some View
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text(asset.displayTitle)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-faint"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if let url = ACPMessage.ToolCallAsset.trustedLocalURL(from: source, trustedRoot: trustedRoot) {
-                    Button("Open") { NSWorkspace.shared.open(url) }
-                }
-            }
-            .font(.system(size: 10, weight: .medium))
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity)
-            .background(theme.color("bg-2").opacity(0.6))
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
-            }
-            content()
-        }
-        .background(theme.color("bg-0").opacity(0.6))
-        .clipShape(.rect(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
     }
 

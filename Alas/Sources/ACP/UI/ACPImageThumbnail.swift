@@ -91,7 +91,7 @@ struct ACPImageThumbnail: View {
 /// `QLPreviewPanel.shared()`: the shared Quick Look panel takes control via
 /// the responder chain, and since nothing in a SwiftUI app implements the
 /// `QLPreviewPanelController` protocol it resets our data source and shows
-/// "nothing selected". A self-owned `NSPanel` hosting an `NSImageView` is
+/// "nothing selected". A self-owned `NSPanel` hosting our image viewport is
 /// reliable and stays above the app.
 @MainActor
 final class ACPImagePreview {
@@ -106,8 +106,10 @@ final class ACPImagePreview {
         let size = Self.fit(image.size, into: cap)
 
         let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            contentRect: NSRect(origin: .zero, size: NSSize(
+                width: max(320, size.width), height: max(240, size.height + 44)
+            )),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -116,12 +118,8 @@ final class ACPImagePreview {
         panel.title = title
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-
-        let imageView = NSImageView(frame: NSRect(origin: .zero, size: size))
-        imageView.image = image
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.autoresizingMask = [.width, .height]
-        panel.contentView = imageView
+        panel.contentMinSize = NSSize(width: 280, height: 200)
+        panel.contentView = NSHostingView(rootView: ZoomableImageView(image: image))
 
         panel.center()
         panel.makeKeyAndOrderFront(nil)

@@ -277,7 +277,6 @@ struct MermaidDiagramViewerView: View {
     @State private var renderState = MermaidRenderRequestState()
     @State private var interactionState = MermaidViewerInteractionState()
     @GestureState private var dragTranslation: CGSize = .zero
-    @GestureState private var magnification: CGFloat = 1
     @State private var actualSizeScale: CGFloat = 1
     @State private var liveBackingScale: CGFloat
 
@@ -360,7 +359,7 @@ struct MermaidDiagramViewerView: View {
                         .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: fittedSize.width, height: fittedSize.height)
-                        .scaleEffect(interactionState.scale(adding: magnification))
+                        .scaleEffect(interactionState.scale)
                         .offset(Self.displayTranslation(
                             committed: interactionState.translation,
                             gesture: dragTranslation
@@ -402,7 +401,11 @@ struct MermaidDiagramViewerView: View {
             .clipped()
         }
         .simultaneousGesture(panGesture)
-        .simultaneousGesture(zoomGesture)
+        .background {
+            MermaidMagnificationReader { factor in
+                interactionState.zoom(by: factor)
+            }
+        }
     }
 
     private var panGesture: some Gesture {
@@ -412,16 +415,6 @@ struct MermaidDiagramViewerView: View {
             }
             .onEnded { value in
                 interactionState.translate(by: value.translation)
-            }
-    }
-
-    private var zoomGesture: some Gesture {
-        MagnifyGesture()
-            .updating($magnification) { value, magnification, _ in
-                magnification = value.magnification
-            }
-            .onEnded { value in
-                interactionState.zoom(by: value.magnification)
             }
     }
 
@@ -602,6 +595,49 @@ private struct MermaidDiagramViewerToolbar: View {
             Rectangle()
                 .fill(theme.color("line"))
                 .frame(height: 0.5)
+        }
+    }
+}
+
+/// Receives native trackpad events without competing with the canvas drag
+/// gesture. Restrict the monitor to this canvas and its window.
+private struct MermaidMagnificationReader: NSViewRepresentable {
+    let onMagnify: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> Backing {
+        let view = Backing()
+        view.onMagnify = onMagnify
+        return view
+    }
+
+    func updateNSView(_ nsView: Backing, context: Context) {
+        nsView.onMagnify = onMagnify
+    }
+
+    final class Backing: NSView {
+        var onMagnify: ((CGFloat) -> Void)?
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+                guard let self, let window = self.window,
+                      event.window === window,
+                      !self.isHiddenOrHasHiddenAncestor,
+                      self.visibleRect.contains(self.convert(event.locationInWindow, from: nil))
+                else { return event }
+                self.onMagnify?(1 + event.magnification)
+                return nil
+            }
+        }
+
+        isolated deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
         }
     }
 }
