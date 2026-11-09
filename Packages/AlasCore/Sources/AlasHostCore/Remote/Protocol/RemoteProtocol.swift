@@ -1546,6 +1546,8 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
     /// Hosts that serve `readWorktree`.
     public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve transcript image files, including paths outside the worktree.
+    public static let transcriptImagesV1 = "host.transcriptImages.v1"
     /// Hosts that serve the `fileBytes` read of `readWorktree`.
     public static let worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"
     /// Hosts whose `fileBytes` read also takes the stash, checkpoint and
@@ -1603,7 +1605,7 @@ public enum HostProtocolCapability: Sendable {
     public static let delegationV1 = "host.delegation.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
-        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,
         worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1, delegationV1,
     ]
     /// What only a headless host serves.

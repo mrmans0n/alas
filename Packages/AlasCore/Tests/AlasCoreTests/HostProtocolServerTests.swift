@@ -522,6 +522,23 @@ struct HostProtocolServerTests {
             == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
     }
 
+    @Test(arguments: ["png", ""]) func transcriptImagesOutsideWorktreeTravelOverHostChannel(_ suffix: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let ref = WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)
+        let image = FileManager.default.temporaryDirectory.appendingPathComponent("shot-\(UUID())\(suffix.isEmpty ? "" : "." + suffix)")
+        defer { try? FileManager.default.removeItem(at: image) }
+        let data = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="))
+        try data.write(to: image)
+        let reply = try await fixture.request(.readWorktree(worktree: ref, read: .transcriptImage(path: image.path)))
+        #expect(reply == .worktreeRead(reply: .fileBytes(sessionId: worktree.id, path: image.path, data: data, byteSize: data.count)))
+        // The editor's byte endpoint retains its worktree-only contract.
+        let editor = try await fixture.request(.readWorktree(worktree: ref, read: .fileBytes(path: image.path, revision: nil)))
+        #expect(editor == .worktreeRead(reply: .fileUnavailable(
+            sessionId: worktree.id, path: image.path, reason: .pathRejected, byteSize: nil, message: nil)))
+    }
+
     /// A preview reads a file's raw bytes, from the working tree or a stored
     /// side, under the text read's path rules and refused over the cap.
     @Test func aMacReadsAWorktreeFilesBytes() async throws {

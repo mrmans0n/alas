@@ -118,6 +118,7 @@ public protocol RemoteWorktreeInspecting: AnyObject {
     func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+    func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult
     func remoteFileBytes(sessionId: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult
     func remoteFileHistory(sessionId: String, path: String) async -> RemoteFileHistoryResult
     func remoteRangeFiles(sessionId: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult
@@ -128,6 +129,9 @@ public protocol RemoteWorktreeInspecting: AnyObject {
 
 /// A reader without range, byte or history reads answers them as it would an unknown session.
 extension RemoteWorktreeInspecting {
+    public func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult {
+        .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+    }
     public func remoteFileHistory(sessionId: String, path: String) async -> RemoteFileHistoryResult {
         .failure(reason: .sessionUnknown, message: nil)
     }
@@ -219,6 +223,13 @@ extension RemoteWorktreeInspecting {
             switch await remoteFileContents(sessionId: id, path: path) {
             case .success(let text, let truncated, let version):
                 return .fileContents(sessionId: id, path: path, text: text, truncated: truncated, version: version)
+            case .failure(let reason, let byteSize, let message):
+                return .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: byteSize, message: message)
+            }
+        case .transcriptImage(let path):
+            switch await remoteTranscriptImage(sessionId: id, path: path) {
+            case .success(let data):
+                return .fileBytes(sessionId: id, path: path, data: data, byteSize: data.count)
             case .failure(let reason, let byteSize, let message):
                 return .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: byteSize, message: message)
             }

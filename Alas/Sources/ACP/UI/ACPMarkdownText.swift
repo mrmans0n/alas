@@ -444,28 +444,36 @@ struct CodeBlockView: View {
 }
 
 extension EnvironmentValues {
-    /// Worktree an agent's markdown images may load from. Without one only
-    /// inline `data:` images render, the same rule tool-call assets follow.
+    /// Session root for local or SSH image paths. Peer transcripts install
+    /// their own reader instead of reading this machine's filesystem.
     @Entry var acpTrustedImageRoot: URL? = nil
+    @Entry var acpTranscriptImageReader: ACPTranscriptImageReader? = nil
+}
+
+/// A peer reader captures its host/worktree so a later selection cannot redirect a read.
+struct ACPTranscriptImageReader: Sendable {
+    let id: String
+    let read: @MainActor @Sendable (String) async -> Data?
 }
 
 /// `![alt](source)` on its own line, drawn like a Mermaid block: full width,
 /// never upscaled, capped at the transcript diagram height. Sources resolve
-/// through the tool-call asset rules, so only files inside the worktree and
-/// `data:` URIs load; anything else stays a labelled row.
+/// through the tool-call asset reader, including SSH and peer sessions,
+/// with relative paths resolved against the owning worktree.
 private struct ACPMarkdownImageBlockView: View {
     let alt: String
     let source: String
     @Environment(\.acpTrustedImageRoot) private var trustedRoot
+    @Environment(\.acpTranscriptImageReader) private var imageReader
     @Environment(\.theme) private var theme
 
     var body: some View {
         let asset = ACPMessage.ToolCallAsset.image(uri: source, name: alt.isEmpty ? nil : alt)
         let trustedRoot = trustedRoot
-        if asset.canLoadImage(trustedRoot: trustedRoot) {
+        if imageReader != nil || trustedRoot != nil || asset.canLoadImage(trustedRoot: trustedRoot) {
             ACPCachedThumbnail(
-                cacheKey: asset.thumbnailCacheKey(trustedRoot: trustedRoot),
-                loadImage: { asset.loadedImage(trustedRoot: trustedRoot) }
+                cacheKey: asset.transcriptImageCacheKey(trustedRoot: trustedRoot, reader: imageReader),
+                loadImage: { await asset.loadedTranscriptImage(trustedRoot: trustedRoot, reader: imageReader) }
             ) { image in
                 chrome(asset) {
                     MermaidFittedDiagramLayout(
@@ -508,7 +516,7 @@ private struct ACPMarkdownImageBlockView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
-                if let url = ACPMessage.ToolCallAsset.trustedLocalURL(from: source, trustedRoot: trustedRoot) {
+                if imageReader == nil, let url = ACPMessage.ToolCallAsset.trustedLocalURL(from: source, trustedRoot: trustedRoot) {
                     Button("Open") { NSWorkspace.shared.open(url) }
                 }
             }

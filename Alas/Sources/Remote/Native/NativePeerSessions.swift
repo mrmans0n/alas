@@ -625,6 +625,20 @@ final class NativePeerSessions {
         hostFileBuffers[file]?.revert()
     }
 
+    /// Capture the owning peer so image paths never resolve on the viewing Mac.
+    func transcriptImageReader() -> ACPTranscriptImageReader {
+        guard let selectedWorktree, let host = selectedWorktreeGroup?.host, let hosts,
+              hosts.supportsTranscriptImages(serverId: selectedWorktree.serverId) else {
+            return ACPTranscriptImageReader(id: "unavailable") { _ in nil }
+        }
+        let serverId = selectedWorktree.serverId
+        return ACPTranscriptImageReader(id: "\(serverId):\(host.snapshot.worktree.id)") { source in
+            guard case .fileBytes(_, _, let data, _)? = await hosts.read(.transcriptImage(path: source), in: host, serverId: serverId)
+            else { return nil }
+            return data
+        }
+    }
+
     /// The selected worktree on a host that serves file bytes, whether or not a tab is open: only the host
     /// channel carries them.
     var hostBytesTarget: (serverId: String, worktree: PeerHostWorktree)? {
@@ -1884,7 +1898,7 @@ final class NativePeerSessions {
             .commitDiffFailed(
                 sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), path: path,
                 reason: .unknown, message: nil)
-        case .file(let path), .fileBytes(let path, _):
+        case .file(let path), .fileBytes(let path, _), .transcriptImage(let path):
             .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
         case .fileHistory(let path): .fileHistoryFailed(sessionId: id, path: path, reason: .unknown, message: nil)
         }

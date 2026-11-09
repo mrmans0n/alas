@@ -1325,7 +1325,6 @@
 		B43BAD582B752ED182798353 /* ACPSymbolChipCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 122BF82C6163B46AB4C5F8F6 /* ACPSymbolChipCell.swift */; };
 		B472D692A8D8D1C664EAC467 /* ACPSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */; };
 		B4C4E13CFE986FC20DC12808 /* ACPFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA51D49B1AE4C4E10D450C6 /* ACPFileWriterTests.swift */; };
-		B4F98348084DEFA5C1D51A6E /* RemoteImageCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA759D2C99D1FEE3C67A1BA /* RemoteImageCacheTests.swift */; };
 		B5282C19E847997834044DB9 /* ACPUsageLimitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799F68AC6B053829814B8052 /* ACPUsageLimitTests.swift */; };
 		B54B0BFA87B2566DB59C3D59 /* ConflictMarkerParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */; };
 		B57411C3B6F51700CEEA4C93 /* ACPTranscriptCoreTextRowView+Accessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14B16D52D24D25ABD495F81 /* ACPTranscriptCoreTextRowView+Accessibility.swift */; };
@@ -2213,7 +2212,6 @@
 		1C8926C5ABBB7B8157ACFEF3 /* session-update-context-compaction-partial.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-context-compaction-partial.json"; sourceTree = "<group>"; };
 		1C893B8591A0B47E36E910F3 /* CheckpointRecoveryCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRecoveryCard.swift; sourceTree = "<group>"; };
 		1C8F14A2CEAE4B8404213C73 /* AlasSegmentedControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSegmentedControl.swift; sourceTree = "<group>"; };
-		1CA759D2C99D1FEE3C67A1BA /* RemoteImageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImageCacheTests.swift; sourceTree = "<group>"; };
 		1CBDD619D8463328F6C13E61 /* CheckpointDiffTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointDiffTabView.swift; sourceTree = "<group>"; };
 		1CEAAB5A1851AAC887017ACB /* ACPContextCompactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPContextCompactionView.swift; sourceTree = "<group>"; };
 		1D3505FB870FA22C9C0FDB26 /* RightPaneStateSyncStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStateSyncStatusTests.swift; sourceTree = "<group>"; };
@@ -6366,7 +6364,6 @@
 				843E7D6E8972C01B3DC924F2 /* RemoteHostCapabilitiesTests.swift */,
 				1854EA4072F4F45DA70854D0 /* RemoteHostRegistryTests.swift */,
 				621C13FD3A997CCB29273993 /* RemoteHostStatusStoreTests.swift */,
-				1CA759D2C99D1FEE3C67A1BA /* RemoteImageCacheTests.swift */,
 				69B2FEBEDD6FD3B2B37F4895 /* RemoteLastActivityTests.swift */,
 				2D89D9FFAC80BDE46A651A0F /* RemoteLSPLauncherTests.swift */,
 				807FC0DF3AE4C069E77F85B6 /* RemotePollCadenceTests.swift */,
@@ -9057,7 +9054,6 @@
 				A45A26B8B43E49BC8F952CD6 /* RemoteHostRegistryTests.swift in Sources */,
 				6AE8EFD251D182A476F90E4B /* RemoteHostStatusStoreTests.swift in Sources */,
 				99128A6A10558AFFC62BA44A /* RemoteIdentityKeyTests.swift in Sources */,
-				B4F98348084DEFA5C1D51A6E /* RemoteImageCacheTests.swift in Sources */,
 				A383AB30B3097591509DBE56 /* RemoteKeepAwakeControllerTests.swift in Sources */,
 				5BB2FF7F9DFFFEF75CA508A2 /* RemoteLSPLauncherTests.swift in Sources */,
 				6B51524A0970D593F6AEEAB1 /* RemoteLastActivityTests.swift in Sources */,
