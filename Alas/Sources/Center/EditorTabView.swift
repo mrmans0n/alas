@@ -37,6 +37,7 @@ private enum EditorFindPresentation: Equatable {
 }
 
 struct EditorTabView: View {
+    @Environment(\.designScale) private var scale
     let worktree: Worktree
     let worktreePath: URL
     let relativePath: String
@@ -114,12 +115,12 @@ struct EditorTabView: View {
                         ))
                     }
                 },
-                trailing: AnyView(HStack(spacing: 8) {
+                trailing: AnyView(HStack(spacing: scale.space[2]) {
                     if !peerHostFile { statusBadge }
                     if runScriptScope != nil {
                         Button("Help me write this") { showsRunScriptWritingHelp = true }
                             .buttonStyle(.plain)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-muted"))
                     }
                     if !isBinary {
@@ -606,25 +607,25 @@ struct EditorTabView: View {
     }
 
     private var binaryPlaceholder: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: "doc.fill")
-                .font(.system(size: 30))
+                .font(.system(size: 30)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-faint"))
             Text((breadcrumbRelativePath as NSString).lastPathComponent)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: hero title
                 .foregroundColor(theme.color("fg"))
             Text("Binary file")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             if !worktreePath.isRemoteAlasPath {
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[2]) {
                     Button("Open with System") { FileSystemOpen.open(url: absoluteFileURL) }
                     Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteFileURL) }
                 }
-                .padding(.top, 4)
+                .padding(.top, scale.space[1])
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             onStartupRecoveryReady()

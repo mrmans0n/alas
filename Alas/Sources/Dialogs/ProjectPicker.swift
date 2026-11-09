@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProjectPicker: View {
+    @Environment(\.designScale) private var scale
     @Binding var selection: String
     let projects: [ProjectConfig]
     /// Resolves each project's icon, which may come from the repo's `.alas/`
@@ -26,23 +27,23 @@ struct ProjectPicker: View {
                     ProjectIconView(icon: icon(project), fallbackName: project.name, size: .picker)
                 }
                 Text(selectedProject?.name ?? "Choose a repository")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .background(theme.color("bg-1"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $open, arrowEdge: .bottom) {
@@ -54,15 +55,15 @@ struct ProjectPicker: View {
     private var popoverBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             AlasField(text: $search, placeholder: "Search repositories...")
-                .padding(8)
+                .padding(scale.space[2])
 
             Divider().background(theme.color("line"))
 
             if projects.isEmpty {
                 Text("No repositories")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(12)
+                    .padding(scale.space[3])
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -84,19 +85,19 @@ struct ProjectPicker: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(project.id == selection ? 1 : 0)
                 ProjectIconView(icon: icon(project), fallbackName: project.name, size: .picker)
                 Text(project.name)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

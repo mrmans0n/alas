@@ -88,6 +88,9 @@ public final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
+    /// Whether a user turn asks the agent for its predicted follow-up prompt:
+    /// suggestions are on with the agent as their source.
+    private let requestsPredictedPrompt: @MainActor () -> Bool
     /// Fires on the main actor once per `sendNow` prompt whose RPC settled
     /// while it was still the active prompt. Recovery-context prompts and
     /// superseded prompts do not fire.
@@ -170,6 +173,7 @@ public final class ACPSessionRunner {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     public var onPersistenceFlushForTesting: (@MainActor () -> Void)?
     public var activePromptIDForTesting: Int? { activePromptID }
+    public var observedUpdateCountForTesting: Int { observedUpdateCount }
     public func visualAidFirstWriteWaiterCountForTesting(id: UUID) -> Int { unconfirmedVisualAids[id]?.count ?? 0 }
 #endif
     private var updatesTask: Task<Void, Never>?
@@ -342,6 +346,14 @@ public final class ACPSessionRunner {
     /// The last yielded update of a `session/load` replay that is applied
     /// live rather than suppressed. See `treatLoadReplayAsHistory`.
     private var unsuppressedLoadReplayTarget: Int?
+    /// A `session/load` replay held back, unapplied, until the adapter's end
+    /// event for this load (`holdLoadReplay(untilEndOf:)`), with the stream
+    /// index each update was dequeued at.
+    private var loadReplayHold: (loadID: String, updates: [(params: ACPSessionUpdateParams, streamIndex: Int)])?
+    /// The adapter said this load's replay is whole; see `holdLoadReplay(untilEndOf:)`.
+    public private(set) var loadReplayEndReceived = false
+    /// Called once when the end event releases a held load replay.
+    public var onLoadReplayEnd: (() -> Void)?
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so a queue
@@ -408,6 +420,7 @@ public final class ACPSessionRunner {
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+         requestsPredictedPrompt: @escaping @MainActor () -> Bool = { false },
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
          onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
          onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
@@ -438,6 +451,7 @@ public final class ACPSessionRunner {
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.session = session
         self.onSuccessfulTurn = onSuccessfulTurn
+        self.requestsPredictedPrompt = requestsPredictedPrompt
         self.connection = connection
         self.persistence = resolvedPersistence
         self.sessionId = sessionId
@@ -658,7 +672,7 @@ public final class ACPSessionRunner {
                     self.costLog.append((self.dequeuedUpdateCount, cost))
                     if self.costLog.count > 32 { self.compactCostLog() }
                 }
-                self.enqueueIncomingUpdate(u)
+                self.receiveIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
             // that's the intentional detach path (tab close, worktree
@@ -1264,7 +1278,21 @@ public final class ACPSessionRunner {
         }
     }
 
-    private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
+    private func receiveIncomingUpdate(_ update: ACPSessionUpdateParams) {
+        guard let loadID = loadReplayHold?.loadID else {
+            enqueueIncomingUpdate(update)
+            return
+        }
+        // Appended in place: a local copy would share the buffer and copy it
+        // on every update, which is quadratic for a long replay.
+        loadReplayHold?.updates.append((update, dequeuedUpdateCount))
+        guard ACPLoadReplayEnd.ends(update.update, loadID: loadID) else { return }
+        loadReplayEndReceived = true
+        releaseHeldLoadReplay()
+        onLoadReplayEnd?()
+    }
+
+    private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams, streamIndex: Int? = nil) {
         guard isConnectionCurrent() else { return }
         // The diffPatch gate, at the one intake every live and broker-replayed
         // update passes. `session.diffPatch` is this connection's own
@@ -1281,7 +1309,7 @@ public final class ACPSessionRunner {
         pendingIncomingUpdates.append(.init(
             params: update,
             receivedWhileHoldingLease: receivedWhileHoldingLease,
-            streamIndex: dequeuedUpdateCount
+            streamIndex: streamIndex ?? dequeuedUpdateCount
         ))
         guard incomingUpdateFlushTask == nil else { return }
         incomingUpdateFlushTask = Task { @MainActor [weak self] in
@@ -1458,6 +1486,10 @@ public final class ACPSessionRunner {
                 promptActive: activePromptID != nil
             )).union(session.applyFileChangeReportUpdate(info))
             applySessionInfoTitle(info)
+            if !suppressingLoadReplay, let answer = ACPPredictedPrompt.answer(in: params.update),
+               session.agentPrediction.receive(answer) {
+                nextPromptLogger.notice("agent predicted \(answer.text?.count ?? 0) characters")
+            }
         } else {
             preAppliedSessionInfoDirty = nil
         }
@@ -1972,6 +2004,7 @@ public final class ACPSessionRunner {
 
     #if DEBUG
     public var pendingIncomingUpdateCountForTesting: Int { pendingIncomingUpdates.count }
+    public var heldLoadReplayCountForTesting: Int { loadReplayHold?.updates.count ?? 0 }
 
     public func applyIncomingUpdateForTesting(_ params: ACPSessionUpdateParams) {
         applyIncomingUpdate(params)
@@ -1993,6 +2026,58 @@ public final class ACPSessionRunner {
     public func treatLoadReplayAsHistory(throughYieldedUpdateCount target: Int) {
         guard target > observedUpdateCount else { return }
         unsuppressedLoadReplayTarget = max(unsuppressedLoadReplayTarget ?? 0, target)
+    }
+
+    /// Holds an unsuppressed `session/load` replay, unapplied, until the
+    /// adapter's end event for `loadID` says it is whole (`ACPLoadReplayEnd`).
+    /// The end event then applies it as history at once, before the load
+    /// response. Without one, the load's outcome decides:
+    /// `releaseHeldLoadReplay()` after a successful response,
+    /// `discardHeldLoadReplay()` after a failed one. Call before `start()`.
+    public func holdLoadReplay(untilEndOf loadID: String) {
+        guard !suppressingLoadReplay, loadReplayHold == nil else { return }
+        loadReplayHold = (loadID, [])
+        loadReplayEndReceived = false
+    }
+
+    /// Applies a held load replay as history. After a response the manager
+    /// has already set the history window, which this keeps as it is.
+    public func releaseHeldLoadReplay() {
+        guard let hold = loadReplayHold else { return }
+        loadReplayHold = nil
+        if unsuppressedLoadReplayTarget == nil {
+            treatLoadReplayAsHistory(throughYieldedUpdateCount: dequeuedUpdateCount)
+        }
+        for held in hold.updates {
+            enqueueIncomingUpdate(held.params, streamIndex: held.streamIndex)
+        }
+        flushPendingIncomingUpdates()
+    }
+
+    /// Takes every update the client had yielded when this was called off
+    /// the stream while a load replay is held. A failed load's response and
+    /// its updates arrive on separate streams, so its end event can still be
+    /// queued when the error is seen; call this before deciding to discard.
+    public func awaitHeldLoadReplayDelivery() async {
+        let watermark = connection.client.yieldedUpdateCount
+        while loadReplayHold != nil, dequeuedUpdateCount < watermark, !stopped, !Task.isCancelled,
+              updatesTask?.isCancelled == false, isConnectionCurrent() {
+            await Task.yield()
+        }
+    }
+
+    /// Drops a held load replay that never ended, so a partial history is
+    /// not shown. It goes through load replay suppression, as a failed load's
+    /// replay did before the hold existed: reconciled, counted, and
+    /// acknowledged, so a broker does not deliver it again.
+    public func discardHeldLoadReplay() {
+        guard let hold = loadReplayHold else { return }
+        loadReplayHold = nil
+        suppressLoadReplay(throughYieldedUpdateCount: dequeuedUpdateCount)
+        for held in hold.updates {
+            enqueueIncomingUpdate(held.params, streamIndex: held.streamIndex)
+        }
+        flushPendingIncomingUpdates()
     }
 
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
@@ -2066,6 +2151,7 @@ public final class ACPSessionRunner {
         defer { session.releaseLegacyProjection(epoch: projectionEpoch) }
         stopped = true
         unsuppressedLoadReplayTarget = nil
+        loadReplayHold = nil
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()
@@ -2497,35 +2583,67 @@ public final class ACPSessionRunner {
         var text: String?
         var phase: ACPMessagePhase?
         var isAgent = false
+        var isUser = false
+        /// Output of a turn already complete, which a chunk continues only
+        /// while the session lets streaming cross that boundary.
+        var isCompletedOutput = false
     }
 
     /// This turn's rows with buffered agent chunks applied to a copy, finding
     /// each chunk's row as `ACPSession.apply` does. Read-only on purpose; see
     /// `bufferedAgentText`.
+    ///
+    /// Like `apply`, it drops what load replay will suppress and chunks that
+    /// would cross a completed-output boundary. Whether crossing is allowed is
+    /// read now, though the chunks land on the next coalescing tick: the same
+    /// approximation as quoting before the buffer drains at all.
     private func turnRowsWithBufferedAgentText() -> [TurnRow] {
         let messages = session.transcript.messages
-        var rows = messages[min(activePromptTranscriptFloor ?? 0, messages.count)...].compactMap { message -> TurnRow? in
+        let floor = min(activePromptTranscriptFloor ?? 0, messages.count)
+        let boundary = session.transcript.completedOutputBoundaryMessageIds
+        let crossing = session.allowsStreamingBoundaryCrossing
+        var rows = messages[floor...].compactMap { message -> TurnRow? in
             if message.isInterruptedTurnContinuationNotice { return TurnRow() }
             switch message {
             case .agent(_, let id, let text):
-                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true)
-            case .user, .toolCall, .fileEdit, .visualAid:
+                return TurnRow(messageId: id, text: text.value, phase: text.phase, isAgent: true,
+                               isCompletedOutput: boundary.contains(message.stableId))
+            case .user:
+                return TurnRow(isUser: true)
+            case .toolCall, .fileEdit, .visualAid:
                 return TurnRow()
             default:
                 return ACPSessionTranscriptReader.agentText(message).map { TurnRow(text: $0) }
             }
         }
-        for pending in pendingIncomingUpdates where !isSubagentUpdate(pending.params) {
+        for pending in pendingIncomingUpdatesToApply() where !isSubagentUpdate(pending.params) {
             switch pending.params.update {
             case .userMessageChunk(let chunk) where chunk.directed != nil:
                 continue
-            case .toolCall, .userMessageChunk:
+            case .userMessageChunk:
+                rows.append(TurnRow(isUser: true))
+            case .toolCall:
                 rows.append(TurnRow())
             case .agentMessageChunk(let chunk):
                 guard case .text(let part) = chunk.content else { continue }
+                // A row of an earlier turn has this turn's prompt after it, so
+                // nothing it receives is this turn's text.
+                if let id = chunk.messageId, !rows.contains(where: { $0.isAgent && $0.messageId == id }),
+                   messages[..<floor].contains(where: { if case .agent(_, id, _) = $0 { true } else { false } }) {
+                    continue
+                }
                 let found = chunk.messageId.map { id in rows.lastIndex { $0.isAgent && $0.messageId == id } }
                     ?? rows.lastIndex { $0.isAgent || $0.text == nil }.flatMap { rows[$0].isAgent ? $0 : nil }
-                if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
+                if let found, !crossing,
+                   rows[found].isCompletedOutput || (chunk.messageId != nil && rows[(found + 1)...].contains { $0.isUser }) {
+                    continue
+                }
+                // Crossing is allowed here, and it opens the row once.
+                let crossesBoundary = found.map { rows[$0].isCompletedOutput } ?? false
+                if let found, crossesBoundary { rows[found].isCompletedOutput = false }
+                if crossesBoundary, chunk.messageId == nil {
+                    rows.append(TurnRow(messageId: nil, text: part, phase: chunk.phase, isAgent: true))
+                } else if let found, chunk.messageId != nil || !Self.startsNewPhase(chunk.phase, after: rows[found].phase) {
                     let text = rows[found].text ?? ""
                     rows[found].text = text + ACPSession.streamingSeparator(between: text, and: part) + part
                     rows[found].phase = chunk.phase ?? rows[found].phase
@@ -2543,11 +2661,20 @@ public final class ACPSessionRunner {
         if let phase, let previous { phase != previous } else { false }
     }
 
+    /// The buffered updates `apply` will see: load replay suppresses the
+    /// first ones while it lasts, counting every update as
+    /// `applyIncomingUpdate` does.
+    private func pendingIncomingUpdatesToApply() -> ArraySlice<PendingIncomingUpdate> {
+        guard suppressingLoadReplay, let target = loadReplaySuppressionTarget else { return pendingIncomingUpdates[...] }
+        let suppressed = max(0, min(pendingIncomingUpdates.count, target - observedUpdateCount))
+        return pendingIncomingUpdates.dropFirst(suppressed)
+    }
+
     /// Agent text still in the incoming-update coalescing buffer, not yet in
     /// the transcript. Read-only on purpose: draining the buffer at turn end
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
-        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+        let text = pendingIncomingUpdatesToApply().compactMap { pending -> String? in
             guard !isSubagentUpdate(pending.params),
                   case .agentMessageChunk(let chunk) = pending.params.update,
                   case .text(let value) = chunk.content
@@ -4893,12 +5020,12 @@ extension ACPSessionRunner {
             }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
-            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?) in
+            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?, fileChangeReportRequestId: String?, predictedPromptRequestID: String?) in
                 // Stopped, or its connection replaced, while symbol mentions
                 // resolved: this prompt is over and must not be recorded.
                 if self.activePromptID == promptID, self.stopped || !self.isConnectionCurrent() {
                     abandonUnrecordedPrompt()
-                    return (false, nil, nil)
+                    return (false, nil, nil, nil)
                 }
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -4913,7 +5040,7 @@ extension ACPSessionRunner {
                        !self.steerInProgress, self.activePromptID == nil {
                         onPromptFinished?(false)
                     }
-                    return (false, nil, nil)
+                    return (false, nil, nil, nil)
                 }
                 // Only now that nothing can refuse it before the row: a refused
                 // prompt starts no turn, so the Retry of an earlier failed one stands.
@@ -4946,6 +5073,21 @@ extension ACPSessionRunner {
                     ACPAgentFileChangeReportRequest.newRequestId()
                 } else {
                     nil
+                }
+                // Only a user's own turn can offer a suggestion when it ends,
+                // so only it asks the agent for one. Any prompt spends the
+                // previous turn's prediction.
+                let predictedPromptRequestID: String? = if normalUserTurn, delegatedSource == nil,
+                    self.session.forkRecord?.contextDeliveryPending != true,
+                    self.session.supportsPredictedPrompt, self.requestsPredictedPrompt() {
+                    ACPPredictedPrompt.newRequestID()
+                } else {
+                    nil
+                }
+                if let predictedPromptRequestID {
+                    self.session.agentPrediction.expect(promptID: promptID, requestID: predictedPromptRequestID)
+                } else {
+                    self.session.agentPrediction.reset()
                 }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
@@ -4983,7 +5125,7 @@ extension ACPSessionRunner {
                     self.persistQueue()
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, nil, fileChangeReportRequestId)
+                    return (true, nil, fileChangeReportRequestId, predictedPromptRequestID)
                 }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
@@ -5030,7 +5172,7 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    return (true, messageID, fileChangeReportRequestId)
+                    return (true, messageID, fileChangeReportRequestId, predictedPromptRequestID)
                 }
                 let recordedID = recordedUserMessageID
                     ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
@@ -5049,7 +5191,7 @@ extension ACPSessionRunner {
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                return (true, nil, fileChangeReportRequestId)
+                return (true, nil, fileChangeReportRequestId, predictedPromptRequestID)
             }
             guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
@@ -5160,6 +5302,7 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     fileChangeReportRequestId: promptRecording.fileChangeReportRequestId,
+                    predictedPromptRequestID: promptRecording.predictedPromptRequestID,
                     onRequestHandoff: onDispatchRegistered,
                     onTransportHandoff: { [weak self, promptHandoffs] in
                         promptHandoffs.mark(promptID)

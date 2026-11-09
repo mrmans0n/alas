@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ReviewTargetDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var appState: AppState
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
@@ -28,13 +29,13 @@ struct ReviewTargetDialog: View {
                 }
                 .frame(width: 720)
                 .background(theme.color("bg-1").opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
                 .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                .padding(.top, 70)
+                .padding(.top, 70) // design-literal: palette sits a fixed distance below the window top
                 .frame(maxHeight: .infinity, alignment: .top)
                 .onTapGesture { /* swallow */ }
                 .onKeyPress { press in handleKey(press) }
@@ -92,30 +93,30 @@ struct ReviewTargetDialog: View {
                         _ = model.back()
                     } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(scale.meta.font(weight: .semibold))
                             .foregroundColor(theme.color("fg-muted"))
                     }
                     .buttonStyle(.plain)
                     .help("Back to worktrees")
                 }
                 Text(worktree.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Divider().frame(height: 14)
             } else {
                 Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 12, weight: .regular))
+                    .font(scale.meta.font(weight: .regular))
                     .foregroundColor(theme.color("fg-dim"))
             }
             TextField(placeholder, text: Bindable(model).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
-                .font(.system(size: 15))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg"))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[3])
         .overlay(
             Rectangle()
                 .fill(theme.color("line-soft"))
@@ -167,7 +168,7 @@ struct ReviewTargetDialog: View {
                             }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: model.scrollToSelectionTick) { _, _ in
@@ -181,22 +182,22 @@ struct ReviewTargetDialog: View {
     private func worktreeRow(_ entry: ReviewTargetPaletteModel.WorktreeEntry, isSelected: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(entry.worktree.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     if entry.isCurrent {
                         Text("current")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(scale.caption.font(weight: .medium))
                             .foregroundColor(theme.color("fg-dim"))
                     }
                 }
                 Text(RemotePath.display(entry.worktree.path.path))
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -204,7 +205,7 @@ struct ReviewTargetDialog: View {
             Spacer()
             if let ahead = entry.aheadCount {
                 Text(ahead == 0 ? "up to date" : "\(ahead) ahead")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(ahead == 0 ? theme.color("fg-dim") : theme.color("accent"))
             }
             if entry.worktree.status == .dirty {
@@ -214,8 +215,8 @@ struct ReviewTargetDialog: View {
                     .help("Uncommitted changes")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(isSelected ? theme.color("accent-soft") : Color.clear)
         .contentShape(Rectangle())
     }
@@ -246,7 +247,7 @@ struct ReviewTargetDialog: View {
                         .id(row.stableId)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: model.scrollToSelectionTick) { _, _ in
@@ -268,11 +269,11 @@ struct ReviewTargetDialog: View {
         switch row {
         case .header(let title):
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-faint"))
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 3)
+                .padding(.horizontal, scale.space[4])
+                .padding(.top, scale.space[2])
+                .padding(.bottom, scale.space[0])
         case .message(let text):
             messageRow(text)
         case .followedRevision(let expression, let resolvedSHA, let branch, _):
@@ -342,17 +343,17 @@ struct ReviewTargetDialog: View {
             .help("Set as range start")
             VStack(alignment: .leading, spacing: 1) {
                 Text(commit.subject)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Text("\(commit.shortSha) · \(commit.author)")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-dim"))
             }
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(
             isSelected
                 ? theme.color("accent-soft")
@@ -364,15 +365,15 @@ struct ReviewTargetDialog: View {
     private func branchRow(_ name: String, isSelected: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text(name)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(isSelected ? theme.color("accent-soft") : Color.clear)
         .contentShape(Rectangle())
     }
@@ -387,39 +388,39 @@ struct ReviewTargetDialog: View {
             VStack(alignment: .leading, spacing: 1) {
                 RevisionTetherView(expression: expression, resolvedSHA: String(resolvedSHA.prefix(10)))
                 Text(branch)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-dim"))
             }
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(isSelected ? theme.color("accent-soft") : Color.clear)
         .contentShape(Rectangle())
     }
 
     private func messageRow(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[3])
     }
 
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("del"))
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("del").opacity(0.12))
     }
 
@@ -439,8 +440,8 @@ struct ReviewTargetDialog: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.5))
         .overlay(
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5),
@@ -450,7 +451,7 @@ struct ReviewTargetDialog: View {
 
     private func label(_ s: String) -> some View {
         Text(s)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-faint"))
     }
 

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct TerminalPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -13,10 +14,10 @@ struct TerminalPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Terminal").font(.system(size: 18, weight: .semibold))
+                Text("Terminal").font(SettingsPaneStyle.titleFont)
                 Text("The Ghostty terminal embedded in the center pane.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Shell") {
                     SettingsRow(name: "Default shell", desc: "Path to the shell executable.") {
@@ -56,9 +57,9 @@ struct TerminalPane: View {
                             textColor: NSColor(theme.color("fg"))
                         )
                             .frame(minHeight: 80)
-                            .padding(8)
+                            .padding(scale.space[2])
                             .background(theme.color("bg-0"))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
                     }
                     SettingsRow(name: "Run on worktree create",
                                 desc: "Executed once after a worktree is created.") {
@@ -68,9 +69,9 @@ struct TerminalPane: View {
                             textColor: NSColor(theme.color("fg"))
                         )
                             .frame(minHeight: 60)
-                            .padding(8)
+                            .padding(scale.space[2])
                             .background(theme.color("bg-0"))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
                     }
                     SettingsRow(name: "Inherit parent env",
                                 desc: "Pass environment from launching shell into terminals.") {
@@ -153,11 +154,11 @@ struct TerminalPane: View {
                                     ProgressView()
                                         .controlSize(.small)
                                     Text("Checking…")
-                                        .font(.system(size: 11))
+                                        .font(scale.metaFont)
                                         .foregroundColor(theme.color("fg-dim"))
                                 }
                                 if let status = hookStatus[agent] {
-                                    Text(status).font(.system(size: 11))
+                                    Text(status).font(scale.metaFont)
                                         .foregroundColor(theme.color("fg-dim"))
                                 }
                             }
@@ -165,7 +166,7 @@ struct TerminalPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .onAppear {
             refreshInstallStates()

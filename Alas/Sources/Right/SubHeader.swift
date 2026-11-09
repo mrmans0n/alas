@@ -12,23 +12,24 @@ struct SubHeader: View {
     var trailing: AnyView? = nil
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 5) {
                 Icon(
                     name: expanded ? "chev-down" : "chev-right",
-                    size: 9,
+                    size: scale.glyph.size,
                     color: staged ? theme.color("staged-chev") : theme.color("fg-faint")
                 )
-                .frame(width: 12, height: 12)
+                .frame(width: scale.space[3], height: scale.space[3])
                 Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
                 Text("\(count)")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .semibold))
+                    .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0] / 2)
                     .background(theme.color("seg-pill-bg"))
                     .clipShape(Capsule())
                     .foregroundColor(theme.color("fg-muted"))
@@ -38,7 +39,7 @@ struct SubHeader: View {
                         Text("+\(stats.add)").foregroundColor(theme.color("add"))
                         Text("−\(stats.del)").foregroundColor(theme.color("del"))
                     }
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .font(scale.caption.font(weight: .semibold, design: .monospaced))
                 }
                 if let trailing { trailing }
             }

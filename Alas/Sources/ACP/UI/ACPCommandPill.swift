@@ -100,16 +100,17 @@ struct ACPAlasPrismBackground: View {
 }
 
 struct ACPAlasCommandBadge: View {
+    @Environment(\.designScale) private var scale
     var body: some View {
         Text("Alas")
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
             .background { ACPAlasPrismBackground() }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .overlay {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .strokeBorder(Color(nsColor: ACPAlasPrismStyle.border), lineWidth: 0.75)
             }
             .help("Handled by Alas, not sent to the agent")
@@ -524,40 +525,57 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
 /// Name, argument hint, and full description of a slash command, plus the
 /// session's PR state for `/ship`.
 struct ACPCommandHoverCard: View {
+    @Environment(\.designScale) private var scale
     let suggestion: ACPPromptSuggestion
     var shipStatus: ACPShipStatus? = nil
+    /// The host opens a skill's `SKILL.md` on a click on its chip.
+    var opensSkill = false
     @Environment(\.theme) private var theme
 
     static func hasDetails(_ suggestion: ACPPromptSuggestion) -> Bool {
         !(suggestion.description ?? "").isEmpty || !(suggestion.hint ?? "").isEmpty
+            || suggestion.presentation?.isSkill == true
+    }
+
+    /// The skill line, or nil for a command that is not a skill.
+    static func skillLine(_ suggestion: ACPPromptSuggestion, opensSkill: Bool) -> String? {
+        guard let presentation = suggestion.presentation, presentation.isSkill else { return nil }
+        guard presentation.skillPath != nil else { return "Skill bundled with the agent" }
+        return opensSkill ? "Skill · click to open SKILL.md" : "Skill"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: ACPCommandPillStyle.symbolName)
                     .foregroundStyle(Color(nsColor: ACPCommandPillStyle.tint))
                 Text(suggestion.command)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
             }
             if let hint = suggestion.hint, !hint.isEmpty {
                 Text(hint)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(.secondary)
             }
             if let description = suggestion.description, !description.isEmpty {
                 Text(description)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
+                    .padding(.top, scale.space[0])
+            }
+            if let skill = Self.skillLine(suggestion, opensSkill: opensSkill) {
+                Text(skill)
+                    .font(scale.metaFont)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, scale.space[0])
             }
             if let shipStatus {
-                Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, scale.space[1])
                 shipLine(shipStatus)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(width: 340, alignment: .leading)
     }
 
@@ -565,23 +583,23 @@ struct ACPCommandHoverCard: View {
     /// open a PR for.
     private func shipLine(_ status: ACPShipStatus) -> some View {
         let badge = status.presentation.badge
-        return HStack(spacing: 5) {
+        return HStack(spacing: scale.space[1]) {
             Image(systemName: badge.symbolName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(badge.color(theme: theme))
             if let number = status.presentation.number {
                 Text(number)
-                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 Text("· \(status.presentation.phaseLine)")
                     .foregroundStyle(.secondary)
             } else {
                 Text(status.unshippedLabel)
                     .foregroundStyle(.secondary)
                 Text(status.branch)
-                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
             }
         }
-        .font(.system(size: 12))
+        .font(scale.metaFont)
         .lineLimit(1)
         .truncationMode(.middle)
     }
@@ -599,7 +617,8 @@ final class ACPCommandChipHoverController {
         suggestion: ACPPromptSuggestion,
         in textView: NSTextView,
         context: ACPPromptCardContext? = nil,
-        theme: Theme? = nil
+        theme: Theme? = nil,
+        opensSkill: Bool = false
     ) {
         guard target != range else { return }
         hide()
@@ -609,7 +628,8 @@ final class ACPCommandChipHoverController {
             guard let self, let textView, self.target == range,
                   let anchor = (textView as? ACPNSTextView)?.imageChipAnchorRect(for: range)
                     ?? textView.upstreamReferenceAnchorRect(for: range) else { return }
-            let card = ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
+            let card = ACPCommandHoverCard(
+                suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion), opensSkill: opensSkill)
             let hosting = NSHostingController(rootView: card.environment(\.theme, theme ?? EnvironmentValues().theme))
             let popover = NSPopover()
             popover.behavior = .transient
@@ -635,6 +655,7 @@ final class ACPCommandChipHoverController {
 // MARK: - Transcript pill
 
 struct ACPCommandPill: View {
+    @Environment(\.designScale) private var scale
     let suggestion: ACPPromptSuggestion
     @State private var isHovering = false
     @State private var showsCard = false
@@ -644,7 +665,7 @@ struct ACPCommandPill: View {
     var body: some View {
         HStack(spacing: 0) {
             Image(systemName: ACPCommandPillStyle.symbolName)
-                .font(.system(size: 9, weight: .semibold))
+                .font(scale.glyphFont)
                 .foregroundStyle(.white)
                 .frame(width: ACPCommandPillStyle.capWidth, height: ACPMentionChipMetrics.height)
                 .background(isAlas ? Color.white.opacity(0.08) : Color(nsColor: ACPCommandPillStyle.tint).opacity(0.55))
@@ -662,9 +683,9 @@ struct ACPCommandPill: View {
                 Color(nsColor: ACPCommandPillStyle.tint).opacity(0.16)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .overlay(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .strokeBorder(
                     isAlas ? Color(nsColor: ACPAlasPrismStyle.border)
                         : Color(nsColor: ACPCommandPillStyle.tint).opacity(0.6),
@@ -682,8 +703,22 @@ struct ACPCommandPill: View {
             if !Task.isCancelled { showsCard = true }
         }
         .popover(isPresented: $showsCard, arrowEdge: .bottom) {
-            ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
+            ACPCommandHoverCard(
+                suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion),
+                opensSkill: opensSkill != nil)
         }
+        .onTapGesture {
+            guard let opensSkill else { return }
+            showsCard = false
+            opensSkill()
+        }
+    }
+
+    /// Opens the skill's `SKILL.md`, when the command is a skill with a file
+    /// and the host can open it.
+    private var opensSkill: (() -> Void)? {
+        guard suggestion.presentation?.skillPath != nil, let open = context?.openSkill else { return nil }
+        return { open(suggestion) }
     }
 }
 
@@ -700,6 +735,7 @@ extension ACPPromptCardContext {
 /// Observes only the session's command list, so a streaming transcript never
 /// re-renders this row.
 struct ACPUserMessageText: View {
+    @Environment(\.designScale) private var scale
     /// The raw message text — NOT pre-spliced with image markers. Detecting
     /// the leading command has to run against this first: an image chip
     /// attached before the user typed the command carries no wire text of
@@ -788,14 +824,14 @@ struct ACPUserMessageText: View {
             // would turn the message into a two-column layout and swallow
             // its line breaks.
             if rest.contains(where: \.isNewline) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     ACPCommandPill(suggestion: match.suggestion)
                     if !rest.isEmpty {
                         ACPMarkdownText(raw: rest, typography: typography)
                     }
                 }
             } else {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: scale.space[2]) {
                     ACPCommandPill(suggestion: match.suggestion)
                         .padding(.top, ACPCommandPillStyle.topInset(
                             forLineFont: typography.appKitFont(size: typography.paragraphSize)

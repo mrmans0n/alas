@@ -7,6 +7,7 @@ import AlasCode
 import AlasAgents
 import AlasACP
 import AlasSessions
+import AlasAgentKit
 
 /// Where a new session runs.
 public enum SessionTarget: Codable, Hashable, Sendable {
@@ -282,6 +283,40 @@ extension SessionsAPI {
     /// Why the live session's agent cannot run, or the error it last hit.
     public func agentIssue(_ sessionID: String) -> RemoteAgentIssue? {
         (try? liveManager(for: sessionID))?.liveSession(for: sessionID).flatMap(RemoteSessionConfigProjection.agentIssue(session:))
+    }
+
+    /// Installs the managed ACP adapter the session's agent is missing on
+    /// this Mac and connects the session again, as the app's Install button
+    /// does. A session missing its adapter released its lease, so like
+    /// `stop` this needs only the live session.
+    public func installAdapter(_ sessionID: String, caller: HostCaller) async throws {
+        caller.log("sessions.installAdapter", sessionID)
+        let manager = try liveManager(for: sessionID)
+        guard let session = manager.liveSession(for: sessionID) else { throw SessionRefusal.notFound }
+        guard case .needsSetup = session.setupState,
+              ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil
+        else { throw SessionRefusal.notPending }
+        // Retained throughout: the client that asked may go away while it
+        // installs, and the detach must not evict a session no view holds.
+        manager.retainSession(id: sessionID)
+        defer { manager.releaseSession(id: sessionID) }
+        // Clears the issue while it installs: a second request is refused.
+        session.setupState = .checking
+        do {
+            // Where the agent runs: an SSH worktree's agent runs on its host.
+            let target: ACPAdapterTarget = manager.executionRemoteHost.map { .ssh(host: $0) } ?? .local
+            try await core.adapterInstalls.install(target: target, agentID: session.agentId)
+        } catch {
+            session.setupState = .setupError(reason: "Couldn't install the adapter: \(error.localizedDescription)")
+            throw SessionRefusal.agentUnavailable
+        }
+        await manager.detach(sessionId: sessionID)
+        session.lastError = nil
+        session.setupState = .checking
+        await manager.attach(to: sessionID, freshlyCreated: ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: session.restoredFromPersistence,
+            remoteSessionId: session.remoteSessionId
+        ))
     }
 
     /// Takes the session over from the instance that drives it.

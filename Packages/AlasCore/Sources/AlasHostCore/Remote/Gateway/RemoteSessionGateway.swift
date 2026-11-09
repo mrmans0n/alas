@@ -88,14 +88,44 @@ public final class RemoteSessionGateway {
 
     /// Who the paired devices are, for this connection's `delegation` requests.
     public var delegationPairing: RemotePairingService?
+    /// Takes what the client answers to a request this server sent it as
+    /// `RemoteServerMessage.peerHost`. Without it those answers are dropped.
+    public var onPeerHostReply: (@MainActor (HostServerMessage) -> Void)?
+    /// The device authenticated with a `.delegation` token: only the host
+    /// protocol's delegation requests are served, and only their answers and
+    /// events are sent. Checked here because every client message of the
+    /// socket passes through `handle`.
+    private let delegationOnly: Bool
 
     public init(host: AlasHost?, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
+         scope: RemoteDeviceScope = .full,
          sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
+        let delegationOnly = scope == .delegation
+        self.delegationOnly = delegationOnly
         self.host = host
         self.caller = caller
+        // Whatever a later change makes this gateway send, a delegation-only
+        // client gets host-protocol frames and nothing else.
+        if delegationOnly {
+            if let sendTracked {
+                self.sendTracked = { @Sendable message, onWritten in
+                    guard case .host = message else { return onWritten() }
+                    sendTracked(message, onWritten)
+                }
+            } else {
+                self.sendTracked = nil
+            }
+            self.send = { message in
+                guard case .host = message else { return }
+                send(message)
+            }
+            self.federation = nil
+            self.consoleLink = nil
+            return
+        }
         self.sendTracked = sendTracked
         self.federation = federation
         self.consoleLink = consoleLink
@@ -113,6 +143,17 @@ public final class RemoteSessionGateway {
     }
 
     public func handle(_ message: RemoteClientMessage) async {
+        if delegationOnly {
+            // An allowlist, so a message kind added later is refused until
+            // someone decides otherwise. `peerHost` carries answers to what
+            // this server asked, never a request of it.
+            switch message {
+            case .host(let request): serveHost(request)
+            case .peerHost(let reply): onPeerHostReply?(reply)
+            default: break
+            }
+            return
+        }
         if let federation, let downstream, federation.route(message, from: downstream) { return }
         switch message {
         case .helloAck:
@@ -120,6 +161,8 @@ public final class RemoteSessionGateway {
             break
         case .host(let request):
             serveHost(request)
+        case .peerHost(let reply):
+            onPeerHostReply?(reply)
         case .console(let request):
             handleConsole(request)
         case .portForward(let request):
@@ -220,6 +263,11 @@ public final class RemoteSessionGateway {
             }
         case .openSessionTab(let id):
             reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
+        case .installAdapter(let id):
+            // Off this connection's queue: an install can take minutes, and the
+            // outcome reaches the client as the session's agent issue anyway.
+            let sessions = sessions, caller = hostCaller
+            Task { try? await sessions?.installAdapter(id, caller: caller) }
         case .closeSessionTab(let id):
             reportTabAction(await presenter?.closeSessionTab(for: id) ?? .failure("Closing session tabs is unavailable."), sessionId: id)
         case .sendPrompt(let id, let text, let attachments, let intent, let mentions):
@@ -423,6 +471,13 @@ public final class RemoteSessionGateway {
                 candidates = found.mentions
             }
             send(.mentionCandidates(sessionId: id, query: query, candidates: candidates))
+        case .readTranscriptImage(let id, let path):
+            let key = "readTranscriptImage\u{0}\(id)\u{0}\(path)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            let reply = await hostCalls.inspection.remoteRead(.transcriptImage(path: path), sessionId: id)
+            let data: Data? = if case .fileBytes(_, _, let bytes, _) = reply { bytes } else { nil }
+            send(.transcriptImage(sessionId: id, path: path, data: data))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }
@@ -639,7 +694,7 @@ public final class RemoteSessionGateway {
         if hostConnection == nil, let host, let caller {
             let server = HostProtocolServer(host: host)
             server.delegationPairing = delegationPairing
-            hostConnection = server.connect(caller: caller) { [weak self] reply in
+            hostConnection = server.connect(caller: caller, delegationOnly: delegationOnly) { [weak self] reply in
                 await self?.sendWritten(.host(reply))
             }
         }
@@ -1396,7 +1451,7 @@ public final class RemoteSessionGateway {
                 stableId: sid,
                 kind: "toolCall",
                 text: nil,
-                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent)),
+                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent, stableId: sid, index: index)),
                 index: index
             )
         case .fileEdit(_, let edit):
@@ -1435,7 +1490,9 @@ public final class RemoteSessionGateway {
 
     private static func remoteToolCall(
         _ call: ACPMessage.ToolCall,
-        fullContent: String? = nil
+        fullContent: String? = nil,
+        stableId: String,
+        index: Int
     ) -> ACPMessage.ToolCall {
         var remote = call
         if let fullContent {
@@ -1462,7 +1519,49 @@ public final class RemoteSessionGateway {
                 name: asset.name
             )
         }
+        // Inline-only images have no file the lazy reader can fetch. Keep
+        // validated bytes, capped across the call, without displacing its text.
+        func transportBytes<Value: Encodable>(_ value: Value) -> Int {
+            guard let json = Self.encodeJSON(value) else { return Int.max }
+            return RemoteWireMessage(stableId: stableId, kind: "toolCall", text: nil, json: json, index: index).transportByteCount
+        }
+        var byteCount = transportBytes(remote)
+        var remaining = RemoteTranscriptSync.maxMessageBytes / 2
+        guard byteCount < RemoteTranscriptSync.maxMessageBytes else { return remote }
+        for (index, asset) in call.assets.enumerated() {
+            guard let encoded = Self.inlineImageData(asset, maximumBytes: remaining) else { continue }
+            let previous = remote.assets[index]
+            let candidate = ACPMessage.ToolCallAsset(kind: asset.kind, data: encoded, uri: previous.uri,
+                                                      mimeType: asset.mimeType, name: asset.name)
+            // The unchanged envelope cancels: measure the escaped asset delta
+            // without re-encoding the whole tool call for each image.
+            let addedBytes = transportBytes(candidate) - transportBytes(previous)
+            guard addedBytes <= remaining,
+                  addedBytes <= RemoteTranscriptSync.maxMessageBytes - byteCount else { continue }
+            remote.assets[index] = candidate
+            remaining -= addedBytes
+            byteCount += addedBytes
+        }
         return remote
+    }
+
+    private static func inlineImageData(_ asset: ACPMessage.ToolCallAsset, maximumBytes: Int) -> String? {
+        guard asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true else { return nil }
+        for source in [asset.data, asset.uri].compactMap({ $0 }) {
+            guard source.utf8.count <= maximumBytes else { continue }
+            let payload: Substring
+            if source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") {
+                guard let comma = source.firstIndex(of: ","),
+                      source[..<comma].lowercased().contains(";base64") else { continue }
+                payload = source[source.index(after: comma)...]
+            } else {
+                payload = source[...]
+            }
+            guard let data = Data(base64Encoded: String(payload), options: .ignoreUnknownCharacters),
+                  TranscriptImageFile.isImage(data) else { continue }
+            return data.base64EncodedString()
+        }
+        return nil
     }
 
     private static func remoteAssetURI(_ uri: String?) -> String? {

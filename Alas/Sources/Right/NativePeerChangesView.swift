@@ -52,6 +52,7 @@ struct NativePeerChangesView: View {
     var reviews: AnyView? = nil
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     /// Stashes starts collapsed, as `RightPaneState.stashesExpanded` does locally.
     @State private var collapsedSections: Set<String> = ["Stashes"]
     @State private var collapsedWorkingTreePaths: Set<String> = []
@@ -122,7 +123,7 @@ struct NativePeerChangesView: View {
                         NativePeerRailMessage(text: "The peer shortened these lists.")
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
         }
     }
@@ -158,7 +159,7 @@ struct NativePeerChangesView: View {
                     if let git, preparation == nil, files.contains(where: { $0.stage == .staged }) {
                         Button("Commit…", action: git.onCommit)
                             .buttonStyle(.plain)
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("accent"))
                     }
                 }
@@ -263,12 +264,12 @@ struct NativePeerChangesView: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 8, weight: .semibold))
+                                .font(scale.glyphFont)
                                 .foregroundColor(theme.color("fg-faint"))
                                 .frame(width: 8)
                             Text(commit.shortSha).foregroundColor(theme.color("fg-faint"))
                             Text(commit.subject)
-                                .font(.system(size: 11.5))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("fg"))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -276,9 +277,9 @@ struct NativePeerChangesView: View {
                             if commit.add > 0 { Text("+\(commit.add)").foregroundColor(theme.color("add")) }
                             if commit.del > 0 { Text("−\(commit.del)").foregroundColor(theme.color("del")) }
                         }
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
+                        .font(scale.meta.font(weight: .regular, design: .monospaced))
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.vertical, scale.space[1])
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -384,10 +385,10 @@ struct NativePeerChangesView: View {
                 NativePeerRailMessage(text: message)
                 Button("Retry") { onLoadCommitFiles(sha) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("accent"))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.bottom, scale.space[2])
             }
         case .loaded(let result):
             if result.files.isEmpty {
@@ -420,12 +421,13 @@ struct NativePeerChangesView: View {
 struct NativePeerRailMessage: View {
     let text: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(12)
+            .padding(scale.space[3])
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -443,6 +445,7 @@ struct NativePeerCommitSheet: View {
     let onDismiss: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var subject = ""
     @State private var messageBody = ""
     @State private var amend = false
@@ -462,22 +465,22 @@ struct NativePeerCommitSheet: View {
                 }
                 DialogField(label: "Body") {
                     TextEditor(text: $messageBody)
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 80, maxHeight: 160)
-                        .padding(8)
+                        .padding(scale.space[2])
                         .background(theme.color("bg-0"))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
                         .aiBeam(isActive: isSuggesting)
                 }
                 Toggle("Amend the last commit", isOn: $amend)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .toggleStyle(.checkbox)
                 if let errorMessage {
-                    Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
+                    Text(errorMessage).font(scale.metaFont).foregroundColor(.red)
                 } else if !hasStaged && !amend {
-                    Text("Stage changes before committing.").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    Text("Stage changes before committing.").font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                 }
             },
             cancelTitle: "Cancel",

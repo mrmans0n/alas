@@ -40,6 +40,11 @@ public struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable, Senda
     public let category: String?      // e.g. "ThoughtLevel" — used as a routing hint
     public let currentValue: ACPConfigValue?
     public let options: [ACPConfigOptionItem]
+    /// The value the adapter recommends, from `_meta.recommendedConfigValue`.
+    /// Display only: it never selects anything, and `ChipSpec` drops one the
+    /// option doesn't advertise. It isn't encoded, so only a live adapter
+    /// message can set it, never a stored copy.
+    public let recommendedValue: String?
 
     public var currentStringValue: String? {
         guard case .string(let value) = currentValue else { return nil }
@@ -53,6 +58,16 @@ public struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable, Senda
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case id, name, type, category, currentValue, options
+        case meta = "_meta"
+    }
+
+    private struct Metadata: Decodable {
+        struct Recommendation: Decodable {
+            let version: Int
+            let value: String
+        }
+
+        let recommendedConfigValue: Recommendation?
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +78,8 @@ public struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable, Senda
         category = try? c.decode(String.self, forKey: .category)
         currentValue = try? c.decode(ACPConfigValue.self, forKey: .currentValue)
         options = (try? c.decode([ACPConfigOptionItem].self, forKey: .options)) ?? []
+        let recommendation = (try? c.decodeIfPresent(Metadata.self, forKey: .meta))?.recommendedConfigValue
+        recommendedValue = recommendation?.version == 1 ? recommendation?.value : nil
     }
 
     public init(id: String, name: String, type: String = "select",
@@ -79,13 +96,20 @@ public struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable, Senda
 
     public init(id: String, name: String, type: String = "select",
          category: String? = nil, currentValue: ACPConfigValue?,
-         options: [ACPConfigOptionItem] = []) {
+         options: [ACPConfigOptionItem] = [], recommendedValue: String? = nil) {
         self.id = id
         self.name = name
         self.type = type
         self.category = category
         self.currentValue = currentValue
         self.options = options
+        self.recommendedValue = recommendedValue
+    }
+
+    /// This option with another selection. Everything the adapter said about it stays.
+    public func withCurrentValue(_ value: ACPConfigValue?) -> ACPConfigOption {
+        ACPConfigOption(id: id, name: name, type: type, category: category,
+                        currentValue: value, options: options, recommendedValue: recommendedValue)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -143,13 +167,7 @@ public struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable, Senda
                     merged.append(current)
                     continue
                 }
-                merged.append(ACPConfigOption(
-                    id: option.id,
-                    name: option.name,
-                    type: option.type,
-                    category: option.category,
-                    currentValue: selectedValue,
-                    options: option.options))
+                merged.append(option.withCurrentValue(selectedValue))
                 continue
             }
             if let baselineConfigOptions,

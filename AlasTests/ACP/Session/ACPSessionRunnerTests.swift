@@ -1612,6 +1612,65 @@ struct ACPSessionRunnerTests {
         #expect(row.titleSource == .placeholder)
     }
 
+    @Test("a held load replay applies only at the end event of its own load")
+    func heldLoadReplayAppliesAtItsEndEvent() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        var ends = 0
+        runner.onLoadReplayEnd = { ends += 1 }
+        runner.holdLoadReplay(untilEndOf: "load-2")
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("replayed"))))
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-1")))
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: nil)))
+        try await waitUntil { runner.heldLoadReplayCountForTesting == 3 }
+        #expect(session.transcript.messages.isEmpty)
+        #expect(!runner.loadReplayEndReceived)
+
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-2")))
+        try await waitUntil { runner.loadReplayEndReceived }
+        #expect(session.transcript.messages.count == 1)
+
+        // A second end event, and the response-time fallbacks, change nothing.
+        mock.emit(.init(sessionId: "s", update: .loadReplayEnd(id: "load-2")))
+        try await waitUntil { runner.observedUpdateCountForTesting == 5 }
+        runner.releaseHeldLoadReplay()
+        runner.discardHeldLoadReplay()
+        #expect(session.transcript.messages.count == 1)
+        #expect(runner.observedUpdateCountForTesting == 5)
+        #expect(ends == 1)
+    }
+
+    @Test("a held load replay without an end event applies at the response, or is dropped when the load fails",
+          arguments: [true, false])
+    func heldLoadReplayWithoutEndEvent(loadSucceeds: Bool) async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        runner.holdLoadReplay(untilEndOf: "load-1")
+        runner.start()
+        defer { runner.stop() }
+        mock.emit(.init(
+            sessionId: "s", update: .agentMessageChunk(.text("replayed")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }))
+        try await waitUntil { runner.heldLoadReplayCountForTesting == 1 }
+
+        if loadSucceeds {
+            runner.releaseHeldLoadReplay()
+        } else {
+            runner.discardHeldLoadReplay()
+        }
+
+        #expect(session.transcript.messages.count == (loadSucceeds ? 1 : 0))
+        // Applied or dropped, the replay is consumed: a broker does not resend it.
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 1)
+        // Dropped updates still count, so later ones keep the yielded watermark.
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(title: "Live"))))
+        try await waitUntil { runner.observedUpdateCountForTesting == 2 }
+        #expect(runner.heldLoadReplayCountForTesting == 0)
+    }
+
     @Test("session_info_update applies during load replay suppression")
     func sessionInfoUpdateAppliesDuringLoadReplaySuppression() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -2547,9 +2606,11 @@ struct ACPSessionRunnerTests {
     /// A started, negotiated runner whose `session/prompt` opens `entered`, then answers `response` once `respond` opens.
     private func makeGatedPromptRunner(
         response: ACPResponse = ACPResponse(body: ACPSessionRunnerTests.succeededPrompt),
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        requestsPredictedPrompt: Bool = false
     ) async throws -> GatedPromptFixture {
-        let (runner, mock, session, store) = try await makeFailureRunner(onTurnCompleted: onTurnCompleted)
+        let (runner, mock, session, store) = try await makeFailureRunner(
+            onTurnCompleted: onTurnCompleted, requestsPredictedPrompt: requestsPredictedPrompt)
         runner.start()
         session.agentFileChangeReport = .init()
         let entered = AsyncGate()
@@ -2560,6 +2621,35 @@ struct ACPSessionRunnerTests {
             return response
         }
         return .init(runner: runner, mock: mock, session: session, store: store, entered: entered, respond: respond)
+    }
+
+    @Test("a user turn asks its agent for a prediction only when asked to and supported, and keeps only its own answer",
+          .timeLimit(.minutes(1)), arguments: [(true, true), (false, true), (true, false)])
+    func userTurnAsksForItsPrediction(requested: Bool, supported: Bool) async throws {
+        let fixture = try await makeGatedPromptRunner(requestsPredictedPrompt: requested)
+        defer { fixture.runner.stop() }
+        fixture.session.supportsPredictedPrompt = supported
+        let item = UUID()
+        fixture.session.enqueue(id: item, blocks: [.text("Fix the build")])
+        fixture.session.normalQueuedTurnIDs.insert(item)
+        fixture.runner.flushQueueIfIdle()
+        await fixture.entered.wait()
+        let promptID = fixture.session.nextPromptID - 1
+        let requestID = sentPrompts(fixture.mock).last.flatMap {
+            ($0.params as? ACPSessionPromptParams)?.meta?.promptSuggestions?.id
+        }
+        #expect((requestID != nil) == (requested && supported))
+
+        func answer(_ id: String, _ text: String) throws -> ACPSessionUpdateParams {
+            let meta = #"{"_meta":{"promptSuggestions":{"suggestions":[{"text":"\#(text)"}],"id":"\#(id)"}}}"#
+            return .init(sessionId: "s", update: .sessionInfoUpdate(
+                try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data(meta.utf8))))
+        }
+        fixture.mock.emit(try answer("earlier-prompt", "Stale."))
+        if let requestID { fixture.mock.emit(try answer(requestID, "Run the tests.")) }
+        await fixture.respond.open()
+
+        #expect(await fixture.session.agentPrediction.answer(for: promptID) == (requestID != nil ? "Run the tests." : nil))
     }
 
     private func emitReport(_ info: ACPSessionInfoUpdate, requestId: String, on fixture: GatedPromptFixture) async throws {
@@ -2753,7 +2843,8 @@ struct ACPSessionRunnerTests {
         coalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
-        onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil
+        onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
+        requestsPredictedPrompt: Bool = false
     ) async throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2777,6 +2868,7 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onAuthRequired: onAuthRequired,
             onSuccessfulTurn: onSuccessfulTurn,
+            requestsPredictedPrompt: { requestsPredictedPrompt },
             onTurnCompleted: onTurnCompleted,
             isConnectionCurrent: isConnectionCurrent,
             incomingUpdateCoalesceNanos: coalesceNanos
@@ -6172,6 +6264,45 @@ struct ACPSessionRunnerTests {
         #expect(completions.first?.lastAgentText == expected)
     }
 
+    enum DroppedOnApply: CaseIterable, Sendable { case loadReplay, completedOutput }
+
+    /// Buffered text that `apply` will drop is not quoted either: a replayed
+    /// chunk, or one that would reopen output already complete.
+    @Test(arguments: DroppedOnApply.allCases)
+    func completionDoesNotQuoteBufferedTextApplyWillDrop(_ dropped: DroppedOnApply) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            session: session, onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run {
+                session.apply(agentChunk("Parser done.", id: "m1"))
+                switch dropped {
+                case .loadReplay:
+                    runner.suppressLoadReplay(throughYieldedUpdateCount: runner.observedUpdateCountForTesting + 1)
+                case .completedOutput:
+                    session.markCompletedOutputBoundary()
+                    session.allowsStreamingBoundaryCrossing = false
+                }
+            }
+            mock.emit(.init(sessionId: "s", update: agentChunk(" Parser done again.", id: "m1")))
+            _ = await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: ACPSessionRunner.blocks(text: "do it", attachments: []),
+                queuedItemId: nil,
+                onPromptFinished: { _ in continuation.resume(returning: ()) }
+            )
+        }
+
+        #expect(completions.first?.lastAgentText == "Parser done.")
+    }
+
     @Test("completion never quotes an agent message from an earlier turn")
     func completionDoesNotQuotePriorTurnText() async throws {
         var completions: [ACPTurnCompletion] = []
@@ -8283,5 +8414,14 @@ private final class DurableAcknowledgementRecorder: @unchecked Sendable {
         lock.lock()
         count += 1
         lock.unlock()
+    }
+}
+
+extension ACPSessionUpdate {
+    /// The adapter's client-neutral end of a `session/load` replay.
+    static func loadReplayEnd(id: String?) -> ACPSessionUpdate {
+        var end: [String: Any] = ["version": 1]
+        if let id { end["id"] = id }
+        return .sessionInfoUpdate(.init(metadata: AnyCodable(["loadReplayEnd": end])))
     }
 }

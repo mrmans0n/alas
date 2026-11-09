@@ -439,14 +439,15 @@ struct ACPPlanDocumentCard: View {
     /// Nil hides the open action (a child or a peer transcript).
     var onOpenFile: ((String) -> Void)? = nil
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if display.isUnderReview {
             HStack(spacing: 6) {
                 Image(systemName: "doc.text")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                 Text(ACPPlanDocument.Display.underReviewLabel)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
             }
             .foregroundStyle(theme.color("fg-muted"))
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -459,16 +460,16 @@ struct ACPPlanDocumentCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("accent"))
                     .frame(width: 18, height: 18)
                 Text("Plan")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("accent"))
                 Spacer(minLength: 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("accent").opacity(0.08))
             VStack(alignment: .leading, spacing: 10) {
                 if let markdown = display.markdown {
@@ -478,15 +479,11 @@ struct ACPPlanDocumentCard: View {
                     ACPPlanFileLine(label: "Plan file", path: display.filePath, onOpen: openAction)
                 }
             }
-            .padding(12)
+            .padding(scale.space[3])
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.color("bg-1").opacity(0.96))
-        .clipShape(.rect(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("line"), lineWidth: 1)
-        )
+        .background(theme.color("bg-2").opacity(0.5))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
     }
 
     private var openAction: (() -> Void)? {
@@ -502,19 +499,20 @@ struct ACPPlanFileLine: View {
     let path: String?
     let onOpen: (() -> Void)?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "doc")
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
                 if let path {
                     Text(path)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.middle)

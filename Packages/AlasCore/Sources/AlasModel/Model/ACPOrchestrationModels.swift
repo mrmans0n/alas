@@ -176,8 +176,12 @@ public struct ACPDelegationRecord: Equatable, Sendable {
     /// When the target accepted the awaited prompt, by its clock; nil for a
     /// child's first prompt. Identifies the wait, whichever instance reads it.
     public var peerAwaitingSince: Int64? = nil
+    /// How many prompts were ever on their way to the child's peer, counted
+    /// before each is sent. A lost-turn claim judged from a status read with
+    /// fewer can say nothing about a turn one of them started.
+    public var peerSends: Int64 = 0
 
-    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false, peerAwaitingSince: Int64? = nil) {
+    public init(childSessionId: String, parentSessionId: String, projectId: String, parentWorktreeId: String, childWorktreeId: String? = nil, agentId: String, worktreeRequest: ACPDelegatedWorktreeRequest, pendingInitialPrompt: String? = nil, phase: ACPDelegationPhase, failureMessage: String? = nil, createdAt: Int64, updatedAt: Int64, lastParentReportAt: Int64? = nil, modelSelection: ACPDelegatedModelSelection? = nil, role: String? = nil, peerServerId: String? = nil, peerAwaiting: Bool = false, peerAwaitingSince: Int64? = nil, peerSends: Int64 = 0) {
         self.childSessionId = childSessionId
         self.parentSessionId = parentSessionId
         self.projectId = projectId
@@ -196,6 +200,7 @@ public struct ACPDelegationRecord: Equatable, Sendable {
         self.peerServerId = peerServerId
         self.peerAwaiting = peerAwaiting
         self.peerAwaitingSince = peerAwaitingSince
+        self.peerSends = peerSends
     }
 }
 

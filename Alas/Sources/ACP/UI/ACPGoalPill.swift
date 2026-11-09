@@ -4,6 +4,7 @@ import SwiftUI
 /// Toolbar pill for a session goal. Every goal surface uses the `goal` tint;
 /// a running goal also carries the `/btw` prism sweep across its fill.
 struct ACPGoalPill: View {
+    @Environment(\.designScale) private var scale
     let goal: ACPGoalState
     var isLit = false
     @Environment(\.theme) private var theme
@@ -19,25 +20,25 @@ struct ACPGoalPill: View {
         let running = Self.phase(of: goal) == .running
         let paused = Self.phase(of: goal) == .paused
         let tint = theme.color("goal")
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
-        HStack(spacing: 5) {
+        let shape = RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
+        HStack(spacing: scale.space[1]) {
             Image(systemName: paused ? "pause.fill" : "target")
                 .font(.system(size: paused ? 9 : 11, weight: .semibold))
                 .foregroundStyle(running ? tint : theme.color("fg-muted"))
             Text(Self.pillTitle(goal))
-                .font(.system(size: 10.5, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundStyle(theme.color(running ? "fg" : "fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.tail)
             if let tokens = Self.tokenText(goal) {
                 Text(tokens)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .font(scale.caption.font(weight: .medium, design: .monospaced))
                     .foregroundStyle(running ? tint : theme.color("fg-dim"))
                     .lineLimit(1)
                     .fixedSize()
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 24)
         .background {
             tint.opacity(running ? (isLit ? 0.26 : 0.14) : (isLit ? 0.18 : 0.08))
@@ -130,6 +131,7 @@ struct ACPGoalPill: View {
 }
 
 struct ACPGoalControl: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let onDraftChange: (String) -> Void
     let onAction: (ACPGoalAction, String?) async throws -> Void
@@ -167,15 +169,15 @@ struct ACPGoalControl: View {
 
     private var setGoalLabel: some View {
         let tint = theme.color("goal")
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
-        return HStack(spacing: 5) {
+        let shape = RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
+        return HStack(spacing: scale.space[1]) {
             Image(systemName: "target")
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
             Text("Set goal")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 24)
         .background(tint.opacity(isLit ? 0.22 : 0.10))
         .clipShape(shape)
@@ -249,6 +251,7 @@ struct ACPGoalSubmission {
 /// The goal card: objective, budget, and stats, with the goal's actions in a
 /// footer bar. Clearing confirms inside the footer.
 private struct ACPGoalPopover: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let capability: ACPGoalCapability
     let onDraftChange: (String) -> Void
@@ -283,22 +286,22 @@ private struct ACPGoalPopover: View {
         let showsEditor = (goal == nil || isEditing || !objective.isEmpty) && actions.contains(.set)
         VStack(alignment: .leading, spacing: 0) {
             header(goal: goal, showsEditor: showsEditor)
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 if showsEditor {
                     editor
                 } else if let goal {
                     details(goal)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(.horizontal, scale.space[3])
+            .padding(.bottom, scale.space[3])
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("del"))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.bottom, scale.space[2])
             }
             footer(goal: goal, actions: actions, showsEditor: showsEditor)
         }
@@ -317,20 +320,20 @@ private struct ACPGoalPopover: View {
 
     private func header(goal: ACPGoalState?, showsEditor: Bool) -> some View {
         let running = goal.map { ACPGoalPill.phase(of: $0) == .running } ?? true
-        return HStack(spacing: 7) {
+        return HStack(spacing: scale.space[2]) {
             Image(systemName: "target")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(running ? theme.color("goal") : theme.color("fg-faint"))
             Text(showsEditor ? (goal == nil ? "Set a goal" : "Change goal") : "Goal")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
             Spacer(minLength: 0)
             if let goal {
                 statusChip(goal)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     @ViewBuilder
@@ -338,20 +341,20 @@ private struct ACPGoalPopover: View {
         if let status = ACPGoalPill.normalizedStatus(goal.status) {
             let phase = ACPGoalPill.phase(of: goal)
             let tint = theme.color("goal")
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 switch phase {
                 case .running:
                     Circle().fill(tint).frame(width: 5, height: 5)
                 case .paused:
-                    Image(systemName: "pause.fill").font(.system(size: 7, weight: .bold))
+                    Image(systemName: "pause.fill").font(scale.glyph.font(weight: .bold))
                 case .settled:
                     EmptyView()
                 }
                 Text(status.prefix(1).uppercased() + status.dropFirst())
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
             }
             .foregroundStyle(phase == .running ? tint : theme.color("fg-muted"))
-            .padding(.horizontal, 7)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 18)
             .background(
                 phase == .running ? tint.opacity(0.16) : theme.color("bg-4").opacity(0.7),
@@ -365,17 +368,17 @@ private struct ACPGoalPopover: View {
     private var editor: some View {
         TextField("Describe what done looks like…", text: Binding(get: { objective }, set: onDraftChange), axis: .vertical)
             .textFieldStyle(.plain)
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg"))
             .lineLimit(3...6)
             .focused($editorFocused)
             .disabled(isSubmitting)
             .onSubmit { perform(.set) }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
-            .background(theme.color("field-bg"), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[2])
+            .background(theme.color("field-bg"), in: RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                     .strokeBorder(theme.color("goal").opacity(editorFocused ? 0.6 : 0.3), lineWidth: 0.5)
             }
             .accessibilityLabel("Goal objective")
@@ -388,22 +391,22 @@ private struct ACPGoalPopover: View {
     private func details(_ goal: ACPGoalState) -> some View {
         let running = ACPGoalPill.phase(of: goal) == .running
         Text(goal.objective)
-            .font(.system(size: 13, weight: .medium))
+            .font(scale.emphasisFont)
             .foregroundStyle(theme.color("fg"))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
 
         if let tokens = ACPGoalPill.tokenText(goal) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 HStack {
                     Text("Tokens")
                         .foregroundStyle(theme.color("fg-dim"))
                     Spacer(minLength: 0)
                     Text(tokens)
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("fg-muted"))
                 }
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 if let progress = ACPGoalPill.tokenProgress(goal) {
                     progressBar(progress, running: running)
                 }
@@ -413,14 +416,14 @@ private struct ACPGoalPopover: View {
         TimelineView(.periodic(from: .now, by: running ? 1 : 15)) { context in
             let stats = stats(for: goal, now: context.date)
             if !stats.isEmpty {
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: scale.space[4]) {
                     ForEach(stats, id: \.self) { stat in
-                        VStack(alignment: .leading, spacing: 1) {
+                        VStack(alignment: .leading, spacing: scale.space[0]) {
                             Text(stat.label)
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-dim"))
                             Text(stat.value)
-                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                .font(scale.meta.font(weight: .semibold, design: .monospaced))
                                 .foregroundStyle(theme.color("fg"))
                         }
                     }
@@ -431,19 +434,19 @@ private struct ACPGoalPopover: View {
         if let reason = goal.lastReason?.trimmingCharacters(in: .whitespacesAndNewlines),
            !reason.isEmpty {
             Text(reason)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 7)
-                .padding(.leading, 10)
-                .padding(.trailing, 9)
+                .padding(.vertical, scale.space[2])
+                .padding(.leading, scale.space[2])
+                .padding(.trailing, scale.space[2])
                 .background(theme.color("field-bg"))
                 .overlay(alignment: .leading) {
                     Rectangle().fill(theme.color("goal").opacity(0.6)).frame(width: 2)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
         }
     }
 
@@ -487,10 +490,10 @@ private struct ACPGoalPopover: View {
     // MARK: Footer
 
     private func footer(goal: ACPGoalState?, actions: [ACPGoalAction], showsEditor: Bool) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if confirmsClear {
                 Text("Clear this goal?")
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                 Spacer(minLength: 0)
                 progressIndicator
@@ -507,11 +510,11 @@ private struct ACPGoalPopover: View {
                 }
                 .disabled(isSubmitting)
                 Text("↩")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(scale.caption.font(weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: 3))
+                    .padding(.horizontal, scale.space[1])
+                    .padding(.vertical, scale.space[0])
+                    .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: scale.radius.small))
                     .accessibilityHidden(true)
                 ACPGoalFooterButton(title: goal == nil ? "Set Goal" : "Update Goal", kind: .primary) {
                     perform(.set)
@@ -546,8 +549,8 @@ private struct ACPGoalPopover: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .frame(maxWidth: .infinity)
         .background(confirmsClear ? theme.color("del").opacity(0.10) : theme.color("section-head-bg"))
         .overlay(alignment: .top) {
@@ -594,6 +597,7 @@ private struct ACPGoalPopover: View {
 }
 
 private struct ACPGoalFooterButton: View {
+    @Environment(\.designScale) private var scale
     enum Kind {
         case primary
         case normal
@@ -613,21 +617,21 @@ private struct ACPGoalFooterButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 if let icon {
                     Image(systemName: icon)
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.glyphFont)
                 }
                 Text(title)
-                    .font(.system(size: 11.5, weight: isFilled ? .semibold : .medium))
+                    .font(scale.meta.font(weight: isFilled ? .semibold : .medium))
             }
             .foregroundStyle(foreground)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
-            .background(background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(background, in: RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
             .overlay {
                 if kind == .normal {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 }
             }

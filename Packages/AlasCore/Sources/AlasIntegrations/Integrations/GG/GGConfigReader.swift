@@ -90,6 +90,47 @@ public enum GGConfigReader: Sendable {
         )
     }
 
+    /// Repository-local saved review membership. It never proves entry order or current heads.
+    /// An absent local file is unknown: gg can inherit global stacks in that case, which
+    /// must not be associated with this provider repository. A valid local file replaces
+    /// all global stack maps; missing stack/mrs keys therefore mean verified-empty membership.
+    public static func stackReviewMembership(repoPath: String) throws -> [String: [Int]] {
+        struct Stack: Decodable {
+            let mrs: [String: Int]
+            enum CodingKeys: CodingKey { case mrs }
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                mrs = container.contains(.mrs) ? try container.decode([String: Int].self, forKey: .mrs) : [:]
+            }
+        }
+        struct Config: Decodable {
+            let stacks: [String: Stack]
+            enum CodingKeys: CodingKey { case stacks }
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                stacks = container.contains(.stacks) ? try container.decode([String: Stack].self, forKey: .stacks) : [:]
+            }
+        }
+        guard let path = GGStackGate.ggConfigPath(repoPath: repoPath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            throw GGServiceError.malformedOutput("Repository-local gg review membership is unavailable. Refresh native gg before using inbox actions.")
+        }
+        guard data.count <= 4_000_000,
+              let config = try? JSONDecoder().decode(Config.self, from: data),
+              config.stacks.count <= 500 else {
+            throw GGServiceError.malformedOutput("Repository-local gg review membership is malformed or oversized.")
+        }
+        var membership: [String: [Int]] = [:]
+        for (name, stack) in config.stacks {
+            let values = stack.mrs
+            guard values.count <= 500, values.values.allSatisfy({ $0 > 0 }) else {
+                throw GGServiceError.malformedOutput("Saved gg review membership for \(name) is invalid or oversized.")
+            }
+            membership[name] = Set(values.values).sorted()
+        }
+        return membership
+    }
+
     /// gg's stack-branch naming convention.
     public static func composeStackBranch(username: String, stackName: String) -> String {
         "\(username)/\(stackName)"

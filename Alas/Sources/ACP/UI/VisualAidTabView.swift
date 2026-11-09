@@ -70,6 +70,7 @@ private struct VisualAidManagedTabView: View {
 }
 
 private struct VisualAidTabContent: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var transcript: ACPTranscript
     let session: ACPSession
     let tab: VisualAidTabState
@@ -82,7 +83,7 @@ private struct VisualAidTabContent: View {
                 visual: visual, form: session.visualAidForm(for: visual),
                 sendStatus: session.visualAidSendStatus(for: visual.id), actions: actions, fillsHeight: true,
                 typography: typography)
-                .padding(16)
+                .padding(scale.space[4])
         } else {
             VisualAidUnavailableView()
         }

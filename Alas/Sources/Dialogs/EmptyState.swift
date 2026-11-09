@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct EmptyState: View {
+    @Environment(\.designScale) private var scale
     let onAddProject: () -> Void
     let onAddFolder: () -> Void
     /// Set when shown from Settings > Debug; adds a button back to the workspace.
@@ -17,9 +18,9 @@ struct EmptyState: View {
             Button(action: onAddProject) {
                 let shape = RoundedRectangle(cornerRadius: WelcomeFlock.buttonCornerRadius)
                 Label("Add a repository to start", systemImage: "folder.badge.plus")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
+                    .padding(.horizontal, scale.space[4])
                     .frame(height: 38)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { flock.buttonSize = $0 }
                     .overlay(shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.75))
@@ -35,11 +36,11 @@ struct EmptyState: View {
             // from that button alone.
             Button(action: onAddFolder) {
                 Text("or add a plain folder")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(.white.opacity(folderLinkHovered ? 0.95 : 0.7))
                     .underline(folderLinkHovered)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[0])
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -50,13 +51,13 @@ struct EmptyState: View {
             if let onExitPreview {
                 AlasButton(title: "Exit preview", icon: "xmark", style: .normal, action: onExitPreview)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 12)
-                    .padding(.top, 8)
+                    .padding(.trailing, scale.space[3])
+                    .padding(.top, scale.space[2])
             }
 
             TrafficLights()
-                .padding(.leading, 12)
-                .padding(.top, 10)
+                .padding(.leading, scale.space[3])
+                .padding(.top, scale.space[3])
         }
         .onContinuousHover { phase in
             if case .active(let point) = phase { flock.cursor = point } else { flock.cursor = nil }

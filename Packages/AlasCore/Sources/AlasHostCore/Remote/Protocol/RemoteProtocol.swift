@@ -52,6 +52,12 @@ public struct RemoteServerIdentity: Equatable, Sendable {
         self.consoleCapabilities = consoleCapabilities
         self.hostCapabilities = hostCapabilities
     }
+
+    /// The same identity naming no other paired Macs.
+    public var withoutPeers: RemoteServerIdentity {
+        RemoteServerIdentity(serverId: serverId, name: name, consoleCapabilities: consoleCapabilities,
+                             hostCapabilities: hostCapabilities)
+    }
 }
 
 /// An `@` mention, offered by the host's `mentionCandidates` and sent back
@@ -234,12 +240,16 @@ public struct RemoteChip: Codable, Equatable, Sendable {
     public var configId: String?
     public var options: [RemoteChipOption]
     public var currentId: String?
+    /// Absent from older hosts. Display only.
+    public var recommendedId: String?
 
-    public init(source: String, configId: String? = nil, options: [RemoteChipOption], currentId: String? = nil) {
+    public init(source: String, configId: String? = nil, options: [RemoteChipOption], currentId: String? = nil,
+                recommendedId: String? = nil) {
         self.source = source
         self.configId = configId
         self.options = options
         self.currentId = currentId
+        self.recommendedId = recommendedId
     }
 }
 
@@ -293,7 +303,12 @@ public enum RemoteClientMessage: Equatable, Sendable {
     /// refuses to go online until the answering `identityProof` verifies
     /// against that key; a browser, and a peer with nothing pinned yet,
     /// omits it and the server signs nothing.
-    case helloAck(protocolVersion: Int, challenge: String? = nil)
+    ///
+    /// `capabilities` lists what this peer serves the server in return, from
+    /// those the server's `hello` offered, such as
+    /// `HostProtocolCapability.delegationReverseV1`. Empty for a browser and
+    /// for an older peer.
+    case helloAck(protocolVersion: Int, challenge: String? = nil, capabilities: [String] = [])
     case listSessions
     case listWorktrees
     case listAgents
@@ -319,6 +334,9 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case openSessionTab(sessionId: String)
     /// Closes the host's tab for a session, keeping it in recent history.
     case closeSessionTab(sessionId: String)
+    /// Installs the ACP adapter the session's agent is missing on the host,
+    /// then connects it again; see `PeerAdapterInstallCapability`.
+    case installAdapter(sessionId: String)
     case sendPrompt(
         sessionId: String, text: String, attachments: [RemoteAttachment], intent: String,
         mentions: [RemoteMention] = [])
@@ -360,6 +378,7 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case listCommitFiles(sessionId: String, sha: String)
     case commitFileDiff(sessionId: String, sha: String, path: String)
     case readFile(sessionId: String, path: String)
+    case readTranscriptImage(sessionId: String, path: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -371,10 +390,13 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case portForward(PeerPortForwardRequest)
     /// A host protocol message; see `HostClientMessage`.
     case host(HostClientMessage)
+    /// The answer to a `RemoteServerMessage.peerHost` request, or an event of
+    /// a subscription it opened: see `HostProtocolCapability.delegationReverseV1`.
+    case peerHost(HostServerMessage)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console, portForward, host, repoHook }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -382,7 +404,8 @@ extension RemoteClientMessage: Codable {
         case "helloAck":
             self = .helloAck(
                 protocolVersion: try c.decode(Int.self, forKey: .protocolVersion),
-                challenge: try c.decodeIfPresent(String.self, forKey: .challenge))
+                challenge: try c.decodeIfPresent(String.self, forKey: .challenge),
+                capabilities: (try? c.decodeIfPresent([String].self, forKey: .capabilities)) ?? [])
         case "listSessions": self = .listSessions
         case "listWorktrees": self = .listWorktrees
         case "listAgents": self = .listAgents
@@ -447,6 +470,8 @@ extension RemoteClientMessage: Codable {
             self = .openSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "closeSessionTab":
             self = .closeSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "installAdapter":
+            self = .installAdapter(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sendPrompt":
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -542,6 +567,9 @@ extension RemoteClientMessage: Codable {
             self = .commitFileDiff(sessionId: try c.decode(String.self, forKey: .sessionId),
                                    sha: try c.decode(String.self, forKey: .sha),
                                    path: try c.decode(String.self, forKey: .path))
+        case "readTranscriptImage":
+            self = .readTranscriptImage(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                        path: try c.decode(String.self, forKey: .path))
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
@@ -551,6 +579,8 @@ extension RemoteClientMessage: Codable {
             self = .portForward(try c.decode(PeerPortForwardRequest.self, forKey: .portForward))
         case "host":
             self = .host(try c.decode(HostClientMessage.self, forKey: .host))
+        case "peerHost":
+            self = .peerHost(try c.decode(HostServerMessage.self, forKey: .peerHost))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -559,10 +589,11 @@ extension RemoteClientMessage: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .helloAck(let protocolVersion, let challenge):
+        case .helloAck(let protocolVersion, let challenge, let capabilities):
             try c.encode("helloAck", forKey: .type)
             try c.encodeIfPresent(challenge, forKey: .challenge)
             try c.encode(protocolVersion, forKey: .protocolVersion)
+            if !capabilities.isEmpty { try c.encode(capabilities, forKey: .capabilities) }
         case .listSessions: try c.encode("listSessions", forKey: .type)
         case .listWorktrees:
             try c.encode("listWorktrees", forKey: .type)
@@ -631,6 +662,9 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
         case .closeSessionTab(let s):
             try c.encode("closeSessionTab", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .installAdapter(let s):
+            try c.encode("installAdapter", forKey: .type)
             try c.encode(s, forKey: .sessionId)
         case .sendPrompt(let s, let t, let a, let intent, let mentions):
             try c.encode("sendPrompt", forKey: .type)
@@ -724,6 +758,10 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(sha, forKey: .sha)
             try c.encode(path, forKey: .path)
+        case .readTranscriptImage(let s, let path):
+            try c.encode("readTranscriptImage", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(path, forKey: .path)
         case .readFile(let s, let path):
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -737,6 +775,9 @@ extension RemoteClientMessage: Codable {
         case .host(let message):
             try c.encode("host", forKey: .type)
             try c.encode(message, forKey: .host)
+        case .peerHost(let message):
+            try c.encode("peerHost", forKey: .type)
+            try c.encode(message, forKey: .peerHost)
         }
     }
 }
@@ -788,6 +829,8 @@ extension RemoteClientMessage {
             return "listCommitFiles\u{0}\(sessionId)\u{0}\(sha)"
         case .commitFileDiff(let sessionId, let sha, let path):
             return "commitFileDiff\u{0}\(sessionId)\u{0}\(sha)\u{0}\(path)"
+        case .readTranscriptImage(let sessionId, let path):
+            return "readTranscriptImage\u{0}\(sessionId)\u{0}\(path)"
         case .readFile(let sessionId, let path):
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
         default:
@@ -912,6 +955,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
         byteSize: Int?, message: String?)
     /// A file's raw bytes, the answer to `HostWorktreeRead.fileBytes`.
     case fileBytes(sessionId: String, path: String, data: Data, byteSize: Int)
+    /// Session-scoped browser image response, separate from editor file replies.
+    case transcriptImage(sessionId: String, path: String, data: Data?)
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -924,6 +969,11 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case portForward(PeerPortForwardEvent)
     /// A host protocol message; see `HostServerMessage`.
     case host(HostServerMessage)
+    /// A host protocol request from this server to the client, sent only on a
+    /// socket whose `helloAck` acknowledged
+    /// `HostProtocolCapability.delegationReverseV1`. A client that does not
+    /// know the case skips it.
+    case peerHost(HostClientMessage)
 }
 
 extension RemoteServerMessage: Codable {
@@ -938,7 +988,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, workingTreeTruncated, operation, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, portForward, host
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, portForward, host, peerHost
         case challenge, publicKey, signature
         case visualId
         case hook
@@ -963,6 +1013,8 @@ extension RemoteServerMessage: Codable {
             self = .portForward(try c.decode(PeerPortForwardEvent.self, forKey: .portForward))
         case "host":
             self = .host(try c.decode(HostServerMessage.self, forKey: .host))
+        case "peerHost":
+            self = .peerHost(try c.decode(HostClientMessage.self, forKey: .peerHost))
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),
@@ -1197,6 +1249,10 @@ extension RemoteServerMessage: Codable {
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 byteSize: try c.decodeIfPresent(Int.self, forKey: .byteSize),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "transcriptImage":
+            self = .transcriptImage(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                    path: try c.decode(String.self, forKey: .path),
+                                    data: try c.decodeIfPresent(Data.self, forKey: .data))
         case "fileBytes":
             self = .fileBytes(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1242,6 +1298,9 @@ extension RemoteServerMessage: Codable {
         case .host(let message):
             try c.encode("host", forKey: .type)
             try c.encode(message, forKey: .host)
+        case .peerHost(let message):
+            try c.encode("peerHost", forKey: .type)
+            try c.encode(message, forKey: .peerHost)
         case .identityProof(let challenge, let publicKey, let signature):
             try c.encode("identityProof", forKey: .type)
             try c.encode(challenge, forKey: .challenge)
@@ -1489,6 +1548,11 @@ extension RemoteServerMessage: Codable {
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(byteSize, forKey: .byteSize)
             try c.encodeIfPresent(message, forKey: .message)
+        case .transcriptImage(let s, let path, let data):
+            try c.encode("transcriptImage", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(data, forKey: .data)
         case .fileBytes(let s, let path, let data, let byteSize):
             try c.encode("fileBytes", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1520,7 +1584,8 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1] + identity.hostCapabilities)
+            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1]
+                + identity.hostCapabilities)
     }
 }
 
@@ -1546,6 +1611,8 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
     /// Hosts that serve `readWorktree`.
     public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve transcript image files, including paths outside the worktree.
+    public static let transcriptImagesV1 = "host.transcriptImages.v1"
     /// Hosts that serve the `fileBytes` read of `readWorktree`.
     public static let worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"
     /// Hosts whose `fileBytes` read also takes the stash, checkpoint and
@@ -1601,9 +1668,15 @@ public enum HostProtocolCapability: Sendable {
     public static let repoHooksApprovalV1 = "host.repoHooks.approval.v1"
     /// Hosts that serve `delegation`, and send `delegationOutboxChanged`.
     public static let delegationV1 = "host.delegation.v1"
+    /// Delegation over a link the other side opened. A headless host offers it
+    /// in `hello`, meaning it may send `delegation` requests back as
+    /// `RemoteServerMessage.peerHost`. A Mac acknowledges it in `helloAck` when
+    /// it serves them on that link, and then serves `v1`, `eventsV1` and
+    /// `delegationV1` there too: it never sends that host a `hello` to say so.
+    public static let delegationReverseV1 = "host.delegation.reverse.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
-        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,
         worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1, delegationV1,
     ]
     /// What only a headless host serves.
@@ -1614,6 +1687,11 @@ public enum HostProtocolCapability: Sendable {
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client
 /// messages silently, so clients gate the controls on this capability.
+public enum PeerAdapterInstallCapability: Sendable {
+    /// Advertised in `hello` by hosts that serve `installAdapter`.
+    public static let v1 = "peerAdapterInstall.v1"
+}
+
 public enum PeerSessionTabsCapability: Sendable {
     /// Advertised in `hello` by hosts that serve `openSessionTab` and `closeSessionTab`.
     public static let v1 = "peerSessionTabs.v1"

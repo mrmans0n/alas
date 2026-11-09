@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPUserInputPrompt: View {
+    @Environment(\.designScale) private var scale
     let request: ACPUserInputRequest
     let onRespond: (UUID, ACPUserInputAction) -> Void
     let onOpenURL: (UUID) async -> Bool
@@ -60,40 +61,40 @@ struct ACPUserInputPrompt: View {
             }
         }
         .background(theme.color("bg-1").opacity(0.96))
-        .clipShape(.rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
         .defaultFocus($focusedField, initialFocusKey)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: iconName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 18, height: 18)
             Text(headerTitle)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             Spacer(minLength: 8)
             Text(headerLabel)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-muted"))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 
     private var formBody: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             if shouldShowPromptText {
                 promptText
             }
             ForEach(renderedGroups) { group in
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     fieldView(group.field)
                     if let note = group.note {
                         noteView(note)
@@ -101,19 +102,19 @@ struct ACPUserInputPrompt: View {
                 }
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private var promptText: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             if shouldShowTitle, let title = request.title {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundStyle(theme.color("fg"))
             }
             if Self.shouldShowMessage(for: request) {
                 Text(request.message)
-                    .font(.system(size: 12.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -170,13 +171,13 @@ struct ACPUserInputPrompt: View {
     /// A question's note field, under its question rather than as a field of
     /// its own.
     private func noteView(_ field: ACPUserInputField) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Text(field.noteLabel)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundStyle(theme.color("fg-muted"))
             if let description = field.schema.description, !description.isEmpty {
                 Text(description)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-muted"))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -185,7 +186,7 @@ struct ACPUserInputPrompt: View {
             if formState.shouldShowError(for: field),
                let error = formState.validationError(for: field) {
                 Text(error)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(.red)
             }
         }
@@ -195,20 +196,20 @@ struct ACPUserInputPrompt: View {
 
     @ViewBuilder
     private func fieldView(_ field: ACPUserInputField) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(spacing: scale.space[1]) {
                 Text(field.label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 if field.required {
                     Text("Required")
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(scale.captionFont)
                         .foregroundStyle(theme.color("fg-faint"))
                 }
             }
             if let description = field.schema.description, !description.isEmpty {
                 Text(description)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -217,7 +218,7 @@ struct ACPUserInputPrompt: View {
             if formState.shouldShowError(for: field),
                let error = formState.validationError(for: field) {
                 Text(error)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(.red)
             }
         }
@@ -235,14 +236,14 @@ struct ACPUserInputPrompt: View {
         case "string" where field.schema.isSecret:
             SecureField(field.label, text: textBinding(for: field))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .alasFieldChrome(theme: theme)
                 .focused($focusedField, equals: field.key)
         case "string":
             TextField(field.label, text: textBinding(for: field))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .alasFieldChrome(theme: theme)
                 .focused($focusedField, equals: field.key)
@@ -263,45 +264,45 @@ struct ACPUserInputPrompt: View {
         case "array":
             optionList(field)
         default:
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: "exclamationmark.triangle")
                 Text("Unsupported field type: \(field.schema.type)")
             }
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-muted"))
         }
     }
 
     private func optionList(_ field: ACPUserInputField) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ForEach(field.schema.options) { option in
                 let selected = formState.selectionValues[field.key]?.contains(option.const) == true
                 Button {
                     formState.toggle(option.const, for: field)
                 } label: {
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: scale.space[2]) {
                         Image(systemName: selectionIcon(selected: selected, multiple: field.schema.type == "array"))
                             .foregroundStyle(selected ? theme.color("accent") : theme.color("fg-faint"))
                             .frame(width: 16)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: scale.space[0]) {
                             Text(option.title ?? option.const)
                                 .foregroundStyle(theme.color("fg"))
                             if let description = option.description, !description.isEmpty {
                                 Text(description)
-                                    .font(.system(size: 10.5))
+                                    .font(scale.caption.font(weight: .regular))
                                     .foregroundStyle(theme.color("fg-muted"))
                             }
                         }
                         Spacer(minLength: 0)
                     }
-                    .font(.system(size: 11.5))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
+                    .font(scale.metaFont)
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(selected ? theme.color("accent").opacity(0.11) : theme.color("bg-0").opacity(0.4))
-                    .clipShape(.rect(cornerRadius: 6))
+                    .clipShape(.rect(cornerRadius: scale.radius.medium))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .strokeBorder(selected ? theme.color("accent").opacity(0.45) : theme.color("line"), lineWidth: 0.5)
                     )
                 }
@@ -312,10 +313,10 @@ struct ACPUserInputPrompt: View {
     }
 
     private func numericField(_ field: ACPUserInputField) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             TextField(field.label, text: textBinding(for: field))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .alasFieldChrome(theme: theme)
                 .focused($focusedField, equals: field.key)
@@ -370,7 +371,7 @@ struct ACPUserInputPrompt: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             if showsDismissActions {
                 Button(secondaryActionTitle) { onRespond(request.id, .decline) }
                 // Skipping an optional question is all there is to dismiss.
@@ -388,42 +389,42 @@ struct ACPUserInputPrompt: View {
             // An optional submit that gives Codex no answer is a Skip.
             .disabled(!request.isBlocking && !formState.hasOptionalAnswer)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-0").opacity(0.45))
     }
 
     private func urlBody(_ urlRequest: ACPUserInputRequest.URLRequest) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             promptText
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: "globe")
                 Text(urlRequest.url.host ?? urlRequest.url.absoluteString)
                     .fontWeight(.semibold)
             }
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg"))
             Text(urlRequest.url.absoluteString)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let warning = urlWarning(urlRequest.url) {
                 Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(.orange)
             }
             if urlOpenError {
                 Text("The browser could not open this URL.")
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(.red)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private var urlActions: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Button("Decline") { onRespond(request.id, .decline) }
             Button("Cancel", role: .cancel) { onRespond(request.id, .cancel) }
             Spacer()
@@ -434,8 +435,8 @@ struct ACPUserInputPrompt: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-0").opacity(0.45))
     }
 
@@ -499,6 +500,7 @@ struct ACPPlanApprovalSection: Equatable {
 }
 
 struct ACPPlanApprovalPrompt: View {
+    @Environment(\.designScale) private var scale
     let plan: ACPCursorCreatePlanParams
     let onRespond: (ACPCursorPlanResponse) -> Void
     @Environment(\.theme) private var theme
@@ -529,34 +531,34 @@ struct ACPPlanApprovalPrompt: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 if !plan.overview.isEmpty {
                     Text(plan.overview)
-                        .font(.system(size: 12.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg"))
                 }
                 ACPMarkdownText(raw: plan.plan, typography: .default)
                 ForEach(Array(Self.checklistSections(for: plan).enumerated()), id: \.offset) { _, section in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         if let title = section.title {
                             Text(title)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(scale.meta.font(weight: .semibold))
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                         ACPPlanChecklist(items: section.items)
-                            .clipShape(.rect(cornerRadius: 6))
+                            .clipShape(.rect(cornerRadius: scale.radius.medium))
                     }
                 }
             }
-            .padding(12)
-            VStack(alignment: .leading, spacing: 8) {
+            .padding(scale.space[3])
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 TextField("Reason for rejection", text: $rejectionReason)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .alasFieldChrome(theme: theme)
                     .focused($isRejectionReasonFocused)
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     Button("Reject") {
                         onRespond(.init(outcome: .rejected(reason: trimmedRejectionReason)))
                     }
@@ -568,63 +570,64 @@ struct ACPPlanApprovalPrompt: View {
                     .buttonStyle(.borderedProminent)
                 }
             }
-            .padding(12)
+            .padding(scale.space[3])
             .background(theme.color("bg-0").opacity(0.45))
         }
         .background(theme.color("bg-1").opacity(0.96))
-        .clipShape(.rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
         .defaultFocus($isRejectionReasonFocused, false)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "checklist")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 18, height: 18)
             Text(plan.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             Spacer(minLength: 8)
             Text("Plan approval")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-muted"))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 }
 
 struct ACPURLElicitationWaitView: View {
+    @Environment(\.designScale) private var scale
     let wait: ACPURLElicitationWait
     let onOpenAgain: (URL) -> Void
     let onDismiss: (String) -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: scale.space[2]) {
             Spinner(lineWidth: 1.5)
                 .frame(width: 14, height: 14)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text("Waiting for browser completion")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 Text(wait.url.host ?? wait.url.absoluteString)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-muted"))
             }
             Spacer()
             Button("Open Again") { onOpenAgain(wait.url) }
             Button("Dismiss") { onDismiss(wait.id) }
         }
-        .padding(10)
+        .padding(scale.space[2])
         .background(theme.color("bg-1").opacity(0.9))
-        .clipShape(.rect(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 }

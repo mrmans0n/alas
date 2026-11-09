@@ -38,6 +38,18 @@ struct ACPTranscriptRowWindowTests {
         ) == 232)
     }
 
+    /// The resting composer keeps the clearance it always had; whatever stacks
+    /// on it (banner, tray, a taller pill) adds to it.
+    @Test("tail spacer covers everything stacked on the composer", arguments: [
+        (CGFloat(0), CGFloat(128)), // not measured yet
+        (100, 128), // resting pill
+        (60, 128), // never less than a resting pill
+        (160, 188), // grown pill, or a banner and tray on it
+    ])
+    func tailSpacerCoversTheComposerStack(composerStack: CGFloat, expected: CGFloat) {
+        #expect(ACPComposerMetrics.tailSpacerHeight(composerStack: composerStack) == expected)
+    }
+
     @Test("visible rows contain only transcript indices and stable ids")
     @MainActor
     func visibleRowsContainOnlyIndicesAndStableIds() {

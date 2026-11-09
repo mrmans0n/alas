@@ -51,7 +51,7 @@ struct WorktreeRowStatusTests {
         let status = try #require(WorktreeRowView.statusPresentation(
             harnessState: nil, worktreeStatus: .dirty(fileCount: 3, conflictCount: 0)))
         #expect(status.note == "3 files")
-        #expect(status.colorToken == "mod")
+        #expect(status.colorToken == "fg-dim")
         #expect(!status.pulses)
     }
 

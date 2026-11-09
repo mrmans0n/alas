@@ -112,7 +112,7 @@ final class WelcomeFlock {
         let anchor = buttonRect(buttonSize ?? .zero, in: size)
         drawHeadline(in: &ctx, center: CGPoint(x: w / 2, y: anchor.minY - 118), size: size, time: t)
         var subheadline = ctx.resolve(Text("Every agent. Every worktree. One window.")
-            .font(.system(size: 22, weight: .medium)))
+            .font(.system(size: 22, weight: .medium))) // design-literal: welcome art headline, not a text role
         subheadline.shading = .color(.white.opacity(0.7))
         ctx.draw(subheadline, at: CGPoint(x: w / 2, y: anchor.minY - 58))
 
@@ -122,7 +122,7 @@ final class WelcomeFlock {
     /// Headline lit by the dusk: warm light from the sun below, cool sky on
     /// top, a breathing bloom behind it, and a slow glint sweeping across.
     private func drawHeadline(in ctx: inout GraphicsContext, center: CGPoint, size: CGSize, time t: Double) {
-        let headline = ctx.resolve(Text("Your new agentic IDE").font(.system(size: 60, weight: .bold)))
+        let headline = ctx.resolve(Text("Your new agentic IDE").font(.system(size: 60, weight: .bold))) // design-literal: welcome art headline, not a text role
         let textSize = headline.measure(in: size)
         let bounds = CGRect(x: center.x - textSize.width / 2, y: center.y - textSize.height / 2,
                             width: textSize.width, height: textSize.height)

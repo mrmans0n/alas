@@ -8,8 +8,6 @@ struct RightPaneToolbar: View {
     /// Set while a plugin panel is shown: the row names it and drops the tab's controls.
     var panelTitle: String?
     var branch: String = ""
-    var totalAdd: Int = 0
-    var totalDel: Int = 0
     var activeAgentCount: Int = 0
     var waitingAgentCount: Int = 0
     var runningScriptNames: [String] = []
@@ -29,6 +27,7 @@ struct RightPaneToolbar: View {
     var deviceActions: AnyView?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var previewHovered = false
     @State private var newScriptHovered = false
 
@@ -76,8 +75,8 @@ struct RightPaneToolbar: View {
                 }
             }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 4)
+        .padding(.leading, scale.space[2])
+        .padding(.trailing, scale.space[1])
         .frame(height: 34)
         // Flush, not a `paneBand`: this row is the pane's chrome, and reads
         // as the counterpart to the center pane's toolbar. The floating
@@ -102,7 +101,7 @@ struct RightPaneToolbar: View {
                 scheduleCount: scheduleCount,
                 schedulesPaused: schedulesPaused
             ))
-            .font(.system(size: 10.5, design: .monospaced))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-muted"))
             .lineLimit(1)
             .truncationMode(.middle)
@@ -111,15 +110,9 @@ struct RightPaneToolbar: View {
 
     @ViewBuilder
     private var trailing: some View {
-        switch RightPaneToolbarModel.trailing(for: tab, totalAdd: totalAdd, totalDel: totalDel) {
+        switch RightPaneToolbarModel.trailing(for: tab) {
         case .none:
             EmptyView()
-        case .diffTotals(let add, let del):
-            HStack(spacing: 6) {
-                Text("+\(add)").foregroundColor(theme.color("add"))
-                Text("−\(del)").foregroundColor(theme.color("del"))
-            }
-            .font(.system(size: 10.5, design: .monospaced))
         case .search:
             ToolbarBtn(icon: "search", tooltip: "Search files", action: onSearch)
         }
@@ -131,12 +124,12 @@ struct RightPaneToolbar: View {
                 HStack(spacing: 5) {
                     Icon(name: "globe", size: 11)
                     Text("Preview")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                 }
                 .foregroundStyle(theme.color(previewHovered ? "fg" : "fg-muted"))
-                .padding(.horizontal, 6)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
-                .background(previewHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .background(previewHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: scale.radius.small))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.toolbarControl)

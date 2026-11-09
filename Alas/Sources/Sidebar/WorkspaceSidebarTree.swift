@@ -38,6 +38,7 @@ struct WorkspaceSidebarTreeHost<Content: View>: View {
 /// Every row is its own element, so a lazy stack around the tree mounts only
 /// the rows on screen.
 struct WorkspaceSidebarTree<ProjectRow: View>: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     var model = WorkspaceSidebarTreeModel()
     var spaceID: String? = nil
@@ -86,10 +87,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 }
             case .formerWorkspace:
                 Label("Former Workspace", systemImage: "archivebox")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[1])
                     .contentShape(Rectangle())
                     .contextMenu {
                         Button("Delete all former checkouts...", role: .destructive) {
@@ -140,8 +141,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         icon: { state.sidebarIcon(for: $0) }
                     )
                     Text(workspace.name)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .tracking(-0.12)
+                        .font(scale.titleFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -152,7 +152,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             .help(workspace.name)
             ZStack {
                 Text("\(checkoutCount)")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
                     .monospacedDigit()
                     .opacity(hovering ? 0 : 1)
@@ -167,7 +167,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     )
                     .frame(width: 18, height: 18)
                     .background(plusHovering ? theme.color("bg-4") : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 .buttonStyle(.plain)
                 .sidebarHover { hovering in
@@ -180,26 +180,15 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
             .frame(width: 18, height: 18)
         }
-        // Own leading inset matches RepoGroupView's header `.padding(5)`, so
-        // both header kinds land at the same 13pt from the sidebar edge once
-        // the outer scroll-content padding (SidebarView.swift) is added.
-        .padding(.leading, 5)
-        .padding(.trailing, 5)
-        .padding(.vertical, 3)
-        // Matches RepoGroupView's header: same radius, same hover fill, and
-        // accent-soft for selection rather than the pre-E1 bg-4 plus an inset
-        // accent bar. A workspace and a repo sitting next to each other should
-        // announce selection the same way.
+        // Same horizontal inset as RepoGroupView's header, so both header kinds
+        // line up. A workspace is selectable, so unlike a repo header it keeps
+        // the fills a worktree row uses.
+        .padding(.horizontal, scale.space[1])
+        .padding(.vertical, scale.space[1])
         .background(
-            selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
-            in: RoundedRectangle(cornerRadius: 8)
+            selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-3").opacity(0.55) : .clear),
+            in: RoundedRectangle(cornerRadius: scale.radius.medium)
         )
-        .overlay {
-            if selected {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
-            }
-        }
         .contentShape(Rectangle())
         .sidebarHover { hovering in
             if hovering { hoveringWorkspaceID = workspace.id }
@@ -250,7 +239,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         Icon(name: checkout.archivedAt == nil ? "branch" : "archivebox", size: 12)
                         Text(checkout.branch)
                             // Matches WorktreeRowView's branch label.
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .font(selected ? scale.emphasisFont : scale.bodyFont)
                             .foregroundColor(theme.color(checkoutBranchColorToken(checkout: checkout)))
                             .lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 0)
@@ -267,19 +256,13 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 .buttonStyle(.plain)
                 ToolbarBtn(icon: "info.circle", tooltip: "Checkout details") { model.inspectedCheckout = checkout }
             }
-            .padding(.leading, 20)
-            .padding(.trailing, 4)
+            .padding(.leading, scale.space[4])
+            .padding(.trailing, scale.space[1])
             // Same selection and hover language as a worktree row.
             .background(
-                selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
-                in: RoundedRectangle(cornerRadius: 9)
+                selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-3").opacity(0.55) : .clear),
+                in: RoundedRectangle(cornerRadius: scale.radius.medium)
             )
-            .overlay {
-                if selected {
-                    RoundedRectangle(cornerRadius: 9)
-                        .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
-                }
-            }
             .sidebarHover { hovering in
                 if hovering { hoveringCheckoutID = checkout.id }
                 else if hoveringCheckoutID == checkout.id { hoveringCheckoutID = nil }
@@ -313,7 +296,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                                 Icon(name: "folder", size: 12)
                             }
                             Text(member.fallbackProjectName)
-                                .font(.system(size: 11.5, weight: focused ? .medium : .regular))
+                                .font(focused ? scale.emphasisFont : scale.bodyFont)
                                 .foregroundColor(theme.color(member.availability == .available ? "fg-muted" : "fg-dim"))
                                 .lineLimit(1)
                             Spacer(minLength: 0)
@@ -321,10 +304,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                                 Icon(name: "alert", size: 10, color: theme.color("del"))
                             }
                         }
-                        .padding(.leading, 48).padding(.trailing, 12)
+                        .padding(.leading, RepoGroupView.worktreeIndent + scale.space[5] + scale.space[2]).padding(.trailing, scale.space[3])
                         .frame(height: 27)
                         .contentShape(Rectangle())
-                        .background(focused ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                        .background(focused ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: scale.radius.small))
                     }
                     .buttonStyle(.plain)
                     .help(RemotePath.display(member.worktreePath))
@@ -334,7 +317,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         // Outer margin: trailing only, mirroring the workspace header above —
         // the leading side is already covered by the outer scroll-content
         // padding.
-        .padding(.trailing, 6)
+        .padding(.trailing, scale.space[1])
     }
 }
 

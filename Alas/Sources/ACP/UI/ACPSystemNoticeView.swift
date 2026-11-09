@@ -4,6 +4,7 @@ import SwiftUI
 /// Muted single-line aside (e.g. "Agent disconnected.", "Blocked write
 /// outside worktree: …"). Dashed bordered tag for visual lightness.
 struct ACPSystemNoticeView: View {
+    @Environment(\.designScale) private var scale
     let text: String
     @Environment(\.theme) private var theme
     var body: some View {
@@ -24,21 +25,21 @@ struct ACPSystemNoticeView: View {
     }
 
     private var notice: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: iconName)
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
             Text(text)
-                .font(.system(size: 11.5).italic())
+                .font(scale.metaFont.italic())
                 .foregroundStyle(theme.color("fg-faint"))
                 .textSelection(.enabled)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
         )
     }
@@ -57,35 +58,36 @@ struct ACPSystemNoticeView: View {
 /// A goal set or cleared, in the same chrome as `PromptCardRow`'s Ship and
 /// Review cards. The objective wraps in full, so there is nothing to disclose.
 private struct ACPGoalEventCard: View {
+    @Environment(\.designScale) private var scale
     let isSet: Bool
     let objective: String
     @Environment(\.theme) private var theme
 
     var body: some View {
         let tint = isSet ? "goal" : "fg-muted"
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Image(systemName: isSet ? "target" : "xmark")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color(tint))
                 .frame(width: 18, height: 18)
-                .background(theme.color(tint).opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+                .background(theme.color(tint).opacity(0.16), in: RoundedRectangle(cornerRadius: scale.radius.small))
             Text(isSet ? "Goal set" : "Goal cleared")
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-faint"))
                 .fixedSize()
-                .padding(.top, 2)
+                .padding(.top, scale.space[0])
             Text(objective)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color(isSet ? "fg" : "fg-muted"))
                 .textSelection(.enabled)
-                .padding(.top, 1)
+                .padding(.top, scale.space[0])
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         .accessibilityElement(children: .combine)
     }
 }
@@ -137,6 +139,7 @@ struct ACPFailureIncidentActions {
 /// A failure the agent reported, in the notice style, with the recovery actions
 /// the adapter listed and this surface can run.
 struct ACPFailureIncidentCard: View {
+    @Environment(\.designScale) private var scale
     let incident: ACPFailureIncident
     let actions: ACPFailureIncidentActions
     @State private var context: ACPFailureActionContext
@@ -152,41 +155,41 @@ struct ACPFailureIncidentCard: View {
 
     var body: some View {
         let presentation = ACPFailureIncidentPresentation.make(incident, context: context, isActiveRetry: isActiveRetry)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                 Image(systemName: incident.record.severity == .error ? "exclamationmark.octagon" : "exclamationmark.triangle")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(tint(presentation.tone))
                 Text(presentation.title)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color(presentation.tone == .muted ? "fg-faint" : "fg"))
                     .textSelection(.enabled)
                 Spacer(minLength: 0)
             }
             Text("\(presentation.categoryLabel) · \(presentation.severityLabel)")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
             if let details = presentation.details {
                 Text(details)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color(presentation.tone == .muted ? "fg-faint" : "fg-muted"))
                     .textSelection(.enabled)
             }
             if !presentation.actions.isEmpty {
-                HStack(spacing: 10) {
+                HStack(spacing: scale.space[2]) {
                     ForEach(presentation.actions, id: \.self) { action in
                         Button(action.title) { run(action) }
                             .buttonStyle(.borderless)
-                            .font(.system(size: 11.5))
+                            .font(scale.metaFont)
                     }
                 }
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
         )
         .onReceive(actions.changes) {
@@ -220,23 +223,24 @@ struct ACPFailureIncidentCard: View {
 /// unrecognized (including `_`-prefixed) severity falls back to the
 /// `info` style per spec.
 struct ACPSessionNoticeBanner: View {
+    @Environment(\.designScale) private var scale
     let notice: ACPSessionNotice
     let onDismiss: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Image(systemName: iconName)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(accentColor)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 2) {
+                .padding(.top, scale.space[0])
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text(notice.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 if let description = notice.description, !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-muted"))
                 }
             }
@@ -244,20 +248,20 @@ struct ACPSessionNoticeBanner: View {
             Spacer(minLength: 0)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(.ultraThinMaterial)
         .background(accentColor.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(accentColor.opacity(0.35), lineWidth: 0.75)
         )
-        .padding(.bottom, 6)
+        .padding(.bottom, scale.space[2])
     }
 
     private var accentColor: Color {

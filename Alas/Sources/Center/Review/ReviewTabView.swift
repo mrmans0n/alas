@@ -101,6 +101,7 @@ enum ReviewTabBranchContext {
 }
 
 struct ReviewTabView: View {
+    @Environment(\.designScale) private var scale
     let worktree: Worktree
     let tabState: ReviewPRTabState
     let appState: AppState
@@ -154,13 +155,13 @@ struct ReviewTabView: View {
         .overlay(alignment: .bottom) {
             if let msg = errorMessage {
                 Text(msg)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
                     .background(Color.red.opacity(0.85))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .padding(.bottom, 12)
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .padding(.bottom, scale.space[3])
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .animation(.easeInOut(duration: 0.2), value: errorMessage)
             }
@@ -371,26 +372,26 @@ struct ReviewTabView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Icon(name: "list.bullet.rectangle.portrait.fill", size: 14, color: theme.color("accent"))
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 let titleText = tabState.title.isEmpty
                     ? "\(tabState.provider.reviewRequestLabel) Review"
                     : tabState.title
                 Text(titleText)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 if let summary = session?.summary, summary.fileCount > 0 {
-                    HStack(spacing: 6) {
+                    HStack(spacing: scale.space[2]) {
                         Text("\(summary.fileCount) files")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(scale.captionFont)
                             .foregroundColor(theme.color("fg-dim"))
                         Text("+\(summary.totalAdditions)")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(scale.caption.font(design: .monospaced))
                             .foregroundColor(theme.color("add"))
                         Text("-\(summary.totalDeletions)")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(scale.caption.font(design: .monospaced))
                             .foregroundColor(theme.color("del"))
                     }
                 }
@@ -445,8 +446,8 @@ struct ReviewTabView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .lspServerLeases(
             lspLeases,
@@ -464,11 +465,11 @@ struct ReviewTabView: View {
             layoutButton(.split, systemName: "rectangle.split.2x1")
             layoutButton(.stacked, systemName: "rectangle.split.1x2")
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
     }
@@ -479,11 +480,11 @@ struct ReviewTabView: View {
             diffPreferences.layoutMode.wrappedValue = mode
         } label: {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
                 .background(active ? theme.color("bg-1") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(mode.title)
@@ -497,11 +498,11 @@ struct ReviewTabView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
                 .frame(width: 26, height: 24)
                 .background(isActive ? theme.color("accent-soft") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -786,23 +787,23 @@ struct ReviewTabView: View {
     }
 
     private func stateView(title: String, detail: String?, color: Color) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             if isLoading {
                 Spinner()
                     .frame(width: 18, height: 18)
             }
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(color)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

@@ -32,7 +32,7 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint", "diffPatch", "planFile", "sessionFailure", "agentFileChangeReport", "permissionPresentation", "questionCustomAnswer", "recommendedConfigValue", "commandPresentation", "loadReplayEnd", "promptSuggestions"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
@@ -42,6 +42,10 @@ struct ACPConnectionTests {
             #expect(meta["agentFileChangeReport"] as? [String: Int] == ["version": 1])
             #expect(meta["permissionPresentation"] as? [String: Int] == ["version": 1])
             #expect(meta["questionCustomAnswer"] as? [String: Int] == ["version": 1])
+            #expect(meta["recommendedConfigValue"] as? [String: Int] == ["version": 1])
+            #expect(meta["commandPresentation"] as? [String: Int] == ["version": 1])
+            #expect(meta["loadReplayEnd"] as? [String: Int] == ["version": 1])
+            #expect(meta["promptSuggestions"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -71,6 +75,35 @@ struct ACPConnectionTests {
         }
         let outcome = try await ACPConnection(client: mock).initialize()
         #expect(outcome.settlesAtResult == supported)
+    }
+
+    @Test("a neutral version contract is expected only when advertised", arguments: ["loadReplayEnd", "promptSuggestions"], [
+        (#"{"version":1}"#, true),
+        (#"{"version":2}"#, true),
+        (#"{"version":0}"#, false),
+        ("true", false),
+    ])
+    func neutralVersionNegotiation(key: String, contract: (advertisement: String, supported: Bool)) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"\#(key)":\#(contract.advertisement)}}"#.utf8)
+        }
+        let outcome = try await ACPConnection(client: mock).initialize()
+        let supported = key == "loadReplayEnd" ? outcome.supportsLoadReplayEnd : outcome.supportsPredictedPrompt
+        #expect(supported == contract.supported)
+    }
+
+    @Test("the agent's answer names the prompt that asked; other forms answer nothing", arguments: [
+        (#"{"promptSuggestions":{"suggestions":[{"text":"  "},{"text":" Run the tests "}],"id":"p1"}}"#, ACPPredictedPrompt.Answer(id: "p1", text: "Run the tests")),
+        (#"{"promptSuggestions":{"suggestions":[],"id":"p1"}}"#, ACPPredictedPrompt.Answer(id: "p1", text: nil)),
+        (#"{"promptSuggestions":{"suggestions":[{"text":"Run the tests"}]}}"#, nil),
+        (#"{"promptSuggestions":{"suggestions":[]}}"#, nil),
+        (#"{"promptSuggestions":{"id":"p1"}}"#, nil),
+        (#"{"loadReplayEnd":{"version":1,"id":"p1"}}"#, nil),
+    ] as [(String, ACPPredictedPrompt.Answer?)])
+    func predictedPromptAnswer(meta: String, expected: ACPPredictedPrompt.Answer?) throws {
+        let info = try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data(#"{"_meta":\#(meta)}"#.utf8))
+        #expect(ACPPredictedPrompt.answer(in: .sessionInfoUpdate(info)) == expected)
     }
 
     @Test("hook review requires managed launch, verified release and neutral capability", arguments: [
@@ -330,7 +363,8 @@ struct ACPConnectionTests {
         connection.codexHooksReviewEnabled = true
         try await connection.initialize()
         if withToken { connection.codexHooksReviewToken = "reviewed" }
-        _ = try await connection.prompt(sessionId: "s", blocks: [], fileChangeReportRequestId: requestId)
+        _ = try await connection.prompt(sessionId: "s", blocks: [], fileChangeReportRequestId: requestId,
+                                        predictedPromptRequestID: requestId.map { "prediction-\($0)" })
         let params = try #require(mock.sent.last(where: { $0.method == "session/prompt" })?.params)
         let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
         let meta = json["_meta"] as? [String: Any]
@@ -338,8 +372,10 @@ struct ACPConnectionTests {
             let request = try #require(meta?["agentFileChangeReportRequest"] as? [String: Any])
             #expect(request["version"] as? Int == 1)
             #expect(request["requestId"] as? String == requestId)
+            #expect(meta?["promptSuggestions"] as? [String: String] == ["id": "prediction-\(requestId)"])
         } else {
             #expect(meta?["agentFileChangeReportRequest"] == nil)
+            #expect(meta?["promptSuggestions"] == nil)
         }
         #expect((meta?["codexHooks"] as? [String: String]) == (withToken ? ["reviewToken": "reviewed"] : nil))
         #expect((meta == nil) == (requestId == nil && !withToken))

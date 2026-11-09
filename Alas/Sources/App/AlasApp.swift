@@ -41,6 +41,9 @@ struct AlasApp: App {
         // Applies the AppKit menu-crash workaround on the affected OS, and
         // is a no-op everywhere else; see SystemMenuItems.swift.
         AppKitMenuInjection.applyOptOut()
+        #if DEBUG
+        DesignCaptureBridge.install()
+        #endif
         let appState: AppState
         if Self.isRunningUnitTests {
             appState = AppState()
@@ -95,6 +98,7 @@ struct AlasApp: App {
 
         Window("Settings", id: "settings") {
             SettingsWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -102,6 +106,7 @@ struct AlasApp: App {
 
         Window("Commit Prompt", id: "commit-prompt-editor") {
             CommitPromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -109,6 +114,7 @@ struct AlasApp: App {
 
         Window("Review Request Prompt", id: "review-request-prompt-editor") {
             ReviewRequestPromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -116,6 +122,7 @@ struct AlasApp: App {
 
         Window("Merge: Resolve All Prompt", id: "merge-bulk-prompt-editor") {
             MergeBulkResolvePromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -123,6 +130,7 @@ struct AlasApp: App {
 
         Window("Merge: Single-File Prompt", id: "merge-single-prompt-editor") {
             MergeSingleResolvePromptEditorWindow(state: state)
+                .environment(\.designScale, .resolved(for: state.config.density))
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -547,3 +555,40 @@ struct AlasApp: App {
         #endif
     }
 }
+
+#if DEBUG
+/// Design captures open dialogs without clicking: scripts/design/capture.sh
+/// posts this distributed notification with a dialog name, and the bridge
+/// reposts the app's own notification for it. Debug builds only.
+enum DesignCaptureBridge {
+    static let notification = Notification.Name("io.nlopez.alas.dev.capture.open")
+
+    static func install() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: notification, object: nil, queue: .main
+        ) { note in
+            guard let target = note.object as? String else { return }
+            if target.hasPrefix("settings:") {
+                let section = SettingsSection(rawValue: String(target.dropFirst("settings:".count)))
+                NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+            } else if let name = localNotification(for: target) {
+                NotificationCenter.default.post(name: name, object: nil)
+            }
+        }
+    }
+
+    static func localNotification(for target: String) -> Notification.Name? {
+        switch target {
+        case "new-project": .alasCreateProject
+        case "new-worktree": .alasNewWorktree
+        case "repo-selector": .alasOpenRepoSelector
+        case "review-target": .alasOpenReviewPalette
+        case "run-script": .alasOpenRunScriptPalette
+        case "agent-launcher": .alasOpenAgentLauncher
+        case "file-search": .alasOpenSearch
+        case "settings": .alasOpenSettings
+        default: nil
+        }
+    }
+}
+#endif

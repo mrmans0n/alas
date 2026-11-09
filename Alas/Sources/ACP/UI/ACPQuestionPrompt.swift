@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPQuestionPrompt: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let onRespond: (ACPQuestionResponse) -> Void
     @Environment(\.theme) private var theme
@@ -25,9 +26,9 @@ struct ACPQuestionPrompt: View {
                 startPoint: .top, endPoint: .bottom
             )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
         .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
@@ -36,25 +37,25 @@ struct ACPQuestionPrompt: View {
 
     @ViewBuilder
     private func header(_ params: ACPQuestionRequestParams) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             ZStack {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(theme.color("accent").opacity(0.18))
                 Image(systemName: "questionmark.bubble")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("accent"))
             }
             .frame(width: 18, height: 18)
 
             Text("Question")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.6)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("accent"))
 
             if let title = params.title, !title.isEmpty {
                 Text("· \(title)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(theme.color("fg-faint"))
@@ -65,26 +66,26 @@ struct ACPQuestionPrompt: View {
             QuestionPendingPulse()
                 .frame(width: 6, height: 6)
             Text("Awaiting input")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("accent"))
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 
     @ViewBuilder
     private func questionBody(_ params: ACPQuestionRequestParams) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             ForEach(params.questions) { question in
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     Text(question.prompt)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: scale.space[2]) {
                         ForEach(question.options) { option in
                             optionRow(option: option, question: question)
                         }
@@ -92,7 +93,7 @@ struct ACPQuestionPrompt: View {
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 12)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
     }
 
     @ViewBuilder
@@ -101,25 +102,25 @@ struct ACPQuestionPrompt: View {
         Button {
             toggle(option: option, for: question)
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 13))
+                    .font(scale.bodyFont)
                     .foregroundStyle(selected ? theme.color("accent") : theme.color("fg-faint"))
                     .frame(width: 16)
                 Text(option.label)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? theme.color("accent").opacity(0.12) : theme.color("bg-0").opacity(0.45))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(selected ? theme.color("accent").opacity(0.5) : theme.color("line"), lineWidth: 0.5)
             )
         }
@@ -129,7 +130,7 @@ struct ACPQuestionPrompt: View {
     @ViewBuilder
     private func actionRow(_ params: ACPQuestionRequestParams) -> some View {
         let answer = Self.answeredResponse(for: params, selection: selection)
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Button("Skip") {
                 onRespond(.init(outcome: .skipped(reason: nil)))
             }
@@ -150,7 +151,7 @@ struct ACPQuestionPrompt: View {
             .buttonStyle(QuestionPrimaryButtonStyle(theme: theme, disabled: answer == nil))
             .disabled(answer == nil)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.55))
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
@@ -188,33 +189,35 @@ struct ACPQuestionPrompt: View {
 }
 
 private struct QuestionPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.designScale) private var scale
     let theme: Theme
     let disabled: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11.5, weight: .semibold))
-            .padding(.horizontal, 12)
+            .font(scale.meta.font(weight: .semibold))
+            .padding(.horizontal, scale.space[3])
             .frame(height: 26)
             .background(theme.color("accent").opacity(disabled ? 0.16 : (configuration.isPressed ? 0.78 : 0.95)))
             .foregroundStyle(disabled ? theme.color("fg-faint") : Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 
 private struct QuestionSecondaryButtonStyle: ButtonStyle {
+    @Environment(\.designScale) private var scale
     let theme: Theme
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11.5, weight: .medium))
-            .padding(.horizontal, 10)
+            .font(scale.meta.font(weight: .medium))
+            .padding(.horizontal, scale.space[2])
             .frame(height: 26)
             .background(theme.color("bg-0").opacity(configuration.isPressed ? 0.8 : 0.55))
             .foregroundStyle(theme.color("fg-muted"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
     }

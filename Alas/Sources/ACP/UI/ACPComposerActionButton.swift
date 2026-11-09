@@ -17,6 +17,7 @@ struct ACPComposerActionButton: View {
     var showsSchedule = true
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var customScheduleDate = Date()
     @State private var showsCustomSchedule = false
 
@@ -71,7 +72,8 @@ struct ACPComposerActionButton: View {
         }
         .capsuleSurface(
             foreground: theme.color("bg-0"),
-            fill: theme.color("accent")
+            fill: theme.color("accent"),
+            cornerRadius: scale.radius.medium
         )
         .popover(isPresented: $showsCustomSchedule) {
             VStack(alignment: .leading, spacing: 12) {
@@ -96,7 +98,7 @@ struct ACPComposerActionButton: View {
                     .disabled(customScheduleDate <= Date())
                 }
             }
-            .padding(16)
+            .padding(scale.space[4])
             .frame(width: 320)
         }
     }
@@ -107,19 +109,19 @@ struct ACPComposerActionButton: View {
         Button(action: onPrimary) {
             HStack(spacing: 5) {
                 Image(systemName: "stop.fill")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(scale.caption.font(weight: .bold))
                 Text("Stop")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
             }
             .foregroundStyle(theme.color("del"))
-            .padding(.horizontal, 11)
+            .padding(.horizontal, scale.space[3])
             .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
-                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("del").opacity(0.15))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
             )
         }
@@ -151,10 +153,11 @@ struct ACPComposerActionButton: View {
         }
         .capsuleSurface(
             foreground: theme.color("fg"),
-            fill: theme.color("bg-3")
+            fill: theme.color("bg-3"),
+            cornerRadius: scale.radius.medium
         )
         .overlay(
-            RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 1)
         )
     }
@@ -168,11 +171,11 @@ struct ACPComposerActionButton: View {
     private func primaryHalf(title: String, divider: Color) -> some View {
         HStack(spacing: 5) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 12, weight: .bold))
+                .font(scale.meta.font(weight: .bold))
             Text(title)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, scale.space[3])
         .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
         .contentShape(Rectangle())
         .overlay(alignment: .trailing) { segmentDivider(divider) }
@@ -198,7 +201,7 @@ struct ACPComposerActionButton: View {
             content()
         } label: {
             Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
+                .font(scale.glyphFont)
                 .padding(.horizontal, ACPComposerActionButtonMetrics.chevronHorizontalPadding)
                 .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
                 .contentShape(Rectangle())
@@ -252,10 +255,10 @@ struct ACPComposerActionButton: View {
     private var badgeOverlay: some View {
         if queueBadgeCount > 0 {
             Text("\(queueBadgeCount)")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(scale.glyph.font(weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(theme.color("bg-0"))
-                .padding(.horizontal, 4)
+                .padding(.horizontal, scale.space[1])
                 .frame(
                     minWidth: ACPComposerActionButtonMetrics.badgeMinWidth,
                     minHeight: ACPComposerActionButtonMetrics.badgeMinHeight
@@ -273,12 +276,12 @@ private extension View {
     /// and a single foreground style inherited by both. Neither half carries a
     /// background or a color of its own, so they cannot drift out of alignment
     /// or out of tint.
-    func capsuleSurface(foreground: Color, fill: Color) -> some View {
+    func capsuleSurface(foreground: Color, fill: Color, cornerRadius: CGFloat) -> some View {
         foregroundStyle(foreground)
             .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
                 fill,
-                in: RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+                in: RoundedRectangle(cornerRadius: cornerRadius)
             )
     }
 }

@@ -13,6 +13,7 @@ import SwiftUI
 /// and folded into the row's equality token; this view holds no state of
 /// its own, so a mounted row and the store can never disagree.
 struct ACPToolCallGroupHeaderRow: View {
+    @Environment(\.designScale) private var scale
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
     /// Earlier members left out of an automatically expanded live run.
@@ -34,33 +35,42 @@ struct ACPToolCallGroupHeaderRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             toggle
             if hiddenMemberCount > 0 {
                 // Expanding explicitly lifts the live cap (see
                 // `ACPToolCallGroupExpansionSeeds.memberLimit`).
                 Button("Show \(hiddenMemberCount) earlier") { onToggle(true) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .fixedSize()
             }
         }
     }
 
+    /// As `ACPTranscriptCoreTextRowView.addGroupHeader` draws it.
+    private var labelText: Text {
+        guard let failure = summary.failureLabel else { return Text(verbatim: summary.label) }
+        let del = theme.color("del")
+        let glyph = Text(Image(systemName: "xmark")).font(scale.glyph.font(weight: .bold)).foregroundStyle(del)
+        let before = summary.labelBeforeFailure + ACPToolCallGroupSummary.failureSeparator
+        return Text("\(Text(verbatim: before))\(glyph) \(Text(verbatim: failure).foregroundStyle(del))")
+    }
+
     private var toggle: some View {
         Button {
             onToggle(!expanded)
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: summary.iconSystemName)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .frame(width: 16)
                     .foregroundStyle(theme.color("fg-faint"))
                     .accessibilityHidden(true)
-                Text(summary.label)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.color("fg-faint"))
+                labelText
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-muted"))
                     // Rolls the digits instead of snapping them.
                     .contentTransition(.numericText(value: Double(summary.count)))
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
@@ -68,7 +78,7 @@ struct ACPToolCallGroupHeaderRow: View {
                     .truncationMode(.tail)
                     .acpNarrationShimmer(isActive: summary.isLive)
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9))
+                    .font(scale.glyph.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
                     .accessibilityHidden(true)
                 Spacer(minLength: 0)
@@ -78,6 +88,8 @@ struct ACPToolCallGroupHeaderRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
+        // The failure glyph would otherwise be read by its symbol name.
+        .accessibilityLabel(summary.label)
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     }
 }
@@ -87,6 +99,7 @@ struct ACPToolCallGroupHeaderRow: View {
 /// as one visual unit while each card keeps an independent row identity
 /// and measured frame.
 struct ACPToolCallGroupMemberRow<Content: View>: View {
+    @Environment(\.designScale) private var scale
     @ViewBuilder let content: () -> Content
 
     init(@ViewBuilder content: @escaping () -> Content) {
@@ -97,14 +110,16 @@ struct ACPToolCallGroupMemberRow<Content: View>: View {
         ACPToolCallGroupLane {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .acpInsetsProse(by: 7 + ACPTranscriptCoreTextRowView.laneBarWidth + ACPTranscriptCoreTextRowView.laneSpacing)
         }
-        .padding(.leading, 7)
+        .padding(.leading, scale.space[2])
     }
 }
 
 /// The shared bar + indent that marks a row as part of a tool-call bundle.
 /// Factored out so members (and subagent rows) line up exactly.
 struct ACPToolCallGroupLane<Content: View>: View {
+    @Environment(\.designScale) private var scale
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
 
@@ -113,11 +128,11 @@ struct ACPToolCallGroupLane<Content: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: scale.space[3]) {
             Rectangle()
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
-                .padding(.vertical, 2)
+                .padding(.vertical, scale.space[0])
             content()
         }
     }

@@ -87,9 +87,11 @@ struct AgentTabView: View {
     @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
     var disabledReason: (AgentSidebarRow) -> String? = { _ in nil }
 
+    @Environment(\.designScale) private var scale
+
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: scale.space[2]) {
                 if rollup.rows.isEmpty {
                     AgentSidebarEmptyState()
                 } else {
@@ -97,8 +99,8 @@ struct AgentTabView: View {
                     section(title: "History", rows: rollup.history)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 12)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[3])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

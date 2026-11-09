@@ -44,6 +44,7 @@ struct RunTabView: View {
     let worktree: Worktree
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var scripts: [RunScript] = []
     @State private var scriptCatalogError: String?
     @State private var activeWorktreeID: String?
@@ -299,31 +300,31 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             Icon(name: "play", size: 22, color: theme.color("fg-faint"))
             Text("No run scripts yet")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text("Add a script to \(RunScriptStore.repoScriptsRelativeDir) to build, test, or serve this worktree.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, scale.space[4])
         .accessibilityIdentifier("run-tab-empty-state")
     }
 
     private func catalogErrorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Icon(name: "exclamationmark.triangle", size: 13, color: theme.color("warn"))
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
+                .padding(.top, scale.space[0])
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text("Couldn’t refresh run scripts")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
                 Text(message)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(2)
             }
@@ -331,39 +332,39 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             Button("Retry") { refreshScriptsFromControl() }
             .controlSize(.small)
         }
-        .padding(10)
-        .background(theme.color("warn").opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .padding(scale.space[3])
+        .background(theme.color("warn").opacity(0.10), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("warn").opacity(0.25), lineWidth: 1)
         )
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[2])
     }
 
     private func errorState(_ message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             Icon(name: "exclamationmark.triangle", size: 22, color: theme.color("warn"))
             Text("Couldn’t Load Run Scripts")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
             Button("Retry") { refreshScriptsFromControl() }
             .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, scale.space[4])
         .accessibilityIdentifier("run-tab-error-state")
     }
 
     private var historySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             HStack {
                 Text("HISTORY")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
                 Spacer()
@@ -373,42 +374,42 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                         .controlSize(.small)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
 
             if let historyError {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     Text(historyError)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("warn"))
                     Button("Retry") { Task { await loadHistory() } }
                         .controlSize(.small)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, scale.space[3])
             } else if historyPage.entries.isEmpty {
                 Text("No completed runs yet")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
             } else {
                 ForEach(historyPage.entries) { entry in
                     Button {
                         state.openRunReport(worktreeID: worktree.id, runID: entry.id)
                     } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: scale.space[2]) {
                             RunStatusDot(tone: historyTone(entry.outcome), isActive: false)
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: scale.space[0]) {
                                 Text(entry.scriptName)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(scale.emphasisFont)
                                 Text(RunTabPresentation.historyDetail(entry, now: now))
-                                    .font(.system(size: 10))
+                                    .font(scale.caption.font(weight: .regular))
                                     .foregroundColor(theme.color("fg-faint"))
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.vertical, scale.space[2])
+                        .contentShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open report for \(entry.scriptName): \(RunTabPresentation.historyDetail(entry, now: now))")
@@ -421,7 +422,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                     .disabled(historyPageIndex == 0)
                     Spacer()
                     Text(historyRange)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                     Spacer()
                     Button("Next") {
@@ -430,10 +431,10 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                     }
                     .disabled((historyPageIndex + 1) * 20 >= historyPage.totalCount)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, scale.space[3])
             }
         }
-        .padding(.top, 12)
+        .padding(.top, scale.space[3])
     }
 
     private var historyRange: String {
@@ -493,16 +494,17 @@ struct RunScopeHeader: View {
     let title: String
     let count: Int
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
             Text("\(count)")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5).padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                 .background(theme.color("seg-pill-bg"))
                 .clipShape(Capsule())
                 .foregroundColor(theme.color("fg-muted"))
@@ -521,6 +523,7 @@ struct RunRowView: View {
     var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
     @State private var menuHovered = false
 
@@ -528,11 +531,11 @@ struct RunRowView: View {
         let status = Text(presentation.statusLabel).foregroundColor(toneColor)
         let detail = Text(presentation.detail.map { " · \($0)" } ?? "")
             .foregroundColor(theme.color("fg-faint"))
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 RunStatusDot(tone: presentation.tone, isActive: presentation.isActive)
                 Text(presentation.name)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
@@ -547,34 +550,34 @@ struct RunRowView: View {
             }
 
             Text("\(status)\(detail)")
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 13)
+                .padding(.leading, RunStatusDot.size + scale.space[2])
 
             if let location = presentation.locationLabel {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     Icon(name: "terminal", size: 9, color: theme.color("fg-faint"))
                     Text(location)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
-                .padding(.leading, 13)
+                .padding(.leading, RunStatusDot.size + scale.space[2])
             }
 
             if let conflict = presentation.conflictLabel {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     Icon(name: "exclamationmark.triangle", size: 9, color: theme.color("warn"))
                     Text(conflict)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(2)
                 }
-                .padding(.leading, 13)
+                .padding(.leading, RunStatusDot.size + scale.space[2])
             }
 
             if hasSecondaryActions {
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     ForEach(presentation.actions, id: \.self) { action in
                         switch action {
                         case .openTerminal, .showReport:
@@ -590,14 +593,14 @@ struct RunRowView: View {
                         }
                     }
                 }
-                .padding(.leading, 7)
-                .padding(.top, 2)
+                .padding(.leading, scale.space[2])
+                .padding(.top, scale.space[0])
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .rightPaneCardChrome(accent: toneColor, isHovering: hovering)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .onHover { hovering = $0 }
         .help(presentation.locationDetail)
         .accessibilityElement(children: .contain)
@@ -652,10 +655,10 @@ struct RunRowView: View {
 
     private func actionButton(_ action: RunRowAction, prominent: Bool = false) -> some View {
         Button { onAction(action) } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 if case .openEndpoint = action {
                     Text(label(for: action))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Icon(name: "arrow.up.right", size: 10)
@@ -666,16 +669,16 @@ struct RunRowView: View {
                         color: theme.color(prominent && action != .stop ? "accent" : "fg-muted")
                     )
                     Text(label(for: action))
-                        .font(.system(size: 10.5, weight: prominent ? .medium : .regular))
+                        .font(scale.meta.font(weight: prominent ? .medium : .regular))
                         .lineLimit(1)
                 }
             }
             .foregroundStyle(theme.color(prominent && action != .stop ? "accent" : "fg-muted"))
-            .padding(.horizontal, 6)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 24)
             .background(
                 prominent ? theme.color(action == .stop ? "bg-3" : "accent-soft") : .clear,
-                in: RoundedRectangle(cornerRadius: 5)
+                in: RoundedRectangle(cornerRadius: scale.radius.medium)
             )
             .contentShape(Rectangle())
         }
@@ -733,15 +736,16 @@ private struct PluginProcessRowView: View {
     let stop: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var showsOutput = false
 
     var body: some View {
         let running = item.run.exit == nil
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[2]) {
                 RunStatusDot(tone: running ? .active : item.run.exit == 0 ? .success : .failure, isActive: running)
                 Text("\(item.pluginName) · \(item.run.process)")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -752,37 +756,40 @@ private struct PluginProcessRowView: View {
                 }
             }
             Text(running ? "Running" : "Exited \(item.run.exit ?? 0)")
-                .font(.system(size: 10.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
-                .padding(.leading, 13)
+                .padding(.leading, RunStatusDot.size + scale.space[2])
             Text(PluginArgv.display(item.run.command))
-                .font(.system(size: 10, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .padding(.leading, 13)
+                .padding(.leading, RunStatusDot.size + scale.space[2])
             DisclosureGroup("Output", isExpanded: $showsOutput) {
                 ScrollView {
                     Text(item.run.output.isEmpty ? "No output yet" : item.run.output)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg-muted"))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 200)
             }
-            .font(.system(size: 10.5))
-            .padding(.leading, 13)
+            .font(scale.metaFont)
+            .padding(.leading, RunStatusDot.size + scale.space[2])
         }
-        .padding(10)
+        .padding(scale.space[3])
         .rightPaneCardChrome(accent: theme.color(running ? "accent" : "fg-faint"), isHovering: false)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .accessibilityElement(children: .contain)
     }
 }
 
 private struct RunStatusDot: View {
+    /// Diameter; rows indent their detail lines by this plus the title spacing.
+    static let size: CGFloat = 7
+
     let tone: RunStatusTone
     let isActive: Bool
 
@@ -792,7 +799,7 @@ private struct RunStatusDot: View {
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 7, height: 7)
+            .frame(width: Self.size, height: Self.size)
             .opacity(isActive && pulsing ? 0.35 : 1)
             .animation(
                 isActive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,

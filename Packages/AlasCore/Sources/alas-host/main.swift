@@ -42,7 +42,8 @@ pairing link a Mac pastes into Add Peer.
 `alas-host peers` lists the Macs paired with this host and removes one,
 revoking its access, through the running host when one serves the profile.
 `peers add` pairs the running host with the Mac whose pairing link it is given,
-so this host's agents can delegate there. The two must reach each other.
+so this host's agents can delegate there, and nothing else: the Mac grants
+this host a token limited to delegated work. The two must reach each other.
 
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
@@ -242,6 +243,8 @@ var startRemote: (@MainActor () async -> Void)?
 var openSessions: HeadlessSessionPresenter?
 /// How this host's agents reach paired Macs; nil when Remote is off.
 var peerDelegation: HostPeerDelegation?
+/// How a host this one paired with inbound-only reaches its agents; nil when Remote is off.
+var peerRouteHost: PeerRouteHost?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
@@ -262,6 +265,7 @@ let peers = RemotePeerManager(
 peers.onRevokeDevice = { remote?.disconnectDevice($0) }
 host.coreContext.watchForRevokedPeers(of: peers)
 protocolServer.remotePeers = peers
+host.coreContext.delegationPeerRecordName = { serverId in peers.peers.first { $0.serverId == serverId }?.name }
 if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
         // Only the new id is written: keys this build does not model stay.
@@ -321,7 +325,9 @@ if let listen = config.hostRemoteListen {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
                 consoleCapabilities: (shells.isAvailable ? PeerConsoleCapability.headlessHost : []) + [PeerPortForwardCapability.v1],
-                hostCapabilities: host.servedCapabilities
+                // A Mac that paired here inbound-only can serve this host's
+                // agents over its own link, which no app asks of it.
+                hostCapabilities: host.servedCapabilities + [HostProtocolCapability.delegationReverseV1]
             )
         },
         signer: identityKey
@@ -339,7 +345,13 @@ if let listen = config.hostRemoteListen {
             publicKey: identityKey.publicKey
         )
     }
-    let delegation = HostPeerDelegation(links: peers)
+    peers.signRedeem = { identityKey.redeemProof(code: $0, serverId: $1) }
+    // Its tokens sit in a file its agents can read, and it shows no peer
+    // view, so a Mac it adds lets it delegate and nothing else.
+    peers.pairingScope = .delegation
+    // Before the links connect, so each offers the route it serves.
+    peerRouteHost = PeerRouteHost(links: peers, server: protocolServer)
+    let delegation = HostPeerDelegation(links: peers, routes: server)
     host.coreContext.delegationPeers = delegation.client
     peerDelegation = delegation
     server.pairsBackWithPeers = false
@@ -454,6 +466,7 @@ func stop() {
     tailscaleServe?.stop()
     openSessions?.peerConsoleHost?.shutdown()
     peerDelegation?.stop()
+    peerRouteHost?.stop()
     peers.disconnectAll()
     remote?.stop()
     keepAwake.update(enabled: false, serverRunning: false)

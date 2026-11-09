@@ -625,6 +625,20 @@ final class NativePeerSessions {
         hostFileBuffers[file]?.revert()
     }
 
+    /// Capture the owning peer so image paths never resolve on the viewing Mac.
+    func transcriptImageReader() -> ACPTranscriptImageReader {
+        guard let selectedWorktree, let host = selectedWorktreeGroup?.host, let hosts,
+              hosts.supportsTranscriptImages(serverId: selectedWorktree.serverId) else {
+            return ACPTranscriptImageReader(id: "unavailable") { _ in nil }
+        }
+        let serverId = selectedWorktree.serverId
+        return ACPTranscriptImageReader(id: "\(serverId):\(host.snapshot.worktree.id)") { source in
+            guard case .fileBytes(_, _, let data, _)? = await hosts.read(.transcriptImage(path: source), in: host, serverId: serverId)
+            else { return nil }
+            return data
+        }
+    }
+
     /// The selected worktree on a host that serves file bytes, whether or not a tab is open: only the host
     /// channel carries them.
     var hostBytesTarget: (serverId: String, worktree: PeerHostWorktree)? {
@@ -683,6 +697,30 @@ final class NativePeerSessions {
             pendingSessionId = nil
             sessionTabError = Self.peerUnavailableMessage
         }
+    }
+
+    /// Whether the selected session's agent misses an adapter its host can install.
+    func offersAdapterInstall(for issue: RemoteAgentIssue?) -> Bool {
+        guard let selectedSessionId, let row = selectedRow,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return false }
+        return Self.offersAdapterInstall(
+            agentID: row.agentId, issue: issue,
+            hostInstalls: federation.peerSupports(PeerAdapterInstallCapability.v1, serverId: id.serverId)
+        )
+    }
+
+    /// Only a missing adapter Alas manages is installable, and only by a host
+    /// that serves `installAdapter`.
+    nonisolated static func offersAdapterInstall(agentID: String, issue: RemoteAgentIssue?, hostInstalls: Bool) -> Bool {
+        hostInstalls && issue?.kind == "needsSetup" && ACPManagedAdapterDescriptor.descriptor(for: agentID) != nil
+    }
+
+    /// Asks the host to install the selected session's adapter; the outcome
+    /// arrives as the session's agent issue.
+    @discardableResult
+    func installAdapter() -> Bool {
+        routeWhileOnline { .installAdapter(sessionId: $0) }
     }
 
     var selectedRow: RemoteSessionSummary? {
@@ -1884,7 +1922,7 @@ final class NativePeerSessions {
             .commitDiffFailed(
                 sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), path: path,
                 reason: .unknown, message: nil)
-        case .file(let path), .fileBytes(let path, _):
+        case .file(let path), .fileBytes(let path, _), .transcriptImage(let path):
             .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
         case .fileHistory(let path): .fileHistoryFailed(sessionId: id, path: path, reason: .unknown, message: nil)
         }

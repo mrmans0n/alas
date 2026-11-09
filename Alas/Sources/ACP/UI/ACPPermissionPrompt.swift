@@ -61,6 +61,30 @@ struct ACPPermissionCardContent: Equatable {
         )
     }
 
+    init(permission: ACPV2InteractiveRequest.Permission, existingToolCall: ACPMessage.ToolCall? = nil,
+         worktreeRoot: String? = nil) {
+        let update = permission.subject?.toolCallUpdate
+        let title: String
+        if let update, case .value(let value) = update.title { title = value }
+        else if let subject = permission.subject, case .object(let fields) = subject.rawValue,
+                case .string(let command)? = fields["command"] { title = command }
+        else { title = permission.title }
+        let kind: String?
+        if let update, case .value(let value) = update.kind { kind = value }
+        else { kind = nil }
+        let diffs = existingToolCall.flatMap { row in
+            update?.toolCallID.utf8.elementsEqual(row.toolCallId.utf8) == true ? row.diffs : nil
+        } ?? []
+        let summary: String?
+        if let update, case .value(.object(let input)) = update.rawInput,
+           case .string(let command)? = input["command"] { summary = command }
+        else { summary = nil }
+        self.init(heading: permission.title, kind: kind, mcpServerName: nil, title: title, summary: summary,
+            reason: permission.description, defaultToNo: true,
+            options: permission.options.map { Option(optionId: $0.optionID, name: $0.name, kind: $0.kind, description: nil) },
+            diffSections: ACPToolCallPresentation.diffSections(diffs, status: "pending", worktreeRoot: worktreeRoot))
+    }
+
     init(payload: RemotePermissionPayload) {
         self.init(
             heading: payload.title,
@@ -221,8 +245,10 @@ private final class ACPPermissionCardContentCache {
 /// teal glow border, "Awaiting approval" pulse, body summary, sticky
 /// Accept/Reject action row.
 struct ACPPermissionCard: View {
+    @Environment(\.designScale) private var scale
     let content: ACPPermissionCardContent
     let onChoose: (ACPPermissionCardContent.Option) -> Void
+    var statusText: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -237,57 +263,56 @@ struct ACPPermissionCard: View {
                 startPoint: .top, endPoint: .bottom
             )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
+                .strokeBorder(theme.color("accent").opacity(0.8), lineWidth: 1)
         )
-        .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
-        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+        // On the light page the outline carries the card; a shadow only made it heavy.
+        .modifier(PermissionCardDarkElevation(theme: theme))
+        // Contains, not combines, so Accept and Reject stay separate buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(content.kind.map { "Permission request: \($0)" } ?? "Permission request")
     }
 
     /// Header is a short status row only. The long command / details live
     /// in `commandBody` so they don't fight the title for space.
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             ZStack {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(theme.color("accent").opacity(0.18))
                 Image(systemName: "hand.raised")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("accent"))
             }
             .frame(width: 18, height: 18)
 
-            Text("Permission")
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.6)
-                .textCase(.uppercase)
-                .foregroundStyle(theme.color("accent"))
-
+            // "Awaiting approval" is the card's one status label; the kind
+            // says what is being asked for.
             if let kind = content.kind {
-                Text("· \(kind)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-faint"))
+                Text(kind)
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-dim"))
             }
 
             if let server = content.mcpServerName {
                 Text("· via \(server)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-faint"))
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("fg-dim"))
             }
 
             Spacer(minLength: 6)
 
             PendingPulse()
                 .frame(width: 6, height: 6)
-            Text("Awaiting approval")
-                .font(.system(size: 10.5, weight: .semibold))
+            Text(statusText ?? "Awaiting approval")
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("accent"))
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 
@@ -298,13 +323,12 @@ struct ACPPermissionCard: View {
     /// generic "Allow this?" heading and its `description` renders as a
     /// reason line under the command summary.
     private var commandBody: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(content.heading ?? "Allow this?")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.3)
-                .foregroundStyle(theme.color("fg-faint"))
+                .font(scale.titleFont)
+                .foregroundStyle(theme.color("fg"))
             Text(content.title)
-                .font(.system(size: 12.5, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg"))
                 .lineSpacing(3)
                 .textSelection(.enabled)
@@ -312,27 +336,27 @@ struct ACPPermissionCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             ForEach(content.diffSections) { section in
                 ACPToolCallDiffSectionView(section: section, collapsedMaxLines: 15)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             if let summary = content.summary {
                 Text(summary)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineSpacing(2)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
                     .background(theme.color("bg-0").opacity(0.55))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             if let reason = content.reason {
                 Text(reason)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineSpacing(2)
                     .textSelection(.enabled)
@@ -340,7 +364,7 @@ struct ACPPermissionCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 12)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
     }
 
     private var actionRow: some View {
@@ -349,7 +373,7 @@ struct ACPPermissionCard: View {
             isVertical: content.options.contains { $0.description != nil },
             onChoose: onChoose
         )
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.55))
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
@@ -364,6 +388,7 @@ struct ACPPermissionCard: View {
 /// A request's options. Compact horizontal buttons, or, when `isVertical`,
 /// one option per line with its description text under it.
 struct ACPPermissionOptionList: View {
+    @Environment(\.designScale) private var scale
     let options: [ACPPermissionCardContent.Option]
     let defaultToNo: Bool
     let isVertical: Bool
@@ -373,16 +398,16 @@ struct ACPPermissionOptionList: View {
 
     var body: some View {
         if isVertical {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ForEach(options) { option in
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         HStack {
                             Spacer()
                             button(option)
                         }
                         if let description = option.description {
                             Text(description)
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-faint"))
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                                 .multilineTextAlignment(.trailing)
@@ -391,7 +416,7 @@ struct ACPPermissionOptionList: View {
                 }
             }
         } else {
-            HStack(spacing: 10) {
+            HStack(spacing: scale.space[2]) {
                 Spacer()
                 ForEach(options) { option in
                     button(option)
@@ -406,8 +431,24 @@ struct ACPPermissionOptionList: View {
     }
 }
 
+/// The card's accent glow and drop shadow, on dark themes only.
+private struct PermissionCardDarkElevation: ViewModifier {
+    let theme: Theme
+
+    func body(content: Content) -> some View {
+        if theme.darkMode {
+            content
+                .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
+                .acpElevation(darkMode: true)
+        } else {
+            content
+        }
+    }
+}
+
 /// One permission option as a button, styled by its kind.
 struct ACPPermissionOptionButton: View {
+    @Environment(\.designScale) private var scale
     let option: ACPPermissionCardContent.Option
     let defaultToNo: Bool
     let action: () -> Void
@@ -416,20 +457,24 @@ struct ACPPermissionOptionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: glyph)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: isDefaultStyled ? .semibold : .regular))
                 Text(option.name)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: isDefaultStyled ? .semibold : .medium))
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 26)
             .background(isDefaultStyled ? theme.color("accent") : theme.color("bg-3"))
             .foregroundStyle(isDefaultStyled ? theme.color("bg-0") : theme.color("fg"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            // The filled default needs no edge; the others get one that shows on both themes.
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isDefaultStyled ? theme.color("accent") : theme.color("line"), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
+                    .strokeBorder(
+                        isDefaultStyled ? theme.color("accent") : theme.color("fg-faint"),
+                        lineWidth: isDefaultStyled ? 0.5 : 1
+                    )
             )
             .opacity(isEnabled ? 1 : 0.45)
         }
@@ -464,6 +509,7 @@ struct ACPPermissionOptionButton: View {
 /// enablement comes from `ACPPlanReviewPresentation`; the options are the
 /// request's own.
 struct ACPPlanReviewCard: View {
+    @Environment(\.designScale) private var scale
     let review: ACPPlanReviewPresentation
     let options: [ACPPermissionCardContent.Option]
     let defaultToNo: Bool
@@ -475,14 +521,14 @@ struct ACPPlanReviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 planBody
                 if let label = review.fileLabel {
                     ACPPlanFileLine(label: label, path: review.filePath, onOpen: openAction)
                 }
             }
-            .padding(12)
-            VStack(alignment: .trailing, spacing: 6) {
+            .padding(scale.space[3])
+            VStack(alignment: .trailing, spacing: scale.space[2]) {
                 // Claude's long review labels need a line each.
                 ACPPermissionOptionList(
                     options: options, defaultToNo: defaultToNo,
@@ -492,40 +538,40 @@ struct ACPPlanReviewCard: View {
                 )
                 if review.isStale {
                     Text(ACPPlanReviewPresentation.staleNotice)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(12)
+            .padding(scale.space[3])
             .background(theme.color("bg-0").opacity(0.45))
         }
         .background(theme.color("bg-1").opacity(0.96))
-        .clipShape(.rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "checklist")
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 18, height: 18)
             Text("Plan review")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             if review.isOutOfTurn {
                 Text("· Not in a turn")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
             }
             Spacer(minLength: 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 
@@ -538,7 +584,7 @@ struct ACPPlanReviewCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(ACPPlanReviewPresentation.noPlanTextNotice)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
         }
     }

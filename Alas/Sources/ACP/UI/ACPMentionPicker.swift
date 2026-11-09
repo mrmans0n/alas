@@ -20,6 +20,7 @@ enum MentionPickerItem: Hashable {
 /// popover. Hosted inside an NSPanel (see `ACPMentionPickerPanel`) so it can
 /// float above the chat with proper key forwarding.
 struct ACPMentionPickerView: View {
+    @Environment(\.designScale) private var scale
     let worktreeRoot: URL
     var sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil
     let onPick: (URL) -> Void
@@ -75,9 +76,9 @@ struct ACPMentionPickerView: View {
         }
         .frame(width: Self.panelSize.width, height: Self.panelSize.height, alignment: .top)
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
@@ -128,13 +129,13 @@ struct ACPMentionPickerView: View {
     }
 
     private var search: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "at")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .focused($searchFocused)
                 .onChange(of: query) { _, _ in
                     scrollOnHighlightChange = false
@@ -144,27 +145,27 @@ struct ACPMentionPickerView: View {
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
     }
 
     @ViewBuilder
     private var scopeBar: some View {
         let scopes = offeredScopes
         if !scopes.isEmpty {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 ForEach(Array(scopes.enumerated()), id: \.element) { index, item in
                     let number = index + 1
                     Button { select(item) } label: {
                         Text(item.title)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .font(scale.captionFont)
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
                             .background(scope == item ? theme.color("accent").opacity(0.22) : theme.color("bg-2"))
                             .foregroundStyle(scope == item ? theme.color("accent") : theme.color("fg-faint"))
                             .clipShape(Capsule())
@@ -176,7 +177,7 @@ struct ACPMentionPickerView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10).padding(.bottom, 6)
+            .padding(.horizontal, scale.space[2]).padding(.bottom, scale.space[2])
         }
     }
 
@@ -199,34 +200,34 @@ struct ACPMentionPickerView: View {
         if let text {
             Divider().background(theme.color("line"))
             Text(text)
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.vertical, 5)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
         }
     }
 
     private var list: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                LazyVStack(alignment: .leading, spacing: scale.space[0]) {
                     if ranked.isEmpty {
                         Text(isIndexing ? "Indexing worktree…" : "No matches")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
-                            .padding(.horizontal, 10).padding(.vertical, 10)
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
                     } else {
                         ForEach(Array(ranked.enumerated()), id: \.element) { idx, item in
                             // Data-based id (the item), not the row position:
                             // a positional id freezes LazyVStack rows against
                             // the ranked list changing as you type.
-                            VStack(alignment: .leading, spacing: 1) {
+                            VStack(alignment: .leading, spacing: scale.space[0]) {
                                 if let header = groupHeader(at: idx) {
                                     Text(header)
-                                        .font(.system(size: 10, weight: .medium))
+                                        .font(scale.captionFont)
                                         .tracking(0.6)
                                         .foregroundStyle(theme.color("fg-faint"))
-                                        .padding(.horizontal, 10).padding(.top, idx == 0 ? 2 : 8)
+                                        .padding(.horizontal, scale.space[2]).padding(.top, idx == 0 ? 2 : 8)
                                 }
                                 switch item {
                                 case .file(let file): row(idx: idx, file: file)
@@ -238,7 +239,7 @@ struct ACPMentionPickerView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
             }
             .onPreferenceChange(HighlightedSymbolRowKey.self) { highlightedSymbolRow = $0 }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
@@ -270,23 +271,23 @@ struct ACPMentionPickerView: View {
     private func row(idx: Int, symbol: SymbolEntry) -> some View {
         let isOn = idx == highlight
         return Button { onPickSymbol(symbol, false) } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text(symbol.kind.badgeLetter)
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(scale.caption.font(weight: .bold))
                     .foregroundStyle(Color(nsColor: symbol.kind.badgeLabelColor))
                     .frame(width: 16, height: 16)
                     .background(Color(nsColor: symbol.kind.badgeBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 (Text(symbol.container.map { $0 + "." } ?? "").foregroundStyle(theme.color("fg-faint"))
                     + Text(symbol.kind.isCallable ? symbol.name + "()" : symbol.name).fontWeight(.semibold))
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .lineLimit(1)
                 if MentionSymbolRanking.isTestPath(symbol.relativePath) {
                     Text("test")
-                        .font(.system(size: 9.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
-                        .padding(.horizontal, 4)
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                        .padding(.horizontal, scale.space[1])
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 0) {
@@ -299,11 +300,11 @@ struct ACPMentionPickerView: View {
                         .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-dim"))
                         .fixedSize()
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
             }
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .background {
                 if isOn, symbolPreview != nil {
                     GeometryReader { proxy in
@@ -326,25 +327,25 @@ struct ACPMentionPickerView: View {
     private func row(idx: Int, session: ACPSessionMentionCandidate) -> some View {
         let isOn = idx == highlight
         return Button { onPickSession(session) } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: "bubble.left.and.bubble.right")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
                     .frame(width: 14)
                 Text(session.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                 Text("\(session.agentName) · \(session.worktreeName)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -364,26 +365,26 @@ struct ACPMentionPickerView: View {
         let parent = isAbsoluteQuery ? "" : (rel as NSString).deletingLastPathComponent
 
         Button { onPick(file) } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: file.hasDirectoryPath ? "folder" : "doc.text")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
                     .frame(width: 14)
                 Text(name)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(scale.meta.font(weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.color("fg"))
                 if !parent.isEmpty {
                     Text(parent)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

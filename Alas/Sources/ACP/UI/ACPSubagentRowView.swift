@@ -39,6 +39,7 @@ private extension ACPMessage {
 /// giving them transcript indices would corrupt every anchor, fork
 /// boundary and window calculation that maps an index to a parent message.
 struct ACPSubagentRowView: View {
+    @Environment(\.designScale) private var scale
     let descriptor: ACPSubagentRowDescriptor
     /// The live child transcript. Nil while the run has not been restored
     /// (a mirror snapshot, or a row from a session whose child rows were
@@ -118,7 +119,7 @@ struct ACPSubagentRowView: View {
 
     var body: some View {
         ACPToolCallGroupLane {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 header
                 if let lastError = run.lastError, state == .failed {
                     // Often the only explanation a failed child leaves
@@ -126,10 +127,10 @@ struct ACPSubagentRowView: View {
                     // its own — dropping it would make the failure
                     // permanently unexplained.
                     Text(lastError)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(3)
-                        .padding(.leading, 17)
+                        .padding(.leading, scale.space[4])
                 }
                 if expanded {
                     childTranscript
@@ -140,40 +141,40 @@ struct ACPSubagentRowView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: scale.space[0]) {
             headerLine
             if let observationCaption {
                 Text(observationCaption)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .padding(.leading, 17)
+                    .padding(.leading, scale.space[4])
             }
         }
     }
 
     private var headerLine: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
             Button {
                 toggleExpanded()
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: scale.space[2]) {
                     Image(systemName: "person.2")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                     Text(run.displayName)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-muted"))
                     Text(ACPSubagentRowPolicy.stateLabel(for: state))
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                     if let summary = ACPSubagentRowPolicy.summary(
                         task: run.task,
                         messageCount: run.messages.count
                     ) {
                         Text(summary)
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -182,7 +183,7 @@ struct ACPSubagentRowView: View {
                         Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
                     }
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9))
+                        .font(scale.glyphFont)
                         .foregroundStyle(theme.color("fg-faint"))
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
@@ -199,7 +200,7 @@ struct ACPSubagentRowView: View {
             ) {
                 Button("Cancel", action: onCancel)
                     .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .accessibilityLabel("Cancel subagent")
             }
@@ -217,10 +218,10 @@ struct ACPSubagentRowView: View {
     private var childTranscriptContent: some View {
         if run.messages.isEmpty {
             Text(state.isTerminal ? "No output." : "Waiting for output…")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
         } else {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 // Keyed by each row's own per-instance identity, not its
                 // array offset — replay recovery can insert a missing row
                 // in the middle of an already-expanded transcript, shifting
@@ -258,7 +259,7 @@ struct ACPSubagentRowView: View {
                         delegation: delegationBadge(for: message))
                 }
             }
-            .padding(.leading, 2)
+            .padding(.leading, scale.space[0])
         }
     }
 }
@@ -268,6 +269,7 @@ struct ACPSubagentRowView: View {
 /// code, minus the affordances that only make sense on a parent message
 /// (fork, quote, checkpoint restore, timestamps gutter).
 private struct ACPSubagentMessageRow: View {
+    @Environment(\.designScale) private var scale
     let stableId: String
     let message: ACPMessage
     let typography: ACPChatTypography
@@ -279,7 +281,7 @@ private struct ACPSubagentMessageRow: View {
 
     var body: some View {
         if let delegation {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 ACPSubagentDelegationBadgeView(badge: delegation)
                 content
             }
@@ -344,21 +346,22 @@ struct ACPSubagentDelegationBadge {
 }
 
 struct ACPSubagentDelegationBadgeView: View {
+    @Environment(\.designScale) private var scale
     let badge: ACPSubagentDelegationBadge
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "arrow.left.arrow.right")
-                .font(.system(size: 9))
+                .font(scale.glyphFont)
             if let caption = badge.caption {
                 Text(caption)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.captionFont)
             }
             if let action = badge.action {
                 Button(action.label, action: action.perform)
                     .buttonStyle(.plain)
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .underline()
             }
         }
@@ -371,6 +374,7 @@ struct ACPSubagentDelegationBadgeView: View {
 /// attachment-only prompt is a real shape (a screenshot with no words),
 /// and it would otherwise render as an empty row.
 private struct ACPSubagentPromptRow: View {
+    @Environment(\.designScale) private var scale
     let text: String
     let attachments: [ACPMessage.Attachment]
     let typography: ACPChatTypography
@@ -382,11 +386,11 @@ private struct ACPSubagentPromptRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             let images = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
             let others = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
             if !images.isEmpty {
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     // Keyed by index, not uri: the same image attached
                     // twice shares a uri and duplicate ids collapse the row.
                     ForEach(Array(images.enumerated()), id: \.offset) { index, attachment in
@@ -399,7 +403,7 @@ private struct ACPSubagentPromptRow: View {
                 }
             }
             if !others.isEmpty {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     ForEach(Array(others.enumerated()), id: \.offset) { _, attachment in
                         if let target = ACPSymbolReference.target(fromURI: attachment.uri) {
                             ACPSymbolBadge(target: target, snapshot: attachment.symbol, root: root, typography: typography)
@@ -414,7 +418,7 @@ private struct ACPSubagentPromptRow: View {
             }
             if !text.isEmpty {
                 Text(text)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
             }
         }
@@ -428,6 +432,7 @@ private struct ACPSubagentPromptRow: View {
 /// Not `private`: measured directly by `ACPNarrationShimmerTests`, same
 /// reasoning as `ACPToolCallGroupHeaderRow`/`ACPToolCallGroupLane`.
 struct ACPSubagentTextRow: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var buffer: StreamingText
     let typography: ACPChatTypography
     /// Whether this is the row the child is currently writing into —
@@ -441,19 +446,19 @@ struct ACPSubagentTextRow: View {
             // Mirrors the parent transcript's `ACPCommentaryRow` — same
             // "Working…" affordance and shimmer, minus the gutter (fork,
             // quote, checkpoint) that only makes sense on a parent message.
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: scale.space[3]) {
                 Rectangle()
                     .fill(theme.color("bg-4"))
                     .frame(width: 1.5)
                     .acpNarrationShimmer(isActive: isLive, axis: .vertical)
-                    .padding(.vertical, 2)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 7) {
+                    .padding(.vertical, scale.space[0])
+                VStack(alignment: .leading, spacing: scale.space[2]) {
+                    HStack(spacing: scale.space[2]) {
                         Image(systemName: "hammer")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                         Text("Working…")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                     .acpNarrationShimmer(isActive: isLive)

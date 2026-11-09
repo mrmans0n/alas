@@ -252,6 +252,7 @@ struct FileTypeIconView: View {
     let filename: String
     var size: CGFloat = 18
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let info = FileTypeIcon.info(for: filename)
@@ -271,10 +272,10 @@ struct FileTypeIconView: View {
                 .frame(width: size, height: size)
                 .background(color.opacity(0.14))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .strokeBorder(color.opacity(0.25), lineWidth: 0.5)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous))
         }
     }
 

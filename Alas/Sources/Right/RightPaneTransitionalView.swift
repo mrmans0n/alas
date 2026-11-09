@@ -108,18 +108,19 @@ private struct CompactStateLabel: View {
     let text: String
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: systemIcon)
-                .font(.system(size: 22))
+                .font(.system(size: 22)) // design-literal: decorative status icon, not text
                 .foregroundColor(theme.color("warn"))
             Text(text)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, scale.space[4])
     }
 }
 
@@ -129,6 +130,7 @@ private struct SkeletonSectionHeader: View {
     let role: SectionHeaderRole
     let title: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
@@ -140,7 +142,7 @@ private struct SkeletonSectionHeader: View {
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
             Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)

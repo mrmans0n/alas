@@ -13,6 +13,7 @@ struct RunActivityActions {
 /// Xcode-style activity pill beside ▶: what is running, for how long, and
 /// how the last run ended. Clicking it opens the run list.
 struct RunActivityPill: View {
+    @Environment(\.designScale) private var scale
     let input: RunActivityInput
     let actions: RunActivityActions
 
@@ -30,9 +31,9 @@ struct RunActivityPill: View {
     }
 
     private func pill(_ presentation: RunActivityPresentation) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: scale.space[0]) {
             Button { showsRuns.toggle() } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: scale.space[1]) {
                     leadingMark(presentation)
                     summary(presentation.pill)
                 }
@@ -42,10 +43,10 @@ struct RunActivityPill: View {
             .help("Show runs")
             trailingButton(presentation.pill)
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color(isFailure(presentation.pill) ? "del" : "fg"))
-        .padding(.leading, 8)
-        .padding(.trailing, 3)
+        .padding(.leading, scale.space[2])
+        .padding(.trailing, scale.space[1])
         .frame(height: 20)
         .frame(maxWidth: 160)
         // Hug the content; the max-width frame alone fills the offered width.
@@ -71,7 +72,7 @@ struct RunActivityPill: View {
     private func leadingMark(_ presentation: RunActivityPresentation) -> some View {
         switch presentation.pill {
         case .starting:
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 ProgressView().controlSize(.mini)
                 if presentation.hasUndismissedFailure {
                     Circle().fill(theme.color("del")).frame(width: 6, height: 6)
@@ -82,9 +83,9 @@ struct RunActivityPill: View {
                 .fill(theme.color(presentation.hasUndismissedFailure ? "del" : "add"))
                 .frame(width: 7, height: 7)
         case .succeeded:
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(theme.color("add"))
+            Image(systemName: "checkmark").font(scale.glyph.font(weight: .bold)).foregroundStyle(theme.color("add"))
         case .failed:
-            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            Image(systemName: "xmark").font(scale.glyph.font(weight: .bold))
         case .none:
             EmptyView()
         }
@@ -130,7 +131,7 @@ struct RunActivityPill: View {
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 8, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
         }
@@ -155,6 +156,7 @@ struct RunActivityPill: View {
 
 /// The popover behind the pill: active runs, then undismissed failures.
 private struct RunActivityList: View {
+    @Environment(\.designScale) private var scale
     let rows: [RunActivityPresentation.Row]
     let actions: RunActivityActions
     let dismiss: () -> Void
@@ -162,14 +164,14 @@ private struct RunActivityList: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: scale.space[0]) {
             ForEach(rows) { row in
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     mark(row.kind)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.name).font(.system(size: 12)).lineLimit(1)
+                    VStack(alignment: .leading, spacing: scale.space[0]) {
+                        Text(row.name).font(scale.metaFont).lineLimit(1)
                         detail(row)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("fg-muted"))
                     }
                     Spacer(minLength: 12)
@@ -179,11 +181,11 @@ private struct RunActivityList: View {
                             .controlSize(.small)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[1])
             }
         }
-        .padding(6)
+        .padding(scale.space[2])
         .frame(minWidth: 280)
     }
 
@@ -195,9 +197,9 @@ private struct RunActivityList: View {
         case .running:
             Circle().fill(theme.color("add")).frame(width: 7, height: 7)
         case .failed:
-            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(theme.color("del"))
+            Image(systemName: "xmark").font(scale.glyph.font(weight: .bold)).foregroundStyle(theme.color("del"))
         case .succeeded:
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(theme.color("add"))
+            Image(systemName: "checkmark").font(scale.glyph.font(weight: .bold)).foregroundStyle(theme.color("add"))
         }
     }
 

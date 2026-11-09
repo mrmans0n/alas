@@ -37,7 +37,9 @@ struct ACPTranscriptMarkdownLayout {
         let headerFill: NSColor
         let headerRule: NSColor
         let divider: NSColor
-        let stroke: NSColor
+        /// A hairline around the whole grid, so it reads as an object on the page.
+        let border: NSColor
+        let cornerRadius: CGFloat
     }
 
     /// A code block's "Copy" button in its header.
@@ -60,8 +62,6 @@ struct ACPTranscriptMarkdownLayout {
         let ascent: CGFloat
         let fill: NSColor
         let copiedFill: NSColor
-        let stroke: NSColor
-        let copiedStroke: NSColor
 
         /// The button's width: icon, spacing, and label inside its padding.
         @MainActor func width(copied: Bool) -> CGFloat {
@@ -89,44 +89,46 @@ struct ACPTranscriptMarkdownLayout {
         let cornerRadius: CGFloat
         /// A code block's header band: its height from the top, fill, and bottom divider.
         var header: (height: CGFloat, fill: NSColor, divider: NSColor)?
-        /// An outline drawn inside the edge, as SwiftUI's `strokeBorder`.
-        var stroke: NSColor?
+        /// A hairline around the block, drawn inside its rect.
+        var border: NSColor?
     }
 
-    // Copied from `ACPMarkdownText` and its `CodeBlockView`.
-    static let blockSpacing: CGFloat = 8
+    // Copied from `ACPMarkdownText` and its `CodeBlockView`. These are steps of
+    // `DesignScale.space`, the same in both densities; values that differ by
+    // density come from the `scale` passed to `make`.
     static let h1TopPadding: CGFloat = 4
     static let headingTopPadding: CGFloat = 2
     static let quoteBarWidth: CGFloat = 2
     static let quoteBarGap: CGFloat = 10
     static let quoteBarAlpha: CGFloat = 0.55
-    static let codeCornerRadius: CGFloat = 6
     static let codeBackgroundAlpha: CGFloat = 0.6
-    static let codeBodyHorizontalPadding: CGFloat = 10
+    static let codeBodyHorizontalPadding: CGFloat = 12
     static let codeBodyVerticalPadding: CGFloat = 8
-    static let codeHeaderHorizontalPadding: CGFloat = 10
+    static let codeHeaderHorizontalPadding: CGFloat = 12
     /// Between the language label and the Copy button.
     static let codeHeaderSpacing: CGFloat = 8
-    static let codeHeaderVerticalPadding: CGFloat = 6
+    static let codeHeaderVerticalPadding: CGFloat = 4
     /// Height of the empty header `CodeBlockView` keeps when there is no language.
     static let codeEmptyHeaderContentHeight: CGFloat = 1
     static let codeLineSpacing: CGFloat = 2
     static let codeLabelTracking: CGFloat = 0.4
-    static let copyButtonHorizontalPadding: CGFloat = 6
+    static let copyButtonHorizontalPadding: CGFloat = 4
     static let copyButtonIconSpacing: CGFloat = 4
     static let copyButtonVerticalPadding: CGFloat = 2
     static let copyButtonCornerRadius: CGFloat = 4
-    static let copyButtonStrokeWidth: CGFloat = 0.5
     // Copied from `ACPMarkdownText.tableView` and `tableRow`.
     static let maxNativeTableColumns = 5
-    static let tableCellHorizontalPadding: CGFloat = 10
-    static let tableCellVerticalPadding: CGFloat = 6
+    static let tableCellHorizontalPadding: CGFloat = 12
+    static let tableCellVerticalPadding: CGFloat = 8
     static let tableDividerWidth: CGFloat = 0.5
-    static let tableCornerRadius: CGFloat = 6
     /// How tall SwiftUI sizes an empty `Text`, whatever its font.
     static let emptyTextHeight: CGFloat = 14
 
+    /// How wide prose runs.
     let width: CGFloat
+    /// How wide code blocks and tables run: `width`, or more in a transcript
+    /// row that breaks out of the reading column.
+    let wideWidth: CGFloat
     let height: CGFloat
     let lines: [Line]
     let backgrounds: [Background]
@@ -163,28 +165,188 @@ struct ACPTranscriptMarkdownLayout {
         }
     }
 
-    static func make(source: String, width: CGFloat, theme: Theme, typography: ACPChatTypography) -> ACPTranscriptMarkdownLayout? {
+    static func make(
+        source: String, width: CGFloat, wideWidth: CGFloat? = nil, theme: Theme, typography: ACPChatTypography,
+        scale: DesignScale = .comfortable
+    ) -> ACPTranscriptMarkdownLayout? {
         let blocks = ACPMarkdownParser.parse(source)
         guard supports(blocks) else { return nil }
-        var builder = Builder(width: max(1, width), theme: theme, typography: typography)
+        let wideWidth = max(1, wideWidth ?? width)
+        var builder = Builder(width: max(1, width), wideWidth: wideWidth, theme: theme, typography: typography, scale: scale)
         for (index, block) in blocks.enumerated() {
-            if index > 0 { builder.y += blockSpacing }
+            if index > 0 { builder.y += scale.transcriptBlockSpacing }
             builder.add(block)
         }
         return ACPTranscriptMarkdownLayout(
-            width: max(1, width), height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
+            width: max(1, width), wideWidth: wideWidth, height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
             texts: builder.texts, attributedTexts: builder.attributedTexts, codeBlocks: builder.codeBlocks,
             copyButtonStyle: builder.copyButtonStyle, tables: builder.tables, blockSeparators: builder.blockSeparators,
             maxLineHeight: builder.lines.map(\.height).max() ?? 0
         )
     }
 
-    /// As `ACPMarkdownText.tableColumnWidth`, except a table that cannot fit its
-    /// 100 pt minimum shrinks to the width instead of scrolling sideways.
-    static func tableColumnWidth(available: CGFloat, columns: Int) -> CGFloat {
-        guard columns > 0 else { return 0 }
-        let fill = (available - tableDividerWidth * CGFloat(columns - 1)) / CGFloat(columns)
-        return max(1, fill)
+    /// What a table column's cells need, padding included.
+    struct TableColumn: Equatable {
+        /// Its longest word, so no word has to break unless the table can't fit.
+        var minWidth: CGFloat
+        /// Its longest cell on one line.
+        var idealWidth: CGFloat
+        var isNumeric: Bool
+    }
+
+    /// A cell's longest word counts for at most this, so one long path or URL
+    /// doesn't squeeze the other columns.
+    private static let tableWordWidthLimit: CGFloat = 160
+
+    /// Measured from the same attributed strings both table paths draw, so the
+    /// native and SwiftUI rows break their cells alike. `render` gives the cell at
+    /// a row (the header is 0) and column. Cached because a table still streaming
+    /// through SwiftUI asks on every body.
+    static func tableColumns(
+        header: [String], rows: [[String]], typography: ACPChatTypography,
+        render: (_ row: Int, _ column: Int, _ source: String) -> NSAttributedString
+    ) -> [TableColumn] {
+        // Hashes the cells rather than joining them into one string per body.
+        let key = TableColumnsKey(fontFamily: typography.fontFamily, size: typography.paragraphSize, header: header, rows: rows)
+        if let cached = tableColumnCache.object(forKey: key) { return cached.columns }
+        let count = max(header.count, rows.map(\.count).max() ?? 0)
+        let columns = (0..<count).map { column -> TableColumn in
+            var result = TableColumn(minWidth: 0, idealWidth: 0, isNumeric: false)
+            for (rowIndex, cells) in ([header] + rows).enumerated() where column < cells.count {
+                let (ideal, word) = measuredWidths(of: render(rowIndex, column, cells[column]))
+                result.idealWidth = max(result.idealWidth, ideal)
+                result.minWidth = max(result.minWidth, word)
+            }
+            let padding = 2 * tableCellHorizontalPadding
+            result.idealWidth += padding
+            result.minWidth = min(min(result.minWidth, tableWordWidthLimit) + padding, result.idealWidth)
+            result.isNumeric = isNumericColumn(rows.map { column < $0.count ? $0[column] : "" })
+            return result
+        }
+        tableColumnCache.setObject(TableColumnsBox(columns), forKey: key)
+        return columns
+    }
+
+    private final class TableColumnsBox {
+        let columns: [TableColumn]
+        init(_ columns: [TableColumn]) { self.columns = columns }
+    }
+
+    /// `NSCache` wants an object key; equality compares every cell, so a
+    /// hash collision can never hand back another table's columns.
+    private final class TableColumnsKey: NSObject {
+        let fontFamily: String
+        let size: CGFloat
+        let header: [String]
+        let rows: [[String]]
+        private let hashValueCache: Int
+
+        init(fontFamily: String, size: CGFloat, header: [String], rows: [[String]]) {
+            self.fontFamily = fontFamily
+            self.size = size
+            self.header = header
+            self.rows = rows
+            var hasher = Hasher()
+            hasher.combine(fontFamily)
+            hasher.combine(size)
+            hasher.combine(header)
+            hasher.combine(rows)
+            hashValueCache = hasher.finalize()
+        }
+
+        override var hash: Int { hashValueCache }
+
+        override func isEqual(_ object: Any?) -> Bool {
+            guard let other = object as? TableColumnsKey else { return false }
+            return hashValueCache == other.hashValueCache && size == other.size && fontFamily == other.fontFamily
+                && header == other.header && rows == other.rows
+        }
+    }
+
+    private static let tableColumnCache: NSCache<TableColumnsKey, TableColumnsBox> = {
+        let cache = NSCache<TableColumnsKey, TableColumnsBox>()
+        cache.countLimit = 256
+        return cache
+    }()
+
+    /// A cell's width on one line and its longest space-separated word's, one
+    /// point over so what exactly fits doesn't wrap on rounding. Offsets into one
+    /// line, because this runs for every cell of a table as it first scrolls in.
+    private static func measuredWidths(of text: NSAttributedString) -> (ideal: CGFloat, word: CGFloat) {
+        let line = CTLineCreateWithAttributedString(text)
+        let ideal = ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))) + 1
+        let utf16 = text.string.utf16
+        guard utf16.contains(32) else { return (ideal, ideal) }
+        var word: CGFloat = 0
+        var start = 0
+        func close(at end: Int) {
+            guard end > start else { return }
+            let width = CTLineGetOffsetForStringIndex(line, end, nil) - CTLineGetOffsetForStringIndex(line, start, nil)
+            word = max(word, ceil(width) + 1)
+        }
+        for (index, unit) in utf16.enumerated() where unit == 32 {
+            close(at: index)
+            start = index + 1
+        }
+        close(at: utf16.count)
+        return (ideal, word)
+    }
+
+    /// Fits the columns to `available`. Columns that fit on one line get the
+    /// room left over, prose first, so numbers stay close together. Otherwise
+    /// each column gets its longest word and a share of the rest by how much it
+    /// wants. A table that can't fit even that shrinks those widths to
+    /// `available`. Both rendering paths use this, so a table keeps its shape
+    /// when a finished message moves from SwiftUI to a native row.
+    static func tableColumnWidths(_ columns: [TableColumn], available: CGFloat) -> [CGFloat] {
+        guard !columns.isEmpty else { return [] }
+        let room = available - tableDividerWidth * CGFloat(columns.count - 1)
+        let totalIdeal = columns.reduce(0) { $0 + $1.idealWidth }
+        let totalMin = columns.reduce(0) { $0 + $1.minWidth }
+        if totalIdeal <= room {
+            let prose = columns.contains { !$0.isNumeric }
+            let growing = columns.filter { !prose || !$0.isNumeric }.reduce(0) { $0 + $1.idealWidth }
+            return columns.map { column in
+                guard !prose || !column.isNumeric else { return column.idealWidth }
+                return column.idealWidth + (room - totalIdeal) * column.idealWidth / growing
+            }
+        }
+        if totalMin < room {
+            let share = (room - totalMin) / (totalIdeal - totalMin)
+            return columns.map { $0.minWidth + ($0.idealWidth - $0.minWidth) * share }
+        }
+        return columns.map { max(1, $0.minWidth * room / totalMin) }
+    }
+
+    /// Whether a column's cells are all numbers, units allowed: "1,240", "2.1 s",
+    /// "$12", "−3%". Blank cells don't count either way; a column of them is not numeric.
+    nonisolated static func isNumericColumn(_ cells: [String]) -> Bool {
+        var sawNumber = false
+        for cell in cells {
+            let trimmed = cell.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "*_`")))
+            if trimmed.isEmpty || trimmed == "-" || trimmed == "—" { continue }
+            guard trimmed.wholeMatch(of: numericCellPattern) != nil else { return false }
+            sawNumber = true
+        }
+        return sawNumber
+    }
+
+    private nonisolated(unsafe) static let numericCellPattern = /[~≈+\-−±$€£]?[0-9][0-9,._]*\s?(%|[A-Za-zµ]{1,3})?/
+
+    /// A line of `font` as SwiftUI sizes it: ascent to the nearest point, descent
+    /// and leading rounded up. Measured against `Text`: at half-point sizes such
+    /// as 12.5 the ascent lands just past a whole point and is not rounded up.
+    private static func swiftUILineHeight(of font: NSFont) -> CGFloat {
+        font.ascender.rounded() + ceil(-font.descender) + ceil(font.leading)
+    }
+
+    /// Inside the Copy button's padding, here and in `CodeBlockView`, which pins
+    /// it: the height of SwiftUI's symbol image changes with the point size in
+    /// ways `NSImage` does not report, and half-point chat sizes hit that.
+    static func copyButtonContentHeight(_ typography: ACPChatTypography) -> CGFloat {
+        let label = swiftUILineHeight(of: .systemFont(ofSize: typography.labelSize, weight: .medium))
+        let icon = swiftUILineHeight(of: .systemFont(ofSize: typography.labelSize, weight: .regular)) + 2
+        return max(label, icon)
     }
 
     /// Code block `index`'s "Copy" button, sized for the label it shows.
@@ -321,8 +483,10 @@ struct ACPTranscriptMarkdownLayout {
     @MainActor
     private struct Builder {
         let width: CGFloat
+        let wideWidth: CGFloat
         let theme: Theme
         let typography: ACPChatTypography
+        let scale: DesignScale
         var y: CGFloat = 0
         var lines: [Line] = []
         var backgrounds: [Background] = []
@@ -333,10 +497,12 @@ struct ACPTranscriptMarkdownLayout {
         var blockSeparators: [String] = []
         let copyButtonStyle: CopyButtonStyle
 
-        init(width: CGFloat, theme: Theme, typography: ACPChatTypography) {
+        init(width: CGFloat, wideWidth: CGFloat, theme: Theme, typography: ACPChatTypography, scale: DesignScale) {
             self.width = width
+            self.wideWidth = wideWidth
             self.theme = theme
             self.typography = typography
+            self.scale = scale
             // As `CodeBlockView.copyButton`.
             let font = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
             func label(_ string: String, _ color: NSColor) -> CTLine {
@@ -356,9 +522,7 @@ struct ACPTranscriptMarkdownLayout {
                 copiedIcon: icon("checkmark", weight: .bold, add),
                 ascent: font.ascender,
                 fill: theme.nsColor("bg-3").withAlphaComponent(0.6),
-                copiedFill: theme.nsColor("bg-3").withAlphaComponent(0.4),
-                stroke: theme.nsColor("line"),
-                copiedStroke: add.withAlphaComponent(0.5)
+                copiedFill: theme.nsColor("bg-3").withAlphaComponent(0.4)
             )
         }
 
@@ -366,17 +530,21 @@ struct ACPTranscriptMarkdownLayout {
             switch block {
             case .heading(let level, let text):
                 y += level == 1 ? ACPTranscriptMarkdownLayout.h1TopPadding : ACPTranscriptMarkdownLayout.headingTopPadding
-                addBlockText(inline(text, role: .heading(level: level)), x: 0, width: width)
+                let font = typography.appKitFont(size: typography.headingSize(level: level), traits: .boldFontMask)
+                addBlockText(
+                    inline(text, role: .heading(level: level)), x: 0, width: width,
+                    lineHeight: ACPTranscriptMarkdownLayout.swiftUILineHeight(of: font)
+                )
             case .paragraph(let text):
-                addBlockText(inline(text, role: .body), x: 0, width: width)
+                addSpacedBlockText(inline(text, role: .body), x: 0, width: width, lineSpacing: scale.transcriptLineSpacing)
             case .quote(let text):
                 let top = y
                 let x = ACPTranscriptMarkdownLayout.quoteBarWidth + ACPTranscriptMarkdownLayout.quoteBarGap
-                addBlockText(inline(text, role: .quote), x: x, width: max(1, width - x))
+                addSpacedBlockText(inline(text, role: .quote), x: x, width: max(1, width - x), lineSpacing: scale.transcriptLineSpacing)
                 backgrounds.append(Background(
                     rect: CGRect(x: 0, y: top, width: ACPTranscriptMarkdownLayout.quoteBarWidth, height: y - top),
                     color: theme.nsColor("accent").withAlphaComponent(ACPTranscriptMarkdownLayout.quoteBarAlpha),
-                    cornerRadius: 0
+                    cornerRadius: 0 // design-literal: a quote bar is a plain rule
                 ))
             case .code(let language, let body):
                 addCode(language: language, body: body, highlighted: true)
@@ -466,19 +634,14 @@ struct ACPTranscriptMarkdownLayout {
 
         private mutating func addCode(language: String?, body: String, highlighted: Bool) {
             typealias L = ACPTranscriptMarkdownLayout
+            let width = wideWidth
             let top = y
             // The background is added first so it paints under the lines.
-            backgrounds.append(Background(rect: .zero, color: .clear, cornerRadius: 0))
+            backgrounds.append(Background(rect: .zero, color: .clear, cornerRadius: 0)) // design-literal: placeholder, replaced below
             let backgroundIndex = backgrounds.count - 1
 
             // The header is as tall as the taller of its label and the button.
-            // SwiftUI rounds a font's ascent and descent up separately; its symbol
-            // image is two points taller than that, which TextKit and `NSImage` miss
-            // at small sizes.
-            let buttonFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
-            let iconFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .regular)
-            let buttonHeight = max(Self.swiftUILineHeight(of: buttonFont), Self.swiftUILineHeight(of: iconFont) + 2)
-                + 2 * L.copyButtonVerticalPadding
+            let buttonHeight = L.copyButtonContentHeight(typography) + 2 * L.copyButtonVerticalPadding
             let headerContentHeight = buttonHeight
             y += L.codeHeaderVerticalPadding
             let headerTop = y
@@ -487,7 +650,7 @@ struct ACPTranscriptMarkdownLayout {
             if let language, !language.isEmpty {
                 let label = NSAttributedString(string: language.uppercased(), attributes: [
                     .font: typography.appKitFont(size: typography.labelSize, traits: .boldFontMask),
-                    .foregroundColor: theme.nsColor("fg-faint"),
+                    .foregroundColor: theme.nsColor("fg-dim"),
                     .kern: L.codeLabelTracking,
                 ])
                 let first = lines.count
@@ -524,50 +687,59 @@ struct ACPTranscriptMarkdownLayout {
                     .foregroundColor: theme.nsColor("fg"),
                 ])
             }
-            let firstCodeLine = lines.count
             // SwiftUI's line can be a point taller than TextKit's box.
             let codeFont = CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize)
-            addBlockText(
+            addSpacedBlockText(
                 code, x: L.codeBodyHorizontalPadding, width: max(1, width - 2 * L.codeBodyHorizontalPadding),
                 lineSpacing: L.codeLineSpacing,
-                lineHeight: Self.swiftUILineHeight(of: codeFont)
+                lineHeight: L.swiftUILineHeight(of: codeFont),
+                hangingIndent: scale.codeHangingIndent
             )
-            // Line spacing goes between lines, not after the last one.
-            if lines.count > firstCodeLine {
-                lines[lines.count - 1].height -= L.codeLineSpacing
-                y -= L.codeLineSpacing
-            }
             y += L.codeBodyVerticalPadding
 
             backgrounds[backgroundIndex] = Background(
                 rect: CGRect(x: 0, y: top, width: width, height: y - top),
                 color: theme.nsColor("bg-0").withAlphaComponent(L.codeBackgroundAlpha),
-                cornerRadius: L.codeCornerRadius,
-                // As `CodeBlockView`'s header background and divider, and its outline.
+                cornerRadius: scale.radius.medium,
+                // As `CodeBlockView`'s header background and divider.
                 header: (headerBandHeight, theme.nsColor("bg-2").withAlphaComponent(0.6), theme.nsColor("line-soft")),
-                stroke: theme.nsColor("line")
+                border: theme.nsColor("line-soft")
             )
         }
 
         private mutating func addTable(header: [String], rows: [[String]]) {
             typealias L = ACPTranscriptMarkdownLayout
+            let width = wideWidth
             let columns = max(header.count, rows.map(\.count).max() ?? 0)
             guard columns > 0 else { return }
-            let columnWidth = L.tableColumnWidth(available: width, columns: columns)
+            let rendered = ([header] + rows).enumerated().map { rowIndex, cells in
+                (0..<columns).map { inline($0 < cells.count ? cells[$0] : "", role: .tableCell(isHeader: rowIndex == 0)) }
+            }
+            let specs = L.tableColumns(header: header, rows: rows, typography: typography) { row, column, _ in rendered[row][column] }
+            let columnWidths = L.tableColumnWidths(specs, available: width)
+            var columnXs: [CGFloat] = [0]
+            for columnWidth in columnWidths { columnXs.append(columnXs[columnXs.count - 1] + columnWidth + L.tableDividerWidth) }
             let top = y
             let firstLine = lines.count
             let firstBlock = texts.count
             var rowBottoms: [CGFloat] = []
-            for (rowIndex, cells) in ([header] + rows).enumerated() {
+            for rowIndex in rendered.indices {
                 let rowTop = y
                 var rowBottom = rowTop + 2 * L.tableCellVerticalPadding
                 for column in 0..<columns {
                     y = rowTop + L.tableCellVerticalPadding
-                    let x = CGFloat(column) * (columnWidth + L.tableDividerWidth) + L.tableCellHorizontalPadding
-                    let cellWidth = max(1, columnWidth - 2 * L.tableCellHorizontalPadding)
+                    let x = columnXs[column] + L.tableCellHorizontalPadding
+                    let cellWidth = max(1, columnWidths[column] - 2 * L.tableCellHorizontalPadding)
                     let role = ACPMarkdownInlineRole.tableCell(isHeader: rowIndex == 0)
-                    let text = inline(column < cells.count ? cells[column] : "", role: role)
+                    let text = rendered[rowIndex][column]
+                    let firstCellLine = lines.count
                     addBlockText(text, x: x, width: cellWidth, separator: column == columns - 1 ? "\n" : "\t")
+                    if specs[column].isNumeric {
+                        for index in firstCellLine..<lines.count {
+                            let lineWidth = CGFloat(CTLineGetTypographicBounds(lines[index].line, nil, nil, nil))
+                            lines[index].origin.x += max(0, cellWidth - lineWidth)
+                        }
+                    }
                     if text.length == 0 {
                         // An empty cell's `Text` still takes up a line in the SwiftUI table.
                         addEmptyLine(
@@ -586,14 +758,15 @@ struct ACPTranscriptMarkdownLayout {
             tables.append(Table(
                 // Columns fill the width exactly, as the SwiftUI table's background does.
                 rect: CGRect(x: 0, y: top, width: width, height: y - top),
-                columnXs: (1..<columns).map { CGFloat($0) * (columnWidth + L.tableDividerWidth) - L.tableDividerWidth },
+                columnXs: (1..<columns).map { columnXs[$0] - L.tableDividerWidth },
                 rowBottoms: rowBottoms,
                 blocks: firstBlock..<texts.count,
-                fill: theme.nsColor("bg-1").withAlphaComponent(0.4),
+                fill: theme.nsColor("bg-0").withAlphaComponent(0.6),
                 headerFill: theme.nsColor("bg-2").withAlphaComponent(0.5),
                 headerRule: theme.nsColor("line"),
                 divider: theme.nsColor("line-soft"),
-                stroke: theme.nsColor("line")
+                border: theme.nsColor("line-soft"),
+                cornerRadius: scale.radius.medium
             ))
         }
 
@@ -601,20 +774,43 @@ struct ACPTranscriptMarkdownLayout {
         /// `separator` follows it when the text is copied.
         private mutating func addBlockText(
             _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil,
-            separator: String = "\n"
+            hangingIndent: CGFloat = 0, separator: String = "\n"
         ) {
             texts.append(text.string)
             attributedTexts.append(text)
             blockSeparators.append(separator)
-            addText(text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, block: texts.count - 1)
+            addText(
+                text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, hangingIndent: hangingIndent,
+                block: texts.count - 1
+            )
+        }
+
+        /// A selectable block with `lineSpacing` between its lines, not after the last one.
+        private mutating func addSpacedBlockText(
+            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat, lineHeight: CGFloat? = nil,
+            hangingIndent: CGFloat = 0
+        ) {
+            let first = lines.count
+            addBlockText(text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, hangingIndent: hangingIndent)
+            if lines.count > first {
+                lines[lines.count - 1].height -= lineSpacing
+                y -= lineSpacing
+            }
         }
 
         /// Breaks `text` to `width` and stacks its lines from the current `y`.
+        ///
+        /// With a `hangingIndent`, every line breaks `hangingIndent` short of
+        /// `width`, and a line that continues a wrapped one starts that far in.
+        /// SwiftUI text has no hanging indent, so `CodeBlockView` narrows its
+        /// `Text` by the indent instead, and the two break alike.
         private mutating func addText(
             _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil,
-            block: Int? = nil
+            hangingIndent: CGFloat = 0, block: Int? = nil
         ) {
             guard text.length > 0 else { return }
+            let string = text.string as NSString
+            let breakWidth = max(1, width - hangingIndent)
             let typesetter = CTTypesetterCreateWithAttributedString(text)
             // A final newline ends the line before it, so the blank line after it gets a pass of its own.
             let endsInNewline = text.string.last?.isNewline == true
@@ -627,9 +823,11 @@ struct ACPTranscriptMarkdownLayout {
                     )
                     break
                 }
-                let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(width)))
+                let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(breakWidth)))
+                let continues = hangingIndent > 0 && start > 0 && string.character(at: start - 1) != 0x0A // "\n"
+                let lineX = continues ? x + hangingIndent : x
                 // Trailing whitespace hangs past the width; the drawn line leaves it off.
-                let visible = Self.lengthWithoutTrailingWhitespace(text.string as NSString, from: start, count: count)
+                let visible = Self.lengthWithoutTrailingWhitespace(string, from: start, count: count)
                 // A zero-length range means "to the end of the string", so a blank
                 // line gets an empty line of its own instead.
                 let line = visible > 0
@@ -642,7 +840,7 @@ struct ACPTranscriptMarkdownLayout {
                 let measured = max(lineHeight ?? Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
                 let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
                 lines.append(Line(
-                    line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line),
+                    line: line, origin: CGPoint(x: lineX, y: y), height: height, underlines: Self.underlines(of: line),
                     block: block, range: NSRange(location: start, length: count), visibleLength: visible, maxX: x + width
                 ))
                 y += height
@@ -659,18 +857,13 @@ struct ACPTranscriptMarkdownLayout {
             let line = CTLineCreateWithAttributedString(NSAttributedString(string: "", attributes: attributes))
             var ascent: CGFloat = 0, descent: CGFloat = 0
             CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-            let fontHeight = (attributes[.font] as? NSFont).map(TextKitLineHeight.of) ?? 0
+            let fontHeight = (attributes[.font] as? NSFont).map(ACPTranscriptMarkdownLayout.swiftUILineHeight(of:)) ?? 0
             let measured = max(lineHeight ?? fontHeight, ascent + descent)
             lines.append(Line(
                 line: line, origin: CGPoint(x: x, y: y), height: (measured > 0 ? measured : typography.paragraphSize) + lineSpacing,
                 block: block, range: NSRange(location: location, length: 0), visibleLength: 0, maxX: x + width
             ))
             y += lines[lines.count - 1].height
-        }
-
-        /// A line of `font` as SwiftUI sizes it: ascent, descent and leading each rounded up.
-        private static func swiftUILineHeight(of font: NSFont) -> CGFloat {
-            ceil(font.ascender) + ceil(-font.descender) + ceil(font.leading)
         }
 
         private static func lengthWithoutTrailingWhitespace(_ string: NSString, from start: Int, count: Int) -> Int {
@@ -682,11 +875,12 @@ struct ACPTranscriptMarkdownLayout {
             return end - start
         }
 
-        /// The tallest line box TextKit gives any font in `range`.
+        /// The tallest line SwiftUI gives any font in `range`: TextKit leaves
+        /// some sizes fractional, where SwiftUI rounds.
         private static func lineHeight(of text: NSAttributedString, range: NSRange) -> CGFloat {
             var height: CGFloat = 0
             text.enumerateAttribute(.font, in: range) { value, _, _ in
-                if let font = value as? NSFont { height = max(height, TextKitLineHeight.of(font)) }
+                if let font = value as? NSFont { height = max(height, ACPTranscriptMarkdownLayout.swiftUILineHeight(of: font)) }
             }
             return height
         }
@@ -720,32 +914,6 @@ private enum HighlightCache {
         let stored = highlighted.copy() as! NSAttributedString
         cache.setObject(stored, forKey: key, cost: code.utf8.count)
         return stored
-    }
-}
-
-/// A font's line height as `NSLayoutManager` lays it out, which is what
-/// SwiftUI text and the diff rows match.
-private enum TextKitLineHeight {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var cache: [String: CGFloat] = [:]
-
-    static func of(_ font: NSFont) -> CGFloat {
-        let key = "\(font.fontName)|\(font.pointSize)"
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = cache[key] { return cached }
-        let storage = NSTextStorage(string: "X\nX", attributes: [.font: font])
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 1_000, height: CGFloat.greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layoutManager.addTextContainer(container)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: container)
-        let first = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
-        let second = layoutManager.lineFragmentRect(forGlyphAt: 2, effectiveRange: nil)
-        let height = second.minY - first.minY
-        cache[key] = height
-        return height
     }
 }
 

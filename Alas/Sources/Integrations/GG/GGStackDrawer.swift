@@ -51,6 +51,7 @@ struct GGStackDrawer: View {
     let appState: AppState
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var isRefreshing = false
@@ -227,30 +228,40 @@ struct GGStackDrawer: View {
         showsLoading: Bool,
         showsChevron: Bool
     ) -> some View {
-        HStack(spacing: 7) {
-            Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
-            Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
-            Text(title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
-                .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 6)
-            Text(summaryChip)
-                .font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.color("fg-dim"))
-            Button {
-                appState.openGGInbox(projectId: rps.worktree.projectId)
-            } label: {
-                Icon(name: "tray.full", size: 10, color: theme.color("fg-faint"))
+        PaneDrawerRow(
+            leading: {
+                Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
+                Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
+            },
+            identity: {
+                Text(title.uppercased())
+                    .font(scale.caption.font(weight: .semibold)).tracking(0.5)
+                    .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
+                    .help(title)
+            },
+            chips: { _ in
+                Text(summaryChip)
+                    .font(scale.meta.font(weight: .medium)).foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .help(summaryChip)
+            },
+            trailing: {
+                Button {
+                    appState.openGGInbox(projectId: rps.worktree.projectId)
+                } label: {
+                    Icon(name: "tray.full", size: 10, color: theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Open gg inbox")
+                refreshControl(showsLoading: showsLoading)
+                if showsChevron {
+                    Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
+                        .rotationEffect(layout.chevronAngle)
+                }
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help("Open gg inbox")
-            refreshControl(showsLoading: showsLoading)
-            if showsChevron {
-                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
-                    .rotationEffect(layout.chevronAngle)
-            }
-        }
-        .padding(.horizontal, layout.innerHorizontal(12)).padding(.vertical, 7)
+        )
+        .padding(.horizontal, layout.innerHorizontal(scale.space[3])).padding(.vertical, scale.space[2])
     }
 
     @ViewBuilder
@@ -271,10 +282,10 @@ struct GGStackDrawer: View {
     @ViewBuilder
     private func expandedBody(_ model: GGStackPlaceholderModel) -> some View {
         if model.detail != nil || model.canRetry {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 if let detail = model.detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("warn"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -285,16 +296,16 @@ struct GGStackDrawer: View {
                         .disabled(isRefreshing)
                 }
             }
-            .padding(.horizontal, layout.innerHorizontal(12)).padding(.bottom, 10)
+            .padding(.horizontal, layout.innerHorizontal(scale.space[3])).padding(.bottom, scale.space[3])
         }
     }
 
     @ViewBuilder
     private func expandedBody(_ model: GGStackReadinessModel) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if let error = rps.ggStackRemoteError {
                 Text("PR status unavailable: \(error)")
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("warn"))
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Retry PR status", action: refresh)
@@ -305,10 +316,10 @@ struct GGStackDrawer: View {
             if model.isPaused {
                 if let progress = model.syncProgress { syncProgressView(progress) }
                 Text("A gg operation is paused on conflicts. Resolve them in the Conflicts section, then Continue — or Abort to roll back.")
-                    .font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    .font(scale.meta.font).foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
                 if let err = rps.ggActionState.lastError {
-                    Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
+                    Text(err).font(scale.meta.font).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
                 actionRow(model)
                 actionDetails(model)
@@ -317,7 +328,7 @@ struct GGStackDrawer: View {
                 syncProgressView(progress)
                 if let error = rps.ggActionState.lastError {
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(3)
                 }
@@ -328,35 +339,35 @@ struct GGStackDrawer: View {
                 }
             } else {
                 if let summary = model.actionSummary {
-                    Text(summary).font(.system(size: 11)).foregroundColor(theme.color("add"))
+                    Text(summary).font(scale.meta.font).foregroundColor(theme.color("add"))
                 }
                 if let err = rps.ggActionState.lastError {
-                    Text(err).font(.system(size: 11)).foregroundColor(theme.color("warn")).lineLimit(3)
+                    Text(err).font(scale.meta.font).foregroundColor(theme.color("warn")).lineLimit(3)
                 }
                 actionRow(model)
                 actionDetails(model)
                 factsView(model)
             }
         }
-        .padding(.horizontal, layout.innerHorizontal(12)).padding(.bottom, 10)
+        .padding(.horizontal, layout.innerHorizontal(scale.space[3])).padding(.bottom, scale.space[3])
     }
 
     private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             if let status = progress.liveStatus {
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     if progress.showsSpinner {
                         Spinner(lineWidth: 1.4, duration: 0.8)
                             .frame(width: 10, height: 10)
                     }
                     Text(status)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(theme.color("fg-dim"))
                 }
             }
             ForEach(progress.rows) { row in
                 Text(row.text)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg-dim"))
             }
         }
@@ -364,19 +375,19 @@ struct GGStackDrawer: View {
 
     private func actionRow(_ model: GGStackReadinessModel) -> some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 ForEach(model.primaryActions) { action in
                     Button {
                         perform(action)
                     } label: {
-                        HStack(spacing: 6) {
+                        HStack(spacing: scale.space[2]) {
                             if action.isInFlight { Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10) }
-                            Text(action.title).font(.system(size: 11.5, weight: .semibold)).lineLimit(1)
+                            Text(action.title).font(scale.meta.font(weight: .semibold)).lineLimit(1)
                         }
                         .foregroundColor(action.emphasis == .primary ? theme.color("bg-0") : theme.color("fg-muted"))
-                        .padding(.horizontal, 10).frame(height: 26)
+                        .padding(.horizontal, scale.space[3]).frame(height: 26)
                         .background(action.emphasis == .primary ? theme.color("accent") : theme.color("bg-3").opacity(0.72))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
@@ -392,11 +403,11 @@ struct GGStackDrawer: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(scale.title.font)
                             .foregroundStyle(theme.color("fg-muted"))
                             .frame(width: 26, height: 26)
                             .background(theme.color("bg-3").opacity(0.72))
-                            .clipShape(.rect(cornerRadius: 6))
+                            .clipShape(.rect(cornerRadius: scale.radius.medium))
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -412,12 +423,12 @@ struct GGStackDrawer: View {
     private func actionDetails(_ model: GGStackReadinessModel) -> some View {
         if let detail = model.primaryActions.first?.detail {
             Text(detail)
-                .font(.system(size: 10.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))
         }
         if let note = model.localChangesNote {
             Text(note)
-                .font(.system(size: 10.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("warn"))
         }
     }
@@ -440,15 +451,15 @@ struct GGStackDrawer: View {
     }
 
     private func factsView(_ model: GGStackReadinessModel) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: scale.space[1]) {
             ForEach(model.facts) { fact in
-                HStack(spacing: 8) {
-                    Text(fact.label).font(.system(size: 10.5)).foregroundColor(theme.color("fg-faint"))
-                    Spacer(minLength: 8)
-                    Text(fact.value).font(.system(size: 10.5, weight: .semibold)).foregroundColor(theme.color("fg-dim"))
+                HStack(spacing: scale.space[2]) {
+                    Text(fact.label).font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
+                    Spacer(minLength: scale.space[2])
+                    Text(fact.value).font(scale.meta.font(weight: .semibold)).foregroundColor(theme.color("fg-dim"))
                 }
-                .padding(.horizontal, 7).frame(height: 22)
-                .background(RoundedRectangle(cornerRadius: 5).fill(theme.color("bg-2").opacity(0.48)))
+                .padding(.horizontal, scale.space[2]).frame(height: 22)
+                .background(RoundedRectangle(cornerRadius: scale.radius.small).fill(theme.color("bg-2").opacity(0.48)))
             }
         }
     }

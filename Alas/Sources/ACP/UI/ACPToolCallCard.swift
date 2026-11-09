@@ -25,6 +25,7 @@ struct ACPToolCallCard: View {
     @State private var loadingContentToolCallId: String? = nil
     @State private var isHovering = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.acpTerminalHost) private var terminalHost
 
     init(
@@ -52,32 +53,33 @@ struct ACPToolCallCard: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: presentation.iconSystemName)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .frame(width: 16)
                         .foregroundStyle(theme.color("fg-faint"))
                         .accessibilityHidden(true)
                     Text(presentation.label)
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.color("fg-faint"))
+                        .font(scale.metaFont)
+                        .foregroundStyle(theme.color("fg-dim"))
                     if let target = ACPToolCallPresentation.target(for: toolCall, label: presentation.label) {
                         Text(verbatim: target)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .foregroundStyle(theme.color("fg-dim"))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(.horizontal, scale.space[1])
+                            .padding(.vertical, ACPTranscriptCoreTextRowView.toolTargetVerticalPadding)
+                            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.small))
                     }
                     Spacer(minLength: 6)
                     if isHovering, let messageCreatedAt {
                         Text(ACPMessageTimestampFormatter.string(for: messageCreatedAt))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(scale.caption.font(design: .monospaced))
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(1)
                     }
                     if let duration = toolCall.executionDuration {
                         Text(ACPToolCallDurationFormatter.string(for: duration))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(scale.caption.font(design: .monospaced))
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(1)
                             .accessibilityLabel("Tool duration")
@@ -85,12 +87,12 @@ struct ACPToolCallCard: View {
                     }
                     statusIndicator
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9))
+                        .font(scale.glyph.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
-                .padding(.horizontal, expanded ? 10 : 0)
-                .padding(.vertical, expanded ? 7 : 3)
+                .padding(.horizontal, expanded ? scale.space[3] : 0)
+                .padding(.vertical, expanded ? scale.space[2] : scale.space[1])
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -100,13 +102,8 @@ struct ACPToolCallCard: View {
                 expandedBody
             }
         }
-        .background(expanded ? theme.color("bg-1").opacity(0.5) : .clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(borderColor, lineWidth: 0.5)
-                .opacity(expanded ? 1 : 0)
-        )
+        .background(expanded ? theme.color("bg-2").opacity(0.5) : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         // `expandedContent` is keyed to SwiftUI view identity, not to the
         // tool call's id. If SwiftUI recycles this card for a different
         // tool call at the same position (e.g. during prepend / reorder),
@@ -186,9 +183,9 @@ struct ACPToolCallCard: View {
                         Text("No output.")
                     }
                 }
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
-                .padding(.horizontal, 12).padding(.vertical, 10)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
                 .background(theme.color("bg-0").opacity(0.55))
             } else {
                 if !toolCall.diffs.isEmpty {
@@ -205,7 +202,7 @@ struct ACPToolCallCard: View {
                         explicitLanguage: displayContentLanguage,
                         fontSize: 11.5
                     )
-                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
                         .background(theme.color("bg-0").opacity(0.55))
                 }
                 if !toolCall.assets.isEmpty {
@@ -219,9 +216,9 @@ struct ACPToolCallCard: View {
             }
             if let name = toolCall.nonEmptyName {
                 Text("name: \(name)")
-                    .font(.system(size: 9.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
-                    .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 8)
+                    .padding(.horizontal, scale.space[3]).padding(.top, scale.space[1]).padding(.bottom, scale.space[2])
             }
         }
     }
@@ -238,7 +235,7 @@ struct ACPToolCallCard: View {
                 ACPToolCallAssetView(asset: entry.element, trustedImageRoot: trustedImageRoot)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
         .background(theme.color("bg-0").opacity(0.55))
     }
 
@@ -254,21 +251,17 @@ struct ACPToolCallCard: View {
             EmptyView()
         case "failed":
             Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(theme.color("del"))
         case "canceled", "cancelled":
             Image(systemName: "stop.fill")
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(theme.color("fg-faint"))
         default:
             Text(toolCall.status)
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
         }
-    }
-
-    private var borderColor: Color {
-        expanded ? theme.color("bg-4") : theme.color("line")
     }
 
     private var presentation: ACPToolCallPresentation {
@@ -305,6 +298,7 @@ struct ACPToolCallDiffSectionView: View {
     var collapsedMaxLines = 40
     @State private var showsAll = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -319,9 +313,9 @@ struct ACPToolCallDiffSectionView: View {
                 )
             case .unavailable:
                 Text("Change unavailable")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -346,8 +340,8 @@ struct ACPToolCallDiffSectionView: View {
                 Text(verbatim: "−\(section.removed)").foregroundStyle(theme.color("del"))
             }
         }
-        .font(.system(size: 11, design: .monospaced))
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .font(scale.meta.font(design: .monospaced))
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1"))
     }
 }
@@ -391,42 +385,22 @@ private struct ACPToolCallAssetView: View {
     let asset: ACPMessage.ToolCallAsset
     let trustedImageRoot: URL?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    @Environment(\.acpTranscriptImageReader) private var imageReader
 
     var body: some View {
-        switch asset.kind {
-        case .image:
-            if asset.canLoadImage(trustedRoot: trustedImageRoot) {
-                cachedImageThumbnail
-            } else if let remoteImage = remoteImageLocation {
-                RemoteToolCallAssetImage(
-                    host: remoteImage.host,
-                    worktreeRoot: remoteImage.worktreeRoot,
-                    path: remoteImage.path,
-                    asset: asset
-                )
-            } else {
-                compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
-            }
-        case .resource:
-            if asset.looksLikeImage, asset.canLoadImage(trustedRoot: trustedImageRoot) {
-                cachedImageThumbnail
-            } else if asset.looksLikeImage, let remoteImage = remoteImageLocation {
-                RemoteToolCallAssetImage(
-                    host: remoteImage.host,
-                    worktreeRoot: remoteImage.worktreeRoot,
-                    path: remoteImage.path,
-                    asset: asset
-                )
-            } else {
-                compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
-            }
+        if asset.kind == .image || asset.looksLikeImage {
+            cachedImageThumbnail
+        } else {
+            compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
         }
     }
 
     private var cachedImageThumbnail: some View {
         ACPCachedThumbnail(
-            cacheKey: asset.thumbnailCacheKey(trustedRoot: trustedImageRoot),
-            loadImage: { asset.loadedImage(trustedRoot: trustedImageRoot) }
+            cacheKey: asset.transcriptImageCacheKey(trustedRoot: trustedImageRoot, reader: imageReader),
+            loadImage: { await asset.loadedTranscriptImage(trustedRoot: trustedImageRoot, reader: imageReader) }
         ) { image in
             imageThumbnail(image)
                 .help(asset.displayText)
@@ -438,59 +412,47 @@ private struct ACPToolCallAssetView: View {
         }
     }
 
-    private var remoteImageLocation: (host: String, worktreeRoot: String, path: String)? {
-        guard let trustedImageRoot, trustedImageRoot.isRemoteAlasPath,
-              let host = RemoteHostRegistry.shared.host(forPath: trustedImageRoot.path),
-              let uri = asset.uri,
-              let path = ACPToolCallCard.trustedRemotePath(
-                from: uri,
-                trustedRoot: trustedImageRoot
-              )
-        else { return nil }
-        return (host, trustedImageRoot.standardizedFileURL.path, path)
-    }
-
     private func imageThumbnail(_ image: NSImage) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-1").opacity(0.7))
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .padding(6)
+                .padding(scale.space[2])
         }
             .frame(width: 160, height: 120)
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
     }
 
     private var imagePlaceholder: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-1").opacity(0.7))
             Image(systemName: "photo")
-                .font(.system(size: 20))
+                .font(.system(size: 20)) // design-literal: placeholder symbol filling a thumbnail
                 .foregroundStyle(theme.color("fg-faint"))
         }
         .frame(width: 160, height: 120)
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
     }
 
     private func compactRow(iconSystemName: String, title: String, detail: String?) -> some View {
         HStack(spacing: 8) {
             Image(systemName: iconSystemName)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 18, height: 18)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -499,104 +461,10 @@ private struct ACPToolCallAssetView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(theme.color("bg-1").opacity(0.7))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
+        .background(theme.color("bg-2").opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .help(asset.displayText)
-    }
-}
-
-private struct RemoteToolCallAssetImage: View {
-    let host: String
-    let worktreeRoot: String
-    let path: String
-    let asset: ACPMessage.ToolCallAsset
-    @State private var image: NSImage?
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        Group {
-            if let image {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(theme.color("bg-1").opacity(0.7))
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(6)
-                }
-                .frame(width: 160, height: 120)
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
-            } else {
-                placeholder
-            }
-        }
-        .help(asset.displayText)
-        .task(id: "\(host)\u{0}\(path)") {
-            image = nil
-            guard (try? await ACPRemoteFileServer(host: host, worktreeRoot: worktreeRoot)
-                .verifyRemoteContainment(path: path)) != nil
-            else { return }
-            guard let data = await RemoteImageCache.shared.imageData(host: host, path: path),
-                  !Task.isCancelled
-            else { return }
-            image = NSImage(data: data)
-        }
-    }
-
-    private var placeholder: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("accent"))
-                .frame(width: 18, height: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(asset.displayTitle)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let detail = asset.displayDetail {
-                    Text(detail)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(theme.color("fg-faint"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(theme.color("bg-1").opacity(0.7))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
-    }
-}
-
-extension ACPToolCallCard {
-    /// Resolves a remote tool asset under its worktree using the same lexical
-    /// containment rule as ACP remote file serving. Remote symlinks are not
-    /// resolved here because doing so would require an SSH round trip.
-    static func trustedRemotePath(from value: String, trustedRoot: URL) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        let candidate: String
-        if let url = URL(string: trimmed), let scheme = url.scheme {
-            guard scheme.lowercased() == "file" else { return nil }
-            candidate = url.path
-        } else if trimmed.hasPrefix("/") {
-            candidate = trimmed
-        } else {
-            candidate = trustedRoot.path + "/" + trimmed
-        }
-
-        let root = trustedRoot.standardizedFileURL.path
-        return try? ACPRemoteFileServer(host: "", worktreeRoot: root)
-            .lexicallyResolveInsideWorktree(path: candidate)
     }
 }
 
@@ -635,6 +503,22 @@ extension ACPMessage.ToolCallAsset {
         }
         guard let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) else { return nil }
         return NSImage(contentsOf: url)
+    }
+
+    func loadedTranscriptImage(trustedRoot: URL?, reader: ACPTranscriptImageReader?) async -> NSImage? {
+        if let embedded = loadedImage(trustedRoot: nil) { return embedded }
+        guard let uri, !Self.isDataURI(uri) else { return nil }
+        let bytes: Data?
+        if let reader {
+            bytes = await reader.read(uri)
+        } else {
+            bytes = await TranscriptImageFile.read(uri, root: trustedRoot)
+        }
+        return bytes.flatMap(NSImage.init(data:))
+    }
+
+    func transcriptImageCacheKey(trustedRoot: URL?, reader: ACPTranscriptImageReader?) -> String {
+        "\(reader?.id ?? trustedRoot?.absoluteString ?? "none"):\(thumbnailCacheKey(trustedRoot: reader == nil ? trustedRoot : nil))"
     }
 
     func thumbnailCacheKey(trustedRoot: URL?) -> String {
@@ -697,22 +581,8 @@ extension ACPMessage.ToolCallAsset {
     }
 
     static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {
-        guard let trustedRoot else { return nil }
-        let candidate: URL
-        if let url = URL(string: value), let scheme = url.scheme {
-            guard scheme.lowercased() == "file" else { return nil }
-            candidate = url
-        } else if value.hasPrefix("/") {
-            candidate = URL(fileURLWithPath: value)
-        } else {
-            candidate = trustedRoot.appendingPathComponent(value)
-        }
-        let root = trustedRoot.resolvingSymlinksInPath().standardizedFileURL
-        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
-        let rootPath = root.path
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        guard resolved.path == rootPath || resolved.path.hasPrefix(rootPrefix) else { return nil }
-        return resolved
+        guard case .local(let url) = TranscriptImageFile.resolve(value, root: trustedRoot) else { return nil }
+        return url
     }
 
     private static func displayURL(from value: String) -> URL? {

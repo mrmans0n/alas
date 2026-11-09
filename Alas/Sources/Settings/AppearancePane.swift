@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AppearancePane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -24,10 +25,10 @@ struct AppearancePane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Appearance").font(.system(size: 18, weight: .semibold))
+                Text("Appearance").font(SettingsPaneStyle.titleFont)
                 Text("Themes, window chrome, and display defaults.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Theme") {
                     SettingsRow(name: "Color scheme",
@@ -49,20 +50,20 @@ struct AppearancePane: View {
                                     VStack(spacing: 4) {
                                         ZStack(alignment: .topLeading) {
                                             Rectangle().fill(c1).frame(width: 72, height: 46)
-                                            Rectangle().fill(c2).frame(width: 16, height: 4).padding(4)
+                                            Rectangle().fill(c2).frame(width: 16, height: 4).padding(scale.space[1])
                                         }
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
+                                            RoundedRectangle(cornerRadius: scale.radius.small)
                                                 .strokeBorder(state.config.themeId == id ? theme.color("accent") : Color.black.opacity(0.4),
                                                               lineWidth: state.config.themeId == id ? 2 : 0.5)
                                         )
-                                        Text(name).font(.system(size: 10.5))
+                                        Text(name).font(scale.caption.font(weight: .regular))
                                             .foregroundColor(theme.color("fg-muted"))
                                     }
-                                    .padding(4)
+                                    .padding(scale.space[1])
                                     .background(state.config.themeId == id ? theme.color("accent-soft") : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -110,6 +111,22 @@ struct AppearancePane: View {
                         AlasSlider(value: chromeBinding(\.textContrast), range: 0...1, step: 0.05)
                     }
                 }
+                SettingsGroup(title: "Density") {
+                    SettingsRow(name: "Density",
+                                desc: "How tightly the sidebar and agent chat are packed.") {
+                        AlasSegmentedControl(
+                            selection: state.config.density,
+                            options: [
+                                AlasSegmentedOption(id: UIDensity.comfortable, label: "Comfortable"),
+                                AlasSegmentedOption(id: UIDensity.compact, label: "Compact"),
+                            ],
+                            onSelect: {
+                                state.config.density = $0
+                                state.saveConfig()
+                            }
+                        )
+                    }
+                }
                 SettingsGroup(title: "Chat") {
                     SettingsRow(name: "Chat material",
                                 desc: "Behind agent chat transcripts and the composer.") {
@@ -145,7 +162,7 @@ struct AppearancePane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
     }
 

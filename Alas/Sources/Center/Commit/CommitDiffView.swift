@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CommitDiffView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let sha: String
     let file: CommitChangedFile
@@ -95,7 +96,7 @@ struct CommitDiffView: View {
                 )
             } else {
                 Text("Could not load image diff for \(path)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -126,8 +127,8 @@ struct CommitDiffView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
+            HStack(spacing: scale.space[2]) {
                 Text((path as NSString).lastPathComponent)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                     .foregroundColor(titleHovering ? theme.color("accent") : theme.color("fg"))
@@ -148,7 +149,7 @@ struct CommitDiffView: View {
                 AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.4), alignment: .bottom)
         .copyFeedbackOverlay(message: copyFeedback.message)

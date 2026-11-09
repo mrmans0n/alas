@@ -245,8 +245,14 @@ public final class ACPSessionOrchestrationCoordinator {
     private var peerOutboxSignals: [String: Int] = [:]
     /// Counts each prompt a child's peer accepted, for waits already under way.
     private var peerChildSends: [String: Int] = [:]
-    /// Awaited children a peer last said were idle, with the wait they were on.
-    private var quietPeerChildren: [String: Int64] = [:]
+    /// Awaited children a peer last said were idle, with the wait they were
+    /// on and the sends counted by then: a send since may start another turn.
+    private var quietPeerChildren: [String: QuietPeerWait] = [:]
+
+    private struct QuietPeerWait: Equatable {
+        let since: Int64
+        let sends: Int64
+    }
     private var lastSeenPeerOnline: [String: Int64] = [:]
     private var peerOutages: [String: PeerOutage] = [:]
     private var peerOutageCount = 0
@@ -423,6 +429,7 @@ public final class ACPSessionOrchestrationCoordinator {
         case .unreachable(let peer): "\(peer) cannot be reached right now. Check that it is online and paired."
         case .outdated(let peer): "\(peer) runs a version of Alas that cannot take delegated work. Update Alas on it."
         case .revoked(let peer): "This Mac's pairing with \(peer) was revoked."
+        case .unproven(let peer): Self.unprovenMessage(peer)
         case .refused(let reason): reason
         case .notFound: "The peer has no such session."
         }
@@ -812,8 +819,26 @@ public final class ACPSessionOrchestrationCoordinator {
             await deleteOutbox(forPeer: serverId)
         }
         guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
-        let unfinished = children.filter(Self.isUnfinishedOnPeer)
         let message = forgotten ? Self.forgottenMessage(name) : Self.message(for: .revoked(peer: name))
+        await failUnfinishedChildren(children, message: message)
+    }
+
+    /// `serverId` refuses this Mac's delegation requests until the two pair
+    /// again, so its unfinished children fail with one wake each, as for a
+    /// revoked pairing. The children keep running there, and pairing again
+    /// still brings their results, as something to read.
+    public func peerIdentityUnproven(serverId: String, name: String) async {
+        let name = ACPPeerName.sanitized(name) ?? serverId
+        guard let children = try? await environment.persistence.peerChildren(peerServerId: serverId) else { return }
+        await failUnfinishedChildren(children, message: Self.unprovenMessage(name))
+    }
+
+    private static func unprovenMessage(_ peer: String) -> String {
+        "\(peer) cannot confirm this Mac's identity, so it refuses delegated work from it. Pair the two Macs again."
+    }
+
+    private func failUnfinishedChildren(_ children: [ACPDelegationRecord], message: String) async {
+        let unfinished = children.filter(Self.isUnfinishedOnPeer)
         // Together, so one slow parent holds up no other, and one parent's
         // children join one wake.
         let failures = unfinished.map { child in
@@ -889,7 +914,7 @@ public final class ACPSessionOrchestrationCoordinator {
                     continue
                 }
                 guard let child = waiting.first(where: { $0.childSessionId == id }) else { continue }
-                let wait = child.peerAwaitingSince ?? 0
+                let wait = QuietPeerWait(since: child.peerAwaitingSince ?? 0, sends: child.peerSends)
                 guard quietPeerChildren[id] == wait else {
                     quietPeerChildren[id] = wait
                     continue
@@ -906,7 +931,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 // prompt started another wait, or another instance on the store
                 // got here first. A throw leaves it awaited, for a later poll.
                 guard (try? await environment.persistence.claimLostPeerTurn(
-                    childSessionId: id, awaitingSince: child.peerAwaitingSince, outcome: outcome
+                    childSessionId: id, awaitingSince: child.peerAwaitingSince, sends: child.peerSends, outcome: outcome
                 )) == true else { continue }
                 environment.notifyChanged()
                 await deliverPendingMessages(to: child.parentSessionId, callerParent: child)
@@ -951,6 +976,14 @@ public final class ACPSessionOrchestrationCoordinator {
         let serverId = child.peerServerId ?? ""
         guard let peers = environment.delegationPeers() else {
             return .error(Self.message(for: .unreachable(peer: peerName(serverId))))
+        }
+        // Before sending: a quiet check whose status predates the peer
+        // accepting this prompt must not end the wait it starts.
+        do {
+            try await environment.persistence.notePeerSendStarting(childSessionId: child.childSessionId)
+        } catch {
+            Logger(subsystem: "io.nlopez.alas", category: "peer-outbox")
+                .error("Could not note a send to session \(child.childSessionId, privacy: .public): \(String(describing: error), privacy: .public)")
         }
         switch await peers.send(serverId: serverId, sessionID: child.childSessionId, prompt: prompt) {
         case .success(let acceptedAt):
@@ -1078,7 +1111,7 @@ public final class ACPSessionOrchestrationCoordinator {
                 where state.heard[id]?.state == ACPOrchestrationWaitResponse.Session.peerUnreachableState {
                     state.heard[id] = nil
                 }
-            case .failure(.unreachable), .failure(.outdated), .failure(.revoked):
+            case .failure(.unreachable), .failure(.outdated), .failure(.revoked), .failure(.unproven):
                 // A child the revocation failed reports that from its row and
                 // is not asked about. One it left alone is not called failed:
                 // pairing again would still bring its outcome.

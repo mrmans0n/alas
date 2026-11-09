@@ -37,6 +37,7 @@ struct ACPMessageMenuItem {
 }
 
 struct ACPMessageGutter<Content: View>: View {
+    @Environment(\.designScale) private var scale
     typealias CopySource = ACPMessageCopySource
 
     /// Produces the raw Markdown copied by "Copy message". Streaming rows keep
@@ -125,28 +126,28 @@ struct ACPMessageGutter<Content: View>: View {
     @ViewBuilder private var timestamp: some View {
         if let messageCreatedAt {
             Text(ACPMessageTimestampFormatter.string(for: messageCreatedAt))
-                .font(.system(size: 10).monospacedDigit())
+                .font(scale.caption.font(weight: .regular).monospacedDigit())
                 .foregroundStyle(theme.color("fg-faint"))
                 .accessibilityHidden(true)
         }
     }
 
     private var actionButtons: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             if showsInlineTimestamp, messageCreatedAt != nil, let checkpointID {
                 Button {
                     onRestoreCheckpoint(checkpointID)
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(scale.captionFont)
                         .frame(width: 19, height: 19)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.color("fg-muted"))
                 .background(theme.color("bg-3").opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: scale.radius.small)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
                 .contentShape(Rectangle())
@@ -171,9 +172,9 @@ struct ACPMessageGutter<Content: View>: View {
         )
             .frame(width: 19, height: 19)
             .background(theme.color("bg-3").opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
             .contentShape(Rectangle())

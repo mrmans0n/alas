@@ -5,6 +5,7 @@ import SwiftUI
 /// "Kill all idle" bulk action. Loads on appear, after any kill, and on the
 /// Refresh button — no background polling.
 struct OpenSessionsSection: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
@@ -70,7 +71,7 @@ struct OpenSessionsSection: View {
     private var header: some View {
         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
             Text("Long-running zmx sessions. Idle ones can be killed to reclaim resources.")
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
@@ -81,23 +82,23 @@ struct OpenSessionsSection: View {
                     .disabled(isLoading)
             }
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, scale.space[2])
     }
 
     private func subsectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .tracking(0.5)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.top, 12)
-            .padding(.bottom, 2)
+            .padding(.top, scale.space[3])
+            .padding(.bottom, scale.space[0])
     }
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
-            .padding(.vertical, 10)
+            .padding(.vertical, scale.space[3])
     }
 
     // MARK: actions
@@ -145,6 +146,7 @@ struct OpenSessionsSection: View {
 /// name), a subtitle (full path · command · age), an orphan-state badge, and
 /// a Kill button.
 private struct OpenSessionRowView: View {
+    @Environment(\.designScale) private var scale
     let row: OpenSessionRow
     let onKill: () -> Void
     @Environment(\.theme) var theme
@@ -168,24 +170,24 @@ private struct OpenSessionRowView: View {
         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(title).font(.system(size: 12.5, weight: .medium))
+                    Text(title).font(scale.emphasisFont)
                         .foregroundColor(theme.color("fg"))
                     badge
                 }
                 if !subtitleParts.isEmpty {
                     Text(subtitleParts.joined(separator: " · "))
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+            .padding(.top, scale.space[1])
             AlasButton(title: "Kill", style: .subtle, action: onKill)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10)
+        .padding(.vertical, scale.space[3])
         .overlay(Divider().opacity(0.5), alignment: .top)
     }
 
@@ -202,11 +204,11 @@ private struct OpenSessionRowView: View {
 
     private func badgeLabel(_ text: String, color: Color) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .tracking(0.5)
             .foregroundColor(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(color.opacity(0.5), lineWidth: 0.5))
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(color.opacity(0.5), lineWidth: 0.5))
     }
 }

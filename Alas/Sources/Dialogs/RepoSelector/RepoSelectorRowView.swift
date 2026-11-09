@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RepoSelectorRowView: View {
+    @Environment(\.designScale) private var scale
     let row: RepoSelectorRow
     let isSelected: Bool
     let projectsById: [String: ProjectConfig]
@@ -28,10 +29,10 @@ struct RepoSelectorRowView: View {
 
     private var emptyHintRow: some View {
         Text("No repositories. Press ⇥ to add one.")
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 16)
+            .padding(.vertical, scale.space[4])
             .contentShape(Rectangle())
             .onTapGesture { onTap() }
             .onHover { hovering in if hovering { onHover() } }
@@ -48,7 +49,7 @@ struct RepoSelectorRowView: View {
                 .frame(width: 2)
                 .frame(maxHeight: .infinity)
             content
-                .padding(.horizontal, 14)
+                .padding(.horizontal, scale.space[4])
         }
         .frame(height: 28)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -96,8 +97,8 @@ struct RepoSelectorRowView: View {
                             .stroke(theme.color("accent").opacity(0.25), lineWidth: 2)
                     )
             }
-            Highlighted(text: worktree.title, indices: indices)
-                .font(.system(size: 12.5, weight: isCurrent ? .semibold : .medium, design: .monospaced))
+            Highlighted(text: worktree.title, indices: indices, monospaced: false)
+                .font(scale.meta.font(weight: isCurrent ? .semibold : .medium))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -108,9 +109,9 @@ struct RepoSelectorRowView: View {
             statusText(for: worktree)
             if let project = projectsById[worktree.projectId] {
                 Text(project.name)
-                    .font(.system(size: 10, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .regular))
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, 1) // design-literal: hairline inside the project pill
                     .background(theme.color("bg-3"))
                     .foregroundColor(theme.color("fg-faint"))
                     .clipShape(Capsule())
@@ -125,11 +126,11 @@ struct RepoSelectorRowView: View {
     private func actionContent(label: String, icon: String = "plus") -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-faint"))
                 .frame(width: 16)
             Text(label)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
             Spacer(minLength: 0)
         }
@@ -139,18 +140,18 @@ struct RepoSelectorRowView: View {
     private func statusText(for w: Worktree) -> some View {
         if w.addedLines == 0, w.deletedLines == 0 {
             Text("clean")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
         } else {
             HStack(spacing: 4) {
                 if w.addedLines > 0 {
                     Text("+\(w.addedLines)")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("add"))
                 }
                 if w.deletedLines > 0 {
                     Text("−\(w.deletedLines)")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("del"))
                 }
             }
@@ -162,23 +163,23 @@ struct RepoSelectorRowView: View {
     private func headerLabel(_ text: String) -> some View {
         HStack(spacing: 6) {
             Text(text.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-faint"))
             Rectangle()
                 .fill(theme.color("line-soft"))
                 .frame(height: 0.5)
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
+        .padding(.horizontal, scale.space[4])
+        .padding(.top, scale.space[2])
+        .padding(.bottom, scale.space[0])
     }
 
     private var headerRule: some View {
         Rectangle()
             .fill(theme.color("line-soft"))
             .frame(height: 0.5)
-            .padding(.horizontal, 14)
-            .padding(.top, 6)
-            .padding(.bottom, 2)
+            .padding(.horizontal, scale.space[4])
+            .padding(.top, scale.space[2])
+            .padding(.bottom, scale.space[0])
     }
 }

@@ -75,11 +75,13 @@ struct RemoteProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+        #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served)
     }
 
-    @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {
-        let requests: [RemoteClientMessage] = [.openSessionTab(sessionId: "s"), .closeSessionTab(sessionId: "s")]
+    @Test func sessionTabAndAdapterInstallMessagesRoundTripAndKeepTheirSessionScope() throws {
+        let requests: [RemoteClientMessage] = [
+            .openSessionTab(sessionId: "s"), .closeSessionTab(sessionId: "s"), .installAdapter(sessionId: "s"),
+        ]
         for request in requests {
             #expect(try roundTrip(request) == request)
             #expect(request.sessionId == "s")
@@ -167,6 +169,30 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(ack) == ack)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
         #expect(object["challenge"] as? String == "nonce-1")
+        // Older servers read no capabilities, and are sent none.
+        #expect(object["capabilities"] == nil)
+    }
+
+    @Test func helloAckCarriesTheCapabilitiesThePeerServesBack() throws {
+        let ack = RemoteClientMessage.helloAck(
+            protocolVersion: 1, challenge: "nonce-1", capabilities: [HostProtocolCapability.delegationReverseV1])
+        #expect(try roundTrip(ack) == ack)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
+        #expect(object["capabilities"] as? [String] == ["host.delegation.reverse.v1"])
+    }
+
+    /// A request travels from server to client and its answer back, each in
+    /// the other direction's `peerHost`.
+    @Test func peerHostRoundTripsInBothDirections() throws {
+        let request = RemoteServerMessage.peerHost(HostClientMessage(id: 3, request: .delegation(.outbox(after: 5))))
+        #expect(try roundTrip(request) == request)
+        let answer = RemoteClientMessage.peerHost(.response(id: 3, result: .subscribed))
+        #expect(try roundTrip(answer) == answer)
+        let requestType = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])["type"]
+        let answerType = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])["type"]
+        #expect(requestType as? String == "peerHost")
+        #expect(answerType as? String == "peerHost")
+        #expect(request.sessionId == nil && answer.sessionId == nil)
     }
 
     // An older peer's ack has no `challenge` key at all; it must still
@@ -1163,6 +1189,9 @@ struct RemoteProtocolTests {
 
         let readFile = RemoteClientMessage.readFile(sessionId: "s1", path: "README.md")
         #expect(try roundTrip(readFile) == readFile)
+        let image = RemoteClientMessage.readTranscriptImage(sessionId: "s1", path: "/tmp/shot.png")
+        #expect(try roundTrip(image) == image)
+        #expect(image.fileRequestDedupKey == "readTranscriptImage\u{0}s1\u{0}/tmp/shot.png")
 
         let object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(fileDiff)) as? [String: Any])
@@ -1185,6 +1214,10 @@ struct RemoteProtocolTests {
         let changeFailure = RemoteServerMessage.changeListFailed(
             sessionId: "s1", reason: .worktreeUnavailable, message: nil)
         #expect(try roundTrip(changeFailure) == changeFailure)
+        for data in [nil, Data([137, 80, 78, 71])] as [Data?] {
+            let image = RemoteServerMessage.transcriptImage(sessionId: "s1", path: "/tmp/shot.png", data: data)
+            #expect(try roundTrip(image) == image)
+        }
 
         let hunk = RemoteDiffHunk(
             header: "@@ -1,2 +1,3 @@", oldStart: 1, newStart: 1,

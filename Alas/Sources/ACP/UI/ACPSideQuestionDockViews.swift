@@ -126,6 +126,7 @@ struct ACPSideQuestionResizeGrip: View {
 /// Dashed targets shown while the card's header is dragged. The zones come
 /// from `ACPSideQuestionDockLayout`, so what's drawn is what a drop hits.
 struct ACPSideQuestionDropZones: View {
+    @Environment(\.designScale) private var scale
     let size: CGSize
     let highlighted: ACPSideQuestionDock?
 
@@ -136,17 +137,17 @@ struct ACPSideQuestionDropZones: View {
             ForEach(ACPSideQuestionDock.allCases, id: \.self) { dock in
                 let rect = ACPSideQuestionDockLayout.zone(for: dock, in: size).insetBy(dx: 8, dy: 8)
                 let isOn = dock == highlighted
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("accent").opacity(isOn ? 0.16 : 0.05))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10).strokeBorder(
+                        RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(
                             theme.color("accent").opacity(isOn ? 0.9 : 0.4),
                             style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
                         )
                     )
                     .overlay {
                         Label(dock.title, systemImage: dock.symbol)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundStyle(theme.color("accent"))
                     }
                     .frame(width: max(0, rect.width), height: max(0, rect.height))

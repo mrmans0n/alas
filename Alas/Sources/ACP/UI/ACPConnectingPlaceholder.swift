@@ -5,6 +5,7 @@ import SwiftUI
 /// the user knows something's happening between tab open and the first
 /// agent token.
 struct ACPConnectingPlaceholder: View {
+    @Environment(\.designScale) private var scale
     let agentDisplayName: String
     let connectionStartedAt: Date?
     let reconnectAvailable: Bool
@@ -15,7 +16,7 @@ struct ACPConnectingPlaceholder: View {
     @State private var pulse = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: scale.space[4]) {
             statusHeader
             ACPStalledConnectionButton(
                 startedAt: connectionStartedAt,
@@ -30,8 +31,8 @@ struct ACPConnectingPlaceholder: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: 720, alignment: .leading)
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
+        .padding(.horizontal, scale.space[5])
+        .padding(.top, scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
             if !backgroundIsMaterial {
@@ -49,36 +50,36 @@ struct ACPConnectingPlaceholder: View {
     }
 
     private var statusHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Spinner().frame(width: 14, height: 14)
             Text("Connecting to \(agentDisplayName)…")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
         }
-        .padding(.bottom, 4)
+        .padding(.bottom, scale.space[1])
     }
 
     private var skeletonToolRow: some View {
-        HStack(spacing: 8) {
-            shimmerRect.frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 4))
-            shimmerRect.frame(width: 48, height: 10).clipShape(RoundedRectangle(cornerRadius: 3))
-            shimmerRect.frame(width: 140, height: 16).clipShape(RoundedRectangle(cornerRadius: 5))
+        HStack(spacing: scale.space[2]) {
+            shimmerRect.frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            shimmerRect.frame(width: 48, height: 10).clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            shimmerRect.frame(width: 140, height: 16).clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func skeletonBlock(lineCount: Int, widths: [CGFloat]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ForEach(0..<lineCount, id: \.self) { i in
                 let w = i < widths.count ? widths[i] : 0.5
                 GeometryReader { geo in
                     shimmerRect
                         .frame(width: geo.size.width * w, height: 11)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 .frame(height: 11)
             }

@@ -32,6 +32,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     /// Opens the restore preview for a user row's checkpoint; nil hides the action.
     var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
 
+    var imageReader: ACPTranscriptImageReader? = nil
     var visualActions: ACPVisualAidActions = .readOnly
     var visualForm: (ACPVisualAid) -> ACPUserInputFormState? = { _ in nil }
     var visualStatus: (UUID) -> ACPVisualAidSendStatus = { _ in ACPVisualAidSendStatus() }
@@ -366,13 +367,14 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         private struct ThemedToken<Base: Equatable>: Equatable {
             let theme: Theme
             let contentMaxWidth: CGFloat
+            let imageReaderID: String?
             let base: Base
         }
 
-        /// Hosted rows bake the theme and column width in at build time, so
-        /// both belong in every token.
+        /// Hosted rows capture their environment at build time. Refresh them
+        /// when a peer's image-serving capability becomes available too.
         private static func token<T: Equatable>(_ base: T, host: NativePeerTranscriptScroller) -> ACPRowEqualityToken {
-            ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, base: base))
+            ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, imageReaderID: host.imageReader?.id, base: base))
         }
 
         /// Each row lives in its own `NSHostingView`, outside the SwiftUI
@@ -387,6 +389,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.theme, host.theme)
                     .environment(\.openURL, host.openURL)
+                    .environment(\.acpTranscriptImageReader, host.imageReader)
             )
         }
 

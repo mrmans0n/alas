@@ -3,6 +3,7 @@ import SwiftUI
 /// Renames the branch a worktree has checked out. The directory stays where it
 /// is: worktree identity is its path.
 struct RenameBranchDialog: View {
+    @Environment(\.designScale) private var scale
     let branch: String
     let subtitle: String
     /// Nil hides the suggestion button.
@@ -62,7 +63,6 @@ struct RenameBranchDialog: View {
                 DialogField(label: "Branch name") {
                     AlasField(
                         text: $name,
-                        monospaced: true,
                         focusOnAppear: true,
                         onSubmit: renameBranch,
                         disablesAutomaticTextSubstitutions: true,
@@ -71,7 +71,7 @@ struct RenameBranchDialog: View {
                     .aiBeam(isActive: suggestionTask != nil)
                 }
                 if let message = errorMessage ?? validationMessage {
-                    Text(message).font(.system(size: 11)).foregroundColor(.red)
+                    Text(message).font(scale.metaFont).foregroundColor(.red)
                 }
             },
             cancelTitle: "Cancel",

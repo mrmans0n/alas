@@ -212,8 +212,11 @@ public enum HostDelegationRequest: Codable, Equatable, Sendable {
     /// Cancels a child's running turn, as `session_interrupt` does.
     case interrupt(sessionID: String)
     /// Outbox entries after `seq`, a page at a time. Asking also acknowledges
-    /// everything up to `after`.
-    case outbox(after: Int64)
+    /// everything up to `after`. `store` is the store the caller's cursor
+    /// counts in, from an earlier answer: a store that is not this host's
+    /// any more is answered from the start, acknowledging nothing. Nil from
+    /// a caller that knows none, or an older build.
+    case outbox(after: Int64, store: String? = nil)
 
     private enum StartCodingKeys: String, CodingKey { case _0 = "start" }
 }
@@ -281,7 +284,9 @@ public enum HostDelegationResponse: Codable, Equatable, Sendable {
     /// `ACPOrchestrationWaitResponse`, encoded.
     case status(data: Data)
     case interrupted(cancelRequested: Bool)
-    case outbox(entries: [ACPPeerOutboxEntry], hasMore: Bool)
+    /// `store` identifies the database the entries' `seq` counts in; nil
+    /// from an older build.
+    case outbox(entries: [ACPPeerOutboxEntry], hasMore: Bool, store: String? = nil)
 
     private enum DiscoveredCodingKeys: String, CodingKey { case _0 = "discovery" }
 }
@@ -400,6 +405,9 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     /// A file's raw bytes, for a preview: the working tree's when `revision`
     /// is nil. Answered as `.fileBytes` or `.fileUnavailable`.
     case fileBytes(path: String, revision: HostFileRevision?)
+    /// An image referenced by a transcript, including screenshots outside the worktree.
+    /// Answered as `.fileBytes` or `.fileUnavailable`.
+    case transcriptImage(path: String)
     /// The commits that touched a file, newest first and following renames,
     /// up to `RemoteWorktreeFileAccess.maxHistoryEntries`. Answered as
     /// `.fileHistory` or `.fileHistoryFailed`.
@@ -636,13 +644,18 @@ public struct HostPeerSummary: Codable, Equatable, Sendable {
     public var origins: [String]
     /// Nil for a peer that never completed reciprocal pairing, or from an older host.
     public var agentAccess: RemoteDeviceAgentAccess?
+    /// What this host's token for the peer may do there. Nil when it holds
+    /// none, or from an older host.
+    public var tokenScope: RemoteDeviceScope?
 
-    public init(id: String, serverId: String, name: String, origins: [String], agentAccess: RemoteDeviceAgentAccess? = nil) {
+    public init(id: String, serverId: String, name: String, origins: [String], agentAccess: RemoteDeviceAgentAccess? = nil,
+                tokenScope: RemoteDeviceScope? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
         self.origins = origins
         self.agentAccess = agentAccess
+        self.tokenScope = tokenScope
     }
 
     /// The peer `query` names: its id or server id, else a name only one peer has.
@@ -747,6 +760,9 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case workspace(error: WorkspaceAutomationError)
     case session(refusal: SessionRefusal)
     case failed(message: String)
+    /// The caller's device never proved the identity it paired with, so this
+    /// host will not attribute delegated work to it. Pairing again fixes it.
+    case peerIdentityUnproven
     /// The file is no longer at the version the client named: `current`, or nil when it is gone.
     case fileChanged(current: WorktreeFileVersion?)
 }

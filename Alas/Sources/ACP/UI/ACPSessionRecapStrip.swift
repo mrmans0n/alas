@@ -6,6 +6,7 @@ import SwiftUI
 /// button, expanded. It gates itself so only the tab whose session the
 /// coordinator is bound to renders it.
 struct ACPSessionRecapStrip: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var coordinator: SessionSummaryCoordinator
     @ObservedObject var session: ACPSession
 
@@ -28,18 +29,18 @@ struct ACPSessionRecapStrip: View {
     var body: some View {
         let content = content
         if content != .hidden {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 headerRow(content)
                 if isExpanded, case .sections(let sections, let recentContext) = content {
                     details(sections, recentContext: recentContext)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.color("accent").opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(theme.color("accent").opacity(0.08), in: RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                     .strokeBorder(theme.color("accent").opacity(0.22), lineWidth: 0.5)
             }
             .onChange(of: coordinator.cardMode) { _, _ in expansionOverride = nil }
@@ -54,10 +55,10 @@ struct ACPSessionRecapStrip: View {
     }
 
     private func headerRow(_ content: ACPSessionSummaryPresentation.CardContent) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Label("Recap", systemImage: "arrow.counterclockwise")
                 .labelStyle(.titleAndIcon)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
                 .fixedSize()
                 .accessibilityAddTraits(.isHeader)
@@ -69,7 +70,7 @@ struct ACPSessionRecapStrip: View {
                 Spacer(minLength: 0)
             case .failed(let message):
                 Text(message)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -79,18 +80,18 @@ struct ACPSessionRecapStrip: View {
                     Task { await coordinator.refresh(session, mode: .manual) }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("accent"))
             case .sections(let sections, _):
                 Button {
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { expansionOverride = !isExpanded }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: scale.space[2]) {
                         headline(sections)
                         Spacer(minLength: 0)
                         if !isExpanded { countChips(sections) }
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(scale.glyphFont)
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                     .contentShape(Rectangle())
@@ -118,7 +119,7 @@ struct ACPSessionRecapStrip: View {
             : ACPSessionSummaryPresentation.headline(sections)
         if let line {
             (Text("\(line.label): ").foregroundColor(theme.color("fg-muted")) + Text(line.text).foregroundColor(theme.color("fg")))
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .help(line.text)
@@ -135,10 +136,10 @@ struct ACPSessionRecapStrip: View {
 
     private func countChip(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[0])
             .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.75))
             .fixedSize()
     }
@@ -160,7 +161,7 @@ struct ACPSessionRecapStrip: View {
         _ sections: [ACPSessionSummaryPresentation.SectionDescriptor],
         recentContext: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             if recentContext {
                 Text("Summarizes recent context.")
                     .font(.caption)
@@ -186,14 +187,14 @@ struct ACPSessionRecapStrip: View {
         case .blockers: ("exclamationmark", theme.color("del"))
         case .nextAction, .goal: ("arrow.right", theme.color("accent"))
         }
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+        return HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
             Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(color)
                 .frame(width: 12)
                 .accessibilityHidden(true)
             Text(item)
-                .font(.system(size: 11.5, weight: kind == .nextAction ? .semibold : .regular))
+                .font(scale.meta.font(weight: kind == .nextAction ? .semibold : .regular))
                 .foregroundStyle(theme.color("fg"))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -203,10 +204,10 @@ struct ACPSessionRecapStrip: View {
     }
 
     private var loadingLabel: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if reduceMotion {
                 Image(systemName: "hourglass")
-                    .font(.system(size: 10))
+                    .font(scale.caption.font(weight: .regular))
                     .accessibilityHidden(true)
             } else {
                 Spinner(lineWidth: 1.5)
@@ -214,7 +215,7 @@ struct ACPSessionRecapStrip: View {
                     .accessibilityHidden(true)
             }
             Text("Catching up…")
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
         }
         .foregroundStyle(theme.color("fg-muted"))
         .accessibilityElement(children: .combine)
@@ -223,7 +224,7 @@ struct ACPSessionRecapStrip: View {
     private func iconButton(_ systemName: String, help: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
                 .frame(width: 14, height: 14)
                 .contentShape(Rectangle())

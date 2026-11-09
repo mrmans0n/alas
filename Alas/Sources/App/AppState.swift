@@ -165,7 +165,12 @@ final class AppState {
             scheduleCancellation: { action in _ = Task { await action() } }
         )
     }
-    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(
+        engine: NextPromptSourceRouter(
+            onDevice: nextPromptInference,
+            agent: NextPromptAgentEngine { [weak self] id in self?.agentPrediction(for: id) }
+        )
+    ) { [weak self] turn in
         self?.nextPromptSnapshot(for: turn)
     }
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
@@ -434,6 +439,7 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     /// Exists only while `config.pluginsEnabled` is on.
     var pluginManager: PluginManager?
+    @ObservationIgnored var pluginStackInventories: [String: PluginStackInventoryCache] = [:]
     /// For each project a plugin listens for `review.changed` in, the host
     /// subscription that follows its worktrees' review status.
     @ObservationIgnored var pluginReviewFollows: [String: HostSubscription] = [:]
@@ -726,6 +732,19 @@ final class AppState {
         boot: { try await SimulatorControl.boot(udid: $0) }
     )
     var harness: HarnessService { core.harness }
+
+    /// The agents running in a worktree's terminal panes and chat tabs,
+    /// rolled up as the sidebar row and the Changes tab show them.
+    func harnessSummary(forWorktree worktreeId: String) -> HarnessService.WorktreeHarnessSummary? {
+        let ids = tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+            switch tab {
+            case .terminal(let s): return s.root.leaves().map(\.sessionId)
+            case .acpSession(let s): return [s.sessionId]
+            default: return []
+            }
+        }
+        return harness.summary(forSessionIds: ids)
+    }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
     @ObservationIgnored
@@ -794,9 +813,20 @@ final class AppState {
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)
         }
+        manager.signRedeem = { [weak self] code, serverId in
+            self?.remoteIdentityKey.redeemProof(code: code, serverId: serverId)
+        }
         core.watchForRevokedPeers(of: manager)
+        core.delegationPeerRecordName = { [weak manager] serverId in
+            manager?.peers.first { $0.serverId == serverId }?.name
+        }
+        // Before any link connects, so each offers the route it serves.
+        peerRouteHost = PeerRouteHost(links: manager, server: HostProtocolServer(host: host))
         return manager
     }()
+    /// Serves the delegation requests a host that paired with this Mac
+    /// inbound-only sends back over this Mac's link to it.
+    @ObservationIgnored private var peerRouteHost: PeerRouteHost?
     /// Nearby Alas instances. Lazy like `remotePeers`; started and stopped by
     /// the Peers section while it is on screen, never app-wide.
     @ObservationIgnored
@@ -1923,6 +1953,8 @@ final class AppState {
         installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
+        // The agent as the suggestion source needs no local model.
+        if nextPromptUsesAgent { ensureNextPromptObserversStarted() }
         vmManager.isRemoteWorktree = { [weak self] worktreeID in
             RemotePath.isReserved(worktreeID)
                 || self?.projectAndWorktree(withWorktreeId: worktreeID)?.project.host != nil
@@ -5847,6 +5879,7 @@ final class AppState {
     /// has actually landed gives any follower that raced ahead a second,
     /// guaranteed-fresh reload instead of sticking to a stale entry.
     private func invalidateGGStackCacheAndRebumpGeneration(projectId: String) {
+        GGProjectMutationGate.shared.invalidate(project: projectId)
         Task { @MainActor in
             await ggStackCache.invalidate()
             self.bumpRevisionGenerationForProject(projectId: projectId)
@@ -6396,6 +6429,7 @@ final class AppState {
             .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
         let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        if changed { GGProjectMutationGate.shared.invalidate(project: projectId) }
         let completedCreateFailure = await completeReconciledCreateFailures(
             projectId: projectId,
             previousOperationStates: previousOperationStates

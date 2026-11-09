@@ -154,22 +154,46 @@ public actor ACPOrchestrationPersistence {
     public func collectPeerEntry(
         _ entry: ACPPeerOutboxEntry,
         peerServerId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        store: String?
     ) throws -> Bool {
-        try openedStore().collectPeerEntry(entry, peerServerId: peerServerId, parentSessionId: parentSessionId)
+        try openedStore().collectPeerEntry(entry, peerServerId: peerServerId, parentSessionId: parentSessionId, store: store)
     }
 
     @discardableResult
-    public func advancePeerCursor(peerServerId: String, to seq: Int64, settling entry: ACPPeerOutboxEntry? = nil) throws -> Bool {
-        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, settling: entry)
+    public func advancePeerCursor(
+        peerServerId: String, to seq: Int64, store: String?, settling entry: ACPPeerOutboxEntry? = nil
+    ) throws -> Bool {
+        try openedStore().advancePeerCursor(peerServerId: peerServerId, to: seq, store: store, settling: entry)
     }
 
-    public func claimLostPeerTurn(childSessionId: String, awaitingSince: Int64?, outcome: ACPDelegatedMessage) throws -> Bool {
-        try openedStore().claimLostPeerTurn(childSessionId: childSessionId, awaitingSince: awaitingSince, outcome: outcome)
+    public func claimLostPeerTurn(
+        childSessionId: String, awaitingSince: Int64?, sends: Int64, outcome: ACPDelegatedMessage
+    ) throws -> Bool {
+        try openedStore().claimLostPeerTurn(
+            childSessionId: childSessionId, awaitingSince: awaitingSince, sends: sends, outcome: outcome
+        )
+    }
+
+    public func notePeerSendStarting(childSessionId: String) throws {
+        try openedStore().notePeerSendStarting(childSessionId: childSessionId)
     }
 
     public func markPeerAwaiting(childSessionId: String, since: Int64) throws {
         try openedStore().markPeerAwaiting(childSessionId: childSessionId, since: since)
+    }
+
+    public func storeIdentity() throws -> String {
+        try openedStore().storeIdentity()
+    }
+
+    public func peerPosition(peerServerId: String) throws -> ACPPeerCursorPosition {
+        try openedStore().peerPosition(peerServerId: peerServerId)
+    }
+
+    @discardableResult
+    public func adoptPeerStore(peerServerId: String, from expected: String?, to storeId: String) throws -> Bool {
+        try openedStore().adoptPeerStore(peerServerId: peerServerId, from: expected, to: storeId)
     }
 
     public func peerCursor(peerServerId: String) throws -> Int64 {

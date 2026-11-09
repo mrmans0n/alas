@@ -530,12 +530,13 @@ public struct GGService: Sendable {
 
     public func currentStackSnapshot(
         worktreePath: String,
-        refreshRemote: Bool = true
+        refreshRemote: Bool = true,
+        requireRemoteRefresh: Bool = false
     ) async throws -> GGStackSnapshot {
         let result: ProcessResult
         do {
             result = try await runner.run(
-                args: refreshRemote
+                args: requireRemoteRefresh ? ["ls", "--json", "--refresh"] : refreshRemote
                     ? ["ls", "--json"]
                     : ["ls", "--json", "--no-refresh"],
                 cwd: URL(fileURLWithPath: worktreePath)
@@ -553,6 +554,33 @@ public struct GGService: Sendable {
             throw GGServiceError.map(exitCode: result.exitCode, stderr: result.stderr)
         }
         return try GGStackSnapshot.decode(fromJSON: Data(result.stdout.utf8))
+    }
+
+    public func stackDirectory(repoPath: String) async throws -> GGStackDirectorySnapshot {
+        let result = try await runChecked(args: ["ls", "--all", "--json", "--no-refresh"], worktreePath: repoPath)
+        return try GGStackDirectorySnapshot.decode(fromJSON: Data(result.stdout.utf8))
+    }
+
+    public func remoteStackDirectory(repoPath: String) async throws -> GGRemoteStackDirectorySnapshot {
+        let result = try await runChecked(args: ["ls", "--remote", "--json"], worktreePath: repoPath)
+        return try GGRemoteStackDirectorySnapshot.decode(fromJSON: Data(result.stdout.utf8))
+    }
+
+    /// Caller validates existence and frozen scope, then acquires the project gate.
+    /// This is only invoked after a native user confirmation, never by a plugin handler.
+    public func followExistingStack(repoPath: String, name: String, clientOperationID: String) async throws {
+        guard Self.canFollowExistingStackName(name) else {
+            throw GGServiceError.commandFailed(stderr: "This stack name cannot be followed safely.")
+        }
+        _ = try await runChecked(args: ["co", name, "--worktree", "--client-operation-id", clientOperationID], worktreePath: repoPath)
+    }
+
+    /// Match gg's canonical stack-name rules without applying its space-to-hyphen conversion.
+    public static func canFollowExistingStackName(_ name: String) -> Bool {
+        (1...1024).contains(name.utf8.count) && !name.hasPrefix("-") && !name.hasPrefix(".")
+            && !name.hasSuffix(".") && !name.hasSuffix(".lock") && !name.contains("..") && !name.contains("--")
+            && !name.contains(where: { " /~^:?*[\\@".contains($0) })
+            && !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
 
     /// Streams cross-stack triage events from `gg inbox --jsonl`. Runs at the

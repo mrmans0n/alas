@@ -2344,8 +2344,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
             guard !startResults.isEmpty else { return .success(.init(sessionID: start.childID, state: "starting")) }
             return startResults.removeFirst()
         }
+        /// Holds `send` before it answers while set.
+        var sendGate: AsyncStream<Void>?
         func send(serverId: String, sessionID: String, prompt: String) async -> Result<Int64, ACPPeerError> {
             sendCalls.append((sessionID, prompt))
+            if let sendGate { for await _ in sendGate { break } }
             return sendResult
         }
         func read(serverId: String, sessionID: String, offset: Int?, limit: Int?, maxChars: Int?) async -> Result<Data, ACPPeerError> {
@@ -2366,11 +2369,15 @@ struct ACPSessionOrchestrationCoordinatorTests {
         var outboxGate: AsyncStream<Void>?
         var onOutboxCall: ((Int64) -> Void)?
         private(set) var outboxCalls: [Int64] = []
-        func outbox(serverId: String, after: Int64) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
+        /// Answers in place of `outboxAnswer` when set, given the store asked about.
+        var storedOutboxAnswer: ((Int64, String?) -> Result<ACPPeerOutboxPage, ACPPeerError>)?
+        private(set) var outboxStores: [String?] = []
+        func outbox(serverId: String, after: Int64, store: String?) async -> Result<ACPPeerOutboxPage, ACPPeerError> {
             outboxCalls.append(after)
+            outboxStores.append(store)
             onOutboxCall?(after)
             if let outboxGate { for await _ in outboxGate { break } }
-            return outboxAnswer(after)
+            return storedOutboxAnswer?(after, store) ?? outboxAnswer(after)
         }
 
         /// Serves `entries` after the asked-for `seq`, `pageSize` at a time.
@@ -2421,6 +2428,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             availabilityChanged: { coordinator.peerAvailabilityChanged(serverId: $0) },
             childBlocked: childBlocked,
             retryStarts: { await coordinator.retryPeerStarts(serverId: $0) },
+            identityUnproven: { await coordinator.peerIdentityUnproven(serverId: $0, name: $1) },
             settleQuietChildren: settleQuietChildren,
             schedule: schedule
         )
@@ -2448,7 +2456,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
     @Test func availabilityTriggersCollectFromStoredCursor() async throws {
         let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
         let fixture = try remoteFixture(peers: peers)
-        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 5)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 5, store: nil)
         let collector = makeCollector(fixture, peers: peers)
         let (calls, continuation) = AsyncStream<Int64>.makeStream()
         peers.onOutboxCall = { continuation.yield($0) }
@@ -2537,6 +2545,26 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-2"])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    /// A peer whose database was made afresh numbers its outbox from 1 again.
+    /// A cursor left at 57 would skip, and acknowledge away, every new entry.
+    @Test func aPeerWithANewStoreIsCollectedFromTheStart() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence)
+        try await fixture.persistence.advancePeerCursor(peerServerId: "srv-1", to: 57, store: nil)
+        try await fixture.persistence.adoptPeerStore(peerServerId: "srv-1", from: nil, to: "old")
+        let entries = [Self.outcome(1)]
+        peers.storedOutboxAnswer = { after, store in
+            .success(.init(entries: entries.filter { store != "new" || $0.seq > after }, hasMore: false, store: "new"))
+        }
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["outcome-1"])
+        #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 1)
+        #expect(peers.outboxStores == ["old", "new"])
     }
 
     @Test func unreadableSessionStoreNeverCountsAsAGoneParent() async throws {
@@ -2650,6 +2678,24 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(peers.outboxCalls == [0, 2])
         #expect(try await fixture.persistence.peerCursor(peerServerId: "srv-1") == 2)
+    }
+
+    /// A peer that will not trust this Mac's pairing refuses every pull, and
+    /// asking again cannot change that, so the parent hears now instead of
+    /// waiting forever. `old` was owed nothing.
+    @Test func aPeerThatCannotProveThisMacFailsWhatIsAwaitedThere() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        let fixture = try remoteFixture(peers: peers)
+        for id in ["child", "old"] { try await insertRemoteChild(fixture.persistence, id: id) }
+        try await awaitResult(fixture)
+        peers.outboxAnswer = { _ in .failure(.unproven(peer: "mini")) }
+
+        await makeCollector(fixture, peers: peers).collect(serverId: "srv-1")
+
+        let record = try await fixture.persistence.delegation(childSessionId: "child")
+        #expect(record?.phase == .failed)
+        #expect(record?.failureMessage?.hasSuffix("Pair the two Macs again.") == true)
+        #expect(try await phase(fixture.persistence, "old") == .ready)
     }
 
     @Test func signalsDuringAPullQueueOneMorePull() async throws {
@@ -3163,7 +3209,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         _ = await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More"))
         let entry = ACPPeerOutboxEntry(seq: 1, messageId: messageId, childSessionId: "child", prompt: "Done", kind: .prompt, createdAt: 1)
 
-        #expect(try await fixture.persistence.collectPeerEntry(entry, peerServerId: "srv-1", parentSessionId: Self.peerOrigin.sessionId))
+        #expect(try await fixture.persistence.collectPeerEntry(entry, peerServerId: "srv-1", parentSessionId: Self.peerOrigin.sessionId, store: nil))
 
         #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == stillAwaited)
     }
@@ -3650,7 +3696,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let fixture = try remoteFixture(peers: peers)
         let persistence = fixture.persistence
         for server in ["srv-1", "srv-2"] {
-            try await persistence.advancePeerCursor(peerServerId: server, to: 5)
+            try await persistence.advancePeerCursor(peerServerId: server, to: 5, store: nil)
             try await persistence.enqueue(.init(
                 id: "to-\(server)", sourceSessionId: "local", targetSessionId: ACPPeerParent.sentinel(serverId: server),
                 prompt: "done", createdAt: 1, kind: .prompt
@@ -3898,6 +3944,32 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
         await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    /// The peer answered idle before it accepted a prompt still on its way:
+    /// the wait that prompt starts is not ended as lost.
+    @Test(.timeLimit(.minutes(1))) func aQuietCheckDuringASendInFlightKeepsTheChildAwaited() async throws {
+        let peers = FakePeers(peers: [Self.peer("mini", id: "srv-1")])
+        peers.statusAnswer = { _, ids in FakePeers.status(ids, state: "idle", settled: true) }
+        let fixture = try remoteFixture(peers: peers)
+        try await insertRemoteChild(fixture.persistence, awaiting: true)
+        await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1")
+
+        let (statusGate, releaseStatus) = AsyncStream<Void>.makeStream()
+        peers.statusGate = statusGate
+        let asking = Task { await fixture.coordinator.settleQuietPeerChildren(serverId: "srv-1") }
+        try await waitUntil { peers.statusCalls.count == 2 }
+        let (sendGate, releaseSend) = AsyncStream<Void>.makeStream()
+        peers.sendGate = sendGate
+        let sending = Task { await fixture.coordinator.send(origin: Self.peerOrigin, request: .init(targetSessionId: "child", prompt: "More")) }
+        try await waitUntil { peers.sendCalls.count == 1 }
+        releaseStatus.finish()
+        await asking.value
+
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.peerAwaiting == true)
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        releaseSend.finish()
+        _ = await sending.value
     }
 
     /// An idle child may still have its result in the outbox until a pull finishes.

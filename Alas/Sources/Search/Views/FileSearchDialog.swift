@@ -4,6 +4,7 @@ import SwiftUI
 /// with a centered card that animates in. Pass `appState` for open-action
 /// routing.
 struct FileSearchDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var appState: AppState
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
@@ -31,13 +32,13 @@ struct FileSearchDialog: View {
                 .frame(width: 720)
                 .frame(maxHeight: 520)
                 .background(theme.color("bg-1").opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.medium, style: .continuous)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
                 .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                .padding(.top, 70)
+                .padding(.top, 70) // design-literal: palette sits a fixed distance below the window top
                 .frame(maxHeight: .infinity, alignment: .top)
                 .onTapGesture { /* swallow taps so backdrop doesn't close */ }
                 .onKeyPress { press in handleKey(press) }
@@ -82,7 +83,7 @@ struct FileSearchDialog: View {
                             contentGroupViews(model: model)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, scale.space[1])
                 }
                 .frame(minHeight: 240, maxHeight: 460)
                 .onChange(of: model.scrollToSelectionTick) { _, _ in
@@ -231,15 +232,16 @@ struct FileSearchDialog: View {
 }
 
 private struct BannerRow: View {
+    @Environment(\.designScale) private var scale
     let text: String
     @Environment(\.theme) private var theme
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("warn"))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("warn").opacity(0.10))
             .overlay(
                 Rectangle()

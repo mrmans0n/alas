@@ -8,6 +8,7 @@ import SwiftUI
 /// move up/down. Items in `.sending` never reach this view — see
 /// `ACPTranscriptQueuePolicy.shouldRenderQueueBubble(_:)`.
 struct ACPQueueItemRow: View {
+    @Environment(\.designScale) private var scale
     let item: QueuedPrompt
     /// 1-based dispatch position among rendered rows. See
     /// `ACPTranscriptQueuePolicy.queuePosition(at:queue:)`.
@@ -50,22 +51,22 @@ struct ACPQueueItemRow: View {
 
         HStack(alignment: .top, spacing: ACPQueueItemRowMetrics.markerToContentSpacing) {
             positionMarker
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 statusRow
                 contentColumn(preview: preview, pastedSpans: pastedSpans)
             }
             Spacer(minLength: ACPQueueItemRowMetrics.contentToToolbarSpacing)
             toolbar
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .opacity(item.status == .sending ? 0.85 : 1)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-2").opacity(0.5))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(borderColor, style: borderStyle)
         )
         .frame(maxWidth: contentMaxWidth, alignment: .leading)
@@ -91,11 +92,11 @@ struct ACPQueueItemRow: View {
         Group {
             if item.scheduledAt != nil {
                 Image(systemName: "clock")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
             } else {
                 Text("\(position)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(scale.meta.font(weight: .bold, design: .monospaced))
                     .foregroundStyle(position == 1 ? theme.color("accent") : theme.color("fg-faint"))
             }
         }
@@ -105,18 +106,18 @@ struct ACPQueueItemRow: View {
     // MARK: - Status pill + content
 
     private var statusRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if item.status == .sending {
                 ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
             }
             statusText
-                .font(.system(size: 9, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
                 .textCase(.uppercase)
                 .foregroundStyle(statusColor)
             if let err = item.lastError {
                 Text("· \(err)")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundStyle(theme.color("del"))
                     .lineLimit(1)
             }
@@ -163,21 +164,21 @@ struct ACPQueueItemRow: View {
                 .environment(\.acpPastedTextContents, ACPPastedTextContents(text: preview, spans: pastedSpans))
             } else if imageURLs.isEmpty {
                 Text("(empty prompt)")
-                    .font(.system(size: 13))
+                    .font(scale.bodyFont)
                     .foregroundStyle(theme.color("fg-faint"))
             }
         }
     }
 
     private var imageRow: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             ForEach(Array(imageURLs.enumerated()), id: \.offset) { _, url in
                 if let image = NSImage(contentsOf: url) {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 40, height: 40)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
             }
         }
@@ -199,7 +200,7 @@ struct ACPQueueItemRow: View {
 
     @ViewBuilder
     private var toolbar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             if item.status == .pending {
                 if allowsReordering {
                     actionButton(
@@ -260,7 +261,7 @@ struct ACPQueueItemRow: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(foreground)
                 .frame(width: 18, height: 18)
                 .contentShape(Rectangle())

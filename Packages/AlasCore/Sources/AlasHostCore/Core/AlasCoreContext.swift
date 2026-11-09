@@ -131,6 +131,8 @@ public final class AlasCoreContext {
     @ObservationIgnored var reviewRefreshes: [String: Task<Void, Never>] = [:]
     /// The configured base branch each review loop last took.
     @ObservationIgnored var reviewLoopConfiguredBases: [String: String] = [:]
+    /// Installs managed ACP adapters on this Mac, one at a time per agent.
+    @_spi(Testing) @ObservationIgnored public var adapterInstalls = ACPAdapterInstallCoordinator()
     /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
     /// Called with a worktree's id after its followed review status was read.
@@ -194,6 +196,10 @@ public final class AlasCoreContext {
     /// no delegated session never loads the devices; without one every origin
     /// is "another Mac".
     @ObservationIgnored public var delegationPairing: @MainActor () -> RemotePairingService? = { nil }
+    /// The name this Mac's peer record gives a server id, for a Mac that
+    /// delegates with no device here: a host that paired inbound-only and
+    /// sends its requests back over this Mac's link to it.
+    @ObservationIgnored public var delegationPeerRecordName: @MainActor (_ serverId: String) -> String? = { _ in nil }
 
     /// Relayed notices waiting for their user's input, by session id. Each
     /// holds while the session runs on the transcript it was sent from.

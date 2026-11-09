@@ -24,6 +24,7 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
     var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
     var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
+    var transcriptImageResult: RemoteFileBytesResult = .failure(reason: .notFound, byteSize: nil, message: nil)
     var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
     var changeListRequests: [(
         sessionId: String,
@@ -309,6 +310,9 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     }
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
         .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+    func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult {
+        transcriptImageResult
     }
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         fileContentsRequests.append((sessionId, path))
@@ -2181,7 +2185,34 @@ struct RemoteSessionGatewayTests {
         #expect(visualRejection(sent) == "failed")
     }
 
-    @Test func toolCallWireOmitsInlineAssetData() throws {
+    @Test(arguments: [false, true]) func toolCallWireDeliversEmbeddedImages(dataURI: Bool) throws {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="
+        let asset = ACPMessage.ToolCallAsset.image(data: dataURI ? nil : png,
+            uri: dataURI ? "data:image/png;base64," + png : nil, mimeType: "image/png")
+        let call = ACPMessage.ToolCall(toolCallId: "image", title: "Screenshot", status: "completed", assets: [asset])
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        let json = try #require(wire.json?.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: json)
+        #expect(decoded.assets.first?.data == png)
+        #expect(wire.transportByteCount <= RemoteTranscriptSync.maxMessageBytes)
+    }
+
+    @Test func embeddedImagesDoNotDisplaceToolTextBeyondTheTransportBudget() throws {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="
+        var call = ACPMessage.ToolCall(toolCallId: "image", title: "Screenshot", status: "completed", content: "",
+            assets: [.image(data: png, mimeType: "image/png")])
+        var withoutBytes = call
+        withoutBytes.assets = [.image(mimeType: "image/png")]
+        let baseline = RemoteSessionGateway.toWire(.toolCall(withoutBytes), index: 0).transportByteCount
+        call.content = String(repeating: "x", count: RemoteTranscriptSync.maxMessageBytes - baseline - 1)
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        let json = try #require(wire.json?.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: json)
+        #expect(decoded.assets.first?.data == nil)
+        #expect(wire.transportByteCount <= RemoteTranscriptSync.maxMessageBytes)
+    }
+
+    @Test func toolCallWireOmitsInvalidInlineAssetsAndPrivateOutput() throws {
         let msg = ACPMessage.toolCall(.init(
             toolCallId: "tc-image",
             title: "Image generation",
@@ -2963,6 +2994,17 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd", stage: "unstaged"))
         #expect(sent == [.fileDiffFailed(
             sessionId: "s1", path: "../etc/passwd", stage: "unstaged", reason: .pathRejected, message: nil)])
+    }
+
+    @Test(arguments: [false, true]) func browserImageRepliesAreSeparateFromEditorReplies(available: Bool) async {
+        let provider = FakeRemoteApp()
+        let bytes = Data([137, 80, 78, 71])
+        if available { provider.transcriptImageResult = .success(data: bytes) }
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
+        await gateway.handle(.readTranscriptImage(sessionId: "s1", path: "/tmp/shot.png"))
+        #expect(sent == [.transcriptImage(sessionId: "s1", path: "/tmp/shot.png", data: available ? bytes : nil)])
     }
 
     @Test func listFilesAndReadFileSendTreeAndContents() async {

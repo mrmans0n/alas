@@ -2,16 +2,17 @@ import AppKit
 import SwiftUI
 
 struct GeneralPane: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("General").font(.system(size: 18, weight: .semibold))
+                Text("General").font(SettingsPaneStyle.titleFont)
                 Text("Application behavior and updates.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Updates") {
                     SettingsRow(
@@ -39,7 +40,7 @@ struct GeneralPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
     }
 

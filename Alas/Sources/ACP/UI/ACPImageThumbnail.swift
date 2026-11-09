@@ -4,6 +4,7 @@ import AppKit
 /// A clickable thumbnail for a sent image attachment. Tapping opens the
 /// staged file in a floating preview panel over Alas.
 struct ACPImageThumbnail: View {
+    @Environment(\.designScale) private var scale
     let fileURL: URL
     /// 1-based position among the message's images, shown as a small corner
     /// badge so it matches the `🖼N` marker `ACPUserMessageImageMarkers`
@@ -40,11 +41,11 @@ struct ACPImageThumbnail: View {
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
                 .overlay(alignment: .topLeading) { indexBadge }
         } placeholder: {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(.gray.opacity(0.3))
                 .frame(width: 96, height: 96)
                 .overlay(Image(systemName: "photo"))
@@ -55,11 +56,11 @@ struct ACPImageThumbnail: View {
     @ViewBuilder private var indexBadge: some View {
         if let index {
             Text("\(index)")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(minWidth: 14, minHeight: 14)
                 .background(Circle().fill(.black.opacity(0.55)))
-                .padding(4)
+                .padding(scale.space[1])
         }
     }
 

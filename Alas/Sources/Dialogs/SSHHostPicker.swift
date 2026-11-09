@@ -4,6 +4,7 @@ import AppKit
 /// Popover content: pick an SSH host from `~/.ssh/config`, or fall back to
 /// free-text with guidance for hosts that aren't configured.
 struct SSHHostPicker: View {
+    @Environment(\.designScale) private var scale
     @Binding var host: String
     let hosts: [SSHConfigHost]
     let isLoading: Bool
@@ -19,14 +20,14 @@ struct SSHHostPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             AlasField(text: $search, placeholder: "Search hosts…", focusOnAppear: true)
-                .padding(8)
+                .padding(scale.space[2])
             Divider().background(theme.color("line"))
 
             if isLoading {
                 Text("Reading ~/.ssh/config…")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
-                    .padding(12)
+                    .padding(scale.space[3])
             } else if filtered.isEmpty {
                 guidanceFooter
             } else {
@@ -51,18 +52,18 @@ struct SSHHostPicker: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(configHost.alias == host ? 1 : 0)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(configHost.alias)
-                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let subtitle = configHost.subtitle {
                         Text(subtitle)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-faint"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -70,8 +71,8 @@ struct SSHHostPicker: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -82,13 +83,13 @@ struct SSHHostPicker: View {
             Text(hosts.isEmpty
                 ? "No hosts found in ~/.ssh/config. Type any user@host directly, or add an entry:"
                 : "No match in ~/.ssh/config. Type any user@host directly, or add an entry:")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
             let snippet = SSHHostSuggestions.snippet(for: search)
             HStack(alignment: .top, spacing: 8) {
                 Text(snippet)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg"))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -97,19 +98,19 @@ struct SSHHostPicker: View {
                     NSPasteboard.general.setString(snippet, forType: .string)
                 }) {
                     Text("Copy")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .overlay(RoundedRectangle(cornerRadius: 4)
+                        .padding(.horizontal, scale.space[2])
+                        .padding(.vertical, scale.space[0])
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.small)
                             .strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(8)
+            .padding(scale.space[2])
             .background(theme.color("bg-0"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 }

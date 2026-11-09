@@ -70,6 +70,9 @@ public final class RemotePeerManager {
         /// why the way out is the user's own Forget, never an automatic
         /// re-key.
         case identityRebindRefused
+        /// This Mac asked for a narrower token (`pairingScope`) and the far
+        /// side's build does not grant one. Nothing was kept.
+        case scopeUnsupported
     }
 
     public typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -96,6 +99,12 @@ public final class RemotePeerManager {
     /// Peer host-protocol messages, kept off the federation fan-out like
     /// console events: they answer this Mac's own host channel to that peer.
     @ObservationIgnored public var onHostMessage: (@MainActor (_ serverId: String, HostServerMessage) -> Void)?
+    /// Host-protocol requests a peer sends back over this Mac's link to it,
+    /// from a link that carries sessions. Set by whoever serves them before
+    /// the links connect: only then do they offer to.
+    @ObservationIgnored public var onPeerHostRequest: (@MainActor (_ peerId: String, HostClientMessage) -> Void)?
+    /// Told when a peer's link may have gone up or down, or its record went.
+    @ObservationIgnored public var onLinkChanged: (@MainActor (_ peerId: String) -> Void)?
     /// Optional features each peer advertised in its latest `hello`, by
     /// `serverId`. In memory only: every connection re-announces them.
     public private(set) var capabilities: [String: Set<String>] = [:]
@@ -290,6 +299,20 @@ public final class RemotePeerManager {
         // `reduce`, not `Dictionary(uniqueKeysWithValues:)`: a corrupted
         // store with a duplicate `serverId` must not crash init.
         self.durableStateByServerId = self.peers.reduce(into: [:]) { $0[$1.serverId] = $1 }
+        recordProvenKeysOfEarlierPairings()
+    }
+
+    /// Devices made before they recorded keys. A record holding both a token
+    /// and a key paired two ways, and its key was proved by this Mac's own
+    /// `/pair`, so the device that peer reaches this Mac with is proven too.
+    /// An inbound-only record never proved a key, and stays unproven.
+    private func recordProvenKeysOfEarlierPairings() {
+        for peer in peers where !peer.token.isEmpty {
+            guard let key = peer.publicKey, !key.isEmpty, let deviceId = peer.localDeviceId,
+                  let device = pairing.device(id: deviceId), device.peerPublicKey == nil,
+                  device.peerServerId == peer.serverId else { continue }
+            pairing.recordPeerPublicKey(key, deviceId: deviceId)
+        }
     }
 
     // MARK: - Pairing
@@ -305,6 +328,22 @@ public final class RemotePeerManager {
         return LocalIdentity(serverId: me.serverId, name: me.name,
                              origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)),
                              publicKey: me.publicKey)
+    }
+
+    /// Signs a redeem of `code` as this Mac, when there is a key to sign
+    /// with. Set by whoever owns the identity key.
+    @ObservationIgnored public var signRedeem: (@MainActor (_ code: String, _ serverId: String) -> String?)?
+    /// What the token this Mac asks for when it adds a peer may do. A headless
+    /// host asks for `.delegation`: it never shows a peer view, and its tokens
+    /// sit in a file its agents can read. Needs `signRedeem`, since a Mac
+    /// grants a narrower token only to a redeemer that proved its key.
+    @ObservationIgnored public var pairingScope: RemoteDeviceScope = .full
+
+    /// This Mac's proof for redeeming `code` under `advertisement`. Only with
+    /// an advertised key, since the responder checks the proof against it.
+    private func redeemProof(code: String, advertisement: RemotePeerAdvertisement) -> String? {
+        guard advertisement.publicKey != nil else { return nil }
+        return signRedeem?(code, advertisement.serverId)
     }
 
     /// This Mac's advertisement, with the key a peer should pin us to.
@@ -348,8 +387,10 @@ public final class RemotePeerManager {
     public func addPeer(code: String, origins: [String]) async -> AddError? {
         let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, !origins.isEmpty else { return .invalidLink }
-        return await completePairing(origins: origins, expectedPeer: nil, localPeer: nil) { ad in
-            await self.pairer.pair(origins: origins, code: code, deviceName: ad.name, advertisement: ad)
+        let scope = pairingScope == .full ? nil : pairingScope
+        return await completePairing(origins: origins, expectedPeer: nil, localPeer: nil, tokenScope: scope) { ad in
+            await self.pairer.pair(origins: origins, code: code, deviceName: ad.name, advertisement: ad,
+                                   proof: self.redeemProof(code: code, advertisement: ad), scope: scope)
         }
     }
 
@@ -368,6 +409,7 @@ public final class RemotePeerManager {
     }
 
     private func completePairing(origins: [String], expectedPeer: ApprovalPeer?, localPeer: ApprovalPeer?,
+                                 tokenScope: RemoteDeviceScope? = nil,
                                  shouldPublish: () -> Bool = { true },
                                  redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
         let me = localPeer.map { LocalIdentity(serverId: $0.serverID, name: $0.name, origins: $0.origins, publicKey: $0.publicKey) }
@@ -465,7 +507,8 @@ public final class RemotePeerManager {
                 let previous = durableStateByServerId[serverId]
                 upsert(serverId: serverId, name: name ?? origin, origins: origins,
                        lastOrigin: origin, token: token, publicKey: publicKey,
-                       localDeviceId: previous?.isInboundOnly == true ? previous?.localDeviceId : nil)
+                       localDeviceId: previous?.isInboundOnly == true ? previous?.localDeviceId : nil,
+                       tokenScope: tokenScope)
                 durableStateByServerId[serverId] = peers.first { $0.serverId == serverId }
                 return nil
             }
@@ -489,7 +532,8 @@ public final class RemotePeerManager {
             outboundPredecessors[counterCode] = (previousState, previousOwner)
             lastUpsertOwnerByServerId[serverId] = counterCode
             upsert(serverId: serverId, name: name ?? origin, origins: origins,
-                   lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil)
+                   lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil,
+                   tokenScope: tokenScope)
             // `upsert` proves OUR call to A succeeded — nothing more. Our own
             // token is valid the instant A's HTTP reply arrives, so OUR
             // outbound link would come online just fine regardless of
@@ -583,6 +627,14 @@ public final class RemotePeerManager {
         case .identityRebindRefused:
             endAttempt(counterCode: counterCode)
             return .identityRebindRefused
+        case .scopeUnsupported:
+            // The far side may have redeemed the code and be pairing back
+            // already. Nothing more may redeem it, and a device a pair-back
+            // already made is revoked unless an earlier pairing still holds
+            // the identity. The token it issued was dropped unheld.
+            pairing.cancelCode(counterCode)
+            endAttempt(counterCode: counterCode)
+            return .scopeUnsupported
         case .unreachable:
             // Our own leg failing does not mean the peer's did: A's reply to
             // us can be lost on the wire after A already redeemed our
@@ -769,7 +821,8 @@ public final class RemotePeerManager {
             let advertisement = localPeer.map { RemotePeerAdvertisement(serverId: $0.serverID, name: $0.name,
                 origins: $0.origins, counterCode: nil, publicKey: $0.publicKey) } ?? advertisement(counterCode: nil)
             guard case .paired(let token, let repliedServerId, _, let repliedPublicKey, let origin, _) = await pairer.pair(
-                origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement)
+                origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement,
+                proof: redeemProof(code: counterCode, advertisement: advertisement))
             else {
                 // The peer already holds a token for this Mac: it was minted
                 // before this branch ran. Returning empty-handed would leave it
@@ -833,6 +886,9 @@ public final class RemotePeerManager {
             }
             lastUpsertOwnerByServerId[request.peerServerId] = counterCode
             if approvalID != nil { pairing.commitApprovedPeer(deviceId: request.localDeviceId) }
+            // The pair-back proved this key, so the device it pairs with is
+            // that peer's, whatever its own redeem carried.
+            if let repliedPublicKey { pairing.recordPeerPublicKey(repliedPublicKey, deviceId: request.localDeviceId) }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, publicKey: repliedPublicKey,
                    localDeviceId: request.localDeviceId)
@@ -948,17 +1004,42 @@ public final class RemotePeerManager {
         peers.map { peer in
             HostPeerSummary(
                 id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins,
-                agentAccess: peer.localDeviceId.flatMap { pairing.device(id: $0)?.agentAccess }
+                agentAccess: agentAccess(of: peer, provenOnly: false),
+                tokenScope: peer.isInboundOnly ? nil : peer.tokenScope ?? .full
             )
         }
+    }
+
+    /// What `peer`'s agents may do here: as its device here says, or, for a
+    /// peer with none, as its record says, which is what a host that paired
+    /// inbound-only delegates back under. Nil when there is nothing to
+    /// allow: a device gone, or, with `provenOnly`, one that never proved its
+    /// key, and a record with no device and no pinned key.
+    public func agentAccess(of peer: RemotePeer, provenOnly: Bool = true) -> RemoteDeviceAgentAccess? {
+        guard let deviceId = peer.localDeviceId else { return peer.isVerified ? peer.agentAccess ?? .off : nil }
+        guard let device = pairing.device(id: deviceId), !provenOnly || PeerDelegationGate.isProven(device) else { return nil }
+        return device.agentAccess
     }
 
     /// Sets the access of the inbound device `peerId` reaches this Mac with,
     /// and of every other device carrying its identity: a re-pair leaves the
     /// earlier ones with live tokens, and the gate reads whichever authenticated.
-    /// False when the peer has no such device (reciprocal pairing never completed).
+    /// A peer with no device here keeps it on its record instead, if that is
+    /// pinned to a key: a host that paired inbound-only, whose requests come
+    /// back over this Mac's link. False when there is neither, or when
+    /// allowing anything on a device that never proved its identity, which
+    /// the gate would refuse anyway. Turning access off always works.
     public func setAgentAccess(_ access: RemoteDeviceAgentAccess, peerId: String) -> Bool {
-        guard let peer = peers.first(where: { $0.id == peerId }), let deviceId = peer.localDeviceId,
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return false }
+        guard let deviceId = peers[index].localDeviceId else {
+            guard peers[index].isVerified else { return false }
+            peers[index].agentAccess = access == .off ? nil : access
+            durableStateByServerId[peers[index].serverId] = peers[index]
+            savePeers()
+            return true
+        }
+        let peer = peers[index]
+        guard access == .off || pairing.device(id: deviceId).map(PeerDelegationGate.isProven) == true,
               pairing.setAgentAccess(access, deviceId: deviceId) else { return false }
         for other in deviceIds(of: peer) where other != deviceId {
             pairing.setAgentAccess(access, deviceId: other)
@@ -1007,6 +1088,7 @@ public final class RemotePeerManager {
         savePeers()
         onPeerRevoked?(peer.serverId, peer.name, true)
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+        onLinkChanged?(peer.id)
     }
 
     /// Waits for A's reciprocal call to redeem THIS attempt's own
@@ -1083,6 +1165,11 @@ public final class RemotePeerManager {
                 }
                 var confirmed = ownFields
                 confirmed.localDeviceId = buffered.localDeviceId
+                // This attempt's own `/pair` proved the record's key, and the
+                // callback redeemed the code minted for that attempt alone.
+                if let pinned = confirmed.publicKey, !pinned.isEmpty {
+                    pairing.recordPeerPublicKey(pinned, deviceId: buffered.localDeviceId)
+                }
                 peers[index] = confirmed
                 lastUpsertOwnerByServerId[confirmed.serverId] = counterCode
                 if approvedCounterCodes.contains(counterCode) {
@@ -1173,6 +1260,7 @@ public final class RemotePeerManager {
         states = [:]
         for peer in peers {
             onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+            onLinkChanged?(peer.id)
         }
     }
 
@@ -1185,6 +1273,9 @@ public final class RemotePeerManager {
         let id = peer.id
         let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }
         connections[id] = connection
+        if onPeerHostRequest != nil, Self.mayServePeerHost(peer) {
+            connection.acknowledge([HostProtocolCapability.delegationReverseV1])
+        }
         connection.connect()
     }
 
@@ -1201,6 +1292,7 @@ public final class RemotePeerManager {
                     onPeerRevoked?(peer.serverId, peer.name, false)
                 }
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+                onLinkChanged?(peerId)
             }
         case .hello(_, let name, let protocolVersion, _, let advertised):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
@@ -1256,6 +1348,10 @@ public final class RemotePeerManager {
                 onHostMessage?(peer.serverId, message)
                 return
             }
+            if case .peerHost(let request) = message {
+                onPeerHostRequest?(peerId, request)
+                return
+            }
             onFederationEvent?(.message(serverId: peer.serverId, message))
         }
     }
@@ -1271,8 +1367,36 @@ public final class RemotePeerManager {
         return !isProvisional(peer.serverId) && peer.isVerified && states[peerId] == .online
     }
 
+    /// Peers that paired here inbound-only and proved their key doing so, with
+    /// the device each reaches this Mac with. This Mac can reach them only
+    /// over that device's own link.
+    public var provenInboundOnlyPeers: [(peer: RemotePeer, deviceId: String)] {
+        peers.compactMap { peer in
+            guard peer.isInboundOnly, let deviceId = peer.localDeviceId, let device = pairing.device(id: deviceId),
+                  PeerDelegationGate.isProven(device), device.peerServerId == peer.serverId else { return nil }
+            return (peer, deviceId)
+        }
+    }
+
+    /// A record whose peer may send requests back over this Mac's link: one
+    /// pinned to a key, which each socket proves, with no device here,
+    /// which is what a host that paired inbound-only leaves.
+    private static func mayServePeerHost(_ peer: RemotePeer) -> Bool {
+        peer.isVerified && peer.localDeviceId == nil
+    }
+
+    /// The record of a peer whose requests sent back over its link are
+    /// served now: one `mayServePeerHost` allows, online and proven on this
+    /// very socket.
+    public func servesPeerHost(peerId: String) -> RemotePeer? {
+        guard carriesSessions(peerId: peerId), let peer = peers.first(where: { $0.id == peerId }),
+              Self.mayServePeerHost(peer) else { return nil }
+        return peer
+    }
+
     private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String?,
-                        token: String, publicKey: String?, localDeviceId: String?) {
+                        token: String, publicKey: String?, localDeviceId: String?,
+                        tokenScope: RemoteDeviceScope? = nil) {
         // `localDeviceId` is resolved to exactly what the caller passed —
         // including `nil` from `addPeer`'s own call site, which must
         // actually CLEAR a re-paired record's old value: preserving it would
@@ -1310,12 +1434,15 @@ public final class RemotePeerManager {
             // established binding must not be droppable by the far side.
             if let publicKey, !publicKey.isEmpty { peers[index].publicKey = publicKey }
             peers[index].localDeviceId = localDeviceId
+            peers[index].tokenScope = tokenScope
+            // A pairing is a new consent, as a new device's is.
+            peers[index].agentAccess = nil
             peer = peers[index]
         } else {
             peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, origins: origins,
                               lastOrigin: lastOrigin, token: token, publicKey: publicKey,
                               protocolVersion: nil,
-                              localDeviceId: localDeviceId, addedAt: now())
+                              localDeviceId: localDeviceId, addedAt: now(), tokenScope: tokenScope)
             peers.append(peer)
         }
         savePeers()

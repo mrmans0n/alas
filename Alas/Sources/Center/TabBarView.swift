@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TabBarView: View {
+    @Environment(\.designScale) private var scale
     static let terminalAgentMenuSectionTitle = "Terminal"
     static let acpAgentMenuSectionTitle = "ACP Chat"
 
@@ -97,8 +98,8 @@ struct TabBarView: View {
             }
         }
         ToolbarIconButton(iconName: "plus", tooltip: "New terminal", action: onNewTerminal)
-            .padding(.leading, 8)
-            .padding(.trailing, 2)
+            .padding(.leading, scale.space[2])
+            .padding(.trailing, scale.space[0])
         AgentSparkleMenu(
             availability: agentAvailability,
             agents: enabledAgents,
@@ -107,8 +108,8 @@ struct TabBarView: View {
             onLaunchAgent: onLaunchAgent,
             onLaunchACPSession: onLaunchACPSession
         )
-        .padding(.trailing, 2)
-        HStack(spacing: 4) {
+        .padding(.trailing, scale.space[0])
+        HStack(spacing: scale.space[1]) {
             RunScriptMenu(
                 loadScripts: loadRunScripts,
                 isRunning: isScriptRunning,
@@ -119,16 +120,16 @@ struct TabBarView: View {
             )
             RunActivityPill(input: runActivity, actions: runActivityActions)
         }
-        .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? 2 : 8)
+        .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? scale.space[0] : scale.space[2])
         if !pluginCommands.isEmpty {
             ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
                 PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
             }
-            .padding(.trailing, rightSidebarHidden ? 2 : 8)
+            .padding(.trailing, rightSidebarHidden ? scale.space[0] : scale.space[2])
         }
         if rightSidebarHidden {
             ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
-                .padding(.trailing, 8)
+                .padding(.trailing, scale.space[2])
                 .transition(.opacity)
         }
     }
@@ -247,6 +248,7 @@ struct RevisionFollowCapability: Equatable {
 /// own tabs, which must carry `.id(activeId)`'s type so the active one
 /// scrolls into view.
 struct TabStrip<ActiveID: Hashable, Leading: View, Tabs: View, Trailing: View>: View {
+    @Environment(\.designScale) private var scale
     let activeId: ActiveID?
     let isEmpty: Bool
     let sidebarHidden: Bool
@@ -263,11 +265,11 @@ struct TabStrip<ActiveID: Hashable, Leading: View, Tabs: View, Trailing: View>: 
                 // Fade in with the sidebar's collapse animation rather than
                 // popping in when the layout transaction lands.
                 TrafficLights()
-                    .padding(.leading, 12)
-                    .padding(.trailing, 10)
+                    .padding(.leading, scale.space[3])
+                    .padding(.trailing, scale.space[2])
                     .transition(.opacity)
                 ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
-                    .padding(.trailing, 8)
+                    .padding(.trailing, scale.space[2])
                     .transition(.opacity)
             }
             leading
@@ -361,6 +363,7 @@ struct TabItem {
 /// One tab in a `TabStrip`. `trailing` holds per-kind extras such as the
 /// close button.
 struct TabItemView<Trailing: View>: View {
+    @Environment(\.designScale) private var scale
     private static var maxTitleWidth: CGFloat { 220 }
 
     let item: TabItem
@@ -370,8 +373,8 @@ struct TabItemView<Trailing: View>: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 3) {
+        HStack(spacing: scale.space[2]) {
+            HStack(spacing: scale.space[1]) {
                 Icon(name: item.iconName, size: 11,
                      color: iconColor)
                     .modifier(TabActivityPulse(activityState: item.activityState))
@@ -382,14 +385,14 @@ struct TabItemView<Trailing: View>: View {
                 }
             }
             Text(item.title)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
             trailing
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 34)
         .background(active ? theme.color("bg-1") : .clear)
         .overlay(
@@ -422,6 +425,7 @@ struct TabItemView<Trailing: View>: View {
 }
 
 struct TabButton: View {
+    @Environment(\.designScale) private var scale
     let titleLookup: (TabID) -> String?
     let tab: Tab
     let active: Bool
@@ -449,7 +453,7 @@ struct TabButton: View {
         TabItemView(item: item, active: active, onActivate: onActivate) {
             if case .editor(let state) = tab, state.isExternal, !state.isExternalEditable {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
+                    .font(scale.glyph.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
             }
             if let transcript {
@@ -466,6 +470,7 @@ struct TabButton: View {
 /// typing in one editor only invalidates this tab's close/dirty dot, not the
 /// whole tab bar.
 struct TabCloseButton: View {
+    @Environment(\.designScale) private var scale
     let dirtyLookup: () -> Bool
     let onClose: () -> Void
     @Environment(\.theme) private var theme
@@ -484,7 +489,7 @@ struct TabCloseButton: View {
                         Icon(name: "x", size: 9,
                              color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
                             .background(hoveringClose ? theme.color("bg-4") : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     }
                 }
                 .frame(width: 14, height: 14)
@@ -633,6 +638,7 @@ private struct RunScriptMenu: View {
 /// Observes `ACPTranscript` directly so SwiftUI invalidates when plan
 /// items change — `ACPSession` does not forward `transcript.objectWillChange`.
 private struct TabPlanProgressChip: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var transcript: ACPTranscript
     @Environment(\.theme) private var theme
 
@@ -640,10 +646,10 @@ private struct TabPlanProgressChip: View {
         if let items = transcript.currentPlan, !items.isEmpty {
             let done = items.filter { $0.status == "completed" }.count
             Text("\(done) / \(items.count)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(scale.caption.font(design: .monospaced))
                 .foregroundStyle(theme.color("accent"))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.12))
                 .clipShape(Capsule())
         }

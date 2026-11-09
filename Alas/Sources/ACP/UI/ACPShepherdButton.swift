@@ -10,6 +10,7 @@ import SwiftUI
 /// shepherd records and the cached review snapshot, so streaming updates
 /// must not re-render the toolbar. The popover observes the transcript.
 struct ACPShepherdButton: View {
+    @Environment(\.designScale) private var scale
     let session: ACPSession
     let worktree: Worktree
     let state: AppState
@@ -65,16 +66,16 @@ struct ACPShepherdButton: View {
         Button {
             open.toggle()
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(pill.invitesShip ? shipTint : badge.color(theme: theme))
                 if let number = presentation.number {
                     Text(number)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 } else {
                     Text(shipsStack ? "Ship stack" : "Ship")
-                        .font(.system(size: 11, weight: pill.invitesShip ? .semibold : .medium))
+                        .font(scale.meta.font(weight: pill.invitesShip ? .semibold : .medium))
                 }
             }
             .foregroundStyle(pill.invitesShip ? shipTint : theme.color(isLit ? "fg" : "fg-dim"))
@@ -86,13 +87,13 @@ struct ACPShepherdButton: View {
                     ? shipTint.opacity(isLit ? 0.24 : 0.15)
                     : theme.color("bg-3").opacity(isLit ? 1 : 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .overlay(
-                RoundedRectangle(cornerRadius: 5).strokeBorder(
+                RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(
                     pill.invitesShip ? shipTint.opacity(0.5) : theme.color("line"), lineWidth: 0.5
                 )
             )
-            .aiBeam(isActive: badge.isActive, cornerRadius: 5)
+            .aiBeam(isActive: badge.isActive, cornerRadius: scale.radius.small)
         }
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
@@ -214,6 +215,7 @@ extension ShepherdBadgeState {
 }
 
 private struct ShepherdPopover: View {
+    @Environment(\.designScale) private var scale
     let session: ACPSession
     @ObservedObject var transcript: ACPTranscript
     let worktree: Worktree
@@ -338,19 +340,19 @@ private struct ShepherdPopover: View {
             infoLine("Waiting for the first status check.", systemImage: "hourglass")
         }
         Divider().background(theme.color("line"))
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                 Image(systemName: presentation.badge.symbolName)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(presentation.badge.color(theme: theme))
                 Text(presentation.phaseLine)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Text("Attempt \(record.fixAttempts) of \(record.fixAttemptBudget)")
                 Stepper(
                     "Fix attempts",
@@ -366,7 +368,7 @@ private struct ShepherdPopover: View {
                 .help("Fix prompts sent before the shepherd stops and asks for you")
                 Text("· Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
             }
-            .font(.system(size: 10.5))
+            .font(scale.caption.font(weight: .regular))
             .foregroundStyle(theme.color("fg-muted"))
             ShepherdSwitchRow(
                 title: "Auto-fix",
@@ -385,8 +387,8 @@ private struct ShepherdPopover: View {
                 state.reviewShepherd.setAutoMerge(isOn, for: record.id)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         Divider().background(theme.color("line"))
         footer(record: record)
     }
@@ -420,33 +422,33 @@ private struct ShepherdPopover: View {
         let url = request?.url ?? record.remote.reviewRequestURL(number: record.id.requestNumber)
         let shortSHA = (request?.headSHA ?? record.lastSeenHeadSHA).map { String($0.prefix(7)) }
         let parts: [String?] = ["\(record.branch) → \(record.baseBranch)", shortSHA, kind.displayName]
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        return VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                 Text(number)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(scale.meta.font(weight: .semibold, design: .monospaced))
                     .foregroundStyle(theme.color("accent"))
                 Text(request?.title ?? "")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 Link(destination: url) {
                     Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                 }
                 .foregroundStyle(theme.color("fg-muted"))
                 .help("Open \(kind.reviewRequestLabel) \(number) in the browser")
                 .accessibilityLabel("Open \(kind.reviewRequestLabel) \(number) in the browser")
             }
             Text(parts.compactMap { $0 }.joined(separator: " · "))
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     private func reviewLines(request: ReviewRequest, reviewers: ReviewerResult?) -> some View {
@@ -455,17 +457,17 @@ private struct ShepherdPopover: View {
         let threadText = openThreads.isEmpty
             ? "No open review threads"
             : "\(openThreads.count) open thread\(openThreads.count == 1 ? "" : "s"), \(trusted) from trusted reviewers"
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: scale.space[1]) {
             Text(threadText)
             if let reviewersText = requiredReviewersText(reviewers) {
                 Text(reviewersText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-dim"))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     private func requiredReviewersText(_ reviewers: ReviewerResult?) -> String? {
@@ -479,7 +481,7 @@ private struct ShepherdPopover: View {
 
     private func footer(record: ShepherdRecord) -> some View {
         let label = record.id.providerKind.reviewRequestLabel
-        return HStack(spacing: 8) {
+        return HStack(spacing: scale.space[2]) {
             Button("Open in Changes") {
                 onClose()
                 Task {
@@ -504,8 +506,8 @@ private struct ShepherdPopover: View {
             .help("Stop watching. The \(label) stays open.")
         }
         .controlSize(.small)
-        .font(.system(size: 11))
-        .padding(12)
+        .font(scale.metaFont)
+        .padding(scale.space[3])
     }
 
     // MARK: Unbound
@@ -548,9 +550,9 @@ private struct ShepherdPopover: View {
     }
 
     private func adoptRow(text: String, buttonTitle: String, request: ReviewRequest?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(text)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             AlasButton(title: buttonTitle, style: .primary, fillsWidth: true) {
@@ -563,14 +565,14 @@ private struct ShepherdPopover: View {
             .help(request == nil ? "Waiting for the PR status" : "Bind this PR to this session and send it the current problems")
             .accessibilityLabel(buttonTitle)
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     @ViewBuilder
     private func createContent(kind: CodeHostKind?, reason: String?) -> some View {
         let label = kind?.reviewRequestLabel ?? "PR"
         let defaults = state.config.changes.shepherd
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ShipPopoverStep(symbol: "sparkles") {
                 Text("The agent writes the description and opens the \(label) on \(kind?.displayName ?? "the code host").")
             }
@@ -578,7 +580,7 @@ private struct ShepherdPopover: View {
                 Text("Alas watches CI and reviews, and sends failures back to this session.")
             }
             ShipPopoverStep(symbol: "slider.horizontal.3") {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     ShipPopoverChip(text: "Auto-fix \(defaults.autoFix ? "on" : "off")")
                     ShipPopoverChip(text: "Auto-merge \(defaults.autoMerge ? "on" : "off")")
                     ShipPopoverChip(text: "\(defaults.maxFixAttempts) attempt\(defaults.maxFixAttempts == 1 ? "" : "s")")
@@ -588,13 +590,13 @@ private struct ShepherdPopover: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))
-                    .padding(.leading, 2)
+                    .padding(.leading, scale.space[0])
                     .help("Change the shepherd defaults in Settings > Changes")
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         Divider().background(theme.color("line"))
         ShipPopoverFooter(
             title: "Ship with agent",
@@ -611,68 +613,70 @@ private struct ShepherdPopover: View {
     // MARK: Pieces
 
     private func infoLine(_ text: String, systemImage: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: systemImage)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
             Text(text)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
         }
         .foregroundStyle(theme.color("fg-dim"))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 }
 
 /// The Ship popovers' header before anything is shepherded: a symbol tile,
 /// a title and a monospaced detail line.
 struct ShipPopoverHeader: View {
+    @Environment(\.designScale) private var scale
     let symbol: String
     let title: String
     let detail: String
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: popover header icon
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 32, height: 32)
-                .background(theme.color("accent").opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                .background(theme.color("accent").opacity(0.18), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundStyle(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(detail)
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(scale.space[3])
         .accessibilityElement(children: .combine)
     }
 }
 
 /// One line of what Ship will do, led by an accent symbol.
 struct ShipPopoverStep<Content: View>: View {
+    @Environment(\.designScale) private var scale
     let symbol: String
     @ViewBuilder let content: Content
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 14)
                 .accessibilityHidden(true)
             content
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -680,6 +684,7 @@ struct ShipPopoverStep<Content: View>: View {
 }
 
 struct ShipPopoverChip: View {
+    @Environment(\.designScale) private var scale
     let text: String
     /// Theme color key that tints the chip; nil keeps it neutral.
     var tone: String? = nil
@@ -687,11 +692,11 @@ struct ShipPopoverChip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10))
+            .font(scale.caption.font(weight: .regular))
             .foregroundStyle(theme.color(tone ?? "fg-muted"))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(tone.map { theme.color($0).opacity(0.15) } ?? theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, scale.space[1])
+            .padding(.vertical, scale.space[0])
+            .background(tone.map { theme.color($0).opacity(0.15) } ?? theme.color("bg-3"), in: RoundedRectangle(cornerRadius: scale.radius.small))
             .lineLimit(1)
     }
 }
@@ -699,6 +704,7 @@ struct ShipPopoverChip: View {
 /// The Ship popovers' footer: why Ship can't run yet, the full-width
 /// button, and the composer command that does the same.
 struct ShipPopoverFooter: View {
+    @Environment(\.designScale) private var scale
     let title: String
     let symbol: String
     let reason: String?
@@ -710,25 +716,25 @@ struct ShipPopoverFooter: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: scale.space[2]) {
             if let reason {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     if isWaiting {
                         ACPPulseDot(color: theme.color("warn"))
                     } else {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                     }
                     Text(reason)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(theme.color("warn"))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(theme.color("warn").opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
-                .padding(.bottom, 2)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[2])
+                .background(theme.color("warn").opacity(0.13), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                .padding(.bottom, scale.space[0])
             }
             AlasButton(title: title, icon: symbol, style: .primary, fillsWidth: true, action: action)
                 .disabled(reason != nil)
@@ -736,9 +742,9 @@ struct ShipPopoverFooter: View {
                 .help(reason ?? help)
                 .accessibilityLabel(title)
             Text("or type /ship in the composer")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("fg-faint"))
         }
-        .padding(12)
+        .padding(scale.space[3])
     }
 }

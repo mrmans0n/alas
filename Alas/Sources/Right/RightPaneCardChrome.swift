@@ -7,6 +7,7 @@ struct RightPaneCardChrome: ViewModifier {
     let isHovering: Bool
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     func body(content: Content) -> some View {
         content
@@ -19,16 +20,16 @@ struct RightPaneCardChrome: ViewModifier {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 ),
-                in: RoundedRectangle(cornerRadius: 11)
+                in: RoundedRectangle(cornerRadius: scale.radius.medium)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 11).strokeBorder(
+                RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(
                     isHovering ? accent.opacity(0.38) : theme.color("line").opacity(0.78),
                     lineWidth: 0.75
                 )
             )
             .shadow(color: .black.opacity(isHovering ? 0.18 : 0.10), radius: isHovering ? 5 : 3, y: 2)
-            .contentShape(RoundedRectangle(cornerRadius: 11))
+            .contentShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 

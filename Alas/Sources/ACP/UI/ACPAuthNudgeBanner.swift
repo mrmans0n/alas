@@ -30,6 +30,7 @@ struct ACPAuthTerminalCommand: Equatable {
 }
 
 struct ACPAuthNudgeBanner: View {
+    @Environment(\.designScale) private var scale
     let agentDisplayName: String
     let methods: [ACPInitializeResult.ACPAuthMethod]
     let reason: String?
@@ -43,12 +44,12 @@ struct ACPAuthNudgeBanner: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "person.badge.key")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
             Spacer()
@@ -61,8 +62,8 @@ struct ACPAuthNudgeBanner: View {
                 onReconnect()
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.6))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)

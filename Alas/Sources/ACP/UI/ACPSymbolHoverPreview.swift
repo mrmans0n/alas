@@ -212,6 +212,7 @@ final class ACPSymbolHoverCache {
 }
 
 struct ACPSymbolHoverCard<Accessory: View>: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var model: ACPSymbolHoverModel
     /// Tallest the code area may get before it scrolls.
     let maxCodeHeight: CGFloat
@@ -238,7 +239,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
     private static var skeletonWidths: [CGFloat] { [0.58, 0.82, 0.46, 0.72, 0.9, 0.52, 0.36, 0.68] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             header
             accessory
             switch model.state {
@@ -267,20 +268,20 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
         let target = model.target
         let location = "\(target.path):\(model.lineRange.lowerBound + 1)–\(model.lineRange.upperBound + 1)"
             + (target.includeCode ? " · code included" : "")
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: scale.space[2]) {
             Text(target.kind.badgeLetter)
-                .font(.system(size: 9.5, weight: .bold))
+                .font(scale.caption.font(weight: .bold))
                 .foregroundStyle(Color(nsColor: target.kind.badgeLabelColor))
                 .frame(width: 16, height: 16)
                 .background(Color(nsColor: target.kind.badgeBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-            VStack(alignment: .leading, spacing: 3) {
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text(target.qualifiedName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(location)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
@@ -290,7 +291,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundStyle(.secondary)
             .lineLimit(3)
             .truncationMode(.middle)
@@ -300,7 +301,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
     private func moreLines(_ count: Int) -> some View {
         if count > 0 {
             Text(count == 1 ? "1 more line" : "\(count) more lines")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -329,7 +330,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
     private func skeleton(_ frame: ACPSymbolHoverModel.CodeFrame, viewportWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(0..<frame.shownLines, id: \.self) { line in
-                RoundedRectangle(cornerRadius: 3)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .fill(.quaternary)
                     .frame(width: viewportWidth * Self.skeletonWidths[line % Self.skeletonWidths.count],
                            height: max(4, frame.lineHeight * 0.5))

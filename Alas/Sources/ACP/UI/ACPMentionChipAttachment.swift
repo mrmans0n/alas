@@ -223,22 +223,23 @@ final class ACPFileMentionHoverController {
 }
 
 private struct ACPFileMentionHoverCard: View {
+    @Environment(\.designScale) private var scale
     let name: String
     let location: String
     let systemImage: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Label(name, systemImage: systemImage)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .lineLimit(1)
             Text(location)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
                 .truncationMode(.middle)
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(width: 340, alignment: .leading)
     }
 }

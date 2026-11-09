@@ -74,25 +74,15 @@ enum ACPBackgroundTaskPresentation {
     /// Top plus bottom padding around the tray content.
     static let verticalPadding: CGFloat = 10
     static let headerHeight: CGFloat = 22
-    static let rowHeight: CGFloat = 26
+    static let rowHeight: CGFloat = 26 // design-literal: row pitch feeds height math
     /// A failed stop shows up to two lines of error under its row.
-    static let rowErrorHeight: CGFloat = 32
+    static let rowErrorHeight: CGFloat = 32 // design-literal: row pitch feeds height math
     /// Expanded rows scroll beyond this height so a long list can't push the
     /// header off the top of a short chat.
     static let maxRowsHeight: CGFloat = 6 * rowHeight
 
     static func rowsHeight(_ tasks: [ACPBackgroundTask]) -> CGFloat {
         tasks.reduce(0) { $0 + rowHeight + ($1.stopError == nil ? 0 : rowErrorHeight) }
-    }
-
-    /// Height the tray occupies above the composer, so the transcript's tail
-    /// spacer can keep the last line clear of it. Zero when there is no work.
-    static func trayHeight(tasks: [ACPBackgroundTask], expandedOverride: Bool?) -> CGFloat {
-        guard !tasks.isEmpty else { return 0 }
-        let header = showsHeader(taskCount: tasks.count) ? headerHeight : 0
-        let rows = isExpanded(taskCount: tasks.count, override: expandedOverride)
-            ? min(rowsHeight(tasks), maxRowsHeight) : 0
-        return verticalPadding + header + rows
     }
 
     static func elapsedText(_ interval: TimeInterval) -> String {
@@ -108,6 +98,10 @@ enum ACPBackgroundTaskPresentation {
         return paused > 0 ? "\(base) · \(paused) paused" : base
     }
 
+    static func tooltip(_ task: ACPBackgroundTask) -> String {
+        [task.name, transcriptDetail(task)].compactMap { $0 }.joined(separator: "\n")
+    }
+
     /// Text shown under the command when a transcript row is expanded: the
     /// summary, else the description. Either is skipped when it only repeats
     /// the task name, which adapters commonly send for shell commands.
@@ -119,15 +113,9 @@ enum ACPBackgroundTaskPresentation {
     }
 }
 
-extension ACPSession {
-    var backgroundTrayHeight: CGFloat {
-        ACPBackgroundTaskPresentation.trayHeight(
-            tasks: activeBackgroundTasks, expandedOverride: backgroundTrayExpanded)
-    }
-}
-
 /// Tray docked to the top of the composer listing active background work.
 struct ACPBackgroundTaskTray: View {
+    @Environment(\.designScale) private var scale
     let tasks: [ACPBackgroundTask]
     let canStop: Bool
     /// The user's explicit collapse choice; nil follows the default.
@@ -165,7 +153,7 @@ struct ACPBackgroundTaskTray: View {
                                    ACPBackgroundTaskPresentation.maxRowsHeight))
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .padding(.vertical, ACPBackgroundTaskPresentation.verticalPadding / 2)
         .background(shape.fill(theme.color("bg-1")))
         .overlay(shape.strokeBorder(theme.color("line"), lineWidth: 0.75))
@@ -174,17 +162,17 @@ struct ACPBackgroundTaskTray: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Button {
                 expandedOverride = !isExpanded
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     headerIcon
                     Text(ACPBackgroundTaskPresentation.headerTitle(total: tasks.count, paused: pausedCount))
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-muted"))
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(scale.glyph.font(weight: .bold))
                         .foregroundStyle(theme.color("fg-faint"))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     Spacer(minLength: 0)
@@ -196,7 +184,7 @@ struct ACPBackgroundTaskTray: View {
             if canStop, tasks.contains(where: \.canStop) {
                 Button(action: stopAll) {
                     Text("Stop all")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-dim"))
                 }
                 .buttonStyle(.plain)
@@ -215,11 +203,11 @@ struct ACPBackgroundTaskTray: View {
                 Spinner(lineWidth: 1.2, duration: 0.7)
             case .paused:
                 Image(systemName: "pause.fill")
-                    .font(.system(size: 9))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("warn"))
             case .list:
                 Image(systemName: "list.bullet")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("fg-faint"))
             }
         }
@@ -228,13 +216,13 @@ struct ACPBackgroundTaskTray: View {
 
     private func row(_ task: ACPBackgroundTask) -> some View {
         let hovered = hoveredId == task.id
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: scale.space[0]) {
+            HStack(spacing: scale.space[2]) {
                 leadingIcon(task)
                 commandText(task)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(ACPBackgroundTaskPresentation.elapsedText(context.date.timeIntervalSince(task.startedAt)))
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 stopButton(task)
@@ -242,20 +230,20 @@ struct ACPBackgroundTaskTray: View {
             .frame(height: ACPBackgroundTaskPresentation.rowHeight)
             if let error = task.stopError {
                 Text(error)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("del"))
                     .lineLimit(2)
-                    .padding(.leading, 21)
-                    .padding(.bottom, 4)
+                    .padding(.leading, 21) // design-literal: aligns under the row title past the icon
+                    .padding(.bottom, scale.space[1])
             }
         }
-        .padding(.horizontal, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.color("bg-2") : .clear))
-        .padding(.horizontal, -6)
+        .padding(.horizontal, scale.space[2])
+        .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(hovered ? theme.color("bg-2") : .clear))
+        .padding(.horizontal, -scale.space[2])
         .acpTrackingHover { inside in
             if inside { hoveredId = task.id } else if hoveredId == task.id { hoveredId = nil }
         }
-        .help([task.name, task.summary ?? task.description].compactMap { $0 }.joined(separator: "\n"))
+        .help(ACPBackgroundTaskPresentation.tooltip(task))
     }
 
     @ViewBuilder
@@ -263,7 +251,7 @@ struct ACPBackgroundTaskTray: View {
         Group {
             if task.state == "paused" {
                 Image(systemName: "pause.fill")
-                    .font(.system(size: 9))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("warn"))
             } else {
                 Spinner(lineWidth: 1.2, duration: 0.7)
@@ -290,6 +278,7 @@ struct ACPBackgroundTaskTray: View {
 /// A task name in one truncated line: shell commands in monospace with the
 /// arguments dimmed, prose names in the regular font.
 private struct ACPBackgroundTaskName: View {
+    @Environment(\.designScale) private var scale
     let name: String
     @Environment(\.theme) private var theme
 
@@ -298,10 +287,10 @@ private struct ACPBackgroundTaskName: View {
             if let parts = ACPBackgroundTaskPresentation.commandParts(name) {
                 (Text(parts.head).foregroundColor(theme.color("fg"))
                     + Text(parts.arguments.isEmpty ? "" : " " + parts.arguments).foregroundColor(theme.color("fg-dim")))
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
             } else {
                 Text(name)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg"))
             }
         }
@@ -314,6 +303,7 @@ private struct ACPBackgroundTaskName: View {
 /// label, command chip, duration and status glyph. Expanding reveals the full
 /// command, the task's summary and any stop error.
 struct ACPBackgroundTaskTranscriptRow: View {
+    @Environment(\.designScale) private var scale
     let task: ACPBackgroundTask
 
     @State private var expanded = false
@@ -322,28 +312,28 @@ struct ACPBackgroundTaskTranscriptRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { expanded.toggle() } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .frame(width: 16)
                         .foregroundStyle(theme.color("fg-faint"))
                         .accessibilityHidden(true)
                     Text("Background")
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-faint"))
                     ACPBackgroundTaskName(name: task.name)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
+                        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.small))
                     Spacer(minLength: 6)
                     if let finishedAt = task.finishedAt {
                         Text(ACPToolCallDurationFormatter.string(for: finishedAt.timeIntervalSince(task.startedAt)))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(scale.caption.font(weight: .medium, design: .monospaced))
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(1)
                     }
                     status
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9))
+                        .font(scale.glyphFont)
                         .foregroundStyle(theme.color("fg-faint"))
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
@@ -360,33 +350,33 @@ struct ACPBackgroundTaskTranscriptRow: View {
             }
         }
         .background(expanded ? theme.color("bg-1").opacity(0.5) : .clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("bg-4"), lineWidth: 0.5)
                 .opacity(expanded ? 1 : 0)
         )
     }
 
     private var details: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(verbatim: task.name)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg-dim"))
             if let detail = ACPBackgroundTaskPresentation.transcriptDetail(task) {
                 Text(verbatim: detail)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
             }
             if let error = task.stopError {
                 Text(verbatim: error)
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("del"))
             }
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-0").opacity(0.55))
     }
 
@@ -397,15 +387,15 @@ struct ACPBackgroundTaskTranscriptRow: View {
             EmptyView()
         case "failed":
             Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(theme.color("del"))
         case "stopped", "lost":
             Image(systemName: "stop.fill")
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(theme.color("fg-faint"))
         case "paused":
             Image(systemName: "pause.fill")
-                .font(.system(size: 9))
+                .font(scale.glyphFont)
                 .foregroundStyle(theme.color("warn"))
         default:
             Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
@@ -415,6 +405,7 @@ struct ACPBackgroundTaskTranscriptRow: View {
 
 /// Always-visible stop control; the fill appears on hover like the toolbar buttons.
 private struct StopTaskButton: View {
+    @Environment(\.designScale) private var scale
     let taskName: String
     let action: () -> Void
 
@@ -424,11 +415,11 @@ private struct StopTaskButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .semibold))
+                .font(scale.glyphFont)
                 .foregroundStyle(theme.color(hovering ? "fg" : "fg-muted"))
                 .toolbarControlSurface(
                     isLit: hovering,
-                    metrics: ToolbarControlMetrics(width: 18, height: 18, cornerRadius: 4))
+                    metrics: ToolbarControlMetrics(width: 18, height: 18, cornerRadius: scale.radius.small))
         }
         .buttonStyle(.toolbarControl)
         .acpTrackingHover { hovering = $0 }

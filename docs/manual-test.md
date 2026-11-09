@@ -366,8 +366,8 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 
 1. Select a GG worktree checked out at the stack head (required for `New stack commit`) with one staged file and one unstaged file.
 2. Confirm Prepare and the GG stack drawer are visible at the same time.
-3. Confirm Prepare shows `Review current changes`, `New stack commit`, `Amend current`, and `Absorb into stack` in that order.
-4. Run `Review current changes` and confirm both staged and unstaged changes appear in the local Changes review.
+3. Confirm Prepare shows `Review changes`, `New stack commit`, `Amend current`, and `Absorb into stack` in that order.
+4. Run `Review changes` and confirm both staged and unstaged changes appear in the local Changes review.
 5. Open `New stack commit`, commit the staged change, and confirm the stack refreshes while the unstaged file remains under Changes.
 
 ### GG staged-only Amend

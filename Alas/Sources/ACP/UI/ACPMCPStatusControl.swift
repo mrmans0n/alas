@@ -4,6 +4,7 @@ import SwiftUI
 /// editing the project configuration only makes this summary stale, because
 /// a different attachment plan cannot be applied until the next reconnect.
 struct ACPMCPStatusControl: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var session: ACPSession
     let currentServers: [ProjectMCPServer]
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
@@ -37,27 +38,27 @@ struct ACPMCPStatusControl: View {
             Button {
                 popoverOpen.toggle()
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: scale.space[1]) {
                     Image(systemName: "server.rack")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                     Text("MCP \(status.requestedCount)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .font(scale.caption.font(weight: .semibold))
                     if status.skippedCount > 0 || status.hasBuiltInWarning {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9))
+                            .font(scale.glyphFont)
                     }
                     if status.isStale {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(scale.glyphFont)
                     }
                 }
                 .foregroundStyle(foregroundColor(for: status))
-                .padding(.horizontal, 8)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 24)
                 .background(backgroundColor(for: status))
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .strokeBorder(foregroundColor(for: status).opacity(isLit ? 0.5 : 0.28), lineWidth: 0.5)
                 }
             }
@@ -90,6 +91,7 @@ struct ACPMCPStatusControl: View {
 }
 
 private struct ACPMCPStatusPopover: View {
+    @Environment(\.designScale) private var scale
     enum InstallState { case idle, running, done, failed }
 
     let status: ACPMCPStatusState
@@ -106,41 +108,41 @@ private struct ACPMCPStatusPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("MCP servers")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 Spacer()
                 Text(status.summaryText)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .font(scale.caption.font(weight: .medium))
                     .foregroundStyle(theme.color("fg-muted"))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
 
             if status.isStale {
-                HStack(spacing: 7) {
+                HStack(spacing: scale.space[2]) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                     Text("New settings apply on reconnect.")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                 }
                 .foregroundStyle(theme.color("warn"))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("warn").opacity(0.10))
             }
 
             if status.hasBuiltInWarning {
-                HStack(alignment: .top, spacing: 7) {
+                HStack(alignment: .top, spacing: scale.space[2]) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                     Text("The agent harness didn't start the Alas MCP server — it may be blocked by an enterprise MCP policy (stdio servers are commonly restricted).")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(theme.color("warn"))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("warn").opacity(0.10))
             }
@@ -149,17 +151,17 @@ private struct ACPMCPStatusPopover: View {
 
             VStack(spacing: 0) {
                 ForEach(status.externalRows ?? status.rows) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                         Image(systemName: row.isRequested ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(row.isRequested ? theme.color("accent") : theme.color("warn"))
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: scale.space[0]) {
                             Text(row.name)
-                                .font(.system(size: 11.5, weight: .medium))
+                                .font(scale.meta.font(weight: .medium))
                                 .foregroundStyle(theme.color("fg"))
                                 .lineLimit(1)
                             Text("\(row.transport) - \(row.detail)")
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-muted"))
                                 .lineLimit(2)
                         }
@@ -170,23 +172,23 @@ private struct ACPMCPStatusPopover: View {
                             Button("Disable") {
                                 onToggleRepoServer(row.name, .disable)
                             }
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                         } else if row.repoToggle == .enable,
                                   let onToggleRepoServer {
                             Button("Enable") {
                                 onToggleRepoServer(row.name, .enable)
                             }
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                         } else if row.repoToggle == .approve,
                                   let onToggleRepoServer {
                             Button("Approve") {
                                 onToggleRepoServer(row.name, .approve)
                             }
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
                 }
             }
 
@@ -195,24 +197,24 @@ private struct ACPMCPStatusPopover: View {
             }
 
             if status.showsSwitchToHTTPAction, let onSwitchToHTTP {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     AlasButton(title: "Switch to HTTP transport", icon: "arrow.triangle.2.circlepath", style: .normal) {
                         onSwitchToHTTP()
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
             } else if status.hasBuiltInWarning {
-                HStack(alignment: .top, spacing: 7) {
+                HStack(alignment: .top, spacing: scale.space[2]) {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                     Text(builtInWarningDetail)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(theme.color("fg-muted"))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -220,21 +222,21 @@ private struct ACPMCPStatusPopover: View {
                 AlasButton(title: "Reconnect session", icon: "arrow.clockwise", style: .normal) {
                     onReconnect()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
             }
 
             if let detail = status.preambleDetail {
                 Divider().background(theme.color("line"))
-                HStack(spacing: 7) {
+                HStack(spacing: scale.space[2]) {
                     Image(systemName: "text.bubble")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                     Text(detail)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                 }
                 .foregroundStyle(theme.color("fg-muted"))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -257,7 +259,7 @@ private struct ACPMCPStatusPopover: View {
 
     @ViewBuilder
     private var installActionRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             switch installState {
             case .idle:
                 AlasButton(title: "Install pi-mcp-adapter", style: .subtle) {
@@ -269,23 +271,23 @@ private struct ACPMCPStatusPopover: View {
                     }
                 }
             case .running:
-                HStack(spacing: 7) {
+                HStack(spacing: scale.space[2]) {
                     ProgressView().controlSize(.small)
                     Text("Installing pi-mcp-adapter…")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                 }
                 .foregroundStyle(theme.color("fg-muted"))
             case .done:
                 Text("Installed ✓ — reconnect to apply")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("add"))
             case .failed:
                 Text("Install failed — see pi output")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("warn"))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 }

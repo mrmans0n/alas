@@ -29,6 +29,7 @@ enum BreadcrumbMenuItems {
 /// segments tap-to-reveal in the Files tab; the last segment is the file.
 /// Right-click on any segment shows a context menu supplied by `menuItems`.
 struct BreadcrumbView: View {
+    @Environment(\.designScale) private var scale
     let relativePath: String
     let onRevealInFiles: (String) -> Void
     /// Receives (segmentIndex, pathPrefix). Returns the menu items for that
@@ -43,9 +44,9 @@ struct BreadcrumbView: View {
         let isAbsolute = relativePath.hasPrefix("/")
         let components = relativePath.split(separator: "/")
         let lastIndex = components.count - 1
-        return HStack(spacing: 6) {
+        return HStack(spacing: scale.space[2]) {
             if components.isEmpty {
-                Text("").font(.system(size: 11, design: .monospaced))
+                Text("").font(scale.metaFont)
             } else {
                 ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
                     // Preserve the leading slash for absolute paths so that
@@ -55,7 +56,7 @@ struct BreadcrumbView: View {
                     let joined = components[0...i].joined(separator: "/")
                     let pathPrefix = isAbsolute ? "/" + joined : joined
                     Text(String(comp))
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
                         // Suppress tap-to-reveal-in-Files for absolute (external)
                         // paths: `onRevealInFiles` treats paths as worktree-relative,
@@ -74,7 +75,7 @@ struct BreadcrumbView: View {
             Spacer()
             if let trailing { trailing }
         }
-        .padding(.horizontal, 12).frame(height: 28)
+        .padding(.horizontal, scale.space[3]).frame(height: 28)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }

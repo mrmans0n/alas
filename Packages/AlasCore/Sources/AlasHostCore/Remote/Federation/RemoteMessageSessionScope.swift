@@ -18,17 +18,17 @@ extension RemoteClientMessage {
     public var sessionId: String? {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .portForward, .host:
+             .createWorktreeSession, .createSession, .console, .portForward, .host, .peerHost:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
-             .openSessionTab(let id), .closeSessionTab(let id):
+             .openSessionTab(let id), .closeSessionTab(let id), .installAdapter(let id):
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _, _), .searchMentions(let id, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .setConfigOption(let id, _, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
              .queueMove(let id, _, _), .queuePromote(let id, _),
-             .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _),
+             .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _), .readTranscriptImage(let id, _),
              .visualAidResponse(let id, _, _, _, _, _):
             return id
         }
@@ -37,7 +37,7 @@ extension RemoteClientMessage {
     public func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .portForward, .host:
+             .createWorktreeSession, .createSession, .console, .portForward, .host, .peerHost:
             return self
         case .subscribe: return .subscribe(sessionId: new)
         case .unsubscribe: return .unsubscribe(sessionId: new)
@@ -54,6 +54,7 @@ extension RemoteClientMessage {
         case .takeOver: return .takeOver(sessionId: new)
         case .openSessionTab: return .openSessionTab(sessionId: new)
         case .closeSessionTab: return .closeSessionTab(sessionId: new)
+        case .installAdapter: return .installAdapter(sessionId: new)
         case .sendPrompt(_, let text, let attachments, let intent, let mentions):
             return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent, mentions: mentions)
         case .searchMentions(_, let query): return .searchMentions(sessionId: new, query: query)
@@ -86,6 +87,7 @@ extension RemoteClientMessage {
             return .listFiles(sessionId: new, path: path, comparisonMode: comparisonMode)
         case .listCommitFiles(_, let sha): return .listCommitFiles(sessionId: new, sha: sha)
         case .commitFileDiff(_, let sha, let path): return .commitFileDiff(sessionId: new, sha: sha, path: path)
+        case .readTranscriptImage(_, let path): return .readTranscriptImage(sessionId: new, path: path)
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
         }
     }
@@ -94,7 +96,7 @@ extension RemoteClientMessage {
 extension RemoteServerMessage {
     public var sessionId: String? {
         switch self {
-        case .hello, .identityProof, .console, .portForward, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return nil
@@ -114,7 +116,7 @@ extension RemoteServerMessage {
              .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
-             .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .mentionCandidates(let id, _, _),
+             .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .transcriptImage(let id, _, _), .mentionCandidates(let id, _, _),
              .fileHistory(let id, _, _, _), .fileHistoryFailed(let id, _, _, _):
             return id
         case .sessionConfig(let cfg):
@@ -124,7 +126,7 @@ extension RemoteServerMessage {
 
     public func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
-        case .hello, .identityProof, .console, .portForward, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .portForward, .host, .peerHost, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return self
@@ -198,6 +200,8 @@ extension RemoteServerMessage {
             return .fileContents(sessionId: new, path: path, text: text, truncated: truncated, version: version)
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             return .fileUnavailable(sessionId: new, path: path, reason: reason, byteSize: byteSize, message: message)
+        case .transcriptImage(_, let path, let data):
+            return .transcriptImage(sessionId: new, path: path, data: data)
         case .fileBytes(_, let path, let data, let byteSize):
             return .fileBytes(sessionId: new, path: path, data: data, byteSize: byteSize)
         case .fileHistory(_, let path, let entries, let truncated):

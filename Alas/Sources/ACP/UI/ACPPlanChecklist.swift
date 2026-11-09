@@ -3,6 +3,7 @@ import SwiftUI
 /// Shared body of the plan UI — header (`done / total`) plus the list
 /// of rows with completed / in-progress / pending marks.
 struct ACPPlanChecklist: View {
+    @Environment(\.designScale) private var scale
     let items: [ACPMessage.PlanItem]
     var isTurnActive = false
     @Environment(\.theme) private var theme
@@ -14,46 +15,46 @@ struct ACPPlanChecklist: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().background(theme.color("line"))
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     row(item: item)
                 }
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, scale.space[2])
         }
         .background(theme.color("bg-1"))
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "sparkles")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("accent"))
             Text("Plan")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("accent"))
             Text("\(done) / \(total)")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.4))
     }
 
     @ViewBuilder
     private func row(item: ACPMessage.PlanItem) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             mark(for: item)
             Text(item.content)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(item.status == "completed" ? theme.color("fg-faint") : theme.color("fg"))
                 .strikethrough(item.status == "completed", color: theme.color("fg-faint").opacity(0.5))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).padding(.vertical, 5)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[1])
         .background(item.status == "in_progress" ? theme.color("accent").opacity(theme.darkMode ? 0.10 : 0.18) : Color.clear)
     }
 
@@ -62,7 +63,7 @@ struct ACPPlanChecklist: View {
         switch item.status {
         case "completed":
             Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(scale.glyph.font(weight: .bold))
                 .foregroundStyle(theme.color("add"))
                 .frame(width: 12)
         case "in_progress" where isTurnActive:
@@ -71,7 +72,7 @@ struct ACPPlanChecklist: View {
                 .frame(width: 12)
         case "in_progress":
             Image(systemName: "circle.dashed")
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color("accent"))
                 .frame(width: 12)
         default:

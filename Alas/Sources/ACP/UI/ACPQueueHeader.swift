@@ -4,6 +4,7 @@ import SwiftUI
 /// one pending item exists. Shows the count on the left and a "Clear"
 /// text button on the right.
 struct ACPQueueHeader: View {
+    @Environment(\.designScale) private var scale
     let count: Int
     var canClear = true
     let onClear: () -> Void
@@ -11,9 +12,9 @@ struct ACPQueueHeader: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text("Up next · \(count) queued")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("fg-faint"))
@@ -21,13 +22,13 @@ struct ACPQueueHeader: View {
             if canClear {
                 Button(action: onClear) {
                     Text("Clear")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-muted"))
                 }
                 .buttonStyle(.plain)
                 .help("Remove pending prompts; background work notifications are retained")
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, scale.space[1])
     }
 }

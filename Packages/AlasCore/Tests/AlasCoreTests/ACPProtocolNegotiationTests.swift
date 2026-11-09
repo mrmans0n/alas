@@ -83,7 +83,7 @@ struct ACPProtocolNegotiationTests {
         }
     }
 
-    @Test func changedPreferenceOnlyAffectsNewConnectionSnapshots() async throws {
+    @Test func normalProtocolSelectionStaysV1WhenPreviewIsEnabled() async throws {
         var config = AppConfig.defaults
         let originalClient = ACPMockClient()
         let nextClient = ACPMockClient()
@@ -104,6 +104,9 @@ struct ACPProtocolNegotiationTests {
         _ = try await next.initialize()
         #expect(!original.protocolSelection.experimentalV2Enabled)
         #expect(next.protocolSelection.experimentalV2Enabled)
+        #expect(ACPProtocolVersion.current == 1)
+        #expect(next.protocolSelection.requestedVersion == .v1)
+        #expect(next.protocolSelection.supportedVersions == [.v1])
         #expect(original.negotiatedProtocolVersion == .v1)
         #expect(next.negotiatedProtocolVersion == .v1)
         #expect(originalClient.sent.count == 1)

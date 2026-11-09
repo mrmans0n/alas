@@ -109,6 +109,7 @@ enum CheckpointDiffLoadKey {
 }
 
 struct CheckpointDiffTabView: View {
+    @Environment(\.designScale) private var scale
     let state: CheckpointDiffTabState
     let target: CheckpointWorktreeTarget?
     var service: any WorktreeCheckpointServicing = WorktreeCheckpointService()
@@ -207,17 +208,17 @@ struct CheckpointDiffTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Text(state.memberPaths.count > 1 ? "\(state.memberPaths.count) files" : (state.primaryPath as NSString).lastPathComponent)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
             Text(state.checkpointLabel)
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.16))
                 .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(state.memberPaths.count > 1 ? state.primaryPath : (state.primaryPath as NSString).deletingLastPathComponent)
                 .font(.system(size: codeFontSize - 1.5))
@@ -226,22 +227,22 @@ struct CheckpointDiffTabView: View {
                 .truncationMode(.middle)
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 
     private func informationalBody(_ message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[2]) {
             Image(systemName: "doc.fill")
-                .font(.system(size: 28))
+                .font(.system(size: 28)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-muted"))
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
             Text("Open the file outside the diff viewer if you need to inspect binary content.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
         }
         .padding()
@@ -249,12 +250,12 @@ struct CheckpointDiffTabView: View {
     }
 
     private func unavailableBody(_ message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[2]) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 28))
+                .font(.system(size: 28)) // design-literal: hero icon
                 .foregroundColor(theme.color("fg-muted"))
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .multilineTextAlignment(.center)
             Button("Retry") { retryGeneration &+= 1 }

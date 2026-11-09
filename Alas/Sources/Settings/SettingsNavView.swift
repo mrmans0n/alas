@@ -56,6 +56,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 struct SettingsNavView: View {
+    @Environment(\.designScale) private var scale
     @Binding var selection: SettingsSection
     var showsDebug: Bool
     @Environment(\.theme) var theme
@@ -68,25 +69,25 @@ struct SettingsNavView: View {
                         Icon(name: section.icon, size: 14,
                              color: selection == section ? theme.color("accent") : theme.color("fg-dim"))
                             .frame(width: 16, height: 16)
-                        Text(section.label).font(.system(size: 12.5))
+                        Text(section.label).font(scale.bodyFont)
                             .foregroundColor(selection == section ? theme.color("fg") : theme.color("fg-muted"))
                         Spacer()
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(selection == section ? theme.color("accent-soft") : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
             Text("Alas \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
-                .padding(.horizontal, 10).padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         }
-        .padding(.horizontal, 8).padding(.vertical, 12)
+        .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[3])
         .frame(width: 200)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .trailing)

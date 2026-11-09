@@ -62,6 +62,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         defer { nextPromptID += 1 }
         return nextPromptID
     }
+    nonisolated public let runtimeKind: ACPSessionRuntimeKind
     nonisolated public let agentId: String
     nonisolated public let worktreeId: String
     /// Where this session's attachments are staged. Staging and send share it,
@@ -326,6 +327,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the current connection's agent sent the `agentFileChangeReport`
     /// advertisement. Runtime only; relearned on attach.
     @Tracked public var agentFileChangeReport: ACPAgentFileChangeReportCapability?
+    /// Whether a prompt can ask the current connection's agent for its turn's
+    /// predicted follow-up prompt. Runtime only; relearned on attach.
+    @Tracked public var supportsPredictedPrompt = false
+    /// The agent's predicted follow-up prompt of the latest prompt that asked.
+    public let agentPrediction = NextPromptAgentPrediction()
     /// The pending plan review's plan file, as read on the session's host,
     /// keyed by the request's `toolCallId`. Runtime only; cleared when the
     /// review is answered or cancelled.
@@ -867,6 +873,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     public init(id: ID, agentId: String, worktreeId: String, title: String,
+         runtimeKind: ACPSessionRuntimeKind = .v1,
          owner: SessionOwnerID? = nil,
          titleSource: ACPSessionTitleSource = .placeholder,
          origin: ACPSessionOrigin = .alasCreated,
@@ -874,6 +881,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
          hydrationState: HydrationState = .ready,
          restoredFromPersistence: Bool = false) {
         self.id = id
+        self.runtimeKind = runtimeKind
         self.agentId = agentId
         self.worktreeId = worktreeId
         self.owner = owner ?? .worktree(worktreeId)

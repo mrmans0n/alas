@@ -33,6 +33,13 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         return textView
     }
 
+    /// A table cell can be narrower than the floor; measuring wider overlaps the next column.
+    @Test(arguments: [(CGFloat(40), CGFloat(40)), (0, 80)])
+    func fittingSizeKeepsAnyPositiveWidth(proposed: CGFloat, expected: CGFloat) {
+        let textView = makeTextView("A cell with several words")
+        #expect(textView.fittingSize(for: proposed).width == expected)
+    }
+
     @Test func repeatedSameWidthProbesHitTheCache() {
         let textView = makeTextView("The quick brown fox jumps over the lazy dog, several times, wrapping.")
 

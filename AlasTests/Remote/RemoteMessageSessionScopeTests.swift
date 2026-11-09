@@ -25,6 +25,7 @@ struct RemoteMessageSessionScopeTests {
             .visualAidResponse(sessionId: "a", visualId: "V", action: "answer", selectedOptionIds: ["x"], note: "n", requestId: "r"),
             .listChanges(sessionId: "a"), .fileDiff(sessionId: "a", path: "p", stage: nil),
             .listFiles(sessionId: "a", path: nil), .readFile(sessionId: "a", path: "p"),
+            .readTranscriptImage(sessionId: "a", path: "/tmp/shot.png"),
         ]
         for message in scoped {
             #expect(message.sessionId == "a", "\(message)")
@@ -83,6 +84,7 @@ struct RemoteMessageSessionScopeTests {
             .fileTree(sessionId: "a", path: nil, nodes: [], truncated: false),
             .fileTreeFailed(sessionId: "a", path: nil, reason: .sessionUnknown, message: nil),
             .fileContents(sessionId: "a", path: "p", text: "", truncated: false),
+            .transcriptImage(sessionId: "a", path: "/tmp/shot.png", data: Data([1, 2])),
             .fileUnavailable(sessionId: "a", path: "p", reason: .sessionUnknown, byteSize: nil, message: nil),
             .error(message: "m", sessionId: "a"),
         ]

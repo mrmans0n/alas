@@ -47,6 +47,7 @@ struct ACPVisualAidActions {
 /// page plus, when it asks one, the native question card. An embedded visual
 /// in the transcript drops the card: it is just the page, part of the reply.
 struct ACPVisualAidCard: View {
+    @Environment(\.designScale) private var scale
     let visual: ACPVisualAid
     let form: ACPUserInputFormState?
     let sendStatus: ACPVisualAidSendStatus
@@ -116,11 +117,11 @@ struct ACPVisualAidCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .topTrailing) {
                 let visible = hovered || voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     overlayButton("doc.on.doc", help: "Copy HTML", action: copyHTML)
                     overlayButton("arrow.up.forward.square", help: actions.popOutLabel) { actions.popOut(visual) }
                 }
-                .padding(6)
+                .padding(scale.space[2])
                 .opacity(visible ? 1 : 0)
                 .allowsHitTesting(visible)
                 .animation(.easeOut(duration: 0.12), value: visible)
@@ -149,7 +150,7 @@ struct ACPVisualAidCard: View {
     }
 
     private func embeddedPlaceholder(_ text: String, button: (String, () -> Void)? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(text).foregroundStyle(theme.color("fg-muted"))
             if let button {
                 Button(button.0, action: button.1)
@@ -164,10 +165,10 @@ struct ACPVisualAidCard: View {
             Image(systemName: systemName)
                 .font(.system(size: typography.labelSize))
                 .foregroundStyle(theme.color("fg-muted"))
-                .padding(.horizontal, 6).padding(.vertical, 3)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
                 .background(theme.color("bg-3").opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .help(help)
@@ -189,16 +190,16 @@ struct ACPVisualAidCard: View {
             }
         }
         .background(theme.color("bg-1"))
-        .clipShape(.rect(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 1))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 1))
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "rectangle.on.rectangle")
                 .foregroundStyle(theme.color("accent"))
             Text(visual.title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .lineLimit(1)
             Spacer(minLength: 8)
             Button(action: copyHTML) { Image(systemName: "doc.on.doc") }
@@ -210,8 +211,8 @@ struct ACPVisualAidCard: View {
                     .help(actions.popOutLabel)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     @ViewBuilder private var surface: some View {
@@ -230,7 +231,7 @@ struct ACPVisualAidCard: View {
     }
 
     private func placeholder(_ text: String, button: (String, () -> Void)? = nil) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             Text(text).foregroundStyle(theme.color("fg-muted"))
             if let button {
                 Button(button.0, action: button.1)
@@ -243,19 +244,19 @@ struct ACPVisualAidCard: View {
         switch visual.answer {
         case .answered(let ids, let note, _):
             let labels = Dictionary(uniqueKeysWithValues: question.options.map { ($0.id, $0.label) })
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text("Answered: " + ids.map { "\($0), \(labels[$0] ?? $0)" }.joined(separator: "; "))
                 if let note { Text("Note: \(note)").foregroundStyle(theme.color("fg-muted")) }
             }
             .font(.callout)
-            .padding(12)
+            .padding(scale.space[3])
         case .dismissed:
-            Text("Dismissed").font(.callout).foregroundStyle(theme.color("fg-muted")).padding(12)
+            Text("Dismissed").font(.callout).foregroundStyle(theme.color("fg-muted")).padding(scale.space[3])
         case nil:
             if !ACPVisualAidQuestionForm.isEditable(answer: visual.answer, canAnswer: canAnswer) {
                 readOnlyQuestion(question)
             } else if let form {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     ACPUserInputPrompt(
                         formState: form,
                         onRespond: { _, action in respond(action, question: question) },
@@ -267,14 +268,14 @@ struct ACPVisualAidCard: View {
                         Text(sendError).font(.callout).foregroundStyle(theme.color("del"))
                     }
                 }
-                .padding(8)
+                .padding(scale.space[2])
             }
         }
     }
 
     /// A mirror cannot answer, so it shows what is asked and where to answer instead of the form.
     private func readOnlyQuestion(_ question: ACPVisualAid.Question) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Text(question.prompt).font(.callout.weight(.semibold))
             ForEach(question.options, id: \.id) { option in
                 Text("• " + option.label)
@@ -282,7 +283,7 @@ struct ACPVisualAidCard: View {
             Text("Answer from the window that owns this session.").foregroundStyle(theme.color("fg-muted"))
         }
         .font(.callout)
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private func respond(_ action: ACPUserInputAction, question: ACPVisualAid.Question) {
