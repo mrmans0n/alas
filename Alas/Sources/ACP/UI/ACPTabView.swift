@@ -267,6 +267,8 @@ private struct ACPSessionView: View {
     @State private var agentUpdateState: AdapterUpdateState?
     @State private var agentDismissedLatest: String?
     @State private var agentUpdateOwner: ACPDetectedAgentOwner?
+    /// A Reinstall from the launch-failure or setup-error banner is running.
+    @State private var isReinstallingAdapter = false
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var composerFocusRequest: Int = 0
@@ -472,6 +474,7 @@ private struct ACPSessionView: View {
             manager: manager,
             parentID: sessionId,
             typography: chatTypography,
+            worktreeRoot: worktree.path.path,
             onInsert: insertSideAnswer,
             onKeep: {
                 state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
@@ -647,7 +650,7 @@ private struct ACPSessionView: View {
     private var transcriptAndComposer: some View {
         HStack(spacing: 0) {
             GeometryReader { chatProxy in
-                let chatContentMaxWidth = ACPChatLayout.readingColumnWidth(scale: scale)
+                let chatContentMaxWidth = ACPChatLayout.readingColumnWidth(scale: scale, columnWidth: chatProxy.size.width)
                 let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
                     preferred: state.config.harness.acpShowMinimap,
                     availableWidth: chatProxy.size.width
@@ -1504,7 +1507,7 @@ private struct ACPSessionView: View {
                         targetHost: adapterTargetHost,
                         mode: .install,
                         onDismiss: { dismissNudge() },
-                        install: { try await installAdapter() },
+                        install: { try await installAdapter(mode: .reinstall) },
                         onInstalled: { await reattachAfterAdapterChange() }
                     )
                 } else if case .needsSetup(let reason) = session.setupState {
@@ -1526,7 +1529,7 @@ private struct ACPSessionView: View {
                         targetHost: adapterTargetHost,
                         mode: .update(current: current, latest: latest),
                         onDismiss: { dismissUpdate(latest: latest) },
-                        install: { try await installAdapter() },
+                        install: { try await installAdapter(mode: .update) },
                         onInstalled: { await reattachAfterAdapterChange() }
                     )
                 }
@@ -1655,11 +1658,54 @@ private struct ACPSessionView: View {
         }
     }
 
-    private func installAdapter() async throws {
+    private func installAdapter(mode: ACPAdapterInstallMode) async throws {
         try await state.acpAdapterInstallCoordinator.install(
             target: adapterTarget,
-            agentID: session.agentId
+            agentID: session.agentId,
+            mode: mode
         )
+    }
+
+    /// Whether this tab can reinstall its agent's adapter: Alas manages it
+    /// and the session runs here rather than mirroring another Mac's.
+    private var canReinstallAdapter: Bool {
+        !isMirror && ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil
+    }
+
+    private var hasSetupError: Bool {
+        if case .setupError = session.setupState { return true }
+        return false
+    }
+
+    /// Uninstalls and installs the adapter again, then reconnects. Failures
+    /// land in the error banner, which keeps offering the button.
+    private func reinstallAdapter() {
+        guard !isReinstallingAdapter else { return }
+        isReinstallingAdapter = true
+        Task {
+            do {
+                try await installAdapter(mode: .reinstall)
+            } catch {
+                await MainActor.run {
+                    isReinstallingAdapter = false
+                    session.lastError = "Couldn't reinstall the adapter: \(error.localizedDescription)"
+                }
+                return
+            }
+            await MainActor.run {
+                isReinstallingAdapter = false
+                session.lastError = nil
+            }
+            await reattachAfterAdapterChange()
+        }
+    }
+
+    private var reinstallAdapterButton: some View {
+        Button(isReinstallingAdapter ? "Reinstalling…" : "Reinstall adapter") { reinstallAdapter() }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isReinstallingAdapter)
+            .help("Uninstall the adapter and install it again. Sessions that already run on it may fail meanwhile.")
     }
 
     private var acpForkTargetWorktreePath: URL {
@@ -1713,6 +1759,9 @@ private struct ACPSessionView: View {
                 Button("Retry", action: onRetry)
                     .buttonStyle(.borderless)
                     .controlSize(.small)
+            }
+            if case .setupError = session.setupState, canReinstallAdapter {
+                reinstallAdapterButton
             }
         }
         .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
@@ -1880,6 +1929,14 @@ private struct ACPSessionView: View {
                     .tint(theme.color("accent"))
                     .disabled(session.connectionRestartInProgress)
             }
+            // A launch that keeps failing can be a damaged adapter install.
+            // A setup error shows the button in its own banner instead.
+            if case .failed = session.agentState,
+               session.connectionRecoveryState == nil,
+               canReinstallAdapter,
+               !hasSetupError {
+                reinstallAdapterButton
+            }
             if dismissible {
                 Button {
                     session.lastError = nil
@@ -1971,6 +2028,8 @@ private struct ACPSideQuestionSlot: View {
     @ObservedObject var manager: ACPSessionManager
     let parentID: ACPSession.ID
     let typography: ACPChatTypography
+    /// The parent's worktree path, for relative paths in approval diffs.
+    let worktreeRoot: String
     let onInsert: (String) -> Void
     let onKeep: () -> Void
     /// The dock this slot renders; it shows nothing unless the card is docked here.
@@ -2019,6 +2078,7 @@ private struct ACPSideQuestionSlot: View {
             } ?? true,
             policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
             typography: typography,
+            worktreeRoot: worktreeRoot,
             onAsk: { text, completion in
                 if let side {
                     let accepted = manager.submit(

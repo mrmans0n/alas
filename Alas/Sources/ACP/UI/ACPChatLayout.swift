@@ -14,10 +14,10 @@ enum ACPChatLayout {
         return min(wideContentMaxWidth, defaultContentMaxWidth + extraWidth)
     }
 
-    /// The agent transcript's column. Unlike the panes above it never grows
-    /// past `readingColumnMax`: long lines are what it exists to prevent.
-    static func readingColumnWidth(scale: DesignScale) -> CGFloat {
-        scale.readingColumnMax
+    /// The agent transcript's column: the scale's reading width, growing with
+    /// wide panes like the panes above, up to `wideContentMaxWidth`.
+    static func readingColumnWidth(scale: DesignScale, columnWidth: CGFloat) -> CGFloat {
+        max(scale.readingColumnMax, contentMaxWidth(forChatColumnWidth: columnWidth))
     }
 
     static func contentMaxWidth(forPaneWidth paneWidth: CGFloat) -> CGFloat {

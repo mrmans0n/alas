@@ -305,7 +305,7 @@ extension SessionsAPI {
         do {
             // Where the agent runs: an SSH worktree's agent runs on its host.
             let target: ACPAdapterTarget = manager.executionRemoteHost.map { .ssh(host: $0) } ?? .local
-            try await core.adapterInstalls.install(target: target, agentID: session.agentId)
+            try await core.adapterInstalls.install(target: target, agentID: session.agentId, mode: .reinstall)
         } catch {
             session.setupState = .setupError(reason: "Couldn't install the adapter: \(error.localizedDescription)")
             throw SessionRefusal.agentUnavailable

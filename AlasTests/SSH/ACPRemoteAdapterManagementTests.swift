@@ -40,6 +40,42 @@ struct ACPRemoteAdapterManagementTests {
         }
     }
 
+    @Test func managedAdapterMissingItsPlatformPackageNeedsReinstall() async throws {
+        let descriptor = ACPManagedAdapterDescriptor.codex
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let prefix = home.appendingPathComponent(".alas/acp/\(descriptor.agentID)")
+        let bin = prefix.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(
+            at: prefix.appendingPathComponent("lib/node_modules/\(descriptor.packageName)"),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        // Stands in for the payload script finding the skipped package.
+        let scripts = [
+            descriptor.binaryName: "#!/bin/sh\nexit 0\n",
+            "node": "#!/bin/sh\nprintf '%s\\n' '@openai/codex-linux-x64'\nexit 3\n",
+        ]
+        for (name, script) in scripts {
+            let file = bin.appendingPathComponent(name)
+            try Data(script.utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let management = ACPRemoteAdapterManagement(
+            runner: { _, _, command, _, _ in
+                try await Process.run("/bin/sh", args: ["-c", command], env: ["HOME": home.path, "PATH": bin.path])
+            },
+            nodeResolver: { _ in .init(npmPath: bin.appendingPathComponent("npm").path,
+                                     nodePath: bin.appendingPathComponent("node").path,
+                                     binDirectory: bin.path) }
+        )
+
+        let resolution = await management.resolve(
+            host: "devbox", descriptor: descriptor, setupCheck: .npxPackage(name: descriptor.packageName))
+
+        #expect(resolution == .error(message: ACPAdapterPayloadCheck.incompleteReason(
+            packageName: descriptor.packageName, missing: ["@openai/codex-linux-x64"], host: "devbox")))
+    }
+
     @Test func managedAdapterWinsWithoutNpm() async {
         let runner = AdapterProbeRunner(results: [
             .init(exitCode: 0, stdout: taggedReady(

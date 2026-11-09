@@ -24,13 +24,40 @@ public struct ACPSetupChecker: Sendable {
                 ? .ready
                 : .missing(reason: "`\(name)` not found on PATH")
         case .npxPackage(let pkg):
-            return await npmPackageInstalled(pkg)
-                ? .ready
-                : .missing(reason: "npm package `\(pkg)` is not installed globally")
+            return await npmPackageState(pkg).result(
+                packageName: pkg, absentReason: "npm package `\(pkg)` is not installed globally")
         case .binaryOnPathOrNpmPackage(let bin, let pkg):
             if resolve(bin) != nil { return .ready }
-            if await npmPackageInstalled(pkg) { return .ready }
-            return .missing(reason: "`\(bin)` not on PATH and `\(pkg)` not installed")
+            return await npmPackageState(pkg).result(
+                packageName: pkg, absentReason: "`\(bin)` not on PATH and `\(pkg)` not installed")
+        }
+    }
+
+    /// The version of a globally installed npm package, or nil when npm or
+    /// the package is missing.
+    public func installedVersion(ofNpmPackage name: String) async -> String? {
+        guard let directory = await globalPackageDirectory(name),
+              let data = try? Data(contentsOf: directory.appendingPathComponent("package.json")),
+              let manifest = try? JSONDecoder().decode(NpmPackageVersion.self, from: data)
+        else { return nil }
+        return manifest.version
+    }
+
+    private enum NpmPackageState {
+        case installed
+        case absent
+        /// Installed and linked, but npm skipped these platform packages.
+        case incomplete(missing: [String])
+
+        /// An incomplete install is an error rather than a missing adapter:
+        /// it needs a reinstall, which the setup-error surfaces offer.
+        func result(packageName: String, absentReason: String) -> ACPSetupResult {
+            switch self {
+            case .installed: .ready
+            case .absent: .missing(reason: absentReason)
+            case .incomplete(let missing):
+                .error(message: ACPAdapterPayloadCheck.incompleteReason(packageName: packageName, missing: missing))
+            }
         }
     }
 
@@ -38,58 +65,66 @@ public struct ACPSetupChecker: Sendable {
         AgentPath.resolveExecutable(named: name, base: env["PATH"], wellKnown: additionalPathDirectories)
     }
 
-    private func npmPackageInstalled(_ name: String) async -> Bool {
-        // `npm root -g` resolves the global node_modules path; look for the package there.
-        guard let npm = resolve("npm") else { return false }
-        let env = ACPProcessEnvironment.augmented(
-            env,
-            additionalPathDirectories: additionalPathDirectories)
-        let result: ProcessResult?
-        do {
-            result = try await Process.run(
-                npm,
-                args: ["root", "-g"],
-                env: env
-            )
-        } catch {
-            return false
-        }
-        guard let result else { return false }
+    private var npmEnvironment: [String: String] {
+        ACPProcessEnvironment.augmented(env, additionalPathDirectories: additionalPathDirectories)
+    }
+
+    /// `npm root -g`'s directory for `name`, when it exists.
+    private func globalPackageDirectory(_ name: String) async -> URL? {
+        guard let npm = resolve("npm"),
+              let result = try? await Process.run(npm, args: ["root", "-g"], env: npmEnvironment)
+        else { return nil }
         let root = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !root.isEmpty else { return false }
+        guard !root.isEmpty else { return nil }
         let packageDirectory = URL(fileURLWithPath: root).appendingPathComponent(name, isDirectory: true)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: packageDirectory.path, isDirectory: &isDir),
-              isDir.boolValue else { return false }
+              isDir.boolValue else { return nil }
+        return packageDirectory
+    }
 
+    private func npmPackageState(_ name: String) async -> NpmPackageState {
+        guard let npm = resolve("npm"), let packageDirectory = await globalPackageDirectory(name) else {
+            return .absent
+        }
+        let env = npmEnvironment
         let descriptors = [
             ACPManagedAdapterDescriptor.claude,
             ACPManagedAdapterDescriptor.codex,
             ACPManagedAdapterDescriptor.pi,
         ]
         guard let descriptor = descriptors.first(where: { $0.packageName == name }) else {
-            return true
+            return .installed
         }
         guard let data = try? Data(contentsOf: packageDirectory.appendingPathComponent("package.json")),
               let manifest = try? JSONDecoder().decode(NpmPackageManifest.self, from: data),
-              let relativePath = manifest.path(for: descriptor.binaryName) else { return false }
+              let relativePath = manifest.path(for: descriptor.binaryName) else { return .absent }
         let executable = packageDirectory.appendingPathComponent(relativePath).standardizedFileURL
-        guard executable.path.hasPrefix(packageDirectory.standardizedFileURL.path + "/") else { return false }
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
+        guard executable.path.hasPrefix(packageDirectory.standardizedFileURL.path + "/") else { return .absent }
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else { return .absent }
         guard let prefixResult = try? await Process.run(
             npm,
             args: ["prefix", "-g"],
             env: env
-        ) else { return false }
+        ) else { return .absent }
         let prefix = prefixResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prefix.isEmpty else { return false }
+        guard !prefix.isEmpty else { return .absent }
         let globalBinary = URL(fileURLWithPath: prefix, isDirectory: true)
             .appendingPathComponent("bin/\(descriptor.binaryName)").path
-        return ACPLaunchPathResolver.isPackageOwnedExecutable(
+        guard ACPLaunchPathResolver.isPackageOwnedExecutable(
             atPath: globalBinary,
             packageDirectory: packageDirectory.path
-        )
+        ) else { return .absent }
+        // Without Node the adapter cannot run either; its launch reports that.
+        guard let node = resolve("node") else { return .installed }
+        let missing = await ACPAdapterPayloadCheck.missingPackages(
+            packageDirectory: packageDirectory.path, node: node, env: env)
+        return missing.isEmpty ? .installed : .incomplete(missing: missing)
     }
+}
+
+private struct NpmPackageVersion: Decodable {
+    let version: String
 }
 
 private struct NpmPackageManifest: Decodable {

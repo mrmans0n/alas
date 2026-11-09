@@ -10,7 +10,7 @@ struct ClaudeCodeACPInstallerTests {
         let installer = ClaudeCodeACPInstaller(runner: { cmd, args in
             calls.append([cmd] + args)
             return (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
         try? await installer.install()
         #expect(calls == [
             ["npm", "install", "-g", "--force", "@alas-ide/claude-agent-acp"],
@@ -28,7 +28,7 @@ struct ClaudeCodeACPInstallerTests {
             return args == ["uninstall", "-g", "@agentclientprotocol/claude-agent-acp"]
                 ? (status: 1, stderr: "missing")
                 : (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
 
         try await installer.install()
 
@@ -44,7 +44,7 @@ struct ClaudeCodeACPInstallerTests {
                 throw CocoaError(.fileNoSuchFile)
             }
             return (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
 
         try await installer.install()
 

@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Detect Claude and Codex adapters that npm left without their platform binary after an interrupted download, fail such installs instead of reporting success, and add Reinstall to the launch-failure banner and to each managed agent's settings. Installs and repairs now remove the old package first; updates still install over it.
+
 ## [0.23.4] - 2026-11-09
 
 ### ✨ Features

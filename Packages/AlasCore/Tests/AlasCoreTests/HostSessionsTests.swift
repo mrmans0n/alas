@@ -388,7 +388,7 @@ struct HostSessionsTests {
         let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
         defer { fixture.tearDown() }
         let installed = Mutex<[String]>([])
-        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { agentID in
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { agentID, _ in
             installed.withLock { $0.append(agentID) }
             setup.withLock { $0 = .ready }
         })
@@ -416,7 +416,7 @@ struct HostSessionsTests {
         let subscription = fixture.host.subscribe()
         try subscription.follow(id)
         try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" } }
-        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _ in
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _, _ in
             await MainActor.run { subscription.cancel() }
             setup.withLock { $0 = .ready }
         })
@@ -435,7 +435,7 @@ struct HostSessionsTests {
         try await eventually { await MainActor.run { sessions.agentIssue(id)?.kind == "needsSetup" } }
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
-        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _ in
+        fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(localInstall: { _, _ in
             started.continuation.yield()
             for await _ in release.stream { break }
         })
@@ -455,7 +455,7 @@ struct HostSessionsTests {
         defer { fixture.tearDown() }
         let targets = Mutex<[String]>([])
         fixture.core.adapterInstalls = ACPAdapterInstallCoordinator(
-            localInstall: { _ in targets.withLock { $0.append("local") } },
+            localInstall: { _, _ in targets.withLock { $0.append("local") } },
             remoteInstall: { host, _ in targets.withLock { $0.append(host) } }
         )
         let sessions = fixture.host.sessions

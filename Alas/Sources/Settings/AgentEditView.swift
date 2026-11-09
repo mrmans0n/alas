@@ -149,6 +149,9 @@ struct AgentEditView: View {
             SettingsRow(name: "Enabled") {
                 AlasToggle(on: $draft.isEnabled)
             }
+            if draft.isBuiltin, let descriptor = ACPManagedAdapterDescriptor.descriptor(for: draft.id) {
+                ACPAdapterSettingsRow(descriptor: descriptor, coordinator: state.acpAdapterInstallCoordinator)
+            }
             SettingsRow(
                 name: "Disable native subagents",
                 desc: nativeDelegationSupport.settingsRowDescription(
@@ -350,5 +353,86 @@ extension AgentDefinition {
         let trimmedExtra = extraTerminalArgs?.filter { !$0.isEmpty }
         normalized.extraTerminalArgs = (trimmedExtra?.isEmpty == false) ? trimmedExtra : nil
         return normalized
+    }
+}
+
+/// The local install of an Alas-managed ACP adapter: its version and health,
+/// with a clean reinstall for installs that npm left incomplete.
+private struct ACPAdapterSettingsRow: View {
+    let descriptor: ACPManagedAdapterDescriptor
+    let coordinator: ACPAdapterInstallCoordinator
+
+    private enum Health: Equatable {
+        case checking
+        case installed(version: String?)
+        case notInstalled
+        case broken(String)
+    }
+
+    @State private var health: Health = .checking
+    @State private var isInstalling = false
+    @State private var installError: String?
+
+    var body: some View {
+        SettingsRow(name: "ACP adapter", desc: description, selectable: true) {
+            HStack(spacing: 8) {
+                AlasButton(title: buttonTitle, style: .subtle) { reinstall() }
+                    .disabled(isInstalling || health == .checking)
+                    .help("Uninstalls the adapter and installs it again. Sessions already running on it may fail meanwhile.")
+                if isInstalling || health == .checking {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        }
+        .task { await refresh() }
+    }
+
+    private var description: String {
+        if isInstalling { return "Reinstalling `\(descriptor.packageName)`…" }
+        if let installError { return "Reinstall failed: \(installError)" }
+        switch health {
+        case .checking:
+            return "Checking `\(descriptor.packageName)`…"
+        case .installed(let version):
+            return "`\(descriptor.packageName)`\(version.map { " \($0)" } ?? "") is installed on this Mac."
+        case .notInstalled:
+            return "`\(descriptor.packageName)` is not installed on this Mac."
+        case .broken(let reason):
+            return reason
+        }
+    }
+
+    private var buttonTitle: String {
+        health == .notInstalled ? "Install" : "Reinstall"
+    }
+
+    private func refresh() async {
+        let state = await ACPInstallerRegistry.installer(for: descriptor.agentID)?.installState()
+            ?? .missing(reason: "")
+        switch state {
+        case .ready:
+            let version = await ACPSetupChecker(env: ACPProcessEnvironment.baseEnvironment())
+                .installedVersion(ofNpmPackage: descriptor.packageName)
+            health = .installed(version: version)
+        case .missing:
+            health = .notInstalled
+        case .error(let message):
+            health = .broken(message)
+        }
+    }
+
+    private func reinstall() {
+        isInstalling = true
+        installError = nil
+        Task {
+            do {
+                try await coordinator.install(target: .local, agentID: descriptor.agentID, mode: .reinstall)
+            } catch {
+                installError = error.localizedDescription
+            }
+            isInstalling = false
+            health = .checking
+            await refresh()
+        }
     }
 }

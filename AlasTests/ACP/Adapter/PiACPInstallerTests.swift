@@ -10,7 +10,7 @@ struct PiACPInstallerTests {
         let installer = PiACPInstaller(runner: { cmd, args in
             capturedCommand = [cmd] + args
             return (status: 0, stderr: "")
-        })
+        }, verify: { .ready })
         try? await installer.install()
         #expect(capturedCommand == ["npm", "install", "-g", "pi-acp"])
     }

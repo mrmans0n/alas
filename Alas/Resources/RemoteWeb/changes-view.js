@@ -120,6 +120,34 @@ function metadataOnlyNotice(hunks, metadataNote) {
   return metadataNote || "";
 }
 
+// One exact patch's hunks as the host flattens them into a tool call's
+// `content` (ACPToolCallDiff.flattenedText): from the first `@@` line, without
+// the final newline, or "Change unavailable: <path>".
+function toolDiffHunks(diff) {
+  const unavailable = "Change unavailable: " + diff.path;
+  const text = diff.patch;
+  if (typeof text !== "string" || !text) return unavailable;
+  let start = 0;
+  while (start < text.length && !text.startsWith("@@", start)) {
+    const newline = text.indexOf("\n", start);
+    if (newline < 0) return unavailable;
+    start = newline + 1;
+  }
+  if (start >= text.length) return unavailable;
+  return text.slice(start, text.endsWith("\n") ? text.length - 1 : text.length);
+}
+
+// A tool call's text for the transcript. When its `content` is exactly its
+// patches' hunks run together, each file's hunks get a `--- <path>` line, so
+// a multi-file edit reads per file. Content with anything else in it (a
+// standard diff, text, a fallback block) is shown as sent.
+function toolDiffText(content, diffs) {
+  if (typeof content !== "string" || !Array.isArray(diffs) || !diffs.length) return content;
+  const hunks = diffs.map(toolDiffHunks);
+  if (content !== hunks.join("\n")) return content;
+  return diffs.map((diff, index) => "--- " + diff.path + "\n" + hunks[index]).join("\n\n");
+}
+
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
@@ -130,5 +158,6 @@ globalThis.RemoteChangesView = {
   formatFileCounts,
   diffRows,
   truncationNotice,
-  metadataOnlyNotice
+  metadataOnlyNotice,
+  toolDiffText
 };
