@@ -24,6 +24,7 @@ struct FileResultRow: View {
     let onTap: () -> Void
     let onHover: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let (color, label) = extLabel(result.ext, theme: theme)
@@ -37,7 +38,7 @@ struct FileResultRow: View {
                     .map { $0 - parts.dirLength },
                 monospaced: false
             )
-            .font(.system(size: 12.5, weight: .medium))
+            .font(scale.emphasisFont)
             .foregroundColor(theme.color("fg"))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -45,16 +46,16 @@ struct FileResultRow: View {
                 text: parts.dir,
                 indices: indicesIn(range: 0..<parts.dirLength)
             )
-            .font(.system(size: 11, design: .monospaced))
+            .font(scale.meta.font(weight: .regular, design: .monospaced))
             .foregroundColor(theme.color("fg-faint"))
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
             if showsRepoBadge, let repoName {
                 Text(repoName)
-                    .font(.system(size: 10))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .regular))
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[0])
                     .background(theme.color("bg-3"))
                     .foregroundColor(theme.color("fg-faint"))
                     .clipShape(Capsule())
@@ -66,7 +67,7 @@ struct FileResultRow: View {
                 SearchKbd(label: "↵")
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, scale.space[4])
         .frame(height: 28)
         .background(
             isSelected
@@ -102,14 +103,15 @@ struct FileResultRow: View {
 private struct ExtBadge: View {
     let label: String
     let color: Color
+    @Environment(\.designScale) private var scale
     var body: some View {
         Text(label)
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .font(scale.caption.font(weight: .bold, design: .monospaced))
             .tracking(0.5)
             .frame(width: 36, height: 16)
             .foregroundColor(color)
             .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                     .strokeBorder(color.opacity(0.33), lineWidth: 0.5)
             )
     }
@@ -118,6 +120,7 @@ private struct ExtBadge: View {
 private struct StatusBadgeView: View {
     let badge: GitStatusBadge
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     var body: some View {
         let color: Color = {
             switch badge {
@@ -128,11 +131,11 @@ private struct StatusBadgeView: View {
             }
         }()
         return Text(badge.rawValue)
-            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            .padding(.horizontal, 4)
+            .font(scale.caption.font(weight: .bold, design: .monospaced))
+            .padding(.horizontal, scale.space[1])
             .frame(height: 14)
             .background(color.opacity(0.20))
             .foregroundColor(color)
-            .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous))
     }
 }

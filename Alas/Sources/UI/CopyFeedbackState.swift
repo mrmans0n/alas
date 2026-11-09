@@ -46,23 +46,24 @@ struct CopyFeedbackChip: View {
     let message: String
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .semibold))
+                .font(scale.glyphFont)
             Text(message)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
         }
         .foregroundColor(theme.color("fg"))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 22)
         .background(theme.color("bg-3"))
         .overlay(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: scale.radius.small)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
         .allowsHitTesting(false)
         .accessibilityLabel(message)
@@ -71,13 +72,14 @@ struct CopyFeedbackChip: View {
 
 struct CopyFeedbackOverlay: ViewModifier {
     let message: String?
+    @Environment(\.designScale) private var scale
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .topTrailing) {
             if let message {
                 CopyFeedbackChip(message: message)
-                    .padding(.top, 5)
-                    .padding(.trailing, 8)
+                    .padding(.top, scale.space[1])
+                    .padding(.trailing, scale.space[2])
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
             }
         }

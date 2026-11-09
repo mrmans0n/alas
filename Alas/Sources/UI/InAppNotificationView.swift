@@ -36,6 +36,7 @@ struct InAppNotificationBanner: View {
     var action: () -> Void = {}
     let dismiss: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private var color: Color {
         theme.color(severity == .error ? "del" : severity == .success ? "add" : "accent")
@@ -52,13 +53,13 @@ struct InAppNotificationBanner: View {
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(message)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(3)
                 .help(message)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
                     .lineLimit(2)
                     .help(detail)
@@ -88,12 +89,12 @@ struct InAppNotificationBanner: View {
                     }
                 }
                 .foregroundStyle(theme.color("accent"))
-                .font(.system(size: 12))
+                .font(scale.metaFont)
             }
             if severity != .progress {
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.glyphFont)
                         .foregroundStyle(theme.color("fg-muted"))
                         .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
@@ -102,12 +103,12 @@ struct InAppNotificationBanner: View {
             }
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(color.opacity(0.12).background(theme.color("bg-1")))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.3), lineWidth: 0.75))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(color.opacity(0.3), lineWidth: 0.75))
         .compositingGroup()
-        .clipShape(.rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("in-app-notification-banner")
     }

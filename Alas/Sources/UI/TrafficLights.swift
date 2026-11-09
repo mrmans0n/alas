@@ -34,7 +34,7 @@ struct TrafficLights: View {
                         .frame(width: 12, height: 12)
                     if hovering {
                         Image(systemName: symbol)
-                            .font(.system(size: 7, weight: .bold))
+                            .font(.system(size: 7, weight: .bold)) // design-literal: matches system traffic lights
                             .foregroundColor(.black.opacity(0.6))
                     }
                 }

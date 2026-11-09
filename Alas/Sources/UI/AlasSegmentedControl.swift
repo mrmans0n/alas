@@ -47,6 +47,7 @@ struct AlasSegmentedControl<ID: Hashable>: View {
     let onSelect: (ID) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 2) {
@@ -54,13 +55,13 @@ struct AlasSegmentedControl<ID: Hashable>: View {
                 segment(option)
             }
         }
-        .padding(2)
+        .padding(scale.space[0])
         .background(theme.color("seg-container-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func segment(_ option: AlasSegmentedOption<ID>) -> some View {
@@ -81,22 +82,22 @@ struct AlasSegmentedControl<ID: Hashable>: View {
                     }
                 }
                 Text(option.label)
-                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                    .font(scale.meta.font(weight: isSelected ? .semibold : .medium))
                     .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
             }
-            .padding(.horizontal, 9)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background {
                 if isSelected {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-3"))
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: scale.radius.small).fill(theme.color("bg-3"))
+                        RoundedRectangle(cornerRadius: scale.radius.small)
                             .stroke(Color.white.opacity(0.04), lineWidth: 1)
                             .blendMode(.plusLighter)
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             .shadow(color: isSelected ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
             .contentShape(Rectangle())
         }

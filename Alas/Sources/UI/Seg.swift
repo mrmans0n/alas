@@ -9,6 +9,7 @@ struct Seg<Value: Hashable>: View {
     @Binding var value: Value
     let options: [(Value, Content)]
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     init(value: Binding<Value>, options: [(Value, String)]) {
         self._value = value
@@ -28,36 +29,36 @@ struct Seg<Value: Hashable>: View {
                     value = item.0
                 } label: {
                     label(for: item.1)
-                        .font(.system(size: 11.5, weight: isActive ? .semibold : .medium))
-                        .padding(.horizontal, 9)
+                        .font(scale.meta.font(weight: isActive ? .semibold : .medium))
+                        .padding(.horizontal, scale.space[2])
                         .frame(height: 22)
                         .contentShape(Rectangle())
                         .background(
                             ZStack {
                                 if isActive {
-                                    RoundedRectangle(cornerRadius: 4)
+                                    RoundedRectangle(cornerRadius: scale.radius.small)
                                         .fill(theme.color("bg-3"))
                                     // Top inner highlight
-                                    RoundedRectangle(cornerRadius: 4)
+                                    RoundedRectangle(cornerRadius: scale.radius.small)
                                         .stroke(Color.white.opacity(0.04), lineWidth: 1)
                                         .blendMode(.plusLighter)
                                 }
                             }
                         )
                         .foregroundColor(isActive ? theme.color("fg") : theme.color("fg-muted"))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                         .shadow(color: isActive ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(2)
+        .padding(scale.space[0])
         .background(theme.color("seg-container-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     @ViewBuilder

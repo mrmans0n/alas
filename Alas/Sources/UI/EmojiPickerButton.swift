@@ -5,16 +5,17 @@ struct EmojiPickerButton: View {
     let selection: String
     let onSelect: (String) -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         EmojiPickerControl(selection: selection, onSelect: onSelect)
             .frame(width: 34, height: 28)
             .background(theme.color("bg-1"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .fixedSize()
     }
 }
@@ -45,7 +46,7 @@ private struct EmojiPickerControl: NSViewRepresentable {
             button.isBordered = false
             button.bezelStyle = .regularSquare
             button.setButtonType(.momentaryPushIn)
-            button.font = NSFont.systemFont(ofSize: 15)
+            button.font = NSFont.systemFont(ofSize: 15) // design-literal: emoji glyph size
             button.target = self
             button.action = #selector(openCharacterPalette)
             addSubview(button)
@@ -55,7 +56,7 @@ private struct EmojiPickerControl: NSViewRepresentable {
             input.drawsBackground = false
             input.focusRingType = .none
             input.alphaValue = 0.01
-            input.font = NSFont.systemFont(ofSize: 15)
+            input.font = NSFont.systemFont(ofSize: 15) // design-literal: emoji glyph size
             input.delegate = self
             addSubview(input)
         }

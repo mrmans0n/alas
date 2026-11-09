@@ -5,11 +5,12 @@ struct ScopeRow: View {
     let isThisWorktreeAvailable: Bool
     var isWorkspaceCheckoutAvailable: Bool = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 10) {
             Text("SCOPE")
-                .font(.system(size: 9.5, weight: .medium))
+                .font(scale.captionFont)
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-faint"))
             HStack(spacing: 3) {
@@ -38,11 +39,11 @@ struct ScopeRow: View {
                 }
             }
             Text(countText)
-                .font(.system(size: 10.5).monospacedDigit())
+                .font(scale.caption.font(weight: .regular).monospacedDigit())
                 .foregroundColor(theme.color("fg-faint"))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.4))
         .overlay(
             Rectangle()
@@ -58,15 +59,15 @@ struct ScopeRow: View {
             model.scope = scope
         } label: {
             Text(scope.displayName)
-                .font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+                .font(scale.meta.font(weight: .medium))
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[1])
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .fill(isOn ? theme.color("accent-soft") : Color.clear)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .strokeBorder(
                             isOn ? theme.color("accent").opacity(0.35) : Color.clear,
                             lineWidth: 0.5
@@ -86,15 +87,15 @@ struct ScopeRow: View {
     private func optionToggle(glyph: String, isOn: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             Text(glyph)
-                .font(.system(size: 10, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .frame(width: 22, height: 20)
                 .foregroundColor(isOn ? theme.color("accent") : theme.color("fg-faint"))
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .fill(isOn ? theme.color("accent-soft") : Color.clear)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .strokeBorder(
                             isOn ? theme.color("accent").opacity(0.35) : theme.color("line"),
                             lineWidth: 0.5

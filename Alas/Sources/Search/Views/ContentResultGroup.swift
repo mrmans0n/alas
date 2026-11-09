@@ -9,6 +9,7 @@ struct ContentResultGroupView: View {
     let onTap: (ContentSearchHit) -> Void
     let onHover: (Int) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,7 +21,7 @@ struct ContentResultGroupView: View {
                     .id(hit.id)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, scale.space[2])
         .overlay(
             Rectangle()
                 .fill(theme.color("line-soft"))
@@ -33,44 +34,44 @@ struct ContentResultGroupView: View {
         let parts = splitPath(group.relativePath)
         return HStack(spacing: 10) {
             Text(parts.name)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg"))
             Text(parts.dir)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
             Text("\(group.hits.count)")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("bg-3"))
                 .foregroundColor(theme.color("fg-dim"))
                 .clipShape(Capsule())
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[1])
     }
 
     private func hitRow(hit: ContentSearchHit, absIndex: Int, isSelected: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(verbatim: Self.lineNumberLabel(for: hit.line))
-                .font(.system(size: 10.5, design: .monospaced).monospacedDigit())
+                .font(scale.caption.font(weight: .regular, design: .monospaced).monospacedDigit())
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(minWidth: 32, alignment: .trailing)
             snippet(for: hit)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(scale.meta.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.leading, 56)
-        .padding(.trailing, 14)
-        .padding(.vertical, 4)
+        .padding(.leading, 56) // design-literal: indent that clears the file header's left edge
+        .padding(.trailing, scale.space[4])
+        .padding(.vertical, scale.space[1])
         .background(
             isSelected ? theme.color("accent-soft") : Color.clear
         )

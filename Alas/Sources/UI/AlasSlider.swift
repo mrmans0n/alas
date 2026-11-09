@@ -7,6 +7,7 @@ struct AlasSlider: View {
     var range: ClosedRange<Double> = 0...1
     var step: Double? = nil
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 10) {
@@ -16,7 +17,7 @@ struct AlasSlider: View {
                 Slider(value: $value, in: range)
             }
             Text(percentLabel)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 36, alignment: .trailing)
         }
