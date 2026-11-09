@@ -34,6 +34,7 @@ struct MermaidDiagramBlockView: View {
     var onRenderComplete: () -> Void = {}
 
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
     @State private var renderState = MermaidRenderRequestState()
     @State private var sourceDisclosure = MermaidSourceDisclosureState()
@@ -73,9 +74,9 @@ struct MermaidDiagramBlockView: View {
         }
         .background(profile == .transcript ? Color.clear : theme.color("bg-0").opacity(0.6))
         .compositingGroup()
-        .clipShape(.rect(cornerRadius: 6))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(profile == .transcript ? Color.clear : theme.color("line"), lineWidth: 0.5)
         }
         .onChange(of: theme) { _, newTheme in
@@ -114,11 +115,12 @@ private struct MermaidDiagramBlockHeader: View {
     let expand: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 10) {
             Text("MERMAID")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer(minLength: 0)
@@ -126,11 +128,11 @@ private struct MermaidDiagramBlockHeader: View {
             Button("Copy", action: copySource)
             Button("Expand", action: expand)
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(scale.caption.font)
         .buttonStyle(.plain)
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .frame(maxWidth: .infinity)
         .background(theme.color("bg-2").opacity(0.6))
         .overlay(alignment: .bottom) {
@@ -147,6 +149,7 @@ private struct MermaidDiagramRenderContent: View {
     let outcome: MermaidRenderOutcome?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         switch outcome {
@@ -156,7 +159,7 @@ private struct MermaidDiagramRenderContent: View {
                 maxHeight: profile.maxEmbeddedHeight,
                 source: source
             )
-            .padding(profile == .transcript ? 0 : 12)
+            .padding(profile == .transcript ? 0 : scale.space[3])
             .frame(maxWidth: .infinity)
         case .failed(let failure):
             VStack(alignment: .leading, spacing: 6) {
@@ -168,7 +171,7 @@ private struct MermaidDiagramRenderContent: View {
                     .foregroundStyle(theme.color("fg-muted"))
                     .textSelection(.enabled)
             }
-            .padding(12)
+            .padding(scale.space[3])
             .frame(maxWidth: .infinity, alignment: .leading)
         case nil:
             ProgressView()
@@ -235,6 +238,7 @@ struct MermaidDiagramSourceView: View {
     var maximumHeight: CGFloat = 220
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
@@ -244,7 +248,7 @@ struct MermaidDiagramSourceView: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: true, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+                .padding(scale.space[3])
         }
         .frame(maxHeight: maximumHeight)
         .background(theme.color("bg-1"))

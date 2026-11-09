@@ -299,3 +299,7 @@ Alas/Sources/Code/LSP/Status/LSPServerChip.swift
 Alas/Sources/Code/LSP/Status/LSPServerChipStrip.swift
 Alas/Sources/Code/LSP/Status/LSPServerStatusDetail.swift
 Alas/Sources/Code/LSP/Status/LSPStatusPill.swift
+Alas/Sources/Code/Markdown/MarkdownTabView.swift
+Alas/Sources/Code/Mermaid/MermaidDiagramBlockView.swift
+Alas/Sources/Code/Mermaid/MermaidDiagramViewer.swift
+Alas/Sources/Code/Mermaid/MermaidTextAttachment.swift
