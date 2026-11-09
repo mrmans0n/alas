@@ -94,10 +94,20 @@ struct StackShepherdPopover: View {
     @ViewBuilder
     private func boundContent(record: StackShepherdRecord, context: StackShepherdSessionContext) -> some View {
         let presentation = context.presentation
+        // Retained requests can reuse positions after landing. Only gg's
+        // current entries have meaningful positions in the stack.
+        let entries = StackShepherdPolicy.statusEntries(of: record, stack: stack, now: Date())
+            .compactMap { entry -> StackShepherdEntry? in
+                guard entry.requestNumber != nil, let shepherd = entry.shepherd else { return nil }
+                guard stack?.name == record.id.stackName || !shepherd.phase.isTerminal else { return nil }
+                return StackShepherdEntry(
+                    entryID: entry.entryID, position: entry.position, title: entry.title, shepherd: shepherd
+                )
+            }
         header(name: record.id.stackName, detail: "\(record.base) · \(record.remote.kind.displayName)")
         Divider().background(theme.color("line"))
         VStack(alignment: .leading, spacing: scale.space[2]) {
-            ForEach(record.entries.sorted { $0.position > $1.position }, id: \.requestNumber) { entry in
+            ForEach(entries.reversed(), id: \.requestNumber) { entry in
                 entryRow(entry, record: record, context: context)
             }
         }

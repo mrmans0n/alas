@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Keep older merged requests out of the stack Ship popover once gg no longer lists them, using the current stack's order and positions instead of retained shepherd history.
+
 ## [0.23.3] - 2026-11-06
 
 ### ✨ Features
