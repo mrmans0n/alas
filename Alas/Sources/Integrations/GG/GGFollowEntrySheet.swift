@@ -8,19 +8,20 @@ struct GGFollowEntrySheet: View {
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var selectedID: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             Text(presentation.isEditing ? "Edit Followed Stack Entry" : "Follow Stack Entry")
-                .font(.system(size: 16, weight: .semibold))
+                .font(scale.title.font)
             Text("The tab tracks this commit's GG-ID across rebases, reorders, and amends.")
-                .font(.system(size: 11.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))
 
             content
 
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
@@ -32,7 +33,7 @@ struct GGFollowEntrySheet: View {
                 .disabled(!canFollow)
             }
         }
-        .padding(18)
+        .padding(scale.space[4])
         .frame(minWidth: 520)
         .onAppear { selectedID = presentation.selectedGGID ?? loadedModel?.selectedID }
         .onChange(of: presentation.state) { _, _ in
@@ -49,10 +50,10 @@ struct GGFollowEntrySheet: View {
     private var content: some View {
         switch presentation.state {
         case .loading:
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Spinner().frame(width: 14, height: 14)
                 Text("Loading stack…")
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("fg-dim"))
             }
             .frame(minWidth: 480, minHeight: 260, alignment: .center)
@@ -75,33 +76,33 @@ struct GGFollowEntrySheet: View {
 
     private func message(_ text: String, color: Color? = nil) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(scale.meta.font)
             .foregroundStyle(color ?? theme.color("fg-dim"))
             .frame(minWidth: 480, minHeight: 260, alignment: .center)
     }
 
     private func row(_ candidate: GGFollowEntryCandidate) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Text("\(candidate.position)")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color("fg-faint"))
                 .frame(width: 18, alignment: .trailing)
             Text(candidate.title)
-                .font(.system(size: 12.5))
+                .font(scale.meta.font)
                 .lineLimit(1)
-            Spacer(minLength: 8)
+            Spacer(minLength: scale.space[2])
             if let number = candidate.prNumber {
                 Text(verbatim: "#\(number)")
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
             }
             if let ciStatus = candidate.ciStatus {
                 Text(ciStatus.rawValue)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
             }
             Text(candidate.ggID ?? "no GG-ID")
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundStyle(theme.color(candidate.isSelectable ? "fg-faint" : "warn"))
                 .lineLimit(1)
         }

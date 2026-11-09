@@ -275,3 +275,7 @@ Alas/Sources/Integrations/GG/GGInboxTabView.swift
 Alas/Sources/Integrations/GG/GGLandingTabView.swift
 Alas/Sources/Integrations/GG/GGSplitCommitTabView.swift
 Alas/Sources/Integrations/GG/GGSplitPreviewRowPlan.swift
+Alas/Sources/Integrations/GG/GGRestackSheet.swift
+Alas/Sources/Integrations/GG/GGFollowEntrySheet.swift
+Alas/Sources/Integrations/GG/GGReorderSheet.swift
+Alas/Sources/Integrations/GG/GGUnstackSheet.swift
