@@ -12,8 +12,15 @@ public struct SimulatorControlError: Error, LocalizedError, Equatable {
     public var errorDescription: String? { message }
 }
 
-/// Lists, boots and shuts down simulators with `xcrun simctl`, which is public
-/// API. Capture and input go through AlasSimService instead.
+public enum SimulatorLaunchError: Error, Equatable, LocalizedError {
+    case notInstalled
+
+    public var errorDescription: String? { "The app isn't installed on this simulator." }
+}
+
+/// Lists, boots and shuts down simulators, and installs and launches apps,
+/// with `xcrun simctl`, which is public API. Capture and input go through
+/// AlasSimService instead.
 public enum SimulatorControl {
     private static let xcrun = "/usr/bin/xcrun"
 
@@ -41,6 +48,35 @@ public enum SimulatorControl {
         guard result.exitCode == 0 || result.stderr.contains("current state: Shutdown") else {
             throw SimulatorControlError(result)
         }
+    }
+
+    /// Installs a built `.app`, replacing an installed copy.
+    public static func install(udid: String, app: URL) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "install", udid, app.path], timeout: 90)
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    /// Launches an installed app, ending a running copy first, and returns its pid.
+    public static func launch(udid: String, bundleID: String) async throws -> Int32 {
+        let result = try await Process.run(
+            xcrun, args: ["simctl", "launch", "--terminate-running-process", udid, bundleID], timeout: 60
+        )
+        if result.exitCode == 0, let pid = launchedPID(result.stdout, bundleID: bundleID) { return pid }
+        // simctl's launch error doesn't say the app is missing; its container lookup does.
+        let container = try await Process.run(xcrun, args: ["simctl", "get_app_container", udid, bundleID])
+        if container.exitCode != 0 { throw SimulatorLaunchError.notInstalled }
+        throw SimulatorControlError(result)
+    }
+
+    /// simctl launch prints `<bundle id>: <pid>`.
+    public static func launchedPID(_ stdout: String, bundleID: String) -> Int32? {
+        for line in stdout.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            if parts.count == 2, parts[0] == bundleID {
+                return Int32(parts[1].trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return nil
     }
 
     /// Whether Xcode's simulator tools are installed and selected.

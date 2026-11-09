@@ -9,6 +9,7 @@ struct NativePeerConsoleView: View {
     let baseFontSize: Float
     let onReconnect: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +47,7 @@ struct NativePeerConsoleView: View {
         HStack(spacing: 10) {
             if let rows = viewer.rows, let columns = viewer.columns {
                 Text("\(columns)×\(rows), size set by the host")
-                    .font(.system(size: 10.5))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
             }
@@ -56,12 +57,12 @@ struct NativePeerConsoleView: View {
                 .controlSize(.small)
                 .help("Shrink the font so the host's terminal fits this pane")
             Text(controlLabel)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color(viewer.isControlling ? "accent" : "fg-muted"))
             controlButton
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 
@@ -96,13 +97,13 @@ struct NativePeerConsoleView: View {
         case .ended(let message):
             VStack(spacing: 10) {
                 Text(message)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg"))
                     .multilineTextAlignment(.center)
                 Button("Reconnect", action: onReconnect)
             }
-            .padding(16)
-            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 10))
+            .padding(scale.space[4])
+            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
             .frame(maxWidth: 360)
         }
     }

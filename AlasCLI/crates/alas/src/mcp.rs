@@ -899,7 +899,7 @@ const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 /// The buttons `device_button` presses.
 const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
 
-const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. `device_user_active` means they took over: wait for them to hand it back. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
+const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. While they drive it, a call waits up to 50 seconds for them to hand it back; `device_user_active` means it is still theirs: try again later. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
     let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });
@@ -1007,6 +1007,32 @@ fn device_tool_definitions() -> Vec<Value> {
                     "include_screenshot": include_screenshot
                 },
                 "required": ["udid", "name"]
+            }
+        }),
+        json!({
+            "name": "device_install",
+            "description": format!("Install a built .app on a booted simulator, replacing an installed copy. Build it for the simulator first, for example with xcodebuild -destination 'platform=iOS Simulator,id=<udid>'. Returns the app's bundle_id and name; then call device_launch. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "app_path": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The .app folder, relative to the worktree root or absolute." }
+                },
+                "required": ["udid", "app_path"]
+            }
+        }),
+        json!({
+            "name": "device_launch",
+            "description": format!("Launch an installed app on a booted simulator, ending a running copy first. Returns its pid. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's bundle ID, from device_install." }
+                },
+                "required": ["udid", "bundle_id"]
             }
         }),
     ]
@@ -1930,6 +1956,21 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 udid: required_limited_string(args, "udid", 64)?,
                 name: button.to_string(),
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
+        "device_install" => {
+            reject_arguments(args, name, &["udid", "app_path"])?;
+            let app_path = required_limited_string(args, "app_path", 4096)?;
+            Ok(Command::Device(alas_client::DeviceCommand::Install {
+                udid: required_limited_string(args, "udid", 64)?,
+                app_path: alas_client::absolutize(std::path::Path::new(worktree_dir), &app_path),
+            }))
+        }
+        "device_launch" => {
+            reject_arguments(args, name, &["udid", "bundle_id"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Launch {
+                udid: required_limited_string(args, "udid", 64)?,
+                bundle_id: required_limited_string(args, "bundle_id", 255)?,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -2883,7 +2924,7 @@ fn dispatch_session_wait(
         timeout_ms,
     } = command
     else {
-        if matches!(command, Command::VmRun { .. }) {
+        if ends_with_its_connection(command) {
             return dispatch_while(env, command, still_pending);
         }
         let result = dispatch(env, command);
@@ -2933,6 +2974,14 @@ fn is_computer_call(command: &Command) -> bool {
     matches!(command, Command::Computer(computer, _) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
 }
 
+/// Calls the app stops when their connection closes (`endsWithItsClient`),
+/// which is how a cancelled one ends: a `vm_run`'s guest command, and a device
+/// call, which may be waiting for the user to hand the simulator back.
+fn ends_with_its_connection(command: &Command) -> bool {
+    matches!(command, Command::VmRun { .. })
+        || matches!(command, Command::Device(device) if *device != alas_client::DeviceCommand::List)
+}
+
 /// Process-unique ids for computer calls, so a cancellation can name one.
 fn next_computer_call_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -2955,7 +3004,8 @@ fn register_pending_call(
             computer.set_call_id(next_computer_call_id());
         }
     } else if preview_id_for_cancel(command).is_none()
-        && !matches!(command, Command::SessionWait { .. } | Command::VmRun { .. })
+        && !matches!(command, Command::SessionWait { .. })
+        && !ends_with_its_connection(command)
     {
         return None;
     }
@@ -3012,8 +3062,9 @@ fn cancellation_command_for_message(
     let command = pending.get(&key).cloned()?;
     // A wait has nothing to cancel in the app: dropping it from `pending`
     // stops its worker at the next slice (see `dispatch_session_wait`). A
-    // `vm_run` worker then closes its connection, which ends the run.
-    if matches!(command, Command::SessionWait { .. } | Command::VmRun { .. }) {
+    // `vm_run` or device worker then closes its connection, which ends the
+    // call in the app.
+    if matches!(command, Command::SessionWait { .. }) || ends_with_its_connection(&command) {
         pending.remove(&key);
         return None;
     }
@@ -4066,6 +4117,8 @@ mod tests {
                 "device_swipe",
                 "device_type",
                 "device_button",
+                "device_install",
+                "device_launch",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4694,7 +4747,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_pending_session_wait_or_vm_run_drops_it_without_an_app_command() {
+    fn cancelling_a_pending_session_wait_vm_run_or_device_call_drops_it_without_an_app_command() {
         let commands = [
             Command::SessionWait {
                 session_ids: vec!["child".into()],
@@ -4706,6 +4759,12 @@ mod tests {
                 timeout_seconds: None,
                 vm: None,
             },
+            // So does a device call's, which the app may be holding for the user.
+            Command::Device(alas_client::DeviceCommand::Type {
+                udid: "U".into(),
+                text: "hello".into(),
+                include_screenshot: false,
+            }),
         ];
         for mut command in commands {
             let pending = std::sync::Mutex::new(std::collections::HashMap::new());
@@ -4883,6 +4942,28 @@ mod tests {
         );
         let ok = map("device_button", json!({ "udid": "U", "name": "home" })).unwrap();
         assert!(runs_on_worker(&ok));
+        assert_eq!(
+            map(
+                "device_install",
+                json!({ "udid": "U", "app_path": "build/../out/Hello.app" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Install {
+                udid: "U".into(),
+                app_path: "/wt/out/Hello.app".into()
+            })
+        );
+        assert_eq!(
+            map(
+                "device_launch",
+                json!({ "udid": "U", "bundle_id": "com.example.hello" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Launch {
+                udid: "U".into(),
+                bundle_id: "com.example.hello".into()
+            })
+        );
         for (name, args, error) in [
             ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
             ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
@@ -4894,6 +4975,8 @@ mod tests {
             ("device_snapshot", json!({ "udid": "U", "limit": 1001 }), "limit must be an integer from 1 to 1000"),
             ("device_type", json!({ "udid": "U", "text": "" }), "text must be a non-empty string of at most 4096 bytes"),
             ("device_open", json!({}), "missing required argument 'udid'"),
+            ("device_install", json!({ "udid": "U" }), "missing required argument 'app_path'"),
+            ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }
@@ -4938,7 +5021,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

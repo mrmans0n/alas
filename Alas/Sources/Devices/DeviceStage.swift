@@ -11,10 +11,15 @@ struct DeviceStage: View {
     /// Names the agent session driving the device.
     let agentName: (String) -> String
     let now: Date
+    /// The app the user dropped on this simulator, while it installs or after it failed.
+    let appInstall: DevicePaneModel.AppInstall?
+    let onDropApp: (URL) -> Void
+    let onDismissAppInstall: () -> Void
     @Environment(\.theme) private var theme
     @State private var streamError: String?
     @State private var streamGeneration = 0
     @State private var pulse = false
+    @State private var dropTargeted = false
 
     private static let margin: CGFloat = 12
     private static let gutter: CGFloat = 44
@@ -34,6 +39,11 @@ struct DeviceStage: View {
                 screen(allowsInput: allowsInput, driver: driver)
                     .frame(width: size.width, height: size.height)
                     .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .strokeBorder(theme.color("accent"), lineWidth: 2)
+                            .opacity(dropTargeted ? 1 : 0)
+                    )
                     .padding(Self.bezel)
                     .background(
                         RoundedRectangle(cornerRadius: radius + Self.bezel, style: .continuous)
@@ -59,7 +69,8 @@ struct DeviceStage: View {
         ZStack(alignment: .top) {
             DeviceScreenView(
                 udid: device.udid, client: client, onStopped: { streamError = $0 },
-                allowsInput: allowsInput, onBlockedClick: pulsePill
+                allowsInput: allowsInput, onBlockedClick: pulsePill,
+                onDropApp: onDropApp, onDropTargeted: { dropTargeted = $0 }
             )
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
@@ -77,6 +88,43 @@ struct DeviceStage: View {
                     .padding(.top, 8)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let appInstall {
+                appInstallPill(appInstall)
+                    .padding(.bottom, 12)
+            }
+        }
+    }
+
+    private func appInstallPill(_ install: DevicePaneModel.AppInstall) -> some View {
+        HStack(spacing: 6) {
+            switch install {
+            case .installing(let name):
+                ProgressView().controlSize(.mini)
+                Text("Installing \(name)…")
+                    .foregroundStyle(theme.color("fg"))
+            case .launching(let name):
+                ProgressView().controlSize(.mini)
+                Text("Launching \(name)…")
+                    .foregroundStyle(theme.color("fg"))
+            case .failed(let message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(theme.color("warn"))
+                Text(message)
+                    .foregroundStyle(theme.color("fg"))
+                Button("Dismiss", action: onDismissAppInstall)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+            }
+        }
+        .font(.system(size: 10.5, weight: .medium))
+        .lineLimit(2)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.ultraThinMaterial, in: Capsule())
+        .background(theme.color("bg-2").opacity(0.6), in: Capsule())
+        .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .padding(.horizontal, 12)
     }
 
     private func driverPill(_ driver: VMDriver) -> some View {
@@ -92,6 +140,10 @@ struct DeviceStage: View {
             case .user, .idle:
                 Text("You're driving")
                     .foregroundStyle(theme.color("fg"))
+                if let waiting = control.waitingSessions(udid: device.udid).first {
+                    Text("· \(agentName(waiting)) is waiting")
+                        .foregroundStyle(theme.color("fg-dim"))
+                }
                 Button("Hand back") { control.handBack(udid: device.udid) }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))

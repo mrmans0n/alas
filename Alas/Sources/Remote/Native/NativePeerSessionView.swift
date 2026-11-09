@@ -292,23 +292,24 @@ struct NativePeerSessionView: View {
 private struct NativePeerUnavailableBanner: View {
     let onReturn: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "wifi.slash")
                 .foregroundStyle(theme.color("warn"))
             Text("This peer session is unavailable. Your draft is preserved until you close it.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg"))
             Spacer(minLength: 8)
             Button("Return", action: onReturn)
                 .buttonStyle(PeerChipButtonStyle(theme: theme))
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("warn").opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("warn").opacity(0.3), lineWidth: 0.5)
         )
     }
@@ -320,14 +321,15 @@ private struct NativePeerUnsupportedElicitation: View {
     let request: RemoteElicitationPayload
     let client: NativePeerSessions
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("This request cannot be shown here.")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
             Text(request.message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
@@ -340,12 +342,12 @@ private struct NativePeerUnsupportedElicitation: View {
             }
             .buttonStyle(PeerChipButtonStyle(theme: theme))
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-1").opacity(0.96))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
     }
@@ -355,10 +357,11 @@ private struct NativePeerUnsupportedElicitation: View {
 private struct NativePeerFromLabel: View {
     let name: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text("From \(name)")
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-muted"))
             .lineLimit(1)
     }
@@ -369,26 +372,27 @@ private struct NativePeerFromLabel: View {
 private struct NativePeerShepherdPill: View {
     let shepherd: HostSessionShepherd
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let badge = shepherd.badgeState {
             HStack(spacing: 5) {
                 Image(systemName: badge.symbolName)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(badge.color(theme: theme))
                 if let number = shepherd.number {
                     Text(number)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 }
             }
             .foregroundStyle(theme.color("fg-dim"))
             .lineLimit(1)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(theme.color("bg-3").opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
-            .aiBeam(isActive: badge.isActive, cornerRadius: 5)
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .aiBeam(isActive: badge.isActive, cornerRadius: scale.radius.small)
             .help(shepherd.tooltip)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Shepherd")
@@ -455,9 +459,9 @@ private struct NativePeerComposer: View {
                 .frame(maxWidth: contentMaxWidth)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 28)
-            .padding(.bottom, 16)
+            .padding(.horizontal, scale.space[5])
+            .padding(.top, scale.space[5])
+            .padding(.bottom, scale.space[4])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -512,7 +516,7 @@ private struct NativePeerComposer: View {
                 deliveryError: client.deliveryError, notice: notice, agentIssue: config?.agentIssue) {
                 HStack(spacing: 8) {
                     Text(error)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundStyle(theme.color("del"))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if let issue = config?.agentIssue, client.offersAdapterInstall(for: issue) {
@@ -562,9 +566,9 @@ private struct NativePeerComposer: View {
                 toolbar(showShortcuts: false)
                 compactToolbar
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, scale.space[0])
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
         .acpComposerPill(focused: composerFocused)
     }
 
@@ -649,8 +653,8 @@ private struct NativePeerComposer: View {
                 ForEach(offeredMentionScopes) { scope in
                     Button { mentionScope = scope } label: {
                         Text(scope.title)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .font(scale.captionFont)
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
                             .background(mentionScope == scope ? theme.color("accent").opacity(0.22) : theme.color("bg-2"))
                             .foregroundStyle(mentionScope == scope ? theme.color("accent") : theme.color("fg-faint"))
                             .clipShape(Capsule())
@@ -671,9 +675,9 @@ private struct NativePeerComposer: View {
                         }
                         if scopedMentionCandidates.isEmpty {
                             Text(mentionRowsAreCurrent ? "No matches" : "Searching…")
-                                .font(.system(size: 12))
+                                .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-faint"))
-                                .padding(6)
+                                .padding(scale.space[2])
                         }
                     }
                 }
@@ -682,33 +686,33 @@ private struct NativePeerComposer: View {
             .opacity(mentionRowsAreCurrent ? 1 : 0.55)
             .frame(height: min(CGFloat(max(1, scopedMentionCandidates.count)) * 26 + 8, 220))
         }
-        .padding(4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .padding(scale.space[1])
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func mentionRow(_ mention: RemoteMention, highlighted: Bool) -> some View {
         HStack(spacing: 8) {
             Image(systemName: NativePeerComposerState.mentionIconName(mention))
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 16)
             Text(mention.name)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
             if let detail = mention.detail {
                 Text(detail)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.head)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 6).fill(highlighted ? theme.color("accent").opacity(0.18) : .clear))
+        .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(highlighted ? theme.color("accent").opacity(0.18) : .clear))
     }
 
     /// Opens, re-queries or closes the picker for the `@` token at the caret.
@@ -780,7 +784,7 @@ private struct NativePeerComposer: View {
     private var attachButton: some View {
         Button { actions.presentImagePicker?() } label: {
             Image(systemName: "photo")
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
         }
@@ -956,11 +960,11 @@ private struct NativePeerComposer: View {
     private var shortcutHint: some View {
         HStack(spacing: 6) {
             Text("⏎")
-                .font(.system(size: 10, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .fontWeight(.semibold)
                 .foregroundStyle(theme.color("fg"))
             Text(sendOnEnter ? "send" : "steer")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundStyle(theme.color("fg-muted"))
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -970,18 +974,19 @@ private struct NativePeerComposer: View {
 /// The small neutral chip the composer toolbar uses for secondary actions.
 private struct PeerChipButtonStyle: ButtonStyle {
     let theme: Theme
+    @Environment(\.designScale) private var scale
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11.5, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .foregroundStyle(theme.color("fg"))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 26)
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("bg-3").opacity(configuration.isPressed ? 1 : 0.7))
             )
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
     }
 }
 

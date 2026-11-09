@@ -80,7 +80,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "computer_open_app", "computer_wait",
         "vm_run", "vm_status",
         "device_list", "device_open", "device_snapshot", "device_screenshot",
-        "device_tap", "device_swipe", "device_type", "device_button",
+        "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
     ]
 
     /// What a child delegated from another Mac reports with. It cannot message
@@ -336,7 +336,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + ". Call device_list, then device_open (it boots the simulator if needed). "
                         + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
                         + "x/y are pixels in the latest device_screenshot. "
-                        + "device_user_active means the user took over the device: wait for them to hand it back. "
+                        + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
+                        + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
                         + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
                 }
             }

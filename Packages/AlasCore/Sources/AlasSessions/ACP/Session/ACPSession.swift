@@ -179,23 +179,18 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var availableProviders: [ACPProviderInfo] = []
     @Tracked public var currentModel: String?
     @Tracked public var contextUsage: ACPUsageInfo?
-    /// How many live `plan_update`s that changed a plan id's content, and
-    /// `plan_removed`s, each plan id has received, with or without a row, so
-    /// a review of an older revision can tell it is stale. A repeated
-    /// identical snapshot is not a revision: Codex resends its final plan
-    /// right before asking to review it. Runtime only; replayed history does
-    /// not count.
-    @Tracked public private(set) var planRevisions: [String: Int] = [:]
-    /// The content each plan id last received, for `planRevisions`.
-    private var planContents: [String: ACPPlanContent] = [:]
+    /// The root's own plan review counters. Runtime only.
+    @Tracked private var planReviewCounters = ACPPlanReviewCounters()
+    /// Each child's plan review counters, from its live updates. Runtime only.
+    @Tracked private var childPlanReviewCounters: [String: ACPPlanReviewCounters] = [:]
+    /// The root's `ACPPlanReviewCounters.planRevisions`.
+    public var planRevisions: [String: Int] { planReviewCounters.planRevisions }
+    /// The root's `ACPPlanReviewCounters.contextResetCount`.
+    public var contextResetCount: Int { planReviewCounters.contextResetCount }
     /// The `.plan` row each `plan_update` checklist id owns, so a snapshot
     /// replaces only its own checklist and `plan_removed` can clear it.
     /// Runtime only: rebuilt from replayed `plan_update`s on load.
     private var checklistRowIds: [String: UUID] = [:]
-    /// How many times the agent reported an empty context (`usage_update`
-    /// with `used == 0`), as Claude does when it restarts with cleared
-    /// context after a plan is approved. Runtime only.
-    @Tracked public private(set) var contextResetCount = 0
     /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
     /// detection for a structured reset time. Runtime only.
     @Tracked public private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
@@ -1400,9 +1395,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             clearRestoredContextRecoveryStatus()
             return applyChecklist(entries)
         case .planUpdate(let plan):
-            if planContents.updateValue(plan.content, forKey: plan.planId) != plan.content {
-                planRevisions[plan.planId, default: 0] += 1
-            }
+            planReviewCounters.count(update)
             // An identified update replaces the plan's whole content, so a
             // checklist hides the id's document and a document empties its checklist.
             if case .items(let entries) = plan.content {
@@ -1435,8 +1428,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 return cleared.union([transcript.messages.count - 1])
             }
         case .planRemoved(let planId):
-            planContents[planId] = nil
-            planRevisions[planId, default: 0] += 1
+            planReviewCounters.count(update)
             return hidePlanDocuments(planId: planId).union(clearChecklist(planId: planId))
         case .availableModelsUpdate(let ms):
             availableModels = ms
@@ -1464,7 +1456,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .usageUpdate(let info):
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
-            if info.used == 0 { contextResetCount += 1 }
+            planReviewCounters.count(update)
             if let rateLimit = info.claudeRateLimit {
                 latestClaudeRateLimit = rateLimit
             }
@@ -3001,6 +2993,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     ) -> Set<Int> {
         guard let run = subagents[subagentSessionId] else { return [] }
         nextPromptActivity.send()
+        childPlanReviewCounters[subagentSessionId, default: ACPPlanReviewCounters()].count(update)
         let dirty = run.apply(update, at: timestamp)
         applySubagentToolCallMetadataSideEffects(update, dirty: dirty)
         return dirty
@@ -4764,6 +4757,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
         guard case .planUpdate(let plan) = update else { return false }
         if case .unknown = plan.content { return false }
         return true
+    }
+
+    /// The plan review counters of the ACP session `sessionId` names: a
+    /// child's own, else the root's.
+    public func planReviewCounters(forSession sessionId: String) -> ACPPlanReviewCounters {
+        guard subagents[sessionId] != nil else { return planReviewCounters }
+        return childPlanReviewCounters[sessionId] ?? ACPPlanReviewCounters()
     }
 
     /// Records the well-formed `_meta.planFile` of a plan review as it parks,

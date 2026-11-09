@@ -23,6 +23,11 @@ selected worktree first; `{wt}` is that worktree's path.
 Set `ALAS_CAPTURE_CENTER` to `gg-inbox` or `gg-landing` to open that gg tab (the inbox of
 the demo project, or a landing in progress for its `invoice-export` stack).
 
+Set `ALAS_CAPTURE_CENTER` to `peer-session`, `peer-permission`, `peer-diff`, `peer-file` or
+`peer-console` (or `ALAS_CAPTURE_DIALOG=peer-new-session`) to capture the native views of a
+paired Mac. The Debug build installs two scripted peers in-process (`DesignCaptureDemoPeer`):
+no network, pairing or keychain. Their sidebar section is collapsed by default.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14

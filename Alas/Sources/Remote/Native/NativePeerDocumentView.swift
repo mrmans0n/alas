@@ -17,6 +17,7 @@ struct NativePeerDocumentView: View {
     let onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var displayModel: DiffDisplayModel?
     @State private var layoutMode: DiffLayoutMode = .split
     @State private var wrapLines = false
@@ -119,12 +120,12 @@ struct NativePeerDocumentView: View {
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
             Text(badge)
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.16))
                 .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text((document.path as NSString).deletingLastPathComponent)
                 .font(.system(size: codeFontSize - 1.5))
@@ -136,8 +137,8 @@ struct NativePeerDocumentView: View {
                 ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
@@ -279,8 +280,8 @@ struct NativePeerDocumentView: View {
         Text(text)
             .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
             .foregroundColor(theme.color(color))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
     }
@@ -312,6 +313,7 @@ struct NativePeerFileHistoryView: View {
     let onClose: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -339,20 +341,20 @@ struct NativePeerFileHistoryView: View {
         case .failed(let message):
             VStack(spacing: 8) {
                 Text("Could not load file history")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("del"))
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .multilineTextAlignment(.center)
                     .lineLimit(4)
                 AlasButton(title: "Retry", style: .subtle, action: onRetry)
             }
-            .padding(24)
+            .padding(scale.space[5])
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded(let listing) where listing.entries.isEmpty:
             Text("No history for \(history.path)")
-                .font(.system(size: 13))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -376,12 +378,12 @@ struct NativePeerFileHistoryView: View {
                 }
                 if listing.truncated {
                     Text("Showing the latest \(RemoteWorktreeFileAccess.maxHistoryEntries)")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(12)
+                        .padding(scale.space[3])
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, scale.space[2])
         }
     }
 
@@ -415,6 +417,7 @@ struct NativePeerHostFileView: View {
     let state: AppState
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var buffer: EditorBuffer?
 
     var body: some View {
@@ -441,17 +444,17 @@ struct NativePeerHostFileView: View {
                 .font(CenterTypography.codeFont(family: state.config.code.fontFamily, size: CGFloat(state.config.code.fontSize)))
                 .foregroundColor(theme.color("fg"))
             Text("host")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.16))
                 .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             Spacer()
             ToolbarBtn(icon: "x", tooltip: "Back to session", action: { client.closeDocument() })
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
@@ -508,6 +511,7 @@ struct NativePeerReviewView: View {
     }
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var review: HostReview?
     @State private var readFailed = false
     @State private var diff = DiffLoad.loading
@@ -587,19 +591,19 @@ struct NativePeerReviewView: View {
                 .truncationMode(.middle)
             if let verdict = review?.summary.record.verdict?.verdict {
                 Text(verdict.peerLabel)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .semibold))
+                    .padding(.horizontal, scale.space[1])
+                    .padding(.vertical, scale.space[0])
                     .background(theme.color("accent").opacity(0.16))
                     .foregroundColor(theme.color("accent"))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             Spacer()
             ToolbarBtn(icon: "arrow.clockwise", tooltip: "Reload from host") { reloadGeneration += 1 }
             ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
@@ -869,8 +873,8 @@ struct NativePeerReviewView: View {
             .controlSize(.small)
         }
         .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color("bg-2"))
     }
@@ -941,8 +945,8 @@ struct NativePeerReviewView: View {
         Text(text)
             .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
             .foregroundColor(theme.color(color))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
     }

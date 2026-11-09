@@ -9,9 +9,11 @@
 # ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules) opens the right pane on
 # that tab instead of Changes.
 # ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
-# run-script, agent-launcher, file-search) opens that dialog before the capture.
+# run-script, agent-launcher, file-search, peer-new-session) opens that dialog before the capture.
 # ALAS_CAPTURE_CENTER (gg-inbox, gg-landing) opens that tab, backed by the
-# profile's scripted gg (bin/gg), before the capture.
+# profile's scripted gg (bin/gg), before the capture. peer-session, peer-permission,
+# peer-diff, peer-file and peer-console install two scripted paired Macs (Studio Mac,
+# MacBook Air; DesignCaptureDemoPeer) in-process and open that view of Studio Mac.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",

@@ -149,12 +149,14 @@ public struct AlasCLIRequest: Equatable, Sendable {
 
     /// A call whose work ends with the client that asked: a computer input still running after
     /// its `alas` or MCP server went away would drive the Mac for nobody, so it stops as a Stop
-    /// would, and a `vm_run` stops its guest command (how an MCP server cancels one). Other calls
-    /// run to their end, as they always did.
+    /// would, and a `vm_run` stops its guest command (how an MCP server cancels one). A device
+    /// call stops too, including one waiting for the user to hand the simulator back, which
+    /// would otherwise run after the agent stopped. Other calls run to their end, as they always did.
     public var endsWithItsClient: Bool {
         switch command {
         case .computer(let command): command.action != .cancel
         case .vmRun: true
+        case .device(let command): command != .list
         default: false
         }
     }

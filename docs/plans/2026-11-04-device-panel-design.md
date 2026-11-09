@@ -157,8 +157,9 @@ iOS:
   showing the value read back after a change.
 - [ ] Permissions, simulated location, push notifications, open URL
   (`simctl privacy`, `simctl location`, `simctl push`, `simctl openurl`).
-- [ ] Install and launch an app (`simctl install`, `simctl launch`), for
-  example from a run script's build output.
+- [x] Install and launch an app (`simctl install`, `simctl launch`), for
+  example from a run script's build output. Agents (`device_install`,
+  `device_launch`) and drag and drop; run scripts not yet.
 - [ ] Clipboard both ways (`simctl pbcopy`, `simctl pbpaste`).
 - [ ] Screenshot and screen recording (`simctl io <udid> screenshot|recordVideo`,
   or a PNG from the frames Alas already receives).
@@ -184,8 +185,10 @@ Agents (phase 2 and after):
 - [ ] Optional agent-device: when the user already has it installed, put it
   on the agent's PATH next to the native tools, for replay scripts, Metro and
   Expo integration, and profiling. Alas would not install or manage it.
-- [ ] Pause the agent's turn on takeover and resume it on hand back, as VM
-  takeover does (`VMTakeOvers`), instead of only refusing its calls.
+- [x] Pause the agent on takeover instead of only refusing its calls. Built as
+  held calls for simulators: a call waits up to 50 s for hand back
+  (`2026-11-08-devices-agent-loop-design.md`). VM takeover still refuses
+  calls; it never paused the agent's turn either.
 - [ ] Hide `device_*` from `tools/list` while the setting is off. Needs the
   setting to reach the MCP server's environment.
 - [ ] Type non-ASCII text, for example through `simctl pbcopy` and paste.
