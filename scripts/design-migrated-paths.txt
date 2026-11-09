@@ -279,3 +279,8 @@ Alas/Sources/Integrations/GG/GGRestackSheet.swift
 Alas/Sources/Integrations/GG/GGFollowEntrySheet.swift
 Alas/Sources/Integrations/GG/GGReorderSheet.swift
 Alas/Sources/Integrations/GG/GGUnstackSheet.swift
+Alas/Sources/Remote/Native/NativePeerSessionView.swift
+Alas/Sources/Remote/Native/NativePeerDocumentView.swift
+Alas/Sources/Remote/Native/NativePeerConsoleView.swift
+Alas/Sources/Remote/Native/NativePeerTabBar.swift
+Alas/Sources/Remote/Native/NativePeerTranscriptScroller.swift

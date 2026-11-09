@@ -15,6 +15,7 @@ struct NativePeerTabBar: View {
     let onCopySessionMarkdown: (RemoteSessionSummary) -> Void
     let onSaveSessionMarkdown: (RemoteSessionSummary) -> Void
     let onArchiveSession: (RemoteSessionSummary) -> Void
+    @Environment(\.designScale) private var scale
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -87,7 +88,7 @@ struct NativePeerTabBar: View {
                 ToolbarIconButton(iconName: "plus", tooltip: "New session on \(target.peer.name)") {
                     client.beginNewSession(in: selection)
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, scale.space[2])
             }
         }
     }
@@ -127,16 +128,17 @@ extension RemoteSessionSummary {
 private struct NativePeerTabMarker: View {
     let peer: NativePeerGroup
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let tint = theme.color(peer.state.presenceColorToken)
         let summary = Self.summary(for: peer)
         HStack(spacing: 5) {
             Image(systemName: "laptopcomputer")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-muted"))
             Text(peer.name)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -145,11 +147,11 @@ private struct NativePeerTabMarker: View {
                 .fill(tint)
                 .frame(width: 6, height: 6)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 22)
         .background(Capsule().fill(tint.opacity(0.12)))
         .overlay(Capsule().strokeBorder(tint.opacity(0.25), lineWidth: 1))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 34)
         .overlay(alignment: .trailing) {
             Rectangle().fill(theme.color("line")).frame(width: 1, height: 16)
