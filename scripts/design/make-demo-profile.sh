@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=6
+fixture_version=7
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -149,6 +149,25 @@ fi
 rm -rf "$profile/seed"
 mkdir -p "$profile/seed"
 cp "$script_dir/fake-acp-agent.py" "$profile/fake-acp-agent.py"
+
+# Demo plugins, in the profile's own Plugins folder (never the user's). They stay inert until the
+# Debug build's capture bridge starts them for a plugin-* target or the plugins settings section.
+# Each folder is named after the plugin id, as the catalog and Settings expect.
+plugins_seed="$profile/seed/Plugins"
+mkdir -p "$plugins_seed"
+install_demo_plugin() {
+  local source="$1" id
+  id="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$source/plugin.json")"
+  mkdir -p "$plugins_seed/$id"
+  cp "$source"/plugin.json "$plugins_seed/$id/"
+  for file in plugin.js ui.js; do
+    [[ -f "$source/$file" ]] && cp "$source/$file" "$plugins_seed/$id/"
+  done
+  return 0
+}
+for dir in "$script_dir"/demo-plugins/* "$script_dir/../../plugins/samples/hello-workspace"; do
+  install_demo_plugin "$dir"
+done
 
 # The scripted gg, found first on the PATH capture.sh gives Alas. Alas reads that
 # PATH from $SHELL, so $SHELL is a wrapper that runs the script with this PATH

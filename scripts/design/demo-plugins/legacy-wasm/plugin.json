@@ -1,0 +1,1 @@
+{ "id": "io.example.legacy-wasm", "name": "Legacy Wasm", "version": "0.0.1", "api": 2, "entry": "plugin.wasm" }

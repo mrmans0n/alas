@@ -1,0 +1,13 @@
+{
+  "id": "io.example.demo-standup",
+  "name": "Standup",
+  "version": "0.4.1",
+  "api": 15,
+  "entry": "plugin.js",
+  "capabilities": ["workspace.read"],
+  "contributes": {
+    "tabs": [{ "id": "board", "title": "Standup", "kind": "view" }],
+    "panels": [{ "id": "today", "title": "Standup", "icon": "person.3", "location": "right", "kind": "view" }],
+    "commands": [{ "id": "open-board", "title": "Standup board", "icon": "person.3", "slots": ["palette", "repo.menu"], "opens": "board" }]
+  }
+}
