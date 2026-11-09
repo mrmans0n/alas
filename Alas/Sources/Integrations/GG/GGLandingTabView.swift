@@ -278,6 +278,7 @@ struct GGLandingContentView: View {
     let onCancel: () -> Void
     let onRestart: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -285,30 +286,30 @@ struct GGLandingContentView: View {
             Divider().overlay(theme.color("line"))
             GeometryReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: scale.space[3]) {
                         GGLandingStatusCard(session: session)
                         HStack {
                             Text("STACK ORDER")
-                                .font(.system(size: 10.5, weight: .semibold))
+                                .font(scale.caption.font(weight: .semibold))
                                 .tracking(0.5)
                             Spacer()
                             Text("\(session.rows.count) entries")
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .monospacedDigit()
                         }
                         .foregroundStyle(theme.color("fg-muted"))
-                        LazyVStack(spacing: 7) {
+                        LazyVStack(spacing: scale.space[2]) {
                             ForEach(session.rows) { row in
                                 GGLandingEntryView(row: row, session: session)
                             }
                         }
                         if session.phase == .running {
                             Text("You can switch tabs or worktrees while landing continues.")
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-faint"))
                         } else if session.phase == .cancelling || session.phase == .cancelled {
                             Text("Completed merges and queued entries are not undone by cancellation.")
-                                .font(.system(size: 10.5))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                     }
@@ -316,7 +317,7 @@ struct GGLandingContentView: View {
                         maxWidth: ACPChatLayout.contentMaxWidth(forPaneWidth: proxy.size.width),
                         alignment: .leading
                     )
-                    .padding(14)
+                    .padding(scale.space[4])
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
@@ -328,16 +329,16 @@ struct GGLandingContentView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Icon(name: "branch", size: 12, color: theme.color("fg-muted"))
             Text("Land · \(session.stack)")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.title.font)
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 4)
+            Spacer(minLength: scale.space[1])
             GGLandingRuntimeView(startedAt: session.startedAt, endedAt: session.endedAt)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .monospacedDigit()
                 .foregroundStyle(theme.color("fg-faint"))
                 .fixedSize()
@@ -354,10 +355,10 @@ struct GGLandingContentView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .font(.system(size: 11, weight: .medium))
+        .font(scale.meta.font(weight: .medium))
         .foregroundStyle(theme.color("accent"))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
     }
 }
 
@@ -379,13 +380,14 @@ private struct GGLandingRuntimeView: View {
 private struct GGLandingStatusCard: View {
     let session: GGLandingSession
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let status = GGLandingPresentation.status(for: session)
         let warnings = GGLandingPresentation.warnings(for: session)
         let errors = GGLandingPresentation.errors(for: session)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(alignment: .top, spacing: scale.space[2]) {
                 Group {
                     if status.isSpinning {
                         Spinner(lineWidth: 1.5, color: theme.color(status.colorToken))
@@ -397,7 +399,7 @@ private struct GGLandingStatusCard: View {
                 .frame(width: 13, height: 13)
                 .accessibilityHidden(true)
                 Text(GGLandingPresentation.statusTitle(for: session))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier(status == .checking ? "gg-landing-preparing" : "gg-landing-status")
@@ -427,14 +429,14 @@ private struct GGLandingStatusCard: View {
                 .accessibilityIdentifier("gg-landing-warning")
             }
         }
-        .font(.system(size: 10.5))
+        .font(scale.caption.font(weight: .regular))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(theme.color(status.colorToken).opacity(0.04), in: RoundedRectangle(cornerRadius: 7))
+        .padding(scale.space[3])
+        .background(theme.color(status.colorToken).opacity(0.04), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         }
     }
@@ -444,12 +446,13 @@ private struct GGLandingEntryView: View {
     let row: GGLandingRow
     let session: GGLandingSession
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let status = GGLandingPresentation.rowStatus(for: row, in: session)
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: scale.space[3]) {
             Text(verbatim: "\(row.position)")
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg-faint"))
                 .frame(minWidth: 12)
             Group {
@@ -462,36 +465,36 @@ private struct GGLandingEntryView: View {
             }
             .frame(width: 12, height: 12)
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text(row.title)
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("fg"))
                 Text(GGLandingPresentation.detail(for: row, in: session))
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color(status == .pending ? "fg-dim" : status.colorToken))
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             if let number = row.prNumber {
                 Text(verbatim: "#\(number)")
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-muted"))
                     .fixedSize()
-                    .padding(.leading, 10)
+                    .padding(.leading, scale.space[3])
                     .overlay(alignment: .leading) {
                         Rectangle().fill(theme.color("line")).frame(width: 0.5)
                     }
             }
         }
         .textSelection(.enabled)
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[3])
         .background(
             status == .active ? theme.color("accent-soft") : theme.color(status.colorToken).opacity(status == .pending ? 0 : 0.04),
-            in: RoundedRectangle(cornerRadius: 7)
+            in: RoundedRectangle(cornerRadius: scale.radius.medium)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color(status == .active ? "accent" : "line"), lineWidth: 0.5)
         }
         .accessibilityElement(children: .contain)

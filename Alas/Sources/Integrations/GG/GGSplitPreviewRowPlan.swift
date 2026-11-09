@@ -207,7 +207,7 @@ enum GGSplitPreviewRowPlanBuilder {
                 ) {
                     AnyView(
                         hunk.build()
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 10) // design-literal: hunk inset is drawn by the diff row renderer
                             .padding(.top, topPadding)
                             .padding(.bottom, bottomPadding)
                     )
@@ -295,8 +295,8 @@ private struct GGSplitPreviewFileHeaderRow: View {
             .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
             .foregroundStyle(theme.color("fg"))
             .textSelection(.enabled)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 12) // design-literal: feeds estimatedHeight 35 for the file header row
+            .padding(.vertical, 7) // design-literal: feeds estimatedHeight 35 for the file header row
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
     }
@@ -312,7 +312,7 @@ private struct GGSplitPreviewOtherFileRow: View {
         Label(path, systemImage: "doc")
             .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
             .foregroundStyle(theme.color("fg-dim"))
-            .padding(12)
+            .padding(12) // design-literal: feeds estimatedHeight 43 for the other-file row
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -329,8 +329,8 @@ struct GGSplitResultingImagePreview: View {
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 12) // design-literal: feeds the image row estimatedHeight 255
+                .padding(.vertical, 7) // design-literal: feeds the image row estimatedHeight 255
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             ZStack {
@@ -340,7 +340,7 @@ struct GGSplitResultingImagePreview: View {
                         .resizable()
                         .interpolation(.none)
                         .aspectRatio(contentMode: .fit)
-                        .padding(8)
+                        .padding(8) // design-literal: feeds the image row estimatedHeight 255
                 } else if state.isLoading {
                     Spinner().frame(width: 20, height: 20)
                 } else {

@@ -117,6 +117,7 @@ struct GGUnstackSheetPresentationState: Equatable {
 
 struct GGUnstackSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.designScale) private var scale
     @State private var model: GGUnstackModel
     @State private var submissionError: String?
     @State private var isSubmitting = false
@@ -135,9 +136,9 @@ struct GGUnstackSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: scale.space[4]) {
             Text("Split Stack")
-                .font(.title2.weight(.semibold))
+                .font(scale.title.font)
 
             Form {
                 TextField(
@@ -164,18 +165,18 @@ struct GGUnstackSheet: View {
 
             if let reason = model.createWorktreeDisabledReason {
                 Label(reason, systemImage: "info.circle")
-                    .font(.callout)
+                    .font(scale.meta.font)
                     .foregroundStyle(.secondary)
             }
 
             if let reason = model.validationMessage ?? submissionError {
                 Label(reason, systemImage: "exclamationmark.triangle")
-                    .font(.callout)
+                    .font(scale.meta.font)
                     .foregroundStyle(.red)
             }
 
             Text(model.confirmationMessage)
-                .font(.callout)
+                .font(scale.meta.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -207,7 +208,7 @@ struct GGUnstackSheet: View {
                 .disabled(!presentationState.canSubmit(isValid: model.validatedStackName != nil))
             }
         }
-        .padding(20)
+        .padding(scale.space[5])
         .frame(width: 460)
         .interactiveDismissDisabled(presentationState.preventsInteractiveDismissal)
     }

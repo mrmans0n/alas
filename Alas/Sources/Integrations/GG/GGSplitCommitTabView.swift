@@ -16,6 +16,7 @@ struct GGSplitCommitTabView: View {
     let loadsOnAppear: Bool
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var model: GGSplitCommitModel
     @State private var isLoading = true
     @State private var isApplying = false
@@ -150,12 +151,12 @@ struct GGSplitCommitTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Image(systemName: "arrow.trianglehead.branch")
                 .foregroundStyle(theme.color("accent"))
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text("Split Commit")
-                    .font(.headline)
+                    .font(scale.title.font)
                 Text(tabState.targetGGID ?? tabState.targetSHA)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 2)))
                     .foregroundStyle(theme.color("fg-dim"))
@@ -170,8 +171,8 @@ struct GGSplitCommitTabView: View {
                 .disabled(isApplying)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 
@@ -179,14 +180,14 @@ struct GGSplitCommitTabView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Changes")
-                    .font(.headline)
+                    .font(scale.title.font)
                 Spacer()
                 Text("\(model.selectedHunkIDs.count) new · \(originalHunkCount) original")
-                    .font(.caption)
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-dim"))
             }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, scale.space[4])
+                .padding(.vertical, scale.space[2])
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -201,7 +202,7 @@ struct GGSplitCommitTabView: View {
 
     private func splitFileGroup(_ group: GGSplitCommitFileGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[1]) {
                 if group.kind == .selectable {
                     Button {
                         if collapsedFileGroupIDs.contains(group.id) {
@@ -221,7 +222,7 @@ struct GGSplitCommitTabView: View {
                     }
                     .buttonStyle(.plain)
                     .help(collapsedFileGroupIDs.contains(group.id) ? "Expand file" : "Collapse file")
-                    Spacer(minLength: 4)
+                    Spacer(minLength: scale.space[1])
                     Menu("Assign all") {
                         Button("New Commit") { assign(group, to: .newCommit) }
                         Button("Original Commit") { assign(group, to: .originalCommit) }
@@ -234,13 +235,13 @@ struct GGSplitCommitTabView: View {
                         .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                         .lineLimit(2)
                         .truncationMode(.middle)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: scale.space[1])
                     Text("Original only")
-                        .font(.caption)
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-dim"))
                 }
             }
-            .padding(12)
+            .padding(scale.space[3])
 
             if group.kind == .selectable, !collapsedFileGroupIDs.contains(group.id) {
                 ForEach(group.hunks, id: \.id) { hunk in
@@ -253,11 +254,11 @@ struct GGSplitCommitTabView: View {
 
     private func splitHunkRow(_ hunk: GGSplitHunk) -> some View {
         let destination = model.destination(for: hunk.id) ?? .originalCommit
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: scale.space[2]) {
             Button {
                 focusPreview(destination: destination, path: hunk.path)
             } label: {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text(hunk.header)
                         .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                         .foregroundStyle(theme.color("fg"))
@@ -277,10 +278,10 @@ struct GGSplitCommitTabView: View {
                 assign(hunk, to: destination.other)
             }
             .buttonStyle(.plain)
-            .font(.caption.weight(.medium))
+            .font(scale.caption.font)
             .foregroundStyle(destination == .newCommit ? theme.color("add") : theme.color("fg"))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[1])
             .background(destination == .newCommit ? theme.color("add").opacity(0.14) : theme.color("bg-3"))
             .clipShape(.capsule)
             .help("Move to \(destination.other.title)")
@@ -288,8 +289,8 @@ struct GGSplitCommitTabView: View {
             .accessibilityHint("Moves this hunk to \(destination.other.title)")
             .accessibilityIdentifier("gg-split-hunk-destination-\(hunk.id)")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.35))
         .overlay(Divider(), alignment: .bottom)
     }
@@ -309,7 +310,7 @@ struct GGSplitCommitTabView: View {
     }
 
     private var commitCards: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             commitCard(
                 destination: .newCommit,
                 message: $model.firstMessage,
@@ -321,7 +322,7 @@ struct GGSplitCommitTabView: View {
                 preview: model.remainderPreview
             )
         }
-        .padding(12)
+        .padding(scale.space[3])
         .background(theme.color("bg-2"))
     }
 
@@ -331,17 +332,17 @@ struct GGSplitCommitTabView: View {
         preview: GGSplitPreview
     ) -> some View {
         let isActive = activeDestination == destination
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: scale.space[2]) {
             Button {
                 activeDestination = destination
                 previewScrollRequest = nil
             } label: {
                 HStack {
                     Text(destination.title)
-                        .font(.headline)
+                        .font(scale.title.font)
                     Spacer()
                     Text(contentSummary(for: preview))
-                        .font(.caption)
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color("fg-dim"))
                 }
                 .contentShape(.rect)
@@ -356,12 +357,12 @@ struct GGSplitCommitTabView: View {
                 onDraftChange: draftDidChange
             )
         }
-        .padding(10)
+        .padding(scale.space[3])
         .frame(maxWidth: .infinity)
         .background(isActive ? theme.color("accent").opacity(0.09) : theme.color("bg-1"))
-        .clipShape(.rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(isActive ? theme.color("accent") : theme.color("line"), lineWidth: isActive ? 2 : 1)
         }
     }
@@ -374,14 +375,14 @@ struct GGSplitCommitTabView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(destination.title)
-                    .font(.headline)
+                    .font(scale.title.font)
                 Spacer()
                 Text("\(preview.files.flatMap(\.hunkIDs).count) hunk\(preview.files.flatMap(\.hunkIDs).count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-dim"))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("bg-2"))
             Divider()
             if preview.files.isEmpty && preview.nonTextualFiles.isEmpty {
@@ -460,7 +461,7 @@ struct GGSplitCommitTabView: View {
                         Label(path, systemImage: "doc")
                             .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                             .foregroundStyle(theme.color("fg-dim"))
-                            .padding(12)
+                            .padding(12) // design-literal: legacy preview mirrors GGSplitPreviewRowPlan's other-file row
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id(GGSplitPreviewRowID.legacyOther(path: path))
                     }
@@ -479,8 +480,8 @@ struct GGSplitCommitTabView: View {
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: max(10, codeFontSize - 1)))
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 12) // design-literal: legacy preview mirrors GGSplitPreviewRowPlan's file header row
+                .padding(.vertical, 7) // design-literal: legacy preview mirrors GGSplitPreviewRowPlan's file header row
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("bg-2"))
             DiffPaneView(
@@ -501,14 +502,14 @@ struct GGSplitCommitTabView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             if let message = errorMessage ?? model.validationMessage {
                 Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.callout)
+                    .font(scale.meta.font)
                     .foregroundStyle(.red)
                     .lineLimit(2)
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: scale.space[3])
             Button("Cancel", role: .cancel, action: onCancel)
                 .frame(width: 84)
                 .disabled(isApplying)
@@ -519,8 +520,8 @@ struct GGSplitCommitTabView: View {
             .frame(width: 120)
             .disabled(!model.canApply || isApplying)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 
@@ -565,7 +566,7 @@ struct GGSplitCommitTabView: View {
     }
 
     private var loadFailure: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Label(errorMessage ?? "Could not load the split plan.", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
                 .multilineTextAlignment(.center)
@@ -573,22 +574,22 @@ struct GGSplitCommitTabView: View {
                 Task { await load() }
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func unavailableView(reason: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: "arrow.trianglehead.branch")
                 .font(.title)
                 .foregroundStyle(theme.color("fg-dim"))
             Text("Split Commit Unavailable")
-                .font(.headline)
+                .font(scale.title.font)
             Text(reason)
                 .foregroundStyle(theme.color("fg-dim"))
             Button("Close Tab", systemImage: "xmark", action: onCancel)
         }
-        .padding(24)
+        .padding(scale.space[5])
     }
 
     private func load() async -> Bool {
@@ -629,12 +630,13 @@ struct GGSplitCommitMessageEditor: View {
     let onDraftChange: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         PairedTextField(
             text: $message,
             placeholder: "Commit message",
-            font: .systemFont(ofSize: NSFont.systemFontSize),
+            font: scale.body.nsFont,
             textColor: NSColor(theme.color("fg")),
             isBordered: true,
             isBezeled: true,

@@ -73,6 +73,7 @@ struct GGReorderSheet: View {
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.dismiss) private var dismiss
     @State private var model: GGReorderModel
     @State private var isApplying = false
@@ -90,26 +91,26 @@ struct GGReorderSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             Text("Reorder Stack")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text("Drag commits within each mutable section.")
-                .font(.system(size: 11.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))
 
             List {
                 ForEach(model.entries) { entry in
-                    HStack(spacing: 10) {
+                    HStack(spacing: scale.space[3]) {
                         Image(systemName: entry.isMutable ? "line.3.horizontal" : "lock.fill")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundStyle(theme.color("fg-faint"))
                             .frame(width: 16, height: 16)
                         Text(entry.title)
-                            .font(.system(size: 12.5))
+                            .font(scale.meta.font)
                             .lineLimit(1)
-                        Spacer(minLength: 8)
+                        Spacer(minLength: scale.space[2])
                         Text(entry.id)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(scale.caption.font(weight: .regular, design: .monospaced))
                             .foregroundStyle(theme.color("fg-faint"))
                             .lineLimit(1)
                     }
@@ -130,12 +131,12 @@ struct GGReorderSheet: View {
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("warn"))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Spacer()
                 Button("Cancel") {
                     onCancel()
@@ -148,7 +149,7 @@ struct GGReorderSheet: View {
                     .disabled(!model.hasChanges || isApplying)
             }
         }
-        .padding(18)
+        .padding(scale.space[4])
         .interactiveDismissDisabled(isApplying)
     }
 

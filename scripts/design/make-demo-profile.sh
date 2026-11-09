@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=5
+fixture_version=6
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -115,6 +115,10 @@ PY
   chmod +x "$tmp/lantern/.alas/scripts/"*.sh
   git -C "$tmp/lantern" add -A
   git -C "$tmp/lantern" commit -q -m "feat: first ledger"
+  # gg's own config: its presence turns the gg screens on, and the branch
+  # username is what ties the nacho/ worktree to a stack.
+  mkdir -p "$tmp/lantern/.git/gg"
+  printf '{"defaults":{"branch_username":"nacho","base":"main"}}\n' > "$tmp/lantern/.git/gg/config.json"
   echo "$fixture_version" > "$tmp/version"
   mv "$tmp" "$fixture"
 
@@ -145,6 +149,21 @@ fi
 rm -rf "$profile/seed"
 mkdir -p "$profile/seed"
 cp "$script_dir/fake-acp-agent.py" "$profile/fake-acp-agent.py"
+
+# The scripted gg, found first on the PATH capture.sh gives Alas. Alas reads that
+# PATH from $SHELL, so $SHELL is a wrapper that runs the script with this PATH
+# and skips the user's startup files, where a real gg could be found first.
+mkdir -p "$profile/bin"
+cp "$script_dir/fake-gg.py" "$profile/bin/gg"
+cat > "$profile/bin/shell" <<SH
+#!/bin/sh
+# Stands in for \$SHELL: runs the last argument (the script) with a fixed PATH.
+for script; do :; done
+PATH="$profile/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+exec /bin/sh -c "\$script"
+SH
+chmod +x "$profile/bin/gg" "$profile/bin/shell"
 
 selected_path="$fixture/worktrees/${selected_branch//\//-}"
 WORKTREES="$(printf '%s\n' "${worktrees[@]}")" \

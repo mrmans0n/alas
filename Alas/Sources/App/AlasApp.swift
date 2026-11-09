@@ -58,6 +58,9 @@ struct AlasApp: App {
             ACPDictationShortcutMonitor.install { [weak appState] in appState?.binding(for: .dictate) }
         }
         _state = State(initialValue: appState)
+        #if DEBUG
+        MainActor.assumeIsolated { DesignCaptureBridge.state = appState }
+        #endif
         BundledFontRegistrar.registerFonts()
         // Refresh Gatekeeper cache when the user returns from System Settings
         // after granting permission to a blocked LSP binary.
@@ -562,6 +565,7 @@ struct AlasApp: App {
 /// reposts the app's own notification for it. Debug builds only.
 enum DesignCaptureBridge {
     static let notification = Notification.Name("io.nlopez.alas.dev.capture.open")
+    @MainActor static weak var state: AppState?
 
     static func install() {
         DistributedNotificationCenter.default().addObserver(
@@ -571,10 +575,78 @@ enum DesignCaptureBridge {
             if target.hasPrefix("settings:") {
                 let section = SettingsSection(rawValue: String(target.dropFirst("settings:".count)))
                 NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+            } else if target == "gg-inbox" || target == "gg-landing" {
+                openGGTab(target)
             } else if let name = localNotification(for: target) {
                 NotificationCenter.default.post(name: name, object: nil)
             }
         }
+    }
+
+    /// Opens a gg tab on the demo project once the scripted gg has been probed,
+    /// so the inbox never captures its "checking gg" state.
+    private static func openGGTab(_ target: String) {
+        Task { @MainActor in
+            guard let state else { return }
+            let deadline = Date().addingTimeInterval(30)
+            while !GGAvailability.shared.hasProbed || state.projects.isEmpty {
+                guard Date() < deadline else { return }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            let projectId = state.projects[0].id
+            if target == "gg-inbox" {
+                state.openGGInbox(projectId: projectId)
+            } else {
+                seedGGLanding(state: state, projectId: projectId)
+                state.openGGLanding(projectId: projectId)
+            }
+        }
+    }
+
+    /// A landing in progress for the invoice-export stack: two entries merged,
+    /// the third waiting on approval, the fourth pending. The events are the
+    /// ones `gg land --jsonl` emits; nothing is run.
+    @MainActor
+    private static func seedGGLanding(state: AppState, projectId: String) {
+        guard let worktree = state.projectsManager.visibleWorktrees(projectId: projectId)
+            .first(where: { $0.branch == "feat/invoice-export" })
+        else { return }
+        let titles = [
+            "feat(billing): add CSV export for invoices",
+            "feat(billing): stream large exports to disk",
+            "feat(web): export button on the invoice list",
+            "docs: describe the export format",
+        ]
+        let rows = titles.enumerated().map { index, title in
+            GGLandingRow(
+                position: index + 1, title: title, ggId: "c-invoi\(String(format: "%02d", index + 1))",
+                prNumber: 412 + index
+            )
+        }
+        let seed = GGLandingSession.Seed(
+            projectId: projectId, worktreeId: worktree.id, stack: "invoice-export",
+            base: "main", target: "4", rows: rows
+        )
+        let store = GGLandingStore.shared
+        guard store.begin(seed, now: Date().addingTimeInterval(-512)) else { return }
+        store.receive(.start(stack: "invoice-export", base: "main", totalEntries: rows.count), projectId: projectId)
+        for row in rows.prefix(2) {
+            store.receive(
+                .entry(GGLandedEntry(
+                    position: row.position, sha: nil, title: row.title, ggId: row.ggId,
+                    prNumber: row.prNumber, action: "merged"
+                )),
+                projectId: projectId
+            )
+        }
+        store.receive(
+            .wait(GGLandWait(
+                position: 3, prNumber: 414, phase: .readiness, poll: 17, elapsedSeconds: 94,
+                ciStatus: "success", approved: false, mergeTrainStatus: nil, mergeTrainPosition: nil,
+                pipelineRunning: nil, error: nil
+            )),
+            projectId: projectId
+        )
     }
 
     static func localNotification(for target: String) -> Notification.Name? {

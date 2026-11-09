@@ -10,6 +10,8 @@
 # that tab instead of Changes.
 # ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
 # run-script, agent-launcher, file-search) opens that dialog before the capture.
+# ALAS_CAPTURE_CENTER (gg-inbox, gg-landing) opens that tab, backed by the
+# profile's scripted gg (bin/gg), before the capture.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
@@ -159,7 +161,14 @@ json.dump(config, open(path, "w"), indent=2)
 PY
 
 # These set the frame the window opens with, ignoring what other runs saved.
-open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" "$app" --args \
+# SHELL is the profile's wrapper, so the PATH Alas reads from it finds the
+# scripted gg and never the user's own.
+gg_shell_args=()
+if [[ -x "$profile/bin/shell" ]]; then
+  gg_shell_args=(--env "SHELL=$profile/bin/shell")
+fi
+open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" \
+  ${gg_shell_args[@]+"${gg_shell_args[@]}"} "$app" --args \
   -ApplePersistenceIgnoreState YES "-$frame_key" "100 100 $launch_width_pt $launch_height_pt 0 0 1728 1084"
 
 # Waits for a command to succeed, polling until a deadline in seconds.
@@ -265,6 +274,19 @@ fi
 # (DesignCaptureBridge in AlasApp.swift) once the worktrees are visited.
 if [[ -n "${ALAS_CAPTURE_DIALOG:-}" ]]; then
   /usr/bin/swift - "$ALAS_CAPTURE_DIALOG" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+  /bin/sleep 1.5
+fi
+
+# ALAS_CAPTURE_CENTER opens a gg tab the same way. The bridge waits for the
+# scripted gg to be probed, so the tab never shows its "checking gg" state.
+if [[ -n "${ALAS_CAPTURE_CENTER:-}" ]]; then
+  /usr/bin/swift - "$ALAS_CAPTURE_CENTER" <<'SWIFT' 2>/dev/null
 import Foundation
 DistributedNotificationCenter.default().postNotificationName(
     Notification.Name("io.nlopez.alas.dev.capture.open"),

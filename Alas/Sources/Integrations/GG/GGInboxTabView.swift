@@ -66,6 +66,7 @@ struct GGInboxTabView: View {
     var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var ggUpgrade = GGInstallController()
     private let store = GGInboxStore.shared
     private let service = GGService()
@@ -187,24 +188,24 @@ struct GGInboxTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Icon(name: "branch", size: 12, color: theme.color("fg-muted"))
-            Text(tabState.title).font(.system(size: 13, weight: .semibold))
+            Text(tabState.title).font(scale.title.font)
                 .foregroundColor(theme.color("fg"))
             if let snapshot = inboxState.snapshot {
                 Text(Self.commitCountLabel(snapshot.totalItems))
-                    .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    .font(scale.meta.font(weight: .medium)).monospacedDigit()
                     .foregroundColor(theme.color("fg-dim"))
             }
             Spacer()
             if inboxState.isRefreshing {
                 Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 11, height: 11)
                 if let label = Self.refreshLabel(inboxState.refreshProgress) {
-                    Text(label).font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
+                    Text(label).font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
                 }
             } else {
                 if let label = Self.updatedLabel(fetchedAt: inboxState.fetchedAt, now: Date()) {
-                    Text(label).font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
+                    Text(label).font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
                 }
                 Button { refresh() } label: {
                     Icon(name: "arrow.clockwise", size: 11, color: theme.color("fg-faint"))
@@ -214,7 +215,7 @@ struct GGInboxTabView: View {
                 .help("Refresh inbox")
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2])
     }
 
     @ViewBuilder
@@ -247,11 +248,11 @@ struct GGInboxTabView: View {
     }
 
     private var probingState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: scale.space[2]) {
             Spacer()
             Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 12, height: 12)
             Text("Checking gg version…")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
         }
@@ -260,18 +261,18 @@ struct GGInboxTabView: View {
 
     private var upgradeRequiredState: some View {
         let needsInstall = Self.shouldInstallGG(version: GGAvailability.shared.version)
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: scale.space[2]) {
             Spacer()
             Text(needsInstall ? "Inbox needs gg installed." : "Inbox needs a newer gg version.")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.title.font)
                 .foregroundColor(theme.color("fg"))
             if let version = GGAvailability.shared.version {
                 Text("gg \(version)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-muted"))
             }
             Text(needsInstall ? "Install gg to use Inbox." : "gg Inbox requires gg 0.9.12 or newer.")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
             upgradeStatus
             AlasButton(title: needsInstall ? "Install gg…" : "Upgrade gg…", style: .normal) {
@@ -285,7 +286,7 @@ struct GGInboxTabView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(14)
+        .padding(scale.space[4])
     }
 
     @ViewBuilder
@@ -295,24 +296,24 @@ struct GGInboxTabView: View {
         case .idle, .succeeded:
             EmptyView()
         case .running:
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[1]) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
                 Text(needsInstall ? "Installing…" : "Upgrading…")
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg-dim"))
             }
         case .failed(let message):
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("warn"))
                 .lineLimit(2)
         }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: scale.space[1]) {
             Spacer()
-            Text("Inbox is clear.").font(.system(size: 13))
+            Text("Inbox is clear.").font(scale.body.font)
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
         }
@@ -320,16 +321,16 @@ struct GGInboxTabView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Text(message).font(.system(size: 11)).foregroundColor(.red)
+        HStack(spacing: scale.space[2]) {
+            Text(message).font(scale.meta.font).foregroundColor(.red)
                 .lineLimit(2)
             Spacer()
             Button("Retry") { refresh() }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("accent"))
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
     }
 
@@ -351,24 +352,24 @@ struct GGInboxTabView: View {
                     maxWidth: ACPChatLayout.contentMaxWidth(forPaneWidth: proxy.size.width),
                     alignment: .leading
                 )
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
+                .padding(.horizontal, scale.space[4])
+                .padding(.vertical, scale.space[1])
                 .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
 
     private func bucketSection(_ bucket: GGInboxBucket, entries: [GGInboxEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(spacing: scale.space[1]) {
                 Text(bucket.title.uppercased())
-                    .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
+                    .font(scale.caption.font(weight: .semibold)).tracking(0.5)
                     .foregroundColor(theme.color("fg-muted"))
                 Text(Self.commitCountLabel(entries.count))
-                    .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
+                    .font(scale.caption.font(weight: .semibold)).monospacedDigit()
                     .foregroundColor(theme.color(bucket.themeToken))
             }
-            .padding(.top, 10).padding(.bottom, 4)
+            .padding(.top, scale.space[3]).padding(.bottom, scale.space[1])
             ForEach(entries, id: \.sha) { entry in
                 row(entry, bucket: bucket)
             }
@@ -379,20 +380,20 @@ struct GGInboxTabView: View {
         let targetWorktreeId = resolveWorktreeId(entry)
         let kind = Self.reviewRequestKind(prURL: entry.prUrl)
         let tint = theme.color(bucket.themeToken)
-        return HStack(spacing: 10) {
+        return HStack(spacing: scale.space[3]) {
             Text("\(entry.position)")
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text(entry.title)
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[1]) {
                     Text(entry.stackName)
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(1)
                     if let icon = Self.ciIconName(entry.ciStatus) {
@@ -405,14 +406,14 @@ struct GGInboxTabView: View {
                 }
                 if let refreshError = entry.refreshError {
                     Text(refreshError)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .trailing, spacing: 4) {
+            VStack(alignment: .trailing, spacing: scale.space[1]) {
                 if let url = Self.validPRURL(entry.prUrl) {
                     Button { NSWorkspace.shared.open(url) } label: {
                         reviewReferenceLabel(entry.prNumber, kind: kind)
@@ -430,21 +431,21 @@ struct GGInboxTabView: View {
                 }
                 if let behind = entry.behindBase, behind > 0 {
                     Text("behind \(behind)")
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("warn"))
                 }
             }
             .frame(width: 64, alignment: .trailing)
-            .padding(.leading, 10)
+            .padding(.leading, scale.space[3])
             .overlay(alignment: .leading) {
                 Rectangle().fill(tint.opacity(0.28)).frame(width: 0.5)
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[3])
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(tint.opacity(0.28), lineWidth: 0.5)
         }
         .contentShape(Rectangle())
@@ -468,26 +469,26 @@ struct GGInboxTabView: View {
     }
 
     private func stackErrorsSection(_ errors: [GGInboxStackError]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: scale.space[0]) {
             Text("STACK ERRORS")
-                .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
+                .font(scale.caption.font(weight: .semibold)).tracking(0.5)
                 .foregroundColor(theme.color("warn"))
-                .padding(.top, 12).padding(.bottom, 4)
+                .padding(.top, scale.space[3]).padding(.bottom, scale.space[1])
             ForEach(errors, id: \.stackName) { item in
-                HStack(spacing: 8) {
-                    Text(item.stackName).font(.system(size: 11, design: .monospaced))
+                HStack(spacing: scale.space[2]) {
+                    Text(item.stackName).font(scale.meta.font)
                         .foregroundColor(theme.color("fg-muted"))
-                    Text(item.error).font(.system(size: 11))
+                    Text(item.error).font(scale.meta.font)
                         .foregroundColor(theme.color("fg-dim")).lineLimit(2)
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, scale.space[1])
             }
         }
     }
 
     private func reviewReferenceLabel(_ number: Int, kind: CodeHostKind) -> some View {
         Text(verbatim: "\(kind.reviewRequestNumberPrefix)\(number)")
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(scale.meta.font(weight: .medium, design: .monospaced))
             .foregroundColor(theme.color("accent"))
     }
 
