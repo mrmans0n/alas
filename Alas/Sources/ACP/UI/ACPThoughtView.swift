@@ -46,18 +46,18 @@ struct ACPThoughtView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: scale.space[3]) {
             Rectangle()
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
                 .acpNarrationShimmer(isActive: isLive, axis: .vertical)
-                .padding(.vertical, 2)
-            VStack(alignment: .leading, spacing: 6) {
+                .padding(.vertical, scale.space[0])
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 Button {
                     expanded.toggle()
                     onExpandedChange?(expanded)
                 } label: {
-                    HStack(spacing: 7) {
+                    HStack(spacing: scale.space[2]) {
                         Image(systemName: "brain")
                             .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
@@ -74,7 +74,7 @@ struct ACPThoughtView: View {
 
                 if expanded {
                     Text(buffer.value)
-                        .font(.system(size: 12, design: .default).italic())
+                        .font(scale.metaFont.italic())
                         .foregroundStyle(theme.color("fg-dim"))
                         .lineSpacing(2)
                         .textSelection(.enabled)

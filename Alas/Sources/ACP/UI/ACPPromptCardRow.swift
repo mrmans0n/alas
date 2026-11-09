@@ -40,6 +40,7 @@ extension EnvironmentValues {
 /// A turn Alas injected (review feedback, Ship, PR shepherd), shown from its
 /// structured card. The exact instruction the agent got is one click away.
 struct PromptCardRow: View {
+    @Environment(\.designScale) private var scale
     let card: ACPPromptCard
     let text: String
     let contentMaxWidth: CGFloat
@@ -73,9 +74,9 @@ struct PromptCardRow: View {
                 if !isCompact {
                     if card.sections.isEmpty, card.origin == .shepherd {
                         Text("Nothing needs attention right now.")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-muted"))
-                            .padding(.horizontal, 12).padding(.bottom, 8)
+                            .padding(.horizontal, scale.space[3]).padding(.bottom, scale.space[2])
                     }
                     ForEach(Array(card.sections.enumerated()), id: \.offset) { _, section in
                         sectionView(section)
@@ -87,8 +88,8 @@ struct PromptCardRow: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: toggleInstruction)
             .background(theme.color("bg-2"))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .frame(maxWidth: contentMaxWidth * 0.88, alignment: .leading)
             Spacer(minLength: 0)
         }
@@ -112,62 +113,62 @@ struct PromptCardRow: View {
 
     private var headerContent: some View {
         let style = Self.style(for: card.origin)
-        return HStack(spacing: 8) {
+        return HStack(spacing: scale.space[2]) {
             Image(systemName: style.symbol)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color(style.tint))
                 .frame(width: 18, height: 18)
-                .background(theme.color(style.tint).opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+                .background(theme.color(style.tint).opacity(0.16), in: RoundedRectangle(cornerRadius: scale.radius.small))
             Text(style.label)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-faint"))
             Text(card.title)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)
             if !isCompact {
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .rotationEffect(.degrees(showsInstruction ? 180 : 0))
                     .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 
     private var facts: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             ForEach(Array(card.facts.enumerated()), id: \.offset) { _, fact in
                 Text(fact.text)
-                    .font(.system(size: 11, design: fact.kind == .revision || fact.kind == .branch ? .monospaced : .default))
+                    .font(scale.meta.font(design: fact.kind == .revision || fact.kind == .branch ? .monospaced : .default))
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(1)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.75))
+                    .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[0])
+                    .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: scale.radius.small))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.75))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.bottom, scale.space[2])
     }
 
     // MARK: Sections
 
     private func sectionView(_ section: ACPPromptCard.Section) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if let title = section.title {
                 if card.origin == .review {
                     pathText(title)
                 } else {
                     Text(title.uppercased())
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
             }
@@ -175,8 +176,8 @@ struct PromptCardRow: View {
                 itemView(item)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
     }
@@ -184,28 +185,28 @@ struct PromptCardRow: View {
     private func itemView(_ item: ACPPromptCard.Item) -> some View {
         let live = item.reviewCommentID.flatMap { context?.reviewComments?.status(for: $0) }
         let pill = Self.pill(status: item.status, live: live)
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: scale.space[1]) {
             if card.origin != .review, let path = item.location?.path { pathText(path) }
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 if let lines = Self.lineLabel(item.location) {
                     Text(lines)
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(theme.color("accent"))
-                        .padding(.horizontal, 5)
-                        .background(theme.color("accent").opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(.horizontal, scale.space[1])
+                        .background(theme.color("accent").opacity(0.12), in: RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 if let side = item.location?.side {
-                    Text(side).font(.system(size: 10.5)).foregroundStyle(theme.color("fg-faint"))
+                    Text(side).font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-faint"))
                 }
                 if let author = item.author {
-                    Text(author).font(.system(size: 11)).foregroundStyle(theme.color("fg-muted"))
+                    Text(author).font(scale.metaFont).foregroundStyle(theme.color("fg-muted"))
                 }
                 Spacer(minLength: 0)
                 if let pill {
                     Text(pill.label)
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundStyle(theme.color(pill.tint))
-                        .padding(.horizontal, 7)
+                        .padding(.horizontal, scale.space[2])
                         .overlay(Capsule().strokeBorder(theme.color(pill.tint).opacity(0.4), lineWidth: 0.75))
                 }
             }
@@ -215,7 +216,7 @@ struct PromptCardRow: View {
             if let excerpt = item.excerpt { excerptView(excerpt) }
             if live?.state == .resolved, let reply = live?.agentReply {
                 Text("Agent: \(reply)")
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineLimit(2)
             }
@@ -224,11 +225,11 @@ struct PromptCardRow: View {
                     NSWorkspace.shared.open(url)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-faint"))
             }
         }
-        .padding(.leading, 10)
+        .padding(.leading, scale.space[2])
         .overlay(alignment: .leading) {
             Rectangle().fill(theme.color(Self.ruleTint(status: item.status, live: live, origin: card.origin))).frame(width: 2)
         }
@@ -238,9 +239,9 @@ struct PromptCardRow: View {
     private func excerptView(_ excerpt: ACPPromptCard.Excerpt) -> some View {
         switch excerpt.style {
         case .code:
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text("Commented code")
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-faint"))
                 ACPMarkdownText(raw: Self.fenced(excerpt), typography: typography)
             }
@@ -249,9 +250,9 @@ struct PromptCardRow: View {
                 .font(.system(size: typography.codeSize, design: .monospaced))
                 .foregroundStyle(theme.color("fg-muted"))
                 .textSelection(.enabled)
-                .padding(6)
+                .padding(scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.color("bg-3").opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+                .background(theme.color("bg-3").opacity(0.6), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         }
     }
 
@@ -260,7 +261,7 @@ struct PromptCardRow: View {
         let name = (path as NSString).lastPathComponent
         return (Text(directory.isEmpty ? "" : directory + "/").foregroundColor(theme.color("fg-faint"))
             + Text(name).foregroundColor(theme.color("fg")).fontWeight(.semibold))
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .lineLimit(1)
             .truncationMode(.head)
     }
@@ -277,18 +278,18 @@ struct PromptCardRow: View {
     private func actionRow(_ action: ACPPromptCard.Action, context: ACPPromptCardContext) -> some View {
         Button(Self.actionLabel(action)) { context.perform(action) }
             .buttonStyle(.plain)
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("accent"))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
     }
 
     private var instruction: some View {
         ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
     }

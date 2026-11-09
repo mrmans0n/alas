@@ -88,6 +88,7 @@ struct ACPSideQuestionCard: View {
     }
 
     private struct SessionCard: View {
+        @Environment(\.designScale) private var scale
         let entry: ACPSideQuestion
         @ObservedObject var side: ACPSession
         @ObservedObject var transcript: ACPTranscript
@@ -167,9 +168,9 @@ struct ACPSideQuestionCard: View {
         }
 
         private var awaitingInputNotice: some View {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text("The side agent is waiting for input the card can't show.")
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-muted"))
                 Button("Cancel turn", action: onCancelTurn).controlSize(.small)
             }
@@ -228,7 +229,7 @@ struct ACPSideQuestionCard: View {
                 // Offered once the question was sent; see `promoteSideQuestion`.
                 onKeep: entry.isSubmitted ? onKeep : nil
             ) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     // The first question is the header; later ones collapse
                     // to a line each, and only the latest turn is expanded.
                     ForEach(Array(earlierQuestions.dropFirst().enumerated()), id: \.offset) { _, question in
@@ -248,7 +249,7 @@ struct ACPSideQuestionCard: View {
                     }
                     if phase == .answered, !latestHasOutput {
                         Text("The side agent finished without an answer.")
-                            .font(.system(size: 11.5))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                     // Follow-ups wait here until the current turn ends; a
@@ -259,7 +260,7 @@ struct ACPSideQuestionCard: View {
                     }
                 }
             } prompt: {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[2]) {
                     if let coordinator = side.codexHooksReview {
                         ACPCodexHooksReviewView(coordinator: coordinator)
                     }
@@ -331,7 +332,7 @@ struct ACPSideQuestionCard: View {
                 AgentText(buffer: buffer, typography: typography)
             case .toolCall(let call):
                 Text(call.title)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
             default:
@@ -341,7 +342,7 @@ struct ACPSideQuestionCard: View {
 
         private func followUpLine(_ text: String) -> some View {
             Text("↳ \(text)")
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(2)
         }
@@ -350,18 +351,18 @@ struct ACPSideQuestionCard: View {
         private func queuedFollowUp(_ item: QueuedPrompt) -> some View {
             let preview = ACPQueueItemRow.textPreview(of: item.blocks)
             if let error = item.lastError {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text("Couldn't send “\(preview)”: \(error)")
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("del"))
                         .lineLimit(3)
-                    HStack(spacing: 6) {
+                    HStack(spacing: scale.space[2]) {
                         Button("Retry") { onRetryQueued(item.id) }.controlSize(.small)
                         Button("Remove") { onRemoveQueued(item.id) }.controlSize(.small)
                     }
                 }
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                     Text("↳ \(preview)")
                         .foregroundStyle(theme.color("fg-muted"))
                         .lineLimit(2)
@@ -370,7 +371,7 @@ struct ACPSideQuestionCard: View {
                     Spacer(minLength: 4)
                     Button("Remove") { onRemoveQueued(item.id) }.controlSize(.small)
                 }
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
             }
         }
 
@@ -404,6 +405,7 @@ private struct CodexHooksReviewPresence<Content: View>: View {
 }
 
 private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
+    @Environment(\.designScale) private var scale
     let question: String
     let phase: ACPSideQuestionPhase
     let modelName: String?
@@ -492,11 +494,11 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
         }
         .frame(maxHeight: fillsColumn && !isCollapsed ? .infinity : nil, alignment: .top)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .fill(theme.color("bg-1"))
-                .overlay(RoundedRectangle(cornerRadius: 12).fill(theme.color("warn").opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("warn").opacity(0.06)))
         )
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(theme.color("warn").opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("warn").opacity(0.45)))
         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .background {
             // ⌘. collapses the card from anywhere in the tab.
@@ -513,19 +515,19 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             ACPCommandPill(suggestion: ACPAlasSlashCommand.btwSuggestion)
             Text(question.isEmpty ? "Side question" : question)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color(question.isEmpty ? "fg-faint" : "fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
             Text(enforcesReadOnly ? "read-only" : "read-only, not enforced")
-                .font(.system(size: 10.5))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundStyle(theme.color(enforcesReadOnly ? "fg-muted" : "warn"))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[0])
                 .overlay(Capsule().strokeBorder(theme.color("line")))
                 .help(enforcesReadOnly
                     ? "The side agent runs in a read-only mode, and Alas rejects writes and commands."
@@ -541,10 +543,10 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                 .buttonStyle(.plain)
                 .help("Discard side question (Esc)")
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .contentShape(Rectangle())
         .onTapGesture { isCollapsed.toggle() }
         // Dragging the header moves the card; the host shows the drop zones.
@@ -603,23 +605,23 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
             EmptyView()
         case .starting where !hasContent:
             Text("Forking the session…")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
         case .failed(let message):
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("del"))
                 .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
         default:
             ScrollView {
                 content()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
             }
             // Hugs a short answer up to the chosen height; fills the side column.
             .frame(maxHeight: fillsColumn ? .infinity : heights.answer)
@@ -632,8 +634,8 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                 ScrollView {
                     prompt()
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.vertical, scale.space[2])
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { promptIdeal = $0 }
                 }
                 .frame(maxHeight: heights.prompt)
@@ -643,14 +645,14 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if blocked.total > 0 {
                 blockedChip
             }
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 TextField(phase == .composing ? "Ask a side question…" : "Ask a follow-up…", text: followUpBinding)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .focused($fieldFocused)
                     .disabled(!canAsk)
                     .onSubmit(submit)
@@ -668,31 +670,31 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                 }
             }
         }
-        .padding(8)
+        .padding(scale.space[2])
     }
 
     private var blockedChip: some View {
         Button { showsBlocked.toggle() } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: "nosign")
                 Text(blocked.label)
             }
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[0])
             .overlay(Capsule().strokeBorder(theme.color("line")))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help("Show what the side agent tried to do")
         .popover(isPresented: $showsBlocked, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 Text("Side questions can only read. Alas skipped:")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                 ForEach(blocked.entries, id: \.title) { entry in
                     Text(entry.count > 1 ? "\(entry.title) ×\(entry.count)" : entry.title)
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-muted"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -706,7 +708,7 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                     .help("Keep this side question as a session that can change files and run commands")
                 }
             }
-            .padding(12)
+            .padding(scale.space[3])
             .frame(width: 320, alignment: .leading)
         }
     }

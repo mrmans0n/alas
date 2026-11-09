@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ACPCodexHooksReviewView: View {
+    @Environment(\.designScale) private var scale
     @ObservedObject var coordinator: ACPCodexHooksReviewCoordinator
     @Environment(\.theme) private var theme
 
@@ -11,7 +12,7 @@ struct ACPCodexHooksReviewView: View {
                 introduction(presentation)
                 if let snapshot = presentation.snapshot {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: scale.space[2]) {
                             ForEach(rows(snapshot)) { row in
                                 CodexHookReviewRow(
                                     hook: row.hook,
@@ -27,16 +28,16 @@ struct ACPCodexHooksReviewView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 2)
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.bottom, scale.space[0])
                     }
                     .frame(maxHeight: 280)
                     .disabled(presentation.isBusy)
                 }
                 if let error = presentation.error {
                     diagnosticMessage(error, isError: true)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.top, scale.space[2])
                 }
                 trustScope(presentation)
                 actions(presentation)
@@ -49,9 +50,9 @@ struct ACPCodexHooksReviewView: View {
                 )
             )
             .background(theme.color("bg-1"))
-            .clipShape(.rect(cornerRadius: 10))
+            .clipShape(.rect(cornerRadius: scale.radius.medium))
             .overlay {
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
             }
             .shadow(color: theme.color("accent").opacity(0.10), radius: 16, y: 4)
@@ -61,14 +62,14 @@ struct ACPCodexHooksReviewView: View {
     }
 
     private func header(_ presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "arrow.turn.down.right")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .frame(width: 18, height: 18)
-                .background(theme.color("accent").opacity(0.18), in: .rect(cornerRadius: 4))
+                .background(theme.color("accent").opacity(0.18), in: .rect(cornerRadius: scale.radius.small))
                 .accessibilityHidden(true)
             Text("Codex hooks")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.6)
                 .textCase(.uppercase)
             Spacer(minLength: 0)
@@ -83,7 +84,7 @@ struct ACPCodexHooksReviewView: View {
                 Text(presentation.isBusy ? "Checking hooks" : "Awaiting review")
                 Text(presentation.isBusy ? "Checking" : "Review")
             }
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .tracking(0.5)
             .textCase(.uppercase)
             Button("Refresh hooks", systemImage: "arrow.clockwise") {
@@ -99,20 +100,20 @@ struct ACPCodexHooksReviewView: View {
         .labelStyle(.iconOnly)
         .buttonStyle(.plain)
         .foregroundStyle(theme.color("accent"))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("accent").opacity(0.08))
     }
 
     private func introduction(_ presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Text("Review startup hooks")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundStyle(theme.color("fg"))
             Text("Choose which hooks to trust before starting your session.")
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Image(systemName: "folder")
                     .accessibilityHidden(true)
                 Text("\(presentation.context.host) · \((presentation.context.cwd as NSString).lastPathComponent)")
@@ -120,30 +121,30 @@ struct ACPCodexHooksReviewView: View {
                 if let home = presentation.snapshot?.codexHome {
                     Text("·")
                     Text(home)
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .truncationMode(.middle)
                         .help(home)
                 }
             }
-            .font(.system(size: 10.5))
+            .font(scale.caption.font(weight: .regular))
             .lineLimit(1)
-            .padding(.top, 4)
+            .padding(.top, scale.space[1])
         }
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private func trustScope(_ presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Image(systemName: "info.circle")
                 .foregroundStyle(theme.color("accent"))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text("Trust applies across projects and Codex CLI.")
                     .foregroundStyle(theme.color("fg"))
                 Text("Codex saves trusted hashes in this Codex home.")
                 DisclosureGroup("Trust scope and paths") {
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         Text("Codex stores trust in CODEX_HOME/config.toml. Trusting a changed hook replaces the previous trusted hash for the same key.")
                         Text("Execution host: \(presentation.context.host)")
                         Text("Working directory: \(presentation.context.cwd)")
@@ -156,31 +157,31 @@ struct ACPCodexHooksReviewView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 5)
+                    .padding(.top, scale.space[1])
                 }
             }
         }
-        .font(.system(size: 10.5))
+        .font(scale.caption.font(weight: .regular))
         .foregroundStyle(theme.color("fg-muted"))
         .lineSpacing(2)
-        .padding(12)
+        .padding(scale.space[3])
     }
 
     private func actions(_ presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Spacer(minLength: 0)
                 continueButton(presentation)
                 trustButton(presentation)
             }
-            VStack(alignment: .trailing, spacing: 8) {
+            VStack(alignment: .trailing, spacing: scale.space[2]) {
                 continueButton(presentation)
                 trustButton(presentation)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1").opacity(0.55))
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
@@ -211,11 +212,11 @@ struct ACPCodexHooksReviewView: View {
         } icon: {
             Image(systemName: isError ? "exclamationmark.circle" : "exclamationmark.triangle")
         }
-        .font(.system(size: 11))
+        .font(scale.metaFont)
         .foregroundStyle(theme.color(isError ? "del" : "warn"))
-        .padding(9)
+        .padding(scale.space[2])
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.color(isError ? "del" : "warn").opacity(0.08), in: .rect(cornerRadius: 7))
+        .background(theme.color(isError ? "del" : "warn").opacity(0.08), in: .rect(cornerRadius: scale.radius.medium))
     }
 
     private struct Diagnostic: Identifiable {
@@ -246,17 +247,18 @@ struct ACPCodexHooksReviewView: View {
 }
 
 private struct CodexHookReviewRow: View {
+    @Environment(\.designScale) private var scale
     let hook: ACPCodexHook
     let isUnique: Bool
     @Binding var isSelected: Bool
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                 Toggle(isOn: $isSelected) {
                     Text("\(eventTitle) · \(handlerTitle)")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
                 }
                 .toggleStyle(.checkbox)
@@ -264,25 +266,25 @@ private struct CodexHookReviewRow: View {
                 .accessibilityLabel("Trust \(eventTitle) hook, \(hook.key)")
                 Spacer(minLength: 0)
                 Text(hook.trustStatus.capitalized)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundStyle(statusColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(statusColor.opacity(0.10), in: .rect(cornerRadius: 4))
+                    .padding(.horizontal, scale.space[2])
+                    .padding(.vertical, scale.space[1])
+                    .background(statusColor.opacity(0.10), in: .rect(cornerRadius: scale.radius.small))
             }
             Text(target)
-                .font(.system(size: 12, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(3)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 Text(hook.source == "sessionFlags" ? "Launch configuration" : hook.source)
                 Text("·")
-                Text(shortKey).font(.system(size: 10.5, design: .monospaced))
+                Text(shortKey).font(scale.caption.font(weight: .regular, design: .monospaced))
                     .truncationMode(.middle)
             }
-            .font(.system(size: 10.5))
+            .font(scale.caption.font(weight: .regular))
             .lineLimit(1)
             .help(hook.key)
             if !hook.isKnown || !isUnique {
@@ -290,9 +292,9 @@ private struct CodexHookReviewRow: View {
                     .foregroundStyle(theme.color("warn"))
             }
             DisclosureGroup("Details") {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text(target)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundStyle(theme.color("fg"))
                     detail("Key", hook.key)
                     detail("Source", "\(hook.sourcePath) · \(hook.source)")
@@ -310,21 +312,21 @@ private struct CodexHookReviewRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 5)
+                .padding(.top, scale.space[1])
             }
         }
-        .font(.system(size: 10.5))
+        .font(scale.caption.font(weight: .regular))
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(10)
-        .background(theme.color(isSelected ? "accent" : "bg-0").opacity(isSelected ? 0.08 : 0.45), in: .rect(cornerRadius: 7))
+        .padding(scale.space[2])
+        .background(theme.color(isSelected ? "accent" : "bg-0").opacity(isSelected ? 0.08 : 0.45), in: .rect(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color(isSelected ? "accent" : "line").opacity(isSelected ? 0.5 : 1), lineWidth: 0.5)
         }
     }
 
     private func detail(_ title: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
             Text(title).foregroundStyle(theme.color("fg-dim")).frame(width: 48, alignment: .leading)
             Text(value).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -379,20 +381,21 @@ private struct CodexHookReviewRow: View {
 }
 
 private struct CodexHookReviewButtonStyle: ButtonStyle {
+    @Environment(\.designScale) private var scale
     let isPrimary: Bool
     @Environment(\.theme) private var theme
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11.5, weight: .medium))
+            .font(scale.meta.font(weight: .medium))
             .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(minHeight: 28)
             .foregroundStyle(theme.color(isPrimary && isEnabled ? "bg-0" : "fg"))
-            .background(theme.color(isPrimary && isEnabled ? "accent" : "bg-3"), in: .rect(cornerRadius: 6))
+            .background(theme.color(isPrimary && isEnabled ? "accent" : "bg-3"), in: .rect(cornerRadius: scale.radius.medium))
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color(isPrimary && isEnabled ? "accent" : "line"), lineWidth: 0.5)
             }
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)

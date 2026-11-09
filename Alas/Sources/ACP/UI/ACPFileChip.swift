@@ -5,6 +5,7 @@ import SwiftUI
 /// with a leading glyph, filename in fg, dir in muted, optional line range
 /// after a hairline divider.
 struct FileChip: View {
+    @Environment(\.designScale) private var scale
     let path: String
     let lines: String?
     let iconSystemName: String?
@@ -27,20 +28,20 @@ struct FileChip: View {
     }
 
     private var label: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if let iconSystemName {
                 Image(systemName: iconSystemName)
-                    .font(.system(size: 9))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("fg-faint"))
             }
             Text(name)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundStyle(theme.color("fg"))
                 .fontWeight(.medium)
                 .lineLimit(1)
             if !dir.isEmpty {
                 Text("· " + dir)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -48,15 +49,15 @@ struct FileChip: View {
             if let lines {
                 Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 10)
                 Text(lines)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
             }
         }
-        .padding(.horizontal, 7)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 20)
         .background(theme.color("bg-0").opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
         .help(path)
     }
 }
