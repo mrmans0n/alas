@@ -39,6 +39,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
+    @Environment(\.designScale) private var designScale
 
     static let composerSpacerHeight: CGFloat = 220
 
@@ -198,7 +199,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small)
                                 Text("Loading earlier messages…")
-                                    .font(.system(size: 11))
+                                    .font(host.designScale.metaFont)
                                     .foregroundStyle(host.theme.color("fg-muted"))
                             }
                             .opacity(isFetching ? 1 : 0)
@@ -366,6 +367,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
         private struct ThemedToken<Base: Equatable>: Equatable {
             let theme: Theme
+            let designScale: DesignScale
             let contentMaxWidth: CGFloat
             let imageReaderID: String?
             let base: Base
@@ -374,7 +376,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         /// Hosted rows capture their environment at build time. Refresh them
         /// when a peer's image-serving capability becomes available too.
         private static func token<T: Equatable>(_ base: T, host: NativePeerTranscriptScroller) -> ACPRowEqualityToken {
-            ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, imageReaderID: host.imageReader?.id, base: base))
+            ACPRowEqualityToken(ThemedToken(theme: host.theme, designScale: host.designScale, contentMaxWidth: host.contentMaxWidth, imageReaderID: host.imageReader?.id, base: base))
         }
 
         /// Each row lives in its own `NSHostingView`, outside the SwiftUI
@@ -385,9 +387,10 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             AnyView(
                 content()
                     .frame(maxWidth: host.contentMaxWidth, alignment: .leading)
-                    .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
+                    .padding(.horizontal, ACPChatLayout.transcriptRowInset)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.theme, host.theme)
+                    .environment(\.designScale, host.designScale)
                     .environment(\.openURL, host.openURL)
                     .environment(\.acpTranscriptImageReader, host.imageReader)
             )

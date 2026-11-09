@@ -577,6 +577,8 @@ enum DesignCaptureBridge {
                 NotificationCenter.default.post(name: .alasOpenSettings, object: section)
             } else if target == "gg-inbox" || target == "gg-landing" {
                 openGGTab(target)
+            } else if target.hasPrefix("peer-") {
+                openPeerView(target)
             } else if let name = localNotification(for: target) {
                 NotificationCenter.default.post(name: name, object: nil)
             }
@@ -599,6 +601,70 @@ enum DesignCaptureBridge {
             } else {
                 seedGGLanding(state: state, projectId: projectId)
                 state.openGGLanding(projectId: projectId)
+            }
+        }
+    }
+
+    @MainActor private static var demoPeer: DesignCaptureDemoPeer?
+
+    /// Installs the scripted paired Macs (see `DesignCaptureDemoPeer`) and opens
+    /// one of their views through the entry points the sidebar uses.
+    private static func openPeerView(_ target: String) {
+        Task { @MainActor in
+            guard let state else { return }
+            let deadline = Date().addingTimeInterval(30)
+            while state.projects.isEmpty {
+                guard Date() < deadline else { return }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            if state.nativePeerSessions == nil {
+                let peer = DesignCaptureDemoPeer()
+                let client = peer.makeClient { send in
+                    NativePeerConsoles(
+                        send: send,
+                        supportsConsoles: { _ in true },
+                        supportsTerminate: { _ in true },
+                        supportsOpen: { _ in true },
+                        makeSurface: { [weak state] executable, args, onExit in
+                            guard let state else { throw CancellationError() }
+                            return try state.terminal.makeTransientSurface(
+                                cfg: state.config.terminal, theme: state.themeStore.current,
+                                executable: executable, args: args, onExit: onExit
+                            )
+                        }
+                    )
+                }
+                demoPeer = peer
+                state.installNativePeerSessionsForTesting(client)
+                client.start()
+                peer.bringOnline()
+            }
+            guard let client = state.nativePeerSessions else { return }
+            @MainActor func eventually(_ condition: @MainActor () -> Bool) async {
+                let limit = Date().addingTimeInterval(20)
+                while !condition(), Date() < limit { try? await Task.sleep(for: .milliseconds(200)) }
+            }
+            let studio = DesignCaptureDemoPeer.studio.serverId
+            func federated(_ id: String) -> String { RemoteFederatedSessionID.compose(serverId: studio, sessionId: id) }
+            await eventually { client.snapshot.groups.flatMap(\.sessions).count >= 4 }
+            switch target {
+            case "peer-session", "peer-diff", "peer-file", "peer-new-session":
+                client.select(federated("invoice"))
+                await eventually { client.transcript?.messages.isEmpty == false }
+                if target == "peer-diff" {
+                    _ = client.open(.diff(path: "src/billing/Invoice.swift", stage: .unstaged))
+                } else if target == "peer-file" {
+                    _ = client.open(.file(path: "src/billing/InvoiceExporter.swift"))
+                } else if target == "peer-new-session", let selection = client.selectedWorktree {
+                    client.beginNewSession(in: selection)
+                }
+            case "peer-permission":
+                client.select(federated("retry"))
+            case "peer-console":
+                await eventually { client.consoles?.consoles[studio]?.isEmpty == false }
+                client.selectConsole(serverId: studio, consoleId: "demo-console-tests")
+            default:
+                break
             }
         }
     }

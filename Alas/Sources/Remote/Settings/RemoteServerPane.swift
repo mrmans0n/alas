@@ -5,6 +5,7 @@ import CoreImage.CIFilterBuiltins
 
 struct RemoteServerPane: View {
     @Bindable var state: AppState
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) var theme
     @State private var pairingCode: String?
     @State private var peerLink = ""
@@ -28,10 +29,10 @@ struct RemoteServerPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Remote").font(.system(size: 18, weight: .semibold))
+                Text("Remote").font(SettingsPaneStyle.titleFont)
                 Text("Watch sessions and answer permission prompts from another device.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
 
                 SettingsGroup(title: "Remote access") {
                     SettingsRow(
@@ -72,7 +73,7 @@ struct RemoteServerPane: View {
                                     copyAddress(fallbackURL)
                                 } label: {
                                     Text("Copy")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(scale.meta.font(weight: .medium))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -86,7 +87,7 @@ struct RemoteServerPane: View {
                                     copyAddress(address.url)
                                 } label: {
                                     Text("Copy")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(scale.meta.font(weight: .medium))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -111,7 +112,7 @@ struct RemoteServerPane: View {
                             desc: "Live remote access works over a trusted LAN or tailnet. Full browser install and offline shell behavior can require HTTPS, depending on the phone browser."
                         ) {
                             Image(systemName: "info.circle")
-                                .font(.system(size: 14))
+                                .font(scale.bodyFont)
                                 .foregroundColor(theme.color("fg-dim"))
                         }
                         SettingsRow(
@@ -177,23 +178,23 @@ struct RemoteServerPane: View {
                             let link = pairingLink(code: code, port: port)
                             QRView(text: link)
                                 .frame(width: 180, height: 180)
-                                .padding(.top, 8)
+                                .padding(.top, scale.space[2])
                             Text(code)
-                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                .font(scale.body.font(weight: .semibold, design: .monospaced))
                                 .textSelection(.enabled)
-                                .padding(.top, 6)
+                                .padding(.top, scale.space[2])
                             AlasButton(title: "Copy code", style: .subtle) {
                                 copyAddress(code)
                             }
-                            .padding(.top, 6)
+                            .padding(.top, scale.space[2])
                             AlasButton(title: "Copy pairing link", style: .subtle) {
                                 copyAddress(link)
                             }
-                            .padding(.top, 6)
+                            .padding(.top, scale.space[2])
                             Text("Refreshes automatically — scan it, paste the copied link into Alas remote on another device, or type the code into a nearby Mac's Peers list.")
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("fg-dim"))
-                                .padding(.bottom, 8)
+                                .padding(.bottom, scale.space[2])
                         }
                     }
                 }
@@ -225,12 +226,12 @@ struct RemoteServerPane: View {
                                     state.revokeRemoteDevice(device.id)
                                 } label: {
                                     Text("Revoke")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(scale.meta.font(weight: .medium))
                                         .foregroundColor(theme.color("warn"))
-                                        .padding(.horizontal, 12)
+                                        .padding(.horizontal, scale.space[3])
                                         .frame(height: 28)
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 6)
+                                            RoundedRectangle(cornerRadius: scale.radius.medium)
                                                 .strokeBorder(theme.color("warn").opacity(0.4), lineWidth: 0.5)
                                         )
                                 }
@@ -246,12 +247,12 @@ struct RemoteServerPane: View {
                                 state.revokeAllRemoteDevices()
                             } label: {
                                 Text("Revoke All")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(scale.meta.font(weight: .medium))
                                     .foregroundColor(theme.color("warn"))
-                                    .padding(.horizontal, 12)
+                                    .padding(.horizontal, scale.space[3])
                                     .frame(height: 28)
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
+                                        RoundedRectangle(cornerRadius: scale.radius.medium)
                                             .strokeBorder(theme.color("warn").opacity(0.4), lineWidth: 0.5)
                                     )
                             }
@@ -323,10 +324,10 @@ struct RemoteServerPane: View {
                         }
                         if let peerError {
                             Text(peerError)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("warn"))
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 8)
+                                .padding(.horizontal, scale.space[3])
+                                .padding(.bottom, scale.space[2])
                         }
                     }
                     .task(id: state.config.remote.discoverable) {
@@ -344,7 +345,7 @@ struct RemoteServerPane: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         // Tailscale may log in or out, or gain HTTPS certificates, while the
         // pane is open; re-check until it closes.
@@ -432,7 +433,7 @@ struct RemoteServerPane: View {
         SettingsGroup(title: "Tailscale") {
             SettingsRow(name: "Status", desc: tailscaleStatusDescription(tailscale)) {
                 Text(tailscale == nil ? "Not running" : "Connected")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color(tailscale == nil ? "warn" : "add"))
             }
             SettingsRow(
@@ -607,11 +608,11 @@ struct RemoteServerPane: View {
     private func nearbyAction(_ instance: RemoteDiscoveredInstance) -> some View {
         if selectedNearbyId == instance.id, nearbyApprovalIsActive {
             Text("Pairing…")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
         } else if state.remotePeers.peers.contains(where: { $0.serverId == instance.id }) {
             Text("Paired")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
         } else if case .legacy(let instanceID, _) = state.nearbyApprovalState,
                   instanceID == instance.id, selectedNearbyId == instance.id {
@@ -677,7 +678,7 @@ struct RemoteServerPane: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 HStack(alignment: .top, spacing: 8) {
                     Text(nearbyApprovalMessage(now: context.date))
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundStyle(theme.color("fg-dim"))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -687,7 +688,7 @@ struct RemoteServerPane: View {
                             .accessibilityLabel("Cancel nearby pairing request")
                     }
                 }
-                .padding(12)
+                .padding(scale.space[3])
             }
         }
     }
