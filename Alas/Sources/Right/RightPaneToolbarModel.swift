@@ -3,7 +3,6 @@ import Foundation
 /// The trailing accessory of the right pane toolbar, which differs per tab.
 enum RightPaneToolbarTrailing: Equatable {
     case none
-    case diffTotals(add: Int, del: Int)
     case search
 }
 
@@ -47,13 +46,13 @@ enum RightPaneToolbarModel {
         }
     }
 
-    static func trailing(for tab: RightPaneTab, totalAdd: Int, totalDel: Int) -> RightPaneToolbarTrailing {
+    /// Changes has none: its diff totals already sit on the Working Tree
+    /// header and each file row, so the row keeps its width for the branch.
+    static func trailing(for tab: RightPaneTab) -> RightPaneToolbarTrailing {
         switch tab {
-        case .changes:
-            return (totalAdd == 0 && totalDel == 0) ? .none : .diffTotals(add: totalAdd, del: totalDel)
         case .files:
             return .search
-        case .agent, .run, .schedules, .device:
+        case .changes, .agent, .run, .schedules, .device:
             return .none
         }
     }
