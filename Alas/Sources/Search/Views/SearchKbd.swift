@@ -5,19 +5,20 @@ import SwiftUI
 struct SearchKbd: View {
     let label: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text(label)
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 3)
+            .padding(.horizontal, scale.space[1])
             .frame(minWidth: 16, minHeight: 16)
             .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                     .fill(theme.color("bg-3"))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                     .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
             )
     }

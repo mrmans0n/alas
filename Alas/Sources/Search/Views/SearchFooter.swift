@@ -7,31 +7,32 @@ struct SearchFooter: View {
     @Bindable var model: SearchModel
     let showsKindToggle: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 16) {
             HStack(spacing: 5) {
                 SearchKbd(label: "↵")
-                Text("open").font(.system(size: 10.5))
+                Text("open").font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
             }
             if showsKindToggle {
                 HStack(spacing: 5) {
                     SearchKbd(label: "⇥")
                     Text(model.kind == .files ? "content" : "files")
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
                 }
             }
             HStack(spacing: 5) {
                 SearchKbd(label: "esc")
-                Text("close").font(.system(size: 10.5))
+                Text("close").font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-faint"))
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.5))
         .overlay(
             Rectangle()

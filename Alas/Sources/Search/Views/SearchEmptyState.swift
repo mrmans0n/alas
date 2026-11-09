@@ -3,26 +3,27 @@ import SwiftUI
 struct SearchEmptyState: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: 22, weight: .light)) // design-literal: empty-state icon
                 .foregroundColor(theme.color("fg-faint"))
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(scale.emphasisFont)
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.top, 4)
+                .padding(.top, scale.space[1])
             Text(subtitle)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
                 .lineSpacing(2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.vertical, 60)
-        .padding(.horizontal, 30)
+        .padding(.vertical, 60) // design-literal: empty-state breathing room
+        .padding(.horizontal, scale.space[5])
     }
 
     private var title: String {

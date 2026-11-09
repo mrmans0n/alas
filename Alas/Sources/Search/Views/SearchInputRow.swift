@@ -4,16 +4,17 @@ struct SearchInputRow: View {
     @Bindable var model: SearchModel
     @FocusState.Binding var inputFocused: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .regular))
+                .font(scale.meta.font(weight: .regular))
                 .foregroundColor(theme.color("fg-dim"))
             TextField(placeholderText, text: $model.query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
-                .font(.system(size: 15))
+                .font(.system(size: 15)) // design-literal: search query field
                 .foregroundColor(theme.color("fg"))
                 .autocorrectionDisabled(true)
             if model.isLoading {
@@ -26,7 +27,7 @@ struct SearchInputRow: View {
                     model.query = ""
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(scale.glyph.font(weight: .bold))
                         .frame(width: 18, height: 18)
                         .foregroundColor(theme.color("fg-dim"))
                         .background(Circle().fill(theme.color("bg-3")))
@@ -37,12 +38,12 @@ struct SearchInputRow: View {
                 tab("Files",   .files)
                 tab("Content", .content)
             }
-            .padding(2)
+            .padding(scale.space[0])
             .background(theme.color("bg-2"))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[3])
         .overlay(
             Rectangle()
                 .fill(theme.color("line-soft"))
@@ -65,12 +66,12 @@ struct SearchInputRow: View {
             model.kind = k
         } label: {
             Text(label)
-                .font(.system(size: 10.5, weight: .medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+                .font(scale.captionFont)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[1])
                 .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-faint"))
                 .background(
-                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                    RoundedRectangle(cornerRadius: scale.radius.small, style: .continuous)
                         .fill(isOn ? theme.color("bg-3") : Color.clear)
                 )
         }

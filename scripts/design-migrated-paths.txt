@@ -264,3 +264,10 @@ Alas/Sources/UI/Kbd.swift
 Alas/Sources/UI/Seg.swift
 Alas/Sources/UI/ToolbarControlPressStyle.swift
 Alas/Sources/UI/TrafficLights.swift
+Alas/Sources/Search/Views/ContentResultGroup.swift
+Alas/Sources/Search/Views/FileResultRow.swift
+Alas/Sources/Search/Views/ScopeRow.swift
+Alas/Sources/Search/Views/SearchEmptyState.swift
+Alas/Sources/Search/Views/SearchFooter.swift
+Alas/Sources/Search/Views/SearchInputRow.swift
+Alas/Sources/Search/Views/SearchKbd.swift
