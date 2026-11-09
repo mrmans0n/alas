@@ -43,18 +43,10 @@ struct RightPaneToolbarModelTests {
         #expect(leading(.run, runningScriptNames: []) == "Nothing running")
     }
 
-    @Test func onlyChangesShowsDiffTotals() {
-        #expect(RightPaneToolbarModel.trailing(for: .changes, totalAdd: 412, totalDel: 88) == .diffTotals(add: 412, del: 88))
-        #expect(RightPaneToolbarModel.trailing(for: .agent, totalAdd: 412, totalDel: 88) == .none)
-        #expect(RightPaneToolbarModel.trailing(for: .run, totalAdd: 412, totalDel: 88) == .none)
-    }
-
-    @Test func changesHidesTotalsWhenThereIsNoDiff() {
-        #expect(RightPaneToolbarModel.trailing(for: .changes, totalAdd: 0, totalDel: 0) == .none)
-    }
-
-    @Test func filesOffersSearch() {
-        #expect(RightPaneToolbarModel.trailing(for: .files, totalAdd: 0, totalDel: 0) == .search)
+    @Test(arguments: [RightPaneTab.changes, .agent, .run, .schedules, .device])
+    func onlyFilesHasATrailingAccessory(tab: RightPaneTab) {
+        #expect(RightPaneToolbarModel.trailing(for: tab) == .none)
+        #expect(RightPaneToolbarModel.trailing(for: .files) == .search)
     }
 
     @Test func onlyFilesShowsTheOverflowMenu() {

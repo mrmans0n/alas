@@ -8,8 +8,6 @@ struct RightPaneToolbar: View {
     /// Set while a plugin panel is shown: the row names it and drops the tab's controls.
     var panelTitle: String?
     var branch: String = ""
-    var totalAdd: Int = 0
-    var totalDel: Int = 0
     var activeAgentCount: Int = 0
     var waitingAgentCount: Int = 0
     var runningScriptNames: [String] = []
@@ -112,17 +110,9 @@ struct RightPaneToolbar: View {
 
     @ViewBuilder
     private var trailing: some View {
-        switch RightPaneToolbarModel.trailing(for: tab, totalAdd: totalAdd, totalDel: totalDel) {
+        switch RightPaneToolbarModel.trailing(for: tab) {
         case .none:
             EmptyView()
-        case .diffTotals(let add, let del):
-            HStack(spacing: 6) {
-                Text("+\(add)").foregroundColor(theme.color("add"))
-                Text("−\(del)").foregroundColor(theme.color("del"))
-            }
-            .font(scale.meta.font(design: .monospaced))
-            .lineLimit(1)
-            .fixedSize()
         case .search:
             ToolbarBtn(icon: "search", tooltip: "Search files", action: onSearch)
         }

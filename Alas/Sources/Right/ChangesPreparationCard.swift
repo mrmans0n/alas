@@ -18,10 +18,10 @@ enum ChangesPreparationCardText {
         return review + landing.detail
     }
 
-    static func reviewStats(fileCount: Int, additions: Int?, deletions: Int?) -> String {
-        let files = fileCount == 1 ? "1 file" : "\(fileCount) files"
-        guard let additions, let deletions else { return files }
-        return "\(files) · +\(additions) −\(deletions)"
+    /// The line totals sit on the Working Tree header just below, so the card
+    /// counts files only.
+    static func reviewStats(fileCount: Int) -> String {
+        fileCount == 1 ? "1 file" : "\(fileCount) files"
     }
 
     static func draftStats(stagedCount: Int, additions: Int, deletions: Int) -> String {
@@ -289,11 +289,7 @@ struct ChangesPreparationCard: View {
                             .foregroundColor(ink)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(ChangesPreparationCardText.reviewStats(
-                            fileCount: action.fileCount,
-                            additions: action.additions,
-                            deletions: action.deletions
-                        ))
+                        Text(ChangesPreparationCardText.reviewStats(fileCount: action.fileCount))
                         .font(scale.metaFont.monospacedDigit())
                         .foregroundColor(ink.opacity(0.72))
                         .lineLimit(1)

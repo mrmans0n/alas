@@ -211,19 +211,8 @@ struct ReviewChangesModelsTests {
     }
 
     @Test func preparationStatsFormatFileAndLineCounts() {
-        let single = ChangesPreparationCardText.reviewStats(
-            fileCount: 1,
-            additions: 3,
-            deletions: 1
-        )
-        #expect(single == "1 file · +3 −1")
-
-        let duplicatePath = ChangesPreparationCardText.reviewStats(
-            fileCount: 2,
-            additions: nil,
-            deletions: nil
-        )
-        #expect(duplicatePath == "2 files")
+        #expect(ChangesPreparationCardText.reviewStats(fileCount: 1) == "1 file")
+        #expect(ChangesPreparationCardText.reviewStats(fileCount: 2) == "2 files")
     }
 
     @Test func preparationStatsFormatDraftCounts() {
