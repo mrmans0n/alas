@@ -14,11 +14,17 @@ struct DeviceScreenView: NSViewRepresentable {
     /// False while an agent drives: clicks and keys stay off the simulator.
     var allowsInput = true
     var onBlockedClick: () -> Void = {}
+    /// A dropped `.app` the simulator can run.
+    var onDropApp: (URL) -> Void = { _ in }
+    /// Whether such a drag is over the screen.
+    var onDropTargeted: (Bool) -> Void = { _ in }
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
         view.onStopped = onStopped
         view.onBlockedClick = onBlockedClick
+        view.onDropApp = onDropApp
+        view.onDropTargeted = onDropTargeted
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -27,6 +33,8 @@ struct DeviceScreenView: NSViewRepresentable {
     func updateNSView(_ view: DeviceScreenNSView, context: Context) {
         view.onStopped = onStopped
         view.onBlockedClick = onBlockedClick
+        view.onDropApp = onDropApp
+        view.onDropTargeted = onDropTargeted
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -46,6 +54,8 @@ final class DeviceScreenNSView: NSView {
     private var heldKeys = HeldSimulatorKeys()
     var onStopped: (String) -> Void = { _ in }
     var onBlockedClick: () -> Void = {}
+    var onDropApp: (URL) -> Void = { _ in }
+    var onDropTargeted: (Bool) -> Void = { _ in }
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
     var allowsInput = true {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
@@ -57,6 +67,7 @@ final class DeviceScreenNSView: NSView {
         layer = CALayer()
         displayLayer.videoGravity = .resizeAspect
         layer?.addSublayer(displayLayer)
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -64,6 +75,36 @@ final class DeviceScreenNSView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// One `.app` the simulator can run; anything else isn't offered a drop.
+    private func droppedApp(_ info: NSDraggingInfo) -> URL? {
+        let urls = info.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]
+        guard let urls, urls.count == 1, (try? SimulatorAppBundle.read(urls[0])) != nil else { return nil }
+        return urls[0]
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard droppedApp(sender) != nil else { return [] }
+        guard allowsInput else {
+            onBlockedClick()
+            return []
+        }
+        onDropTargeted(true)
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onDropTargeted(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onDropTargeted(false)
+        guard allowsInput, let app = droppedApp(sender) else { return false }
+        onDropApp(app)
+        return true
+    }
 
     override func layout() {
         super.layout()
