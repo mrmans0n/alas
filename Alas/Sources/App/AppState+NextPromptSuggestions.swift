@@ -282,7 +282,13 @@ extension AppState {
         }
     }
 
-    func invalidateAllNextPromptContexts() {
+    /// Memory pressure unloads the local model, so its suggestions go; an agent's
+    /// suggestion is only text and stays, with the composer context that shows it.
+    func relieveNextPromptMemoryPressure() {
+        guard config.nextPromptSource == .onDevice else {
+            invalidateLocalModelSuggestions()
+            return
+        }
         nextPromptCoordinator.invalidateAll()
         clearNextPromptPresentationContext()
     }
