@@ -378,6 +378,7 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case listCommitFiles(sessionId: String, sha: String)
     case commitFileDiff(sessionId: String, sha: String, path: String)
     case readFile(sessionId: String, path: String)
+    case readTranscriptImage(sessionId: String, path: String)
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
@@ -566,6 +567,9 @@ extension RemoteClientMessage: Codable {
             self = .commitFileDiff(sessionId: try c.decode(String.self, forKey: .sessionId),
                                    sha: try c.decode(String.self, forKey: .sha),
                                    path: try c.decode(String.self, forKey: .path))
+        case "readTranscriptImage":
+            self = .readTranscriptImage(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                        path: try c.decode(String.self, forKey: .path))
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
@@ -754,6 +758,10 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(sha, forKey: .sha)
             try c.encode(path, forKey: .path)
+        case .readTranscriptImage(let s, let path):
+            try c.encode("readTranscriptImage", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(path, forKey: .path)
         case .readFile(let s, let path):
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -821,6 +829,8 @@ extension RemoteClientMessage {
             return "listCommitFiles\u{0}\(sessionId)\u{0}\(sha)"
         case .commitFileDiff(let sessionId, let sha, let path):
             return "commitFileDiff\u{0}\(sessionId)\u{0}\(sha)\u{0}\(path)"
+        case .readTranscriptImage(let sessionId, let path):
+            return "readTranscriptImage\u{0}\(sessionId)\u{0}\(path)"
         case .readFile(let sessionId, let path):
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
         default:
@@ -945,6 +955,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
         byteSize: Int?, message: String?)
     /// A file's raw bytes, the answer to `HostWorktreeRead.fileBytes`.
     case fileBytes(sessionId: String, path: String, data: Data, byteSize: Int)
+    /// Session-scoped browser image response, separate from editor file replies.
+    case transcriptImage(sessionId: String, path: String, data: Data?)
     /// The answer to `HostWorktreeRead.fileHistory`: `truncated` when more commits touched it.
     case fileHistory(sessionId: String, path: String, entries: [HostFileHistoryEntry], truncated: Bool)
     case fileHistoryFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
@@ -1237,6 +1249,10 @@ extension RemoteServerMessage: Codable {
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 byteSize: try c.decodeIfPresent(Int.self, forKey: .byteSize),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "transcriptImage":
+            self = .transcriptImage(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                    path: try c.decode(String.self, forKey: .path),
+                                    data: try c.decodeIfPresent(Data.self, forKey: .data))
         case "fileBytes":
             self = .fileBytes(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1532,6 +1548,11 @@ extension RemoteServerMessage: Codable {
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(byteSize, forKey: .byteSize)
             try c.encodeIfPresent(message, forKey: .message)
+        case .transcriptImage(let s, let path, let data):
+            try c.encode("transcriptImage", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(data, forKey: .data)
         case .fileBytes(let s, let path, let data, let byteSize):
             try c.encode("fileBytes", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1590,6 +1611,8 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
     /// Hosts that serve `readWorktree`.
     public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve transcript image files, including paths outside the worktree.
+    public static let transcriptImagesV1 = "host.transcriptImages.v1"
     /// Hosts that serve the `fileBytes` read of `readWorktree`.
     public static let worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"
     /// Hosts whose `fileBytes` read also takes the stash, checkpoint and
@@ -1653,7 +1676,7 @@ public enum HostProtocolCapability: Sendable {
     public static let delegationReverseV1 = "host.delegation.reverse.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
-        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,
         worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1, delegationV1,
     ]
     /// What only a headless host serves.

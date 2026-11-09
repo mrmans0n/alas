@@ -405,6 +405,9 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     /// A file's raw bytes, for a preview: the working tree's when `revision`
     /// is nil. Answered as `.fileBytes` or `.fileUnavailable`.
     case fileBytes(path: String, revision: HostFileRevision?)
+    /// An image referenced by a transcript, including screenshots outside the worktree.
+    /// Answered as `.fileBytes` or `.fileUnavailable`.
+    case transcriptImage(path: String)
     /// The commits that touched a file, newest first and following renames,
     /// up to `RemoteWorktreeFileAccess.maxHistoryEntries`. Answered as
     /// `.fileHistory` or `.fileHistoryFailed`.

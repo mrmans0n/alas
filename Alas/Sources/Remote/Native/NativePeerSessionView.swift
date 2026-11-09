@@ -65,6 +65,7 @@ struct NativePeerSessionView: View {
             fetchOlder: { _ = client.fetchOlder() },
             onQuote: { composerActions.quote($0) },
             onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil,
+            imageReader: client.transcriptImageReader(),
             visualActions: ACPVisualAidActions(
                 answer: { [client] id, answer in
                     await client.answerVisualAid(id, answer: answer, sessionId: transcript.sessionId)

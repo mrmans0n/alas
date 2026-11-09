@@ -358,6 +358,52 @@ struct ACPToolCallPresentationTests {
         #expect(image.size.height > 0)
     }
 
+    @Test("absolute image resources load outside the worktree", arguments: [false, true])
+    func absoluteImageResourceLoadsOutsideWorktree(fileURI: Bool) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-tool-asset-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let imageURL = root.appendingPathComponent("screenshot.png")
+        try writePNG(width: 12, height: 8, to: imageURL)
+        let asset = ACPMessage.ToolCallAsset.image(
+            uri: fileURI ? imageURL.absoluteString : imageURL.path, mimeType: "image/png")
+
+        let worktree = root.appendingPathComponent("worktree", isDirectory: true)
+        #expect(asset.canLoadImage(trustedRoot: worktree))
+        let image = try #require(asset.loadedImage(trustedRoot: worktree))
+        #expect(image.size.width == 12)
+        #expect(image.size.height == 8)
+    }
+
+    @Test("peer images use the host reader when embedded bytes are unavailable", arguments: [nil, "", "invalid"] as [String?])
+    func peerImageUsesHostReader(embeddedData: String?) async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("peer-image-\(UUID()).png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try writePNG(width: 12, height: 8, to: file)
+        let bytes = try Data(contentsOf: file)
+        let source = file.path
+        let asset = ACPMessage.ToolCallAsset.image(data: embeddedData, uri: source, mimeType: "image/png")
+        let reader = ACPTranscriptImageReader(id: "test-peer") { path in
+            #expect(path == source)
+            return bytes
+        }
+        // Remove the local file so only the peer's bytes can produce an image.
+        try FileManager.default.removeItem(at: file)
+        let image = try #require(await asset.loadedTranscriptImage(
+            trustedRoot: URL(fileURLWithPath: "/repo"), reader: reader))
+        #expect(image.size.width == 12)
+        #expect(asset.transcriptImageCacheKey(trustedRoot: nil, reader: reader)
+            != asset.transcriptImageCacheKey(trustedRoot: nil, reader: ACPTranscriptImageReader(id: "other-peer") { _ in nil }))
+    }
+
+    @Test("remote sessions do not load image paths from the local machine")
+    func remoteImageDoesNotLoadLocalFile() {
+        let root = URL(fileURLWithPath: "/.alas-remote/example/repo")
+        let asset = ACPMessage.ToolCallAsset.image(uri: "/tmp/screenshot.png", mimeType: "image/png")
+        #expect(!asset.canLoadImage(trustedRoot: root))
+    }
+
     @Test("the one-line target drops a repeated verb and falls back to the first location", arguments: [
         ("Read host/engine.test.ts", [String](), "Read", "host/engine.test.ts"),
         ("git status --short", [], "Ran", "git status --short"),

@@ -1189,6 +1189,9 @@ struct RemoteProtocolTests {
 
         let readFile = RemoteClientMessage.readFile(sessionId: "s1", path: "README.md")
         #expect(try roundTrip(readFile) == readFile)
+        let image = RemoteClientMessage.readTranscriptImage(sessionId: "s1", path: "/tmp/shot.png")
+        #expect(try roundTrip(image) == image)
+        #expect(image.fileRequestDedupKey == "readTranscriptImage\u{0}s1\u{0}/tmp/shot.png")
 
         let object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(fileDiff)) as? [String: Any])
@@ -1211,6 +1214,10 @@ struct RemoteProtocolTests {
         let changeFailure = RemoteServerMessage.changeListFailed(
             sessionId: "s1", reason: .worktreeUnavailable, message: nil)
         #expect(try roundTrip(changeFailure) == changeFailure)
+        for data in [nil, Data([137, 80, 78, 71])] as [Data?] {
+            let image = RemoteServerMessage.transcriptImage(sessionId: "s1", path: "/tmp/shot.png", data: data)
+            #expect(try roundTrip(image) == image)
+        }
 
         let hunk = RemoteDiffHunk(
             header: "@@ -1,2 +1,3 @@", oldStart: 1, newStart: 1,

@@ -142,6 +142,10 @@ final class NativePeerHosts {
 
     /// The reply a session in `worktree` would get for `read`. Nil when the
     /// host cannot be read, refused, or did not answer in time.
+    func supportsTranscriptImages(serverId: String) -> Bool {
+        canRead(serverId: serverId) && supports(serverId, HostProtocolCapability.transcriptImagesV1)
+    }
+
     func read(_ read: HostWorktreeRead, in worktree: PeerHostWorktree, serverId: String) async -> RemoteServerMessage? {
         guard canRead(serverId: serverId), let channel = channels.channel(for: serverId) else { return nil }
         guard case .worktreeRead(let reply) = await channel.request(.readWorktree(worktree: Self.ref(worktree), read: read)) else {

@@ -29,14 +29,14 @@ final class ACPThumbnailImageCache: @unchecked Sendable {
 
     func image(
         for key: String,
-        load: @escaping @Sendable () -> NSImage?
+        load: @escaping @Sendable () async -> NSImage?
     ) async -> NSImage? {
         if let cached = cachedImage(for: key) {
             return cached
         }
 
         let loaded = await Task.detached(priority: .utility) {
-            load()
+            await load()
         }.value
 
         if let loaded {
@@ -48,7 +48,7 @@ final class ACPThumbnailImageCache: @unchecked Sendable {
 
 struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View, Failure: View>: View {
     let cacheKey: String
-    let loadImage: @Sendable () -> NSImage?
+    let loadImage: @Sendable () async -> NSImage?
     @ViewBuilder var thumbnail: (NSImage) -> Thumbnail
     @ViewBuilder var placeholder: () -> Placeholder
     @ViewBuilder var failure: () -> Failure
@@ -58,7 +58,7 @@ struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View, Failure: View>: Vi
 
     init(
         cacheKey: String,
-        loadImage: @escaping @Sendable () -> NSImage?,
+        loadImage: @escaping @Sendable () async -> NSImage?,
         @ViewBuilder thumbnail: @escaping (NSImage) -> Thumbnail,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
         @ViewBuilder failure: @escaping () -> Failure
@@ -102,7 +102,7 @@ struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View, Failure: View>: Vi
 extension ACPCachedThumbnail where Failure == Placeholder {
     init(
         cacheKey: String,
-        loadImage: @escaping @Sendable () -> NSImage?,
+        loadImage: @escaping @Sendable () async -> NSImage?,
         @ViewBuilder thumbnail: @escaping (NSImage) -> Thumbnail,
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {

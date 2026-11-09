@@ -781,6 +781,29 @@ extension AlasCoreContext {
         }
     }
 
+    @_spi(Testing) public func remoteTranscriptImage(sessionId: String, path: String) async -> RemoteFileBytesResult {
+        await remoteTranscriptImage(in: remoteWorktreeContext(sessionId: sessionId), path: path)
+    }
+
+    func remoteTranscriptImage(in context: RemoteWorktreeContextResult, path: String) async -> RemoteFileBytesResult {
+        let worktree: Worktree
+        switch context {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, byteSize: nil, message: nil)
+        case .found(let found): worktree = found
+        }
+        guard TranscriptImageFile.resolve(path, root: worktree.path) != nil else {
+            return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
+        guard let data = await TranscriptImageFile.read(path, root: worktree.path) else {
+            return .failure(reason: .notFound, byteSize: nil, message: nil)
+        }
+        guard TranscriptImageFile.isImage(data) else {
+            return .failure(reason: .binary, byteSize: data.count, message: nil)
+        }
+        return .success(data: data)
+    }
+
     @_spi(Testing) public func remoteFileBytes(sessionId: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
         await remoteFileBytes(in: remoteWorktreeContext(sessionId: sessionId), path: path, revision: revision)
     }
@@ -1079,6 +1102,9 @@ extension AlasCoreContext {
         }
         func remoteFileContents(sessionId _: String, path: String) async -> RemoteFileContentsResult {
             await core.remoteFileContents(in: .found(worktree), path: path)
+        }
+        func remoteTranscriptImage(sessionId _: String, path: String) async -> RemoteFileBytesResult {
+            await core.remoteTranscriptImage(in: .found(worktree), path: path)
         }
         func remoteFileBytes(sessionId _: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
             await core.remoteFileBytes(in: .found(worktree), path: path, revision: revision)
