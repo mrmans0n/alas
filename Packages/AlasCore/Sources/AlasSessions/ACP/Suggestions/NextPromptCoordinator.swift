@@ -277,6 +277,20 @@ public final class NextPromptCoordinator: ChangeTracking {
         invalidate(incarnation: activeIncarnation)
     }
 
+    /// Drops the turns one engine is generating or offering; the other engine's
+    /// keep theirs. Pending turns resolve their engine when they are next considered.
+    public func invalidateAll(source: NextPromptSource) {
+        let affected = opportunities.values.filter { opportunity in
+            switch opportunity.state {
+            case .pending: false
+            case .generating(let id), .offered(let id, _): id.source == source
+            }
+        }
+        for opportunity in affected {
+            invalidate(incarnation: opportunity.turn.incarnation, reason: "\(source.rawValue) invalidated")
+        }
+    }
+
     public func invalidateAll() {
         let retained = opportunities.values.map(\.turn)
         for turn in retained { nextPromptLogger.notice("prompt \(turn.promptID) dropped: invalidate all") }

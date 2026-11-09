@@ -125,7 +125,7 @@ extension AppState {
     func updateLocalTextModelState(_ value: LocalTextModelState) {
         guard value != localTextModelState else { return }
         if localTextSupported {
-            if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled { nextPromptCoordinator.invalidateAll() }
+            if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled { invalidateLocalModelSuggestions() }
             if config.sessionSummariesEnabled || sessionSummariesRuntimeEnabled { sessionSummaryCoordinator.teardown() }
         }
         localTextModelGeneration &+= 1

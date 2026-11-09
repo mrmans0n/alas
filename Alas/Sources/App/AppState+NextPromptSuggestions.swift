@@ -38,11 +38,8 @@ extension AppState {
                 for await value in await runtime.states() {
                     guard !Task.isCancelled else { return }
                     guard let self else { return }
-                    // Only the local model's suggestions depend on its runtime; under
-                    // automatic, the agents' suggestions must survive its failures.
-                    if value == .unavailable || value == .retryRequired,
-                       self.nextPromptUsesLocalModel, self.config.nextPromptSource == .onDevice {
-                        self.nextPromptCoordinator.invalidateAll()
+                    if value == .unavailable || value == .retryRequired, self.nextPromptUsesLocalModel {
+                        self.invalidateLocalModelSuggestions()
                     }
                     self.nextPromptInferenceState = value
                 }
@@ -275,6 +272,16 @@ extension AppState {
         nextPromptCoordinator.reconsider(incarnation: incarnation)
     }
 
+    /// Only the local model's suggestions depend on its runtime and files;
+    /// the agents' suggestions survive its failures and downloads.
+    func invalidateLocalModelSuggestions() {
+        if config.nextPromptSource == .onDevice {
+            nextPromptCoordinator.invalidateAll()
+        } else {
+            nextPromptCoordinator.invalidateAll(source: .onDevice)
+        }
+    }
+
     func invalidateAllNextPromptContexts() {
         nextPromptCoordinator.invalidateAll()
         clearNextPromptPresentationContext()
@@ -325,10 +332,9 @@ extension AppState {
     func nextPromptSnapshot(session: ACPSession, turn: NextPromptCompletedTurn,
                             environment: NextPromptEligibilitySnapshot.Environment) -> NextPromptEligibilitySnapshot? {
         var environment = environment
+        let usesAgent = config.nextPromptSource.resolved(agentPredicts: session.supportsPredictedPrompt) == .agent
         environment.source = config.nextPromptSource
-        environment.isEnabled = config.nextPromptSource.resolved(agentPredicts: session.supportsPredictedPrompt) == .agent
-            ? nextPromptUsesAgent
-            : nextPromptRuntimeEnabled && nextPromptUsesLocalModel
+        environment.isEnabled = usesAgent ? nextPromptUsesAgent : nextPromptRuntimeEnabled && nextPromptUsesLocalModel
         environment.hasVerifiedModel = localTextModelState == .ready
         // Requests can queue behind a native drain. The async state observer
         // may still carry .unloading after enable/retry has established readiness;
@@ -338,7 +344,8 @@ extension AppState {
         environment.hasForkOrDelegationWork = environment.hasForkOrDelegationWork || nextPromptHasDelegatedWork(parentID: session.id)
         environment.composerEpoch = nextPromptComposerEpochs[session.incarnation, default: 0]
         environment.settingsGeneration = nextPromptSettingsGeneration
-        environment.modelGeneration = localTextModelGeneration
+        // The local model's state changes must not make an agent's suggestion stale.
+        environment.modelGeneration = usesAgent ? 0 : localTextModelGeneration
         return .live(session: session, turn: turn, environment: environment)
     }
 }

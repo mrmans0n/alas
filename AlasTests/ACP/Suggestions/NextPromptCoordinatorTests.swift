@@ -382,6 +382,20 @@ struct NextPromptCoordinatorTests {
         #expect(fixture.generator.unloads == 0)
     }
 
+    @Test func theLocalModelsInvalidationLeavesTheAgentsOffer() async throws {
+        let prediction = NextPromptAgentPrediction()
+        let fixture = Fixture(agent: prediction)
+        prediction.expect(promptID: fixture.promptID, requestID: "current")
+        prediction.receive(.init(id: "current", text: "Run the tests."))
+        fixture.coordinator.completed(fixture.turn)
+        await fixture.coordinator.generationTask?.value
+
+        fixture.coordinator.invalidateAll(source: .onDevice)
+        #expect(fixture.coordinator.offer != nil)
+        fixture.coordinator.invalidateAll(source: .agent)
+        #expect(fixture.coordinator.offer == nil)
+    }
+
     @Test func anAgentTurnWaitsPastTheLocalDeadlineButNotPastItsOwn() async throws {
         let clock = ManualClock()
         let prediction = NextPromptAgentPrediction()
