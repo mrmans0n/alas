@@ -12,6 +12,8 @@
 # run-script, agent-launcher, file-search) opens that dialog before the capture.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
+# ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
+# where {wt} is the selected worktree) runs before the capture.
 # ALAS_CAPTURE_EXPECT_SIZE (such as 1648x1063, in points) fails the capture when
 # the window has another size. The size is also written to window-size.txt.
 set -euo pipefail
@@ -240,6 +242,24 @@ visit_worktrees() {
   "$cli" wt switch "$selected" >/dev/null
 }
 (visit_worktrees)
+
+# ALAS_CAPTURE_CLI runs one alas CLI command in the selected worktree before
+# the capture, such as "open {wt}/src/billing/Invoice.swift" or "review".
+if [[ -n "${ALAS_CAPTURE_CLI:-}" ]]; then
+  (
+    cd "$profile/fixture/lantern"
+    export ALAS_SOCKET_PATH="$runtime_dir/hooks/pid-$app_pid"
+    # The seed's selected worktree, where the transcript lives.
+    selected_path="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spaces"][0]["lastSelectedWorktreeId"])' "$profile/seed/spaces.json")"
+    cd "$selected_path"
+    "$cli" wt switch "$(git -C "$selected_path" branch --show-current)" >/dev/null
+    /bin/sleep 1
+    # {wt} stands for the selected worktree's path.
+    read -ra cli_args <<<"${ALAS_CAPTURE_CLI//\{wt\}/$selected_path}"
+    "$cli" "${cli_args[@]}" >/dev/null || echo "warning: alas ${ALAS_CAPTURE_CLI} failed" >&2
+  )
+  /bin/sleep 2
+fi
 
 # ALAS_CAPTURE_DIALOG opens a dialog through the Debug build's capture bridge
 # (DesignCaptureBridge in AlasApp.swift) once the worktrees are visited.

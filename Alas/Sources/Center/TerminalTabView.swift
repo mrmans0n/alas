@@ -349,15 +349,16 @@ private struct LeafFramesKey: PreferenceKey {
 }
 
 private struct TerminalRecoverPlaceholder: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let worktreeId: String
     let tabId: TabID
     @Environment(\.theme) var theme
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: scale.space[3]) {
             Text("Terminal closed")
-                .font(.system(size: 14))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg-muted"))
             AlasButton(title: "Open new terminal", style: .primary) {
                 Task { _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId) }
@@ -371,12 +372,13 @@ private struct TerminalRecoverPlaceholder: View {
 /// Shown on the host while a paired Mac controls this console. Local input
 /// is suppressed until the user reclaims it here or the peer releases it.
 private struct PeerConsoleControlBanner: View {
+    @Environment(\.designScale) private var scale
     let peerName: String
     let onReclaim: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .foregroundColor(theme.color("accent"))
             Text("\(peerName) is controlling this console. Your typing is paused.")
@@ -387,9 +389,9 @@ private struct PeerConsoleControlBanner: View {
             Button("Reclaim", action: onReclaim)
                 .controlSize(.small)
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .font(scale.metaFont)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-3"))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 1)

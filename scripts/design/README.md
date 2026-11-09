@@ -17,7 +17,9 @@ this checkout's Debug build; set `ALAS_DEV_APP` to use another. Set
 Set `ALAS_CAPTURE_DIALOG` to `new-project`, `new-worktree`, `repo-selector`,
 `review-target`, `run-script`, `agent-launcher` or `file-search` to capture with
 that dialog open. Set `ALAS_CAPTURE_SETTINGS` to comma-separated Settings sections
-(`general,appearance,agents`) to also write `settings-<section>.png`.
+(`general,appearance,agents`) to also write `settings-<section>.png`. Set `ALAS_CAPTURE_CLI` to an `alas`
+CLI command (`open {wt}/src/billing/Invoice.swift`, `review`) to run it in the
+selected worktree first; `{wt}` is that worktree's path.
 
 ## How it works
 

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MergeConflictToolbar: View {
+    @Environment(\.designScale) private var scale
     let conflictCount: Int
     let currentConflictIndex: Int?
     /// True once the conflicted file has been loaded successfully (binary
@@ -37,7 +38,7 @@ struct MergeConflictToolbar: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             counter
             Divider().frame(height: 18)
             navigationButtons
@@ -45,7 +46,7 @@ struct MergeConflictToolbar: View {
             undoButtons
             Divider().frame(height: 18)
             Text("Highlight")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             Picker("Highlight", selection: $wordDiffMode) {
                 Text("Off").tag(MergeWordDiff.Mode.off)
@@ -59,7 +60,7 @@ struct MergeConflictToolbar: View {
             .help("Highlight character or word-level differences inside conflict hunks")
             Spacer()
             Button(action: onAskAgentResolve) {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     if agentBusy {
                         Spinner(lineWidth: 1.5, duration: 0.7)
                             .frame(width: 12, height: 12)
@@ -67,7 +68,7 @@ struct MergeConflictToolbar: View {
                         Image(systemName: "sparkles")
                     }
                     Text("Ask agent to resolve")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                 }
             }
             .buttonStyle(.bordered)
@@ -85,21 +86,21 @@ struct MergeConflictToolbar: View {
                     : "This file has no BASE markers. Run the merge with merge.conflictStyle=zdiff3 to enable BASE.")
             Button(action: onMarkResolved) {
                 Text("Mark resolved")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
             .disabled(!isLoaded || conflictCount > 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
         .background(theme.color("bg-1"))
         .overlay(Divider(), alignment: .bottom)
     }
 
     private var counter: some View {
         Text(counterText)
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
     }
 
@@ -116,7 +117,7 @@ struct MergeConflictToolbar: View {
     /// ⌘Z itself goes through the panes and the Edit menu, so it can't take over a text field
     /// elsewhere in the window.
     private var undoButtons: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             ChevronNavButton(
                 systemName: "arrow.uturn.backward",
                 tooltip: "Undo (⌘Z)",
@@ -135,7 +136,7 @@ struct MergeConflictToolbar: View {
     }
 
     private var navigationButtons: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             ChevronNavButton(
                 systemName: "chevron.up",
                 tooltip: "Previous conflict (⌥↑)",
@@ -159,6 +160,7 @@ struct MergeConflictToolbar: View {
 /// borderless buttons in a toolbar read as text, which is what the user
 /// flagged — this gives prev/next a real affordance.
 private struct ChevronNavButton: View {
+    @Environment(\.designScale) private var scale
     let systemName: String
     let tooltip: String
     let shortcut: KeyEquivalent?
@@ -171,13 +173,13 @@ private struct ChevronNavButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(disabled
                     ? theme.color("fg-faint")
                     : (hovering ? theme.color("fg") : theme.color("fg-muted")))
                 .frame(width: 20, height: 20)
                 .background(hovering && !disabled ? theme.color("bg-4") : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .keyboardShortcut(shortcut.map { KeyboardShortcut($0, modifiers: [.option]) })

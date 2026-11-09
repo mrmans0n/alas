@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct StashDiffTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let state: StashDiffTabState
     var codeFontFamily: String = ""
@@ -45,7 +46,7 @@ struct StashDiffTabView: View {
                 )
             } else {
                 Text("Could not load image diff for \(state.file.path)")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("del"))
                     .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -89,8 +90,8 @@ struct StashDiffTabView: View {
                 Text(error)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
                     .foregroundColor(theme.color("del"))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[2])
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-2"))
             }
@@ -125,17 +126,17 @@ struct StashDiffTabView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[2]) {
             Text((state.file.path as NSString).lastPathComponent)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
             Text(state.stash.ref)
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(scale.caption.font(weight: .semibold))
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .background(theme.color("accent").opacity(0.16))
                 .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text((state.file.path as NSString).deletingLastPathComponent)
                 .font(.system(size: codeFontSize - 1.5))
@@ -144,8 +145,8 @@ struct StashDiffTabView: View {
                 .truncationMode(.middle)
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
