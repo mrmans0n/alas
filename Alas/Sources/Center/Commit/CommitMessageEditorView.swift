@@ -40,6 +40,7 @@ struct CommitAgentAvailabilityPresentation: Equatable {
 }
 
 struct CommitMessageEditorView: View {
+    @Environment(\.designScale) private var scale
     @Binding var subject: String
     @Binding var bodyText: String
     @Binding var aiToolId: String
@@ -91,7 +92,7 @@ struct CommitMessageEditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             headerRow
             if let optionsRow {
                 optionsRow
@@ -105,7 +106,7 @@ struct CommitMessageEditorView: View {
                 .aiBeam(isActive: suggesting)
             if let suggestionNote {
                 Text(suggestionNote)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundColor(theme.color("fg-dim"))
             }
             if !protectedTrailers.isEmpty {
@@ -115,7 +116,7 @@ struct CommitMessageEditorView: View {
                 InlineErrorStrip(message: error, onDismiss: onDismissError)
             }
         }
-        .padding(12)
+        .padding(scale.space[3])
         .background(
             LinearGradient(
                 colors: [theme.color("composer-bg-top"), theme.color("composer-bg-bot")],
@@ -139,10 +140,10 @@ struct CommitMessageEditorView: View {
     }
 
     private var headerRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Icon(name: iconName, size: 12, color: theme.color("accent"))
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -168,12 +169,12 @@ struct CommitMessageEditorView: View {
 
     @ViewBuilder
     private func agentAvailabilityMessage(_ message: String) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             if agentPresentation.showsProgress {
                 ProgressView().controlSize(.small)
             }
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             if agentPresentation.showsRetry {
                 AlasButton(title: "Retry", style: .subtle, action: onRetryAgentAvailability)
@@ -193,27 +194,27 @@ struct CommitMessageEditorView: View {
         let emphasis: CommitComposerActionEmphasis = isPreferred ? .preferred : .subtle
         let enabled = canRun(action)
         Button(action: action.handler) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 Text(displayedLabel(for: action))
-                    .font(.system(size: 12, weight: .semibold))
-                HStack(spacing: 2) {
+                    .font(scale.meta.font(weight: .semibold))
+                HStack(spacing: scale.space[0]) {
                     ForEach(Array(kbdGlyphs(for: shortcut).enumerated()), id: \.offset) { _, glyph in
                         kbdBadge(glyph, emphasis: emphasis)
                     }
                 }
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
+            .padding(.leading, scale.space[4])
+            .padding(.trailing, scale.space[3])
             .frame(height: 28)
             .foregroundColor(isPreferred ? .white : theme.color("fg"))
             .background(buttonBackground(isPreferred: isPreferred, enabled: enabled))
             .overlay {
                 if !isPreferred {
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -259,25 +260,25 @@ struct CommitMessageEditorView: View {
             )
         )
             .foregroundColor(theme.color("fg"))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[3])
             .frame(height: 30)
             .background(theme.color("field-bg"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(
                         focused == .subject ? theme.color("accent") : theme.color("line"),
                         lineWidth: focused == .subject ? 1 : 0.5
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(
                         focused == .subject ? theme.color("accent-glow-soft") : .clear,
                         lineWidth: 2
                     )
                     .padding(-2)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private var bodyField: some View {
@@ -301,47 +302,47 @@ struct CommitMessageEditorView: View {
             )
         )
             .frame(minHeight: 70, maxHeight: 150)
-            .padding(.horizontal, 6).padding(.vertical, 4)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             .background(theme.color("field-bg"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(
                         focused == .body ? theme.color("accent") : theme.color("line"),
                         lineWidth: focused == .body ? 1 : 0.5
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(
                         focused == .body ? theme.color("accent-glow-soft") : .clear,
                         lineWidth: 2
                     )
                     .padding(-2)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private var protectedTrailersSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             Text("GG metadata")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-faint"))
             ForEach(Array(protectedTrailers.enumerated()), id: \.offset) { _, trailer in
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[2]) {
                     Text(trailer.name)
                         .foregroundStyle(theme.color("fg-faint"))
                     Text(trailer.value)
                         .foregroundStyle(theme.color("fg-dim"))
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .textSelection(.enabled)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("field-bg").opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     /// Render the modifier + key glyphs of a `KeyboardShortcut` for display
@@ -378,12 +379,12 @@ struct CommitMessageEditorView: View {
     private func kbdBadge(_ text: String, emphasis: CommitComposerActionEmphasis) -> some View {
         let style = emphasis.badgeStyle
         Text(text)
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .frame(minWidth: 14, minHeight: 14)
-            .padding(.horizontal, 3)
+            .padding(.horizontal, scale.space[1])
             .background(badgeColor(style.background).opacity(style.backgroundOpacity))
             .foregroundColor(badgeColor(style.foreground).opacity(style.foregroundOpacity))
-            .clipShape(RoundedRectangle(cornerRadius: 2))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     private func badgeColor(_ color: CommitComposerActionBadgeColor) -> Color {

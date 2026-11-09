@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CommitEditorTabView: View {
+    @Environment(\.designScale) private var scale
     let worktreePath: URL
     let worktreeId: String
     let tabState: CommitEditorTabState
@@ -134,12 +135,12 @@ struct CommitEditorTabView: View {
                     .frame(width: 20, height: 20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error {
-                VStack(spacing: 8) {
+                VStack(spacing: scale.space[2]) {
                     Text("Could not load commit \(String(tabState.currentSha.prefix(7)))")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(scale.titleFont)
                         .foregroundColor(theme.color("del"))
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                     AlasButton(title: "Retry", style: .subtle) {
                         Task { await loadDetails() }
@@ -229,11 +230,11 @@ struct CommitEditorTabView: View {
                     // A host caps the files it sends; `filesChanged` counts them all.
                     if details.files.count < details.info.filesChanged {
                         Text("Showing \(details.files.count) of \(details.info.filesChanged) files.")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
+                            .padding(.horizontal, scale.space[3])
+                            .padding(.vertical, scale.space[2])
                             .background(theme.color("bg-1"))
                     }
                 }
@@ -272,11 +273,11 @@ struct CommitEditorTabView: View {
                         // A host caps a commit diff; say so before a whole-file drop is decided on it.
                         if diffTruncated {
                             Text("The host cut off part of this diff; some lines are not shown.")
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("warn"))
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, scale.space[3])
+                                .padding(.vertical, scale.space[2])
                                 .background(theme.color("bg-1"))
                         }
                         CommitDiffView(

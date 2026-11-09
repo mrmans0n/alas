@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CommitHeaderView: View {
+    @Environment(\.designScale) private var scale
     static let maxExpandedHeight: CGFloat = 180
 
     let details: CommitDetails
@@ -22,7 +23,7 @@ struct CommitHeaderView: View {
         VStack(alignment: .leading, spacing: 0) {
             compactRow
             if appState != nil {
-                revisionRow.padding(.top, 8)
+                revisionRow.padding(.top, scale.space[2])
             }
             if expanded {
                 CommitDetailsHeightCap(maxHeight: Self.maxExpandedHeight) {
@@ -39,28 +40,28 @@ struct CommitHeaderView: View {
                 }
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .copyFeedbackOverlay(message: copyFeedback.message)
     }
 
     private var compactRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             if let tag = details.info.conventionalTag {
                 Text(tag)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(scale.caption.font(weight: .bold, design: .monospaced))
                     .foregroundColor(theme.color("accent"))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(theme.color("accent").opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             Text(details.info.subject)
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
             Text(details.info.shortSha)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .foregroundColor(shaHovering ? theme.color("accent") : theme.color("fg-faint"))
                 .onTapGesture {
                     copyToPasteboard(details.info.sha, feedback: "Copied SHA")
@@ -73,16 +74,16 @@ struct CommitHeaderView: View {
                 .dragOut { .commitSHA(details.info.sha) }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(details.info.author)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(relativeTime(details.info.date))
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
             Button { expanded.toggle() } label: {
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             .buttonStyle(.plain)
@@ -112,19 +113,19 @@ struct CommitHeaderView: View {
     }
 
     private var expandedBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             if !details.body.isEmpty {
                 Text(details.body)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .lineSpacing(CenterTypography.textLineSpacing(forFontSize: 12))
                     .foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 12) {
+            HStack(spacing: scale.space[3]) {
                 Text("\(details.info.author) <\(details.authorEmail)>")
                 Text(absoluteDate(details.info.date))
                 if !details.parents.isEmpty {
-                    HStack(spacing: 4) {
+                    HStack(spacing: scale.space[1]) {
                         Text("parent" + (details.parents.count > 1 ? "s" : "") + ":")
                         ForEach(Array(details.parents.enumerated()), id: \.offset) { index, parent in
                             Text(parent.prefix(7))
@@ -144,10 +145,10 @@ struct CommitHeaderView: View {
                 Text("+\(details.info.insertions)").foregroundColor(theme.color("add"))
                 Text("−\(details.info.deletions)").foregroundColor(theme.color("del"))
             }
-            .font(.system(size: 10.5, design: .monospaced))
+            .font(scale.caption.font(weight: .regular, design: .monospaced))
             .foregroundColor(theme.color("fg-faint"))
         }
-        .padding(.top, 8)
+        .padding(.top, scale.space[2])
         .textSelection(.enabled)
     }
 

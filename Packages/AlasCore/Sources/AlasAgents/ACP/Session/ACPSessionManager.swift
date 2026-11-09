@@ -166,6 +166,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// False for Workspace Checkout managers: their sessions get no computer tools,
     /// so the first-prompt preamble must not mention them.
     public var computerUseAvailable = true
+    /// Whether user turns ask their agent for its predicted follow-up prompt:
+    /// next-prompt suggestions are on with the agent as their source. Read at
+    /// each send, so a change applies from the next turn.
+    public var requestsPredictedPrompts = false
     /// Builds the `.external` adapter status (adapter inspection + managed
     /// config sync) for a worktree path. Set post-init, mirroring
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
@@ -6969,6 +6973,8 @@ extension ACPSessionManager {
         session.planFile = nil
         session.sessionFailure = nil
         session.agentFileChangeReport = nil
+        session.supportsPredictedPrompt = false
+        session.agentPrediction.reset()
         session.clearRetryableFailure()
         session.availableProviders = []
         session.agentState = .spawning
@@ -7329,6 +7335,7 @@ extension ACPSessionManager {
             session.planFile = initialized.planFile
             session.sessionFailure = initialized.sessionFailure
             session.agentFileChangeReport = initialized.agentFileChangeReport
+            session.supportsPredictedPrompt = initialized.supportsPredictedPrompt
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
                 // Keep the field set while the bounded detach is suspended:
@@ -7755,6 +7762,9 @@ extension ACPSessionManager {
                                           onSuccessfulTurn: { [weak self] turn in
                                               guard let self, self.sessions[sessionId]?.readOnlyRestricted != true else { return }
                                               self.onSuccessfulTurn(turn)
+                                          },
+                                          requestsPredictedPrompt: { [weak self] in
+                                              self?.requestsPredictedPrompts ?? false
                                           },
                                           onTurnCompleted: { [weak self] completion in
                                               guard let self,

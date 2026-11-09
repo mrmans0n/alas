@@ -3,6 +3,7 @@ import SwiftUI
 /// Stands in for the review surface until its file list is known: a rail of
 /// file rows and a couple of diff cards, in the surface's own layout.
 struct DiffReviewLoadingSkeleton: View {
+    @Environment(\.designScale) private var scale
     var railCollapsed = false
 
     @Environment(\.theme) private var theme
@@ -11,15 +12,15 @@ struct DiffReviewLoadingSkeleton: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 if !railCollapsed {
                     ForEach(Array(Self.railRowWidths.enumerated()), id: \.offset) { _, width in
                         DiffReviewSkeletonBar(width: width)
                     }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 16)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[4])
             .frame(
                 width: railCollapsed ? DiffReviewRailMetrics.collapsedWidth : DiffReviewRailMetrics.expandedWidth,
                 alignment: .topLeading
@@ -27,12 +28,12 @@ struct DiffReviewLoadingSkeleton: View {
             .frame(maxHeight: .infinity, alignment: .top)
             .overlay(Rectangle().fill(theme.color("line")).frame(width: 0.5), alignment: .trailing)
 
-            VStack(spacing: 14) {
+            VStack(spacing: scale.space[4]) {
                 DiffReviewSkeletonCard(lineWidths: [0.62, 0.48, 0.71, 0.4, 0.55, 0.66])
                 DiffReviewSkeletonCard(lineWidths: [0.5, 0.68, 0.36, 0.59])
                 Spacer(minLength: 0)
             }
-            .padding(14)
+            .padding(scale.space[4])
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,11 +46,12 @@ struct DiffReviewLoadingSkeleton: View {
 
 /// The diff body of a file whose diff is still loading.
 struct DiffReviewSkeletonLines: View {
+    @Environment(\.designScale) private var scale
     let lineWidths: [CGFloat]
 
     var body: some View {
         GeometryReader { proxy in
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ForEach(Array(lineWidths.enumerated()), id: \.offset) { _, fraction in
                     DiffReviewSkeletonBar(width: max(40, proxy.size.width * fraction))
                 }
@@ -62,37 +64,39 @@ struct DiffReviewSkeletonLines: View {
 }
 
 private struct DiffReviewSkeletonCard: View {
+    @Environment(\.designScale) private var scale
     let lineWidths: [CGFloat]
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 DiffReviewSkeletonBar(width: 180)
                 Spacer(minLength: 0)
                 DiffReviewSkeletonBar(width: 48)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, scale.space[3])
             .frame(height: 40)
             .background(theme.color("bg-2"))
             Rectangle().fill(theme.color("line")).frame(height: 0.5)
             DiffReviewSkeletonLines(lineWidths: lineWidths)
                 .frame(height: CGFloat(lineWidths.count) * 19)
-                .padding(12)
+                .padding(scale.space[3])
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).stroke(theme.color("line"), lineWidth: 0.5))
     }
 }
 
 private struct DiffReviewSkeletonBar: View {
+    @Environment(\.designScale) private var scale
     let width: CGFloat
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3)
+        RoundedRectangle(cornerRadius: scale.radius.small)
             .fill(theme.color("fg-dim").opacity(0.16))
             .frame(width: width, height: 10)
     }

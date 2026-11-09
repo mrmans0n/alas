@@ -85,6 +85,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let agentFileChangeReport: ACPAgentFileChangeReportCapability?
     /// The adapter ends a `session/load` replay with `_meta.loadReplayEnd`.
     public let supportsLoadReplayEnd: Bool
+    /// A prompt can ask the adapter for its turn's predicted follow-up prompt.
+    public let supportsPredictedPrompt: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -111,7 +113,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         planFile: ACPPlanFileCapability? = nil,
         sessionFailure: ACPSessionFailureCapability? = nil,
         agentFileChangeReport: ACPAgentFileChangeReportCapability? = nil,
-        supportsLoadReplayEnd: Bool = false
+        supportsLoadReplayEnd: Bool = false,
+        supportsPredictedPrompt: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -136,6 +139,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.sessionFailure = sessionFailure
         self.agentFileChangeReport = agentFileChangeReport
         self.supportsLoadReplayEnd = supportsLoadReplayEnd
+        self.supportsPredictedPrompt = supportsPredictedPrompt
     }
 }
 
@@ -438,7 +442,9 @@ public final class ACPConnection: @unchecked Sendable {
             agentFileChangeReport: agentFileChangeReport,
             // ACP v1 only, like the other neutral contracts.
             supportsLoadReplayEnd: negotiatedProtocolVersion == .v1
-                && (result.meta?.loadReplayEnd?.version ?? 0) >= 1
+                && (result.meta?.loadReplayEnd?.version ?? 0) >= 1,
+            supportsPredictedPrompt: negotiatedProtocolVersion == .v1
+                && (result.meta?.promptSuggestions?.version ?? 0) >= 1
         )
     }
 
@@ -762,6 +768,7 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
         fileChangeReportRequestId: String? = nil,
+        predictedPromptRequestID: String? = nil,
         onRequestHandoff: (@Sendable () -> Void)? = nil,
         onTransportHandoff: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
@@ -775,6 +782,11 @@ public final class ACPConnection: @unchecked Sendable {
             if let fileChangeReportRequestId {
                 var meta = params.meta ?? ACPSessionMeta()
                 meta.agentFileChangeReportRequest = .init(requestId: fileChangeReportRequestId)
+                params.meta = meta
+            }
+            if let predictedPromptRequestID {
+                var meta = params.meta ?? ACPSessionMeta()
+                meta.promptSuggestions = .init(id: predictedPromptRequestID)
                 params.meta = meta
             }
             let request = ACPRequest(

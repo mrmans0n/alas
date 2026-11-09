@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CIStatusStrip: View {
+    @Environment(\.designScale) private var scale
     let checks: [ReviewCheck]
     /// Past this many checks the expanded list scrolls at that height, so a
     /// large PR doesn't grow a hugging container (the shepherd popover)
@@ -56,7 +57,7 @@ struct CIStatusStrip: View {
                 )
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, scale.space[1])
     }
 
     var body: some View {
@@ -69,22 +70,22 @@ struct CIStatusStrip: View {
                         isExpanded.toggle()
                     }
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("fg-dim"))
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                             .animation(.easeInOut(duration: 0.18), value: isExpanded)
                         Image(systemName: "checkmark.seal")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundColor(summaryColor)
                         Text("CI · \(summaryText)")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                             .foregroundColor(summaryColor)
                         Spacer()
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
+                    .padding(.horizontal, scale.space[4])
+                    .padding(.vertical, scale.space[2])
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -110,6 +111,7 @@ struct CIStatusStrip: View {
 }
 
 private struct CICheckRow: View {
+    @Environment(\.designScale) private var scale
     let check: ReviewCheck
     var isExpanded: Bool = false
     var onToggle: () -> Void = {}
@@ -118,18 +120,18 @@ private struct CICheckRow: View {
     var body: some View {
         VStack(spacing: 0) {
             Button(action: onToggle) {
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     Image(systemName: statusIcon)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(statusColor)
                         .frame(width: 14)
                     Text(check.name)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     if let workflow = check.workflow {
                         Text(workflow)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-dim"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -140,15 +142,15 @@ private struct CICheckRow: View {
                             NSWorkspace.shared.open(url)
                         } label: {
                             Image(systemName: "arrow.up.right.square")
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundColor(theme.color("fg-dim"))
                         }
                         .buttonStyle(.plain)
                         .help("Open in browser")
                     }
                 }
-                .padding(.horizontal, 22)
-                .padding(.vertical, 5)
+                .padding(.horizontal, scale.space[5])
+                .padding(.vertical, scale.space[1])
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
