@@ -1145,16 +1145,30 @@ struct TabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
-    @Test func editorNavigationPreservesSVGSourceReveal() {
+    @Test(arguments: [false, true])
+    func svgSourceStaysVisibleAfterRevealIsConsumed(external: Bool) throws {
         let mgr = TabsManager(store: TestPersistenceStore())
-        let tab = mgr.openEditor(worktreeId: "svg-source-reveal", relativePath: "logo.svg",
-                                 revealLine: 7, revealCharacter: nil)
+        let worktreeID = "svg-source-reveal"
+        let tab = external
+            ? mgr.openExternalEditor(worktreeId: worktreeID, absoluteURL: URL(fileURLWithPath: "/tmp/logo.svg"),
+                                     revealLine: 7, revealCharacter: 2)
+            : mgr.openEditor(worktreeId: worktreeID, relativePath: "logo.svg",
+                             revealLine: 7, revealCharacter: 2)
 
         guard case .editor(let state) = tab else {
             Issue.record("Expected SVG source editor for a line reveal")
             return
         }
         #expect(state.revealLine == 7)
+        #expect(!state.showsImagePreview)
+
+        mgr.consumeReveal(worktreeId: worktreeID, tabId: tab.id)
+
+        let consumed = try #require(mgr.editorTabState(worktreeId: worktreeID, tabId: tab.id))
+        #expect(consumed.revealLine == nil)
+        #expect(consumed.revealCharacter == nil)
+        let restored = try JSONDecoder().decode(EditorTabState.self, from: JSONEncoder().encode(consumed))
+        #expect(!restored.showsImagePreview)
     }
 
     @Test func openImagePreviewCreatesSeparateTabsForDifferentPaths() {

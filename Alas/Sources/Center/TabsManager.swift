@@ -2205,6 +2205,9 @@ final class TabsManager {
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .editor(var s) = file.tabs[idx],
               s.revealLine != nil || s.revealEndLine != nil || s.revealCharacter != nil else { return }
+        if ImageFileType.isTextBacked(relativePath: s.externalAbsolutePath ?? s.relativePath) {
+            s.prefersImageSource = true
+        }
         s.revealLine = nil
         s.revealEndLine = nil
         s.revealCharacter = nil

@@ -466,9 +466,7 @@ struct CenterPaneView: View {
                                         onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
                         let previewPath = s.externalAbsolutePath ?? s.relativePath
-                        if ImageFileType.isSupported(relativePath: previewPath),
-                           !ImageFileType.isTextBacked(relativePath: previewPath)
-                            || (s.revealLine == nil && s.revealCharacter == nil) {
+                        if s.showsImagePreview {
                             ImagePreviewTabView(
                                 worktreePath: worktree.path,
                                 relativePath: s.isExternal ? (previewPath as NSString).lastPathComponent : s.relativePath,
