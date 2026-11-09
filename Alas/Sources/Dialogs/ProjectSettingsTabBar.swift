@@ -19,6 +19,7 @@ enum ProjectSettingsTab: String, CaseIterable, Identifiable {
 }
 
 struct ProjectSettingsSidebar: View {
+    @Environment(\.designScale) private var scale
     @Binding var selection: ProjectSettingsTab
     @Environment(\.theme) private var theme
 
@@ -37,22 +38,22 @@ struct ProjectSettingsSidebar: View {
                                     .scaledToFit()
                             } else {
                                 Image(systemName: tab.symbol)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 16)) // design-literal: tab icon, not text
                             }
                         }
                         .frame(width: 20, height: 20)
                         .accessibilityHidden(true)
                         Text(tab.rawValue)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .font(scale.meta.font(weight: .medium))
                     }
                     .foregroundStyle(theme.color(selection == tab ? "fg" : "fg-dim"))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, scale.space[3])
+                    .padding(.vertical, scale.space[3])
                     .contentShape(Rectangle())
                     .background {
                         if selection == tab {
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: scale.radius.medium)
                                 .fill(theme.color("bg-3"))
                         }
                     }
@@ -62,7 +63,7 @@ struct ProjectSettingsSidebar: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(width: 172)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-2"))

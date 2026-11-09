@@ -13,6 +13,7 @@ struct NewWorktreeGGModeSegment: Equatable {
 }
 
 struct NewWorktreeDialog: View {
+    @Environment(\.designScale) private var scale
     nonisolated static let ggModeFieldLabel = "Stacked Diffs Mode"
 
     @Bindable var state: AppState
@@ -106,7 +107,7 @@ struct NewWorktreeDialog: View {
             content: {
                 if state.worktreeProjects.isEmpty {
                     DialogField(label: "Repository") {
-                        Text("No projects yet — add one first.").font(.system(size: 12))
+                        Text("No projects yet — add one first.").font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                     }
                 } else if showsRepositorySelector {
@@ -128,14 +129,13 @@ struct NewWorktreeDialog: View {
                     .disabled(stackPinnedBase != nil)
                 }
                 if stackPinnedBase != nil {
-                    Text("Pinned to gg's stack base").font(.system(size: 11))
+                    Text("Pinned to gg's stack base").font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 DialogField(label: createsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
                         text: activeNameBinding,
                         placeholder: allowsNamingFromFirstPrompt ? "Leave empty to name it from your first chat message" : "",
-                        monospaced: true,
                         focusOnAppear: true,
                         onSubmit: submitCreate,
                         disablesAutomaticTextSubstitutions: true,
@@ -146,7 +146,7 @@ struct NewWorktreeDialog: View {
                 }
                 if let preview = branchPreviewText {
                     Text(preview)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
                 if ggStackAvailability != .hidden {
@@ -155,11 +155,11 @@ struct NewWorktreeDialog: View {
                             .help(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
                     }
                     if createsGGStack, case .disabled(let hint) = ggStackAvailability {
-                        Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                        Text(hint).font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                     }
                 }
                 if let validationMessage = branchValidationMessage {
-                    Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
+                    Text(validationMessage).font(scale.metaFont).foregroundColor(.red)
                 }
                 issueAttachmentSection
                 DialogField(label: "Start with") {
@@ -172,7 +172,7 @@ struct NewWorktreeDialog: View {
                     }
                 }
                 if let createErrorMessage {
-                    Text(createErrorMessage).font(.system(size: 11)).foregroundColor(.red)
+                    Text(createErrorMessage).font(scale.metaFont).foregroundColor(.red)
                 }
             },
             cancelTitle: "Cancel",
@@ -1023,10 +1023,10 @@ struct NewWorktreeDialog: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Ticket")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                     Text([draft.attachment.displayTitle, draft.kind?.displayName].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1040,10 +1040,10 @@ struct NewWorktreeDialog: View {
                     NSWorkspace.shared.open(draft.attachment.canonicalURL)
                 }
             }
-            .padding(8)
+            .padding(scale.space[2])
             .background(theme.color("bg-0"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
         }

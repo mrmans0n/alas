@@ -21,6 +21,7 @@ struct EditWorkspaceDialog: View {
 }
 
 private struct WorkspaceDefinitionEditor: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let workspace: Workspace?
     @Binding var presented: Bool
@@ -61,7 +62,7 @@ private struct WorkspaceDefinitionEditor: View {
                             Spacer(minLength: 8)
                             Icon(name: "chev-down", size: 9)
                         }
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .alasFieldChrome(theme: theme)
                     }
@@ -74,7 +75,7 @@ private struct WorkspaceDefinitionEditor: View {
                                     locationOption(host, location: .ssh(host))
                                 }
                             }
-                            .padding(6)
+                            .padding(scale.space[2])
                         }
                         .frame(width: 300, height: CGFloat(min(hosts.count + 1, 8)) * 30 + 12)
                     }
@@ -86,7 +87,7 @@ private struct WorkspaceDefinitionEditor: View {
                 if workspace != nil {
                     Button("Delete workspace...", role: .destructive) { confirmingDeletion = true }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("del"))
                         .disabled(isSaving)
                 }
@@ -135,11 +136,11 @@ private struct WorkspaceDefinitionEditor: View {
             HStack(spacing: 8) {
                 Icon(name: "check", size: 10)
                     .opacity(model.executionLocation == location ? 1 : 0)
-                Text(title).font(.system(size: 12)).foregroundColor(theme.color("fg"))
+                Text(title).font(scale.metaFont).foregroundColor(theme.color("fg"))
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
             }
-            .padding(8)
+            .padding(scale.space[2])
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -149,10 +150,10 @@ private struct WorkspaceDefinitionEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Repositories")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
                 Text("\(model.members.count)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                 Spacer()
                 Menu {
@@ -173,7 +174,7 @@ private struct WorkspaceDefinitionEditor: View {
             }
             if model.members.isEmpty {
                 Text(model.eligibleProjects.isEmpty ? "No repositories at this location." : "No repositories selected.")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .frame(maxWidth: .infinity, minHeight: 72)
             } else {
@@ -200,10 +201,10 @@ private struct WorkspaceDefinitionEditor: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(member.fallbackProjectName)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg"))
                 Text(member.fallbackRepositoryRoot)
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                     .truncationMode(.middle)
             }
@@ -269,6 +270,7 @@ private struct WorkspaceDefinitionEditor: View {
 }
 
 struct CreateWorkspaceCheckoutDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     let workspace: Workspace
     @Binding var presented: Bool
@@ -339,14 +341,14 @@ struct CreateWorkspaceCheckoutDialog: View {
                     Image(systemName: index < model.step.rawValue ? "checkmark.circle.fill" : "\(index + 1).circle\(index == model.step.rawValue ? ".fill" : "")")
                     Text(title)
                 }
-                .font(.system(size: 11.5, weight: index == model.step.rawValue ? .semibold : .regular))
+                .font(scale.meta.font(weight: index == model.step.rawValue ? .semibold : .regular))
                 .foregroundColor(theme.color(index == model.step.rawValue ? "fg" : "fg-dim"))
                 if index < 2 {
                     Rectangle().fill(theme.color("line")).frame(height: 1)
                 }
             }
         }
-        .padding(.bottom, 4)
+        .padding(.bottom, scale.space[1])
     }
 
     private var details: some View {
@@ -355,7 +357,6 @@ struct CreateWorkspaceCheckoutDialog: View {
                 AlasField(
                     text: Binding(get: { model.branch }, set: { model.setBranch($0) }),
                     placeholder: "my-change",
-                    monospaced: true,
                     focusOnAppear: true,
                     onSubmit: proceed,
                     disablesAutomaticTextSubstitutions: true,
@@ -364,11 +365,11 @@ struct CreateWorkspaceCheckoutDialog: View {
             }
             if !model.composedBranch.isEmpty {
                 Text("Branch: \(model.composedBranch)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             if let validationMessage = model.branchValidationMessage {
-                Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
+                Text(validationMessage).font(scale.metaFont).foregroundColor(.red)
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {
@@ -379,7 +380,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                 }
             }
             DialogField(label: "Base reference") {
-                AlasField(text: $model.baseReference, placeholder: "main", monospaced: true)
+                AlasField(text: $model.baseReference, placeholder: "main")
             }
             DisclosureGroup("Base references by repository", isExpanded: $showsBaseOverrides) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -388,13 +389,13 @@ struct CreateWorkspaceCheckoutDialog: View {
                             AlasField(text: Binding(
                                 get: { model.memberBaseReferences[member.id] ?? "" },
                                 set: { model.memberBaseReferences[member.id] = $0.isEmpty ? nil : $0 }
-                            ), placeholder: model.baseReference, monospaced: true)
+                            ), placeholder: model.baseReference)
                         }
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, scale.space[2])
             }
-            .font(.system(size: 11.5))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-muted"))
         }
     }
@@ -405,7 +406,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
                     Text("Checking repositories...")
-                        .font(.system(size: 12)).foregroundColor(theme.color("fg-muted"))
+                        .font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
                 }
                 .frame(maxWidth: .infinity, minHeight: 80)
             } else {
@@ -419,7 +420,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                                     Icon(name: "checkmark.circle.fill", size: 14, color: theme.color("add"))
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(workspace.members.first(where: { $0.projectID == member.projectID })?.fallbackProjectName ?? member.projectID)
-                                            .font(.system(size: 12, weight: .medium))
+                                            .font(scale.meta.font(weight: .medium))
                                             .foregroundColor(theme.color("fg"))
                                         Text("\(member.baseReference) → \(model.composedBranch)")
                                             .foregroundColor(theme.color("fg-muted"))
@@ -430,10 +431,10 @@ struct CreateWorkspaceCheckoutDialog: View {
                                             .foregroundColor(theme.color("fg-dim"))
                                             .textSelection(.enabled)
                                     }
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(scale.meta.font(design: .monospaced))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .padding(.vertical, 4)
+                                .padding(.vertical, scale.space[1])
                             }
                         }
                     }
@@ -451,10 +452,10 @@ struct CreateWorkspaceCheckoutDialog: View {
                 ProgressView(value: Double(progress.completedMembers), total: Double(max(progress.totalMembers, 1)))
                     .tint(theme.color("accent"))
                 Text("\(progress.completedMembers) of \(progress.totalMembers) repositories ready")
-                    .font(.system(size: 12)).foregroundColor(theme.color("fg-muted"))
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
             } else if !creationFinished {
                 ProgressView().controlSize(.small)
-                Text("Preparing checkout...").font(.system(size: 12)).foregroundColor(theme.color("fg-muted"))
+                Text("Preparing checkout...").font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
             }
         }
         .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
@@ -552,6 +553,7 @@ struct CreateWorkspaceCheckoutDialog: View {
 }
 
 struct WorkspaceNotice: View {
+    @Environment(\.designScale) private var scale
     let message: String
     var isError = false
     @Environment(\.theme) private var theme
@@ -560,7 +562,7 @@ struct WorkspaceNotice: View {
         HStack(alignment: .top, spacing: 8) {
             Icon(name: "alert", size: 12, color: theme.color(isError ? "del" : "fg-muted"))
             Text(message)
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color(isError ? "del" : "fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)

@@ -8,6 +8,8 @@
 # ALAS_DEV_APP overrides the app; by default this checkout's Debug build is used.
 # ALAS_CAPTURE_RIGHT_TAB (files, agent, run, schedules) opens the right pane on
 # that tab instead of Changes.
+# ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
+# run-script, agent-launcher, file-search) opens that dialog before the capture.
 # ALAS_CAPTURE_EXPECT_SIZE (such as 1648x1063, in points) fails the capture when
 # the window has another size. The size is also written to window-size.txt.
 set -euo pipefail
@@ -236,6 +238,19 @@ visit_worktrees() {
   "$cli" wt switch "$selected" >/dev/null
 }
 (visit_worktrees)
+
+# ALAS_CAPTURE_DIALOG opens a dialog through the Debug build's capture bridge
+# (DesignCaptureBridge in AlasApp.swift) once the worktrees are visited.
+if [[ -n "${ALAS_CAPTURE_DIALOG:-}" ]]; then
+  /usr/bin/swift - "$ALAS_CAPTURE_DIALOG" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+  /bin/sleep 1.5
+fi
 
 # Ready once two captures a second apart match. Status indicators keep pulsing,
 # so captures are compared as thumbnails with a small tolerance.

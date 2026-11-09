@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProjectMCPServerManager: View {
+    @Environment(\.designScale) private var scale
     @Binding var servers: [ProjectMCPServer]
     let approvalQueue: RepoHookApprovalQueue
 
@@ -20,18 +21,18 @@ struct ProjectMCPServerManager: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("MCP Servers")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text("Servers are attached when a new agent session is created.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.top, 3)
-                .padding(.bottom, 16)
+                .padding(.top, scale.space[0])
+                .padding(.bottom, scale.space[4])
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if draft.isEmpty {
                         Text("No MCP servers configured")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                             .frame(maxWidth: .infinity, minHeight: 88, alignment: .center)
                     } else {
@@ -54,9 +55,9 @@ struct ProjectMCPServerManager: View {
                 AlasButton(title: "Done", style: .primary, action: commit)
                     .disabled(!ProjectMCPServerEditorPolicy.canSave(draft))
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 620)
         .background(theme.color("bg-1"))
         .onAppear {
@@ -99,14 +100,14 @@ struct ProjectMCPServerManager: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(server.name.isEmpty ? "Unnamed server" : server.name)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     Text(ProjectMCPServerEditorPolicy.transportLabel(for: server.transport))
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 Text(ProjectMCPServerEditorPolicy.summary(for: server))
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -119,13 +120,13 @@ struct ProjectMCPServerManager: View {
                 deleteTarget = server
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .background(theme.color("bg-0"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func save(_ server: ProjectMCPServer, replacing existingID: String?) {
@@ -183,6 +184,7 @@ private enum ProjectMCPServerEditorTarget: Identifiable {
 }
 
 struct MCPServerIconButton: View {
+    @Environment(\.designScale) private var scale
     let icon: String
     let tooltip: String
     let action: () -> Void
@@ -194,10 +196,10 @@ struct MCPServerIconButton: View {
                 .frame(width: 28, height: 28)
                 .background(theme.color("bg-3"))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: scale.radius.medium)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(tooltip)

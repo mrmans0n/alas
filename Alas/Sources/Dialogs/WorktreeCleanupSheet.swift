@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WorktreeCleanupSheet: View {
+    @Environment(\.designScale) private var scale
     @Bindable var model: WorktreeCleanupModel
     let showKeepBranchOption: Bool
     let onOpenCheckout: (UUID) -> Void
@@ -70,16 +71,16 @@ struct WorktreeCleanupSheet: View {
             if let error = model.scanError {
                 HStack(spacing: 8) {
                     Text(error)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                     Spacer()
                     AlasButton(title: "Retry", style: .normal) {
                         Task { await model.refresh() }
                     }
                 }
-                .padding(8)
+                .padding(scale.space[2])
                 .background(
-                    RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2"))
+                    RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2"))
                 )
             }
 
@@ -87,10 +88,10 @@ struct WorktreeCleanupSheet: View {
                 LazyVStack(alignment: .leading, spacing: 6) {
                     if model.rows.isEmpty {
                         Text(model.isScanning ? "Looking for worktrees…" : "No worktrees found.")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-dim"))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, scale.space[2])
                     }
                     ForEach(model.rows) { row in
                         WorktreeCleanupRow(
@@ -110,7 +111,7 @@ struct WorktreeCleanupSheet: View {
 
             if showKeepBranchOption {
                 Toggle("Keep local branches", isOn: $model.keepBranches)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .toggleStyle(.checkbox)
             }
 
@@ -128,7 +129,7 @@ struct WorktreeCleanupSheet: View {
 
                 if !model.results.isEmpty {
                     Text(WorktreeCleanupModel.summary(for: model.results))
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
             }
@@ -137,6 +138,7 @@ struct WorktreeCleanupSheet: View {
 }
 
 private struct WorktreeCleanupRow: View {
+    @Environment(\.designScale) private var scale
     let row: WorktreeCleanupRowState
     let isSelected: Bool
     let isSelectionDisabled: Bool
@@ -155,14 +157,14 @@ private struct WorktreeCleanupRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(row.worktree.branch)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     if let candidate = row.candidate {
                         Text(verdictLabel(candidate.verdict))
-                            .font(.system(size: 10.5, weight: .medium))
-                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .font(scale.caption.font(weight: .medium))
+                            .padding(.horizontal, scale.space[2]).padding(.vertical, 1) // design-literal: hairline inside the verdict pill
                             .background(
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: scale.radius.small)
                                     .fill(theme.color(verdictColor(candidate.verdict)).opacity(0.18))
                             )
                             .foregroundColor(theme.color(verdictColor(candidate.verdict)))
@@ -173,7 +175,7 @@ private struct WorktreeCleanupRow: View {
                     }
                 }
                 Text(RemotePath.display(row.worktree.path.path))
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -189,7 +191,7 @@ private struct WorktreeCleanupRow: View {
                                 )
                             )
                             Text(signal.label)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("fg-dim"))
                             if case .workspaceCheckout(let owner) = signal {
                                 AlasButton(title: "Open Checkout", style: .normal) {
@@ -202,21 +204,21 @@ private struct WorktreeCleanupRow: View {
                     }
                 } else {
                     Text(row.isScanning ? "Checking merge state, changes, and activity…" : "Details unavailable")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-dim"))
                 }
 
                 if let result, let text = resultLabel(result) {
                     Text(text)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("del"))
                 }
             }
             Spacer()
         }
-        .padding(.vertical, 6).padding(.horizontal, 8)
+        .padding(.vertical, scale.space[2]).padding(.horizontal, scale.space[2])
         .background(
-            RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2"))
+            RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2"))
         )
         .opacity(row.candidate?.isSelectable == false ? 0.6 : 1)
     }
@@ -279,7 +281,7 @@ struct WorktreeCleanupSheetHost: View {
                     onClose: onClose
                 )
             } else {
-                ProgressView().controlSize(.small).padding(40)
+                ProgressView().controlSize(.small).padding(40) // design-literal: spinner placeholder breathing room
             }
         }
         .task {

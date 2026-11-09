@@ -76,6 +76,7 @@ private enum SSHSetupStatus: Equatable {
 }
 
 private struct ProjectDialog: View {
+    @Environment(\.designScale) private var scale
     @Bindable var state: AppState
     @Binding var presented: Bool
     let mode: ProjectDialogMode
@@ -219,15 +220,15 @@ private struct ProjectDialog: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                     .foregroundStyle(theme.color("fg"))
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundStyle(theme.color("fg-dim"))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
+            .padding(.horizontal, scale.space[5])
+            .padding(.vertical, scale.space[4])
 
             Divider()
             HStack(spacing: 0) {
@@ -236,7 +237,7 @@ private struct ProjectDialog: View {
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(selectedTab.rawValue)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold)) // design-literal: tab heading, same title size as the dialog header
                             .foregroundStyle(theme.color("fg"))
                         switch selectedTab {
                         case .general:
@@ -258,7 +259,7 @@ private struct ProjectDialog: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(22)
+                    .padding(scale.space[5])
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -275,8 +276,8 @@ private struct ProjectDialog: View {
                             errorField(errorMessage)
                         }
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, scale.space[5])
+                    .padding(.vertical, scale.space[3])
                 }
                 .frame(maxHeight: 140)
                 .scrollBounceBehavior(.basedOnSize)
@@ -289,15 +290,15 @@ private struct ProjectDialog: View {
                     .disabled(!confirmEnabled)
                     .opacity(confirmEnabled ? 1 : 0.5)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[3])
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .top)
         }
         .frame(minWidth: 800, idealWidth: 800, maxWidth: .infinity)
         .frame(minHeight: 480, idealHeight: 660, maxHeight: .infinity)
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .background(ProjectSettingsSheetSizing())
         .onAppear {
             populateInitialValues()
@@ -406,7 +407,7 @@ private struct ProjectDialog: View {
                     disablesAutomaticTextSubstitutions: true
                 )
                 Text("Variables: {name}, {date}, {time}. Leave blank to use the global default. Applies to regular Git branches.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
         }
@@ -512,16 +513,16 @@ private struct ProjectDialog: View {
         case .remoteSSH:
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    AlasField(text: $sshHost, placeholder: "devbox or user@host", monospaced: true)
+                    AlasField(text: $sshHost, placeholder: "devbox or user@host")
                     Button(action: { showHostPicker.toggle() }) {
                         Image(systemName: "list.bullet")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(scale.meta.font(weight: .semibold))
                             .foregroundColor(theme.color("fg-dim"))
                             .frame(width: 30, height: 28)
                             .background(theme.color("bg-2"))
-                            .overlay(RoundedRectangle(cornerRadius: 6)
+                            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                                 .strokeBorder(theme.color("line"), lineWidth: 0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     }
                     .buttonStyle(.plain)
                     .help("Choose a host from ~/.ssh/config")
@@ -546,14 +547,14 @@ private struct ProjectDialog: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Loading repositories…")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
             } else if let catalogErrorMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(catalogErrorMessage)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(.red)
                         .textSelection(.enabled)
                     AlasButton(title: "Retry", action: { loadRepositoryCatalog(force: true) })
@@ -561,7 +562,7 @@ private struct ProjectDialog: View {
                 .frame(maxWidth: .infinity, minHeight: 90, alignment: .leading)
             } else if displayedRepositories.isEmpty {
                 Text(repositorySearch.isEmpty ? "No repositories found." : "No matching repositories.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                     .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
             } else {
@@ -575,10 +576,10 @@ private struct ProjectDialog: View {
                 .frame(height: 150)
             }
         }
-        .padding(6)
+        .padding(scale.space[2])
         .background(theme.color("bg-1"))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func repositoryRow(_ repository: RemoteRepository) -> some View {
@@ -590,10 +591,10 @@ private struct ProjectDialog: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(repository.fullName)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     Text([repository.visibility, repository.isArchived ? "Archived" : nil].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 10.5))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 Spacer()
@@ -602,10 +603,10 @@ private struct ProjectDialog: View {
                         .foregroundColor(theme.color("accent"))
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[2])
+            .padding(.vertical, scale.space[2])
             .background(selected ? theme.color("bg-3") : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(repository.fullName), \(repository.visibility)\(repository.isArchived ? ", archived" : "")")
@@ -615,7 +616,7 @@ private struct ProjectDialog: View {
     private var cloneFolderField: some View {
         HStack(spacing: 6) {
             Text("Clone into")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             AlasField(text: $cloneRootPath, placeholder: "Choose on first clone", monospaced: true)
             AlasButton(title: "Choose…", action: chooseCloneFolder)
@@ -716,7 +717,7 @@ private struct ProjectDialog: View {
                     Icon(name: symbol, size: 13, color: theme.color("fg"))
                         .frame(width: 24, height: 24)
                         .background(iconSymbolName == symbol ? theme.color("bg-4") : theme.color("bg-2"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 .buttonStyle(.plain)
                 .help(symbol)
@@ -778,7 +779,7 @@ private struct ProjectDialog: View {
     private func gradientPresetRow(_ title: String, _ presets: [ProjectIconGradientPreset]) -> some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
                 .frame(width: 40, alignment: .leading)
             ForEach(presets, id: \.name) { preset in
@@ -825,11 +826,11 @@ private struct ProjectDialog: View {
     private func gradientDirectionChip(_ direction: ProjectIconGradient.Direction) -> some View {
         Button { gradientDirection = direction } label: {
             Text(Self.directionGlyph(direction))
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg"))
                 .frame(width: 26, height: 22)
                 .background(gradientDirection == direction ? theme.color("bg-4") : theme.color("bg-2"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help(Self.directionTitle(direction))
@@ -868,7 +869,7 @@ private struct ProjectDialog: View {
             if let repoIcon {
                 HStack(spacing: 8) {
                     Text("Repository icon (.alas/\(repoIcon.fileName))")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                     AlasButton(title: usesRepoIcon ? "In use" : "Use", action: useRepoIcon)
                         .disabled(usesRepoIcon)
@@ -877,7 +878,7 @@ private struct ProjectDialog: View {
             if let avatarPreset {
                 HStack(spacing: 8) {
                     Text(avatarPreset.label)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                     AlasButton(
                         title: avatarPresetLoading ? "Loading…" : "Use",
@@ -887,7 +888,7 @@ private struct ProjectDialog: View {
                 }
             } else if avatarPresetError {
                 Text("Avatar preset unavailable")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-faint"))
             }
         }
@@ -896,32 +897,32 @@ private struct ProjectDialog: View {
     private var readOnlyPath: some View {
         Text(RemotePath.display(path))
             .foregroundColor(theme.color("fg"))
-            .font(.system(size: 12, design: .monospaced))
+            .font(scale.meta.font(design: .monospaced))
             .lineLimit(1)
             .truncationMode(.middle)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[3])
             .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
             .background(theme.color("bg-1"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func sshConnectionIssueField(_ issue: SSHConnectionIssue) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: issue.kind == .needsInteraction ? "terminal" : "exclamationmark.triangle")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(issue.kind == .needsInteraction ? theme.color("accent") : .red)
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(issue.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(theme.color("fg"))
                     Text(issue.message)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -938,32 +939,32 @@ private struct ProjectDialog: View {
             if !issue.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 DisclosureGroup("SSH details") {
                     copyableSSHDetail(issue.detail)
-                        .padding(.top, 6)
+                        .padding(.top, scale.space[2])
                 }
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
             }
         }
-        .padding(10)
+        .padding(scale.space[3])
         .background(theme.color("bg-0"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func copyableSSHDetail(_ detail: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(detail.trimmingCharacters(in: .whitespacesAndNewlines))
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(scale.caption.font(weight: .regular, design: .monospaced))
                 .foregroundColor(theme.color("fg-muted"))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: { copyToPasteboard(detail) }) {
                 Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             .buttonStyle(.plain)
@@ -975,7 +976,7 @@ private struct ProjectDialog: View {
     private func errorField(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(message)
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(.red)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -984,20 +985,20 @@ private struct ProjectDialog: View {
                 copyToPasteboard(message)
             }) {
                 Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             .buttonStyle(.plain)
             .help("Copy error")
             .accessibilityLabel("Copy error message")
         }
-        .padding(8)
+        .padding(scale.space[2])
         .background(theme.color("bg-0"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func copyToPasteboard(_ value: String) {
@@ -1008,14 +1009,14 @@ private struct ProjectDialog: View {
     private var startupScriptsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Startup scripts")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Text("Approved repository hooks run between global and project scripts when this project inherits or appends.")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 8) {
                 Text("Session open script")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg"))
                 Picker("Session open script", selection: $sessionOpenMode) {
                     ForEach(startupOptions, id: \.0) { option in
@@ -1031,7 +1032,7 @@ private struct ProjectDialog: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 Text("Worktree create script")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg"))
                 Picker("Worktree create script", selection: $worktreeCreateMode) {
                     ForEach(startupOptions, id: \.0) { option in
@@ -1060,24 +1061,24 @@ private struct ProjectDialog: View {
         if showsWorktreeVMSection {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Worktree VMs")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Give new worktrees a macOS VM", isOn: $vmForNewWorktrees)
                         .toggleStyle(.checkbox)
-                        .font(.system(size: 11.5))
+                        .font(scale.metaFont)
                     Text("Created on demand otherwise (agent's first call or the VM tab).")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Guest setup script · runs in each new VM, before its clean point")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
                         .accessibilityLabel("Guest setup script")
                     Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once.")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }
             }
@@ -1091,17 +1092,17 @@ private struct ProjectDialog: View {
         if case .edit(let project) = mode, !project.isFolder {
             VStack(alignment: .leading, spacing: 12) {
                 Text("PR shepherd")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 Text("Instructions and required reviewers Alas uses when it fixes or merges this project's pull requests.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                 if let shepherdRulesOverride {
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text")
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                         Text("Overridden by \(shepherdRulesOverride)")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                     }
                     .foregroundStyle(theme.color("warn"))
                     .help("The repository file wins over these settings. Remove or rename it to use them.")
@@ -1109,7 +1110,7 @@ private struct ProjectDialog: View {
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Instructions")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(
                         text: $shepherdInstructions,
@@ -1125,17 +1126,16 @@ private struct ProjectDialog: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Required reviewers")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     Text("Logins that must review the current head before auto-merge.")
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                     ForEach(shepherdRequiredReviewers.indices, id: \.self) { index in
                         HStack(spacing: 8) {
                             AlasField(
                                 text: shepherdReviewerBinding(at: index),
-                                placeholder: "chatgpt-codex-connector",
-                                monospaced: true
+                                placeholder: "chatgpt-codex-connector"
                             )
                             MCPServerIconButton(icon: "trash", tooltip: "Remove reviewer") {
                                 guard shepherdRequiredReviewers.indices.contains(index) else { return }
@@ -1200,7 +1200,7 @@ private struct ProjectDialog: View {
         let presentation = repoHookPresentations[event] ?? .checkAfterRepositoryAvailable
         HStack(alignment: .firstTextBaseline) {
             Text("\(event.relativePath): \(presentation.summary)")
-                .font(.system(size: 11))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
@@ -1208,11 +1208,11 @@ private struct ProjectDialog: View {
             case .some(.review):
                 Button("Review") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
             case .some(.retry):
                 Button("Retry") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
             case nil:
                 EmptyView()
             }
@@ -1353,11 +1353,11 @@ private struct ProjectDialog: View {
     private var integrationsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Integrations")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             HStack(spacing: 8) {
                 Text(mcpServers.isEmpty ? "No MCP servers configured" : "\(mcpServers.count) MCP server\(mcpServers.count == 1 ? "" : "s") configured")
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 Spacer()
                 AlasButton(title: "Manage MCP Servers…", icon: "slider", action: {
@@ -1871,6 +1871,7 @@ private struct ProjectDialog: View {
 }
 
 struct ProjectStartupScriptEditor: View {
+    @Environment(\.designScale) private var scale
     @Binding var text: String
     let minHeight: CGFloat
     /// Shown while `text` is empty; never inserted into the text.
@@ -1880,28 +1881,29 @@ struct ProjectStartupScriptEditor: View {
     var body: some View {
         PairedTextEditor(
             text: $text,
-            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            font: scale.meta.monospacedNSFont(),
             textColor: NSColor(theme.color("fg"))
         )
         .frame(minHeight: minHeight)
         .overlay(alignment: .topLeading) {
             if let placeholder, text.isEmpty {
                 Text(placeholder)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundStyle(theme.color("fg-faint"))
                     // NSTextView's default line fragment padding.
-                    .padding(.leading, 5)
+                    .padding(.leading, scale.space[1])
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
-        .padding(8)
+        .padding(scale.space[2])
         .background(theme.color("bg-0"))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 }
 
 private struct SSHConnectionAssistant: View {
+    @Environment(\.designScale) private var scale
     let host: String
     let surface: AlasGhostty.SurfaceView?
     let status: SSHSetupStatus
@@ -1930,10 +1932,10 @@ private struct SSHConnectionAssistant: View {
                 .frame(height: 380)
                 .background(Color.black)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: scale.radius.small)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
 
                 statusView
             },

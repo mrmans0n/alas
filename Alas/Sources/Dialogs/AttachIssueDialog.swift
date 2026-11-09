@@ -8,6 +8,7 @@ struct AttachIssuePresentation: Identifiable {
 }
 
 struct AttachIssueDialog: View {
+    @Environment(\.designScale) private var scale
     let onCancel: () -> Void
     let onAttach: (AttachedIssueDraft) -> Void
 
@@ -96,14 +97,14 @@ struct AttachIssueDialog: View {
                         Spinner(lineWidth: 1.5, duration: 0.7)
                             .frame(width: 14, height: 14)
                         Text("Resolving ticket…")
-                            .font(.system(size: 11))
+                            .font(scale.metaFont)
                             .foregroundStyle(theme.color("fg-dim"))
                     }
                     .accessibilityElement(children: .combine)
                 }
                 if let errorMessage = model.errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 11))
+                        .font(scale.metaFont)
                         .foregroundColor(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -182,7 +183,7 @@ struct AttachIssueDialog: View {
                         .fixedSize()
                         if let caption = model.kindCaption {
                             Text(caption)
-                                .font(.system(size: 11))
+                                .font(scale.metaFont)
                                 .foregroundColor(theme.color("fg-dim"))
                         }
                         Spacer(minLength: 0)
@@ -214,10 +215,10 @@ struct AttachIssueDialog: View {
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text(heading)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 Text(url)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -225,20 +226,20 @@ struct AttachIssueDialog: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             AlasButton(title: "Change…", style: .subtle, action: model.cancelResolution)
         }
-        .padding(8)
+        .padding(scale.space[2])
         .background(theme.color("bg-0"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .accessibilityElement(children: .combine)
     }
 
     private func placeholder(height: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 6)
+        RoundedRectangle(cornerRadius: scale.radius.medium)
             .fill(theme.color("bg-0"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
             .frame(height: height)
@@ -271,14 +272,14 @@ struct AttachIssueDialog: View {
 
     private func textEditor(text: Binding<String>, minHeight: CGFloat, maxHeight: CGFloat) -> some View {
         TextEditor(text: text)
-            .font(.system(size: 12))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg"))
             .scrollContentBackground(.hidden)
             .frame(minHeight: minHeight, maxHeight: maxHeight)
-            .padding(8)
+            .padding(scale.space[2])
             .background(theme.color("bg-0"))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
     }

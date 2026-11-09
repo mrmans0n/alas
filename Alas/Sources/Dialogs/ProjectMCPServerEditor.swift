@@ -23,6 +23,7 @@ private enum ProjectMCPTransportEditorKind: String, CaseIterable, Hashable {
 }
 
 struct ProjectMCPServerEditor: View {
+    @Environment(\.designScale) private var scale
     let onSave: (ProjectMCPServer) -> Void
 
     @State private var draft: ProjectMCPServer
@@ -39,8 +40,8 @@ struct ProjectMCPServerEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(draft.name.isEmpty ? "Add MCP Server" : "Edit MCP Server")
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.bottom, 16)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                .padding(.bottom, scale.space[4])
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -62,9 +63,9 @@ struct ProjectMCPServerEditor: View {
 
             if let validationMessage {
                 Text(validationMessage)
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(.red)
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
             }
 
             HStack(spacing: 8) {
@@ -73,9 +74,9 @@ struct ProjectMCPServerEditor: View {
                 AlasButton(title: "Save", style: .primary, action: save)
                     .disabled(!canSave)
             }
-            .padding(.top, 16)
+            .padding(.top, scale.space[4])
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(width: 620)
         .background(theme.color("bg-1"))
     }
@@ -95,7 +96,7 @@ struct ProjectMCPServerEditor: View {
             }
             if transportKind == .sse {
                 Text("Legacy SSE is supported for older MCP servers. Prefer HTTP for new servers.")
-                    .font(.system(size: 11))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
             }
             keyValueEditor(title: "Headers", entries: headersBinding, valuePlaceholder: "${MCP_TOKEN}")
@@ -105,7 +106,7 @@ struct ProjectMCPServerEditor: View {
     private var argumentEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Arguments")
-                .font(.system(size: 11.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg"))
             ForEach(argumentValues.indices, id: \.self) { index in
                 HStack(spacing: 8) {
@@ -126,7 +127,7 @@ struct ProjectMCPServerEditor: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg"))
             ForEach(entries.wrappedValue.indices, id: \.self) { index in
                 HStack(spacing: 8) {
@@ -145,7 +146,7 @@ struct ProjectMCPServerEditor: View {
 
     private var templateHelp: some View {
         Text("Use ${VAR} for environment values. PROJECT_DIR and WORKTREE_DIR are available automatically. Put secret values in environment variables, then reference them here.")
-            .font(.system(size: 11))
+            .font(scale.metaFont)
             .foregroundColor(theme.color("fg-muted"))
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -291,7 +292,7 @@ struct ProjectMCPServerEditor: View {
     private func field<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(theme.color("fg"))
             content()
         }
