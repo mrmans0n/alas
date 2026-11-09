@@ -1009,6 +1009,32 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid", "name"]
             }
         }),
+        json!({
+            "name": "device_install",
+            "description": format!("Install a built .app on a booted simulator, replacing an installed copy. Build it for the simulator first, for example with xcodebuild -destination 'platform=iOS Simulator,id=<udid>'. Returns the app's bundle_id and name; then call device_launch. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "app_path": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The .app folder, relative to the worktree root or absolute." }
+                },
+                "required": ["udid", "app_path"]
+            }
+        }),
+        json!({
+            "name": "device_launch",
+            "description": format!("Launch an installed app on a booted simulator, ending a running copy first. Returns its pid. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's bundle ID, from device_install." }
+                },
+                "required": ["udid", "bundle_id"]
+            }
+        }),
     ]
 }
 
@@ -1930,6 +1956,21 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 udid: required_limited_string(args, "udid", 64)?,
                 name: button.to_string(),
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+            }))
+        }
+        "device_install" => {
+            reject_arguments(args, name, &["udid", "app_path"])?;
+            let app_path = required_limited_string(args, "app_path", 4096)?;
+            Ok(Command::Device(alas_client::DeviceCommand::Install {
+                udid: required_limited_string(args, "udid", 64)?,
+                app_path: alas_client::absolutize(std::path::Path::new(worktree_dir), &app_path),
+            }))
+        }
+        "device_launch" => {
+            reject_arguments(args, name, &["udid", "bundle_id"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::Launch {
+                udid: required_limited_string(args, "udid", 64)?,
+                bundle_id: required_limited_string(args, "bundle_id", 255)?,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4066,6 +4107,8 @@ mod tests {
                 "device_swipe",
                 "device_type",
                 "device_button",
+                "device_install",
+                "device_launch",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4883,6 +4926,28 @@ mod tests {
         );
         let ok = map("device_button", json!({ "udid": "U", "name": "home" })).unwrap();
         assert!(runs_on_worker(&ok));
+        assert_eq!(
+            map(
+                "device_install",
+                json!({ "udid": "U", "app_path": "build/../out/Hello.app" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Install {
+                udid: "U".into(),
+                app_path: "/wt/out/Hello.app".into()
+            })
+        );
+        assert_eq!(
+            map(
+                "device_launch",
+                json!({ "udid": "U", "bundle_id": "com.example.hello" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Launch {
+                udid: "U".into(),
+                bundle_id: "com.example.hello".into()
+            })
+        );
         for (name, args, error) in [
             ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
             ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
@@ -4894,6 +4959,8 @@ mod tests {
             ("device_snapshot", json!({ "udid": "U", "limit": 1001 }), "limit must be an integer from 1 to 1000"),
             ("device_type", json!({ "udid": "U", "text": "" }), "text must be a non-empty string of at most 4096 bytes"),
             ("device_open", json!({}), "missing required argument 'udid'"),
+            ("device_install", json!({ "udid": "U" }), "missing required argument 'app_path'"),
+            ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }
@@ -4938,7 +5005,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

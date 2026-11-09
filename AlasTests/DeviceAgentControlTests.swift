@@ -54,10 +54,61 @@ struct DeviceAgentControlTests {
     ]}]
     """#.utf8)
 
-    private func control(_ input: FakeInput, sleep: @escaping @MainActor (Duration) async -> Void = { _ in }) -> DeviceAgentControl {
+    private final class Installs {
+        var calls: [String] = []
+    }
+
+    private func control(
+        _ input: FakeInput, installs: Installs = Installs(),
+        sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
+    ) -> DeviceAgentControl {
         DeviceAgentControl(
-            input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in }, sleep: sleep
+            input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in },
+            install: { _, app in installs.calls.append("install \(app.lastPathComponent)") },
+            launch: { _, bundleID in
+                guard bundleID == "com.example.hello" else { throw SimulatorLaunchError.notInstalled }
+                installs.calls.append("launch \(bundleID)")
+                return 4021
+            },
+            sleep: sleep
         )
+    }
+
+    private func appBundle(platform: String) throws -> URL {
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)/Hello.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.hello", "CFBundleName": "Hello", "DTPlatformName": platform]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Info.plist"))
+        return app
+    }
+
+    @Test func installAndLaunchAreHeldAndReturnWhatTheAgentNeeds() async throws {
+        let app = try appBundle(platform: "iphonesimulator")
+        defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+        let installs = Installs()
+        let control = control(FakeInput(), installs: installs, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        async let installed = control.perform(.install(udid: "on", appPath: app.path), sessionID: "s")
+        await until { control.waitingSessions(udid: "on") == ["s"] }
+        #expect(installs.calls.isEmpty)
+        control.handBack(udid: "on")
+        #expect(await installed == .text([#"{"bundle_id":"com.example.hello","name":"Hello"}"#]))
+        #expect(await control.perform(.launch(udid: "on", bundleID: "com.example.hello"), sessionID: "s")
+            == .text([#"{"pid":4021}"#]))
+        #expect(installs.calls == ["install Hello.app", "launch com.example.hello"])
+    }
+
+    @Test func installAndLaunchRefuseWhatTheSimulatorCantRun() async throws {
+        let app = try appBundle(platform: "iphoneos")
+        defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+        let installs = Installs()
+        let control = control(FakeInput(), installs: installs)
+        let wrong = await control.perform(.install(udid: "on", appPath: app.path), sessionID: "s")
+        #expect(error(wrong)?.hasPrefix("device_app_wrong_platform:") == true)
+        let missing = await control.perform(.launch(udid: "on", bundleID: "com.example.gone"), sessionID: "s")
+        #expect(error(missing) == "device_app_not_installed: com.example.gone isn't installed on iPhone.")
+        #expect(installs.calls.isEmpty)
     }
 
     private func error(_ response: AlasCLIResponse) -> String? {
@@ -139,7 +190,8 @@ struct DeviceAgentControlTests {
     @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
-            input: FakeInput(), devices: { listed }, boot: { _ in }, sleep: Self.untilCancelled
+            input: FakeInput(), devices: { listed }, boot: { _ in },
+            install: { _, _ in }, launch: { _, _ in 0 }, sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
@@ -233,6 +285,7 @@ extension DeviceAgentControlTests {
         let window = Duration.seconds(60)
         let control = DeviceAgentControl(
             input: input, devices: { [Self.booted] }, boot: { _ in },
+            install: { _, _ in }, launch: { _, _ in 0 },
             // The lease window passes at once; each typing pause lets it fire.
             sleep: { duration in
                 guard duration != window else { return }

@@ -316,7 +316,7 @@ struct ACPMCPPromptPreambleTests {
             "computer_open_app", "computer_wait",
             "vm_run", "vm_status",
             "device_list", "device_open", "device_snapshot", "device_screenshot",
-            "device_tap", "device_swipe", "device_type", "device_button",
+            "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
         ])
     }
 

@@ -724,7 +724,9 @@ final class AppState {
     @ObservationIgnored lazy var deviceControl = DeviceAgentControl(
         input: simulatorStreams,
         devices: { try await SimulatorControl.devices() },
-        boot: { try await SimulatorControl.boot(udid: $0) }
+        boot: { try await SimulatorControl.boot(udid: $0) },
+        install: { try await SimulatorControl.install(udid: $0, app: $1) },
+        launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) }
     )
     var harness: HarnessService { core.harness }
 

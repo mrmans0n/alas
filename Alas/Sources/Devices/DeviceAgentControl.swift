@@ -42,6 +42,8 @@ final class DeviceAgentControl {
     @ObservationIgnored private let input: DeviceInput
     @ObservationIgnored private let devices: () async throws -> [SimulatorDevice]
     @ObservationIgnored private let boot: (String) async throws -> Void
+    @ObservationIgnored private let install: (String, URL) async throws -> Void
+    @ObservationIgnored private let launch: (String, String) async throws -> Int32
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
@@ -74,6 +76,8 @@ final class DeviceAgentControl {
         input: DeviceInput,
         devices: @escaping () async throws -> [SimulatorDevice],
         boot: @escaping (String) async throws -> Void,
+        install: @escaping (String, URL) async throws -> Void,
+        launch: @escaping (String, String) async throws -> Int32,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
@@ -82,6 +86,8 @@ final class DeviceAgentControl {
         self.input = input
         self.devices = devices
         self.boot = boot
+        self.install = install
+        self.launch = launch
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
@@ -195,9 +201,10 @@ final class DeviceAgentControl {
         leased = true
 
         // Touches and keys from two calls must not interleave on one simulator,
-        // so input calls to a device run one at a time, in order.
+        // so input calls to a device run one at a time, in order; installing
+        // and launching take their turn too.
         let isInput = switch command {
-        case .tap, .swipe, .type, .button: true
+        case .tap, .swipe, .type, .button, .install, .launch: true
         case .list, .open, .snapshot, .screenshot: false
         }
         if isInput {
@@ -284,6 +291,29 @@ final class DeviceAgentControl {
         case .button(_, let name, let includeScreenshot):
             input.button(udid: udid, name: name.rawValue)
             return await finish(udid, includeScreenshot: includeScreenshot)
+        case .install(_, let appPath):
+            let app: SimulatorAppBundle
+            do {
+                app = try SimulatorAppBundle.read(URL(fileURLWithPath: appPath))
+            } catch let problem as SimulatorAppBundle.Problem {
+                return .error(problem.message(udid: udid))
+            } catch {
+                return .error("device_app_invalid: \(error.localizedDescription)")
+            }
+            do {
+                try await install(udid, app.url)
+            } catch {
+                return .error("device_install_failed: \(error.localizedDescription)")
+            }
+            return .text([Self.json(["bundle_id": app.bundleID, "name": app.name])])
+        case .launch(_, let bundleID):
+            do {
+                return .text([Self.json(["pid": Int(try await launch(udid, bundleID))])])
+            } catch SimulatorLaunchError.notInstalled {
+                return .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
+            } catch {
+                return .error("device_launch_failed: \(error.localizedDescription)")
+            }
         }
     }
 
