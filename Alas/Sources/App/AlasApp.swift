@@ -597,6 +597,8 @@ enum DesignCaptureBridge {
                 MainActor.assumeIsolated { DesignCaptureCode.snapshotWindows(to: directory) }
             } else if DesignCaptureAttention.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureAttention.shared.open(target, state: state) } }
+            } else if DesignCaptureReview.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureReview.shared.open(target, state: state) } }
             } else if DesignCaptureCode.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureCode.open(target, state: state) } }
             } else if let name = localNotification(for: target) {

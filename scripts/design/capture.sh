@@ -25,6 +25,9 @@
 # with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
 # attention-inbox opens the Attention inbox popover over demo rows (DesignCaptureAttention);
 # attention-rollup does the same and runs its roll-up with scripted groups.
+# review-comments, review-states, review-thread, review-annotation and review-image (with
+# ALAS_CAPTURE_CLI=review) seed draft comments, a provider thread and an annotation over the
+# Review Changes tab and scroll to one of them (DesignCaptureReview).
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",

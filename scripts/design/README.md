@@ -43,6 +43,16 @@ a peer session and a cleanup reminder. The rows replace the real store's aggrega
 in this Debug build. `attention-rollup` also runs the roll-up, with scripted groups instead
 of a model. The popover is composited onto `window.png` like the editor popups.
 
+Set `ALAS_CAPTURE_CLI=review` with `ALAS_CAPTURE_CENTER` set to `review-comments`,
+`review-states`, `review-thread`, `review-annotation` or `review-image` to capture the Review
+Changes tab over the selected worktree's edits (three small source diffs, a 22,000-line
+generated CSV that the surface defers behind "Show full diff", and a PNG that does not
+decode). `DesignCaptureReview` writes five draft comments (one from an agent, with a reply, one
+whole-file) into the profile's draft store and feeds an in-memory provider thread with three
+replies and an eslint annotation to the surface. Each target scrolls to a different place:
+the draft cards and rail, the deferred placeholder, the thread, the annotation, or the top
+(the image). The comment composer and the context-load error row are not reachable this way.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14
