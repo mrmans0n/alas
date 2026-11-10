@@ -53,6 +53,12 @@ struct RunScriptMetadataTests {
         #expect(RunScriptMetadata.parse(fileName: "a.sh", contents: contents).console == expected)
     }
 
+    @Test func appHeaderNamesTheBuiltApp() {
+        let meta = RunScriptMetadata.parse(fileName: "run-ios.sh", contents: "# alas-app: build/Debug-iphonesimulator/Hello.app\n")
+        #expect(meta.appPath == "build/Debug-iphonesimulator/Hello.app")
+        #expect(RunScriptMetadata.parse(fileName: "a.sh", contents: "echo\n").appPath == nil)
+    }
+
     @Test func scriptKeyCombinesScopeAndFileName() {
         let script = RunScript(
             scope: .repo, fileName: "dev.sh",

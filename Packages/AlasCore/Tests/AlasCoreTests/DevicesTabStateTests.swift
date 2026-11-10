@@ -97,4 +97,19 @@ struct DevicesTabStateTests {
         #expect(state.vmRows.map(\.tone) == [.busy])
         #expect(state.simulatorRows.first?.detail == "iOS 26.5")
     }
+
+    @Test(arguments: [
+        (DevicesTarget.simulator("off"), "off"),
+        (.simulator("gone"), "on"),
+        (.vm(.macOS), "on"),
+        (nil, "on"),
+    ] as [(DevicesTarget?, String)])
+    func aRunScriptsAppGoesToTheSelectedSimulatorElseABootedOne(selection: DevicesTarget?, udid: String) {
+        #expect(SimulatorTarget.choose(selection: selection, simulators: [Self.off, Self.on])?.udid == udid)
+    }
+
+    @Test func withNothingBootedARunScriptsAppGoesToTheFirstSimulator() {
+        #expect(SimulatorTarget.choose(selection: nil, simulators: [Self.off])?.udid == "off")
+        #expect(SimulatorTarget.choose(selection: nil, simulators: []) == nil)
+    }
 }

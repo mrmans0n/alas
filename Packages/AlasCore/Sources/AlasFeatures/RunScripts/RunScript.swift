@@ -47,6 +47,9 @@ public struct RunScript: Equatable, Identifiable, Sendable {
     public var endpoint: URL?
     /// Declared as `# alas-console:`. ⌥ flips it for one launch.
     public var console: RunScriptConsole = .shown
+    /// The `.app` the script builds (`# alas-app:`), relative to the worktree
+    /// root or absolute; installed on a simulator when a run succeeds.
+    public var appPath: String?
 
     public var key: String { "\(scope.rawValue):\(fileName)" }
     public var id: String { key }
@@ -56,7 +59,7 @@ public struct RunScript: Equatable, Identifiable, Sendable {
         console == .shown ? "Run \(displayName) in Background" : "Run \(displayName) with Console"
     }
 
-    public init(scope: RunScriptScope, fileName: String, fileURL: URL, displayName: String, onExit: RunScriptOnExit, cwd: String?, isExecutable: Bool, endpoint: URL? = nil, console: RunScriptConsole = .shown) {
+    public init(scope: RunScriptScope, fileName: String, fileURL: URL, displayName: String, onExit: RunScriptOnExit, cwd: String?, isExecutable: Bool, endpoint: URL? = nil, console: RunScriptConsole = .shown, appPath: String? = nil) {
         self.scope = scope
         self.fileName = fileName
         self.fileURL = fileURL
@@ -66,6 +69,7 @@ public struct RunScript: Equatable, Identifiable, Sendable {
         self.isExecutable = isExecutable
         self.endpoint = endpoint
         self.console = console
+        self.appPath = appPath
     }
 }
 
@@ -78,17 +82,18 @@ public enum RunScriptMetadata: Sendable {
     /// is immutable, and `firstMatch(of:)` below does not mutate it — `Regex`
     /// simply isn't `Sendable` yet. Do not rebuild this per call: `parse` runs
     /// once per script file discovered on disk.
-    nonisolated(unsafe) private static let pattern = /^#\s*alas-(name|on-exit|cwd|url|console):\s*(.+?)\s*$/
+    nonisolated(unsafe) private static let pattern = /^#\s*alas-(name|on-exit|cwd|url|console|app):\s*(.+?)\s*$/
 
     public static func parse(
         fileName: String,
         contents: String
-    ) -> (displayName: String, onExit: RunScriptOnExit, cwd: String?, endpoint: URL?, console: RunScriptConsole) {
+    ) -> (displayName: String, onExit: RunScriptOnExit, cwd: String?, endpoint: URL?, console: RunScriptConsole, appPath: String?) {
         var name: String?
         var onExit = RunScriptOnExit.keep
         var cwd: String?
         var endpoint: URL?
         var console = RunScriptConsole.shown
+        var appPath: String?
         for line in contents.split(separator: "\n", omittingEmptySubsequences: false).prefix(headerLineLimit) {
             guard let match = line.firstMatch(of: pattern) else { continue }
             let value = String(match.2)
@@ -98,10 +103,11 @@ public enum RunScriptMetadata: Sendable {
             case "cwd":     cwd = value
             case "url":     endpoint = RunEndpointPolicy.endpoint(from: value)
             case "console": console = RunScriptConsole(rawValue: value) ?? .shown
+            case "app":     appPath = value
             default:        break
             }
         }
         let fallback = (fileName as NSString).deletingPathExtension
-        return (name ?? (fallback.isEmpty ? fileName : fallback), onExit, cwd, endpoint, console)
+        return (name ?? (fallback.isEmpty ? fileName : fallback), onExit, cwd, endpoint, console, appPath)
     }
 }

@@ -57,6 +57,11 @@ final class DevicePaneModel {
         appInstalls[udid] = nil
     }
 
+    /// Shows why an app couldn't be installed, in the simulator's app pill.
+    func failAppInstall(udid: String, message: String) {
+        appInstalls[udid] = .failed(message)
+    }
+
     func refresh() async {
         do {
             devices = try await SimulatorControl.devices()

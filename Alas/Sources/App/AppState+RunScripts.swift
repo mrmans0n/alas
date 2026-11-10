@@ -412,6 +412,9 @@ extension AppState {
                 severity: .success,
                 worktreeID: worktree.id
             )
+            if case .finished(.succeeded) = record.status, let appPath = script.appPath {
+                Task { await installRunScriptApp(appPath, worktree: worktree) }
+            }
             return
         }
         let failure = RunScriptFailure(

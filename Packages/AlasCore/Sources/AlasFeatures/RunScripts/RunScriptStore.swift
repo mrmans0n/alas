@@ -176,7 +176,8 @@ public enum RunScriptStore: Sendable {
             cwd: meta.cwd,
             isExecutable: isExecutable,
             endpoint: meta.endpoint,
-            console: meta.console
+            console: meta.console,
+            appPath: meta.appPath
         )
     }
 }
