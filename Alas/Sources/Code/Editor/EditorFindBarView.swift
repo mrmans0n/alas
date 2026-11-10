@@ -23,17 +23,18 @@ struct EditorFindBarView: View {
     }
 
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: showsReplace ? 4 : 8) {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(theme.color("fg-muted"))
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                 TextField("Find", text: $findText)
                     .focused($findFieldFocused)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .frame(minWidth: 36, idealWidth: showsReplace ? 120 : 180, maxWidth: .infinity)
                     .layoutPriority(2)
                     .onSubmit { onFind(.next) }
@@ -42,7 +43,7 @@ struct EditorFindBarView: View {
                     }
             }
             .padding(.horizontal, showsReplace ? 6 : 8)
-            .padding(.vertical, 4)
+            .padding(.vertical, scale.space[1])
             .background(theme.color("bg-2"))
             .cornerRadius(6)
 
@@ -51,13 +52,13 @@ struct EditorFindBarView: View {
                     TextField("Replace", text: $replaceText)
                         .focused($replaceFieldFocused)
                         .textFieldStyle(PlainTextFieldStyle())
-                        .font(.system(size: 12))
+                        .font(scale.meta.font)
                         .frame(minWidth: 36, idealWidth: 120, maxWidth: .infinity)
                         .layoutPriority(1)
                         .onSubmit { onReplace() }
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[1])
                 .background(theme.color("bg-2"))
                 .cornerRadius(6)
             }
@@ -65,7 +66,7 @@ struct EditorFindBarView: View {
             HStack(spacing: 2) {
                 Button(action: { onFind(.previous) }) {
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.glyph.font)
                         .frame(width: 22, height: 22)
                 }
                 .help("Previous match")
@@ -74,7 +75,7 @@ struct EditorFindBarView: View {
 
                 Button(action: { onFind(.next) }) {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.glyph.font)
                         .frame(width: 22, height: 22)
                 }
                 .help("Next match")
@@ -88,7 +89,7 @@ struct EditorFindBarView: View {
                 onToggleCaseSensitive()
             }) {
                 Text("Aa")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(isCaseSensitive ? theme.color("accent") : theme.color("fg-muted"))
                     .frame(width: 26, height: 22)
             }
@@ -98,7 +99,7 @@ struct EditorFindBarView: View {
             .accessibilityValue(isCaseSensitive ? "On" : "Off")
 
             Text(statusText)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -109,7 +110,7 @@ struct EditorFindBarView: View {
                     onReplace()
                 } label: {
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.glyph.font)
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -121,7 +122,7 @@ struct EditorFindBarView: View {
                     onReplaceAll()
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.glyph.font)
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -132,7 +133,7 @@ struct EditorFindBarView: View {
 
             Button(action: onDone) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(scale.meta.font(weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
                     .frame(width: 22, height: 22)
             }
@@ -140,8 +141,8 @@ struct EditorFindBarView: View {
             .help("Close")
             .accessibilityLabel("Close find bar")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .onExitCommand(perform: onDone)

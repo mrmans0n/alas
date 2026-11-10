@@ -7,6 +7,7 @@ import SwiftUI
 struct EditorConflictBanner: View {
     let buffer: EditorBuffer
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let error = buffer.lastSaveError {
@@ -42,16 +43,16 @@ struct EditorConflictBanner: View {
     private func row(message: String, action: (label: String, run: () -> Void)?) -> some View {
         HStack(spacing: 10) {
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg"))
             Spacer()
             if let action {
                 Button(action.label, action: action.run)
                     .buttonStyle(.borderless)
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 28)
         .background(theme.color("bg-3"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
@@ -61,13 +62,13 @@ struct EditorConflictBanner: View {
     private func row(message: String, primary: (label: String, run: () -> Void), secondary: (label: String, run: () -> Void)) -> some View {
         HStack(spacing: 10) {
             Text(message)
-                .font(.system(size: 12))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg"))
             Spacer()
-            Button(secondary.label, action: secondary.run).buttonStyle(.borderless).font(.system(size: 12))
-            Button(primary.label, action: primary.run).buttonStyle(.borderless).font(.system(size: 12)).foregroundColor(theme.color("accent"))
+            Button(secondary.label, action: secondary.run).buttonStyle(.borderless).font(scale.meta.font)
+            Button(primary.label, action: primary.run).buttonStyle(.borderless).font(scale.meta.font).foregroundColor(theme.color("accent"))
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 28)
         .background(theme.color("bg-3"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)

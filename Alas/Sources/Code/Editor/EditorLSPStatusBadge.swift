@@ -19,6 +19,7 @@ struct EditorLSPStatusBadge: View {
     let onInstall: () -> Void
 
     @State private var popoverOpen: Bool = false
+    @Environment(\.designScale) private var scale
     @State private var resolvedLanguages: [(language: String, displayName: String)] = []
 
     var body: some View {
@@ -32,7 +33,7 @@ struct EditorLSPStatusBadge: View {
         .accessibilityHint(Text("Shows actions for this file's language server"))
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            popoverBody.padding(10).frame(width: 280)
+            popoverBody.padding(scale.space[3]).frame(width: 280)
         }
     }
 
@@ -74,8 +75,8 @@ struct EditorLSPStatusBadge: View {
 
     private func readyBody(language: String, command: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(language) · \(command)").font(.system(size: 11, weight: .semibold))
-            Text("Connected. Document is open and synced.").font(.system(size: 11))
+            Text("\(language) · \(command)").font(scale.meta.font(weight: .semibold))
+            Text("Connected. Document is open and synced.").font(scale.meta.font)
             HStack(spacing: 8) {
                 Button(restartLabel(language: language)) { onRestart()
                 popoverOpen = false }
@@ -89,8 +90,8 @@ struct EditorLSPStatusBadge: View {
 
     private func loadingBody(language: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(language).font(.system(size: 11, weight: .semibold))
-            Text("Starting…").font(.system(size: 11))
+            Text(language).font(scale.meta.font(weight: .semibold))
+            Text("Starting…").font(scale.meta.font)
             Button("Open settings") {
                 onOpenSettings()
                 popoverOpen = false
@@ -100,7 +101,7 @@ struct EditorLSPStatusBadge: View {
 
     private func indexingBody(language: String, tasks: [LSPClient.ProgressTask]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(language) · indexing").font(.system(size: 11, weight: .semibold))
+            Text("\(language) · indexing").font(scale.meta.font(weight: .semibold))
             LSPServerStatusDetail(phase: .indexing(tasks))
             HStack(spacing: 8) {
                 Button(restartLabel(language: language)) { onRestart()
@@ -114,10 +115,10 @@ struct EditorLSPStatusBadge: View {
     @ViewBuilder
     private func problemBody(language: String, kind: ProblemKind, command: String?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(language).font(.system(size: 11, weight: .semibold))
+            Text(language).font(scale.meta.font(weight: .semibold))
             switch kind {
             case .notInstalled:
-                Text("Language server not installed.").font(.system(size: 11))
+                Text("Language server not installed.").font(scale.meta.font)
                 HStack {
                     Button("Install…") { onInstall()
                     popoverOpen = false }
@@ -127,7 +128,7 @@ struct EditorLSPStatusBadge: View {
                 Divider()
                 overridePicker
             case .dead(let detail):
-                Text("Server crashed.").font(.system(size: 11))
+                Text("Server crashed.").font(scale.meta.font)
                 if let detail {
                     LSPServerStatusDetail(phase: .crashed(detail))
                 }
@@ -140,7 +141,7 @@ struct EditorLSPStatusBadge: View {
                 Divider()
                 overridePicker
             case .disabled:
-                Text("Disabled in settings.").font(.system(size: 11))
+                Text("Disabled in settings.").font(scale.meta.font)
                 Button("Open settings") { onOpenSettings()
                 popoverOpen = false }
             }
@@ -150,9 +151,9 @@ struct EditorLSPStatusBadge: View {
     private func noLanguageBody(fileExtension ext: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(ext.isEmpty ? "Plain text" : ".\(ext)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
             Text("No language server for this file. Treat as another language?")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
             overridePicker
         }
     }

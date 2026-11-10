@@ -330,6 +330,7 @@ struct WorkspaceEditRecoveryView: View {
     let coordinator: WorkspaceEditUndoCoordinator
     @State private var confirmRecovery = false
     @State private var recoveryCandidate: UUID?
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let message = coordinator.statusMessage {
@@ -355,7 +356,7 @@ struct WorkspaceEditRecoveryView: View {
                 Text(coordinator.affectedPaths.joined(separator: "\n"))
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
             }
-            .padding(8)
+            .padding(scale.space[2])
             .confirmationDialog("Roll back the uncertain workspace edit attempt? Files are checked again before recovery.", isPresented: $confirmRecovery) {
                 Button("Recover Workspace Edit") {
                     guard let id = recoveryCandidate else { return }

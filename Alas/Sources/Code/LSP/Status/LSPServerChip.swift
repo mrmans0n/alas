@@ -46,6 +46,7 @@ struct LSPServerChip: View {
     let appState: AppState
 
     @State private var popoverOpen = false
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let state = model.badgeState
@@ -59,7 +60,7 @@ struct LSPServerChip: View {
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
             LSPServerChipPopoverBody(model: model, appState: appState) { popoverOpen = false }
-                .padding(10)
+                .padding(scale.space[3])
                 .frame(width: 300)
         }
     }
@@ -72,15 +73,16 @@ struct LSPServerChipPopoverBody: View {
     let dismiss: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(model.headline).font(.system(size: 11, weight: .semibold))
+            Text(model.headline).font(scale.meta.font(weight: .semibold))
             switch model {
             case .serving(let status):
                 Text("\(status.command) · \(Self.location(of: status))")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-muted"))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -93,7 +95,7 @@ struct LSPServerChipPopoverBody: View {
                     Button("Open settings", action: openSettings)
                 }
             case .unavailable(_, let reason):
-                Text(reason.explanation).font(.system(size: 11))
+                Text(reason.explanation).font(scale.meta.font)
                 HStack(spacing: 8) {
                     if reason == .notInstalled {
                         Button("Install…", action: openSettings)
