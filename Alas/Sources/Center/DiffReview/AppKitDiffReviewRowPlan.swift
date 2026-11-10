@@ -54,6 +54,11 @@ private struct AppKitDiffReviewCardRowToken: Equatable {
     let theme: Theme
 }
 
+private struct AppKitDiffReviewScaledToken: Equatable {
+    let content: AppKitDiffRowEqualityToken
+    let scale: DesignScale
+}
+
 struct AppKitDiffReviewRowToken: Equatable {
     let rowID: String
     let contentSignature: Int
@@ -63,6 +68,7 @@ struct AppKitDiffReviewRowToken: Equatable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
+    let scale: DesignScale
     let lspWorktreeID: String?
     let lspRelativePath: String?
     let lspLanguage: String?
@@ -93,6 +99,9 @@ struct AppKitDiffReviewRowInput {
     var annotations: [DiffInlineAnnotation] = []
     let state: AppKitDiffReviewFileState
     let theme: Theme
+    /// Hosted rows do not inherit the SwiftUI environment, so the density's
+    /// scale travels with the input and is injected into every row root.
+    var scale: DesignScale = .comfortable
     var layoutMode: DiffLayoutMode = .split
     var wrapLines = false
     var showWhitespace = false
@@ -118,6 +127,7 @@ struct AppKitDiffReviewRowInput {
         annotations: [DiffInlineAnnotation] = [],
         state: AppKitDiffReviewFileState,
         theme: Theme,
+        scale: DesignScale = .comfortable,
         layoutMode: DiffLayoutMode = .split,
         wrapLines: Bool = false,
         showWhitespace: Bool = false,
@@ -144,6 +154,7 @@ struct AppKitDiffReviewRowInput {
         self.annotations = annotations
         self.state = state
         self.theme = theme
+        self.scale = scale
         self.layoutMode = layoutMode
         self.wrapLines = wrapLines
         self.showWhitespace = showWhitespace
@@ -737,12 +748,12 @@ enum AppKitDiffReviewRowPlanBuilder {
                 var spec = AppKitDiffRowSpec(
                     id: groupID,
                     ownerID: input.file.id.rawValue,
-                    equalityToken: hunk.equalityToken,
+                    equalityToken: .init(AppKitDiffReviewScaledToken(content: hunk.equalityToken, scale: input.scale)),
                     contentSignature: hunk.contentSignature,
                     estimatedHeight: hunk.estimatedHeight,
                     retention: hunk.retention
                 ) {
-                    hunk.build()
+                    AnyView(hunk.build().environment(\.designScale, input.scale))
                 }
                 if usesCoreTextRows {
                     spec.native = coreTextRow(
@@ -995,6 +1006,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             wrapLines: input.wrapLines, showWhitespace: input.showWhitespace,
             codeFontFamily: input.codeFontFamily, codeFontSize: input.codeFontSize,
             theme: input.theme,
+            scale: input.scale,
             lspWorktreeID: input.lspContext?.worktreeId,
             lspRelativePath: input.lspContext?.relativePath,
             lspLanguage: input.lspContext?.language,
@@ -1022,7 +1034,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             estimatedHeight: height,
             retention: retention,
             contextRowCount: contextRowCount,
-            build: build
+            build: { AnyView(build().environment(\.designScale, input.scale)) }
         ))
     }
 
