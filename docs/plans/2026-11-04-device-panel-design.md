@@ -152,14 +152,17 @@ iOS:
   is toolbar work plus `AlasSimulatorSession` methods.
 - [ ] Foldable hinge and pose. Needs `HingePoseControl` wiring and possibly
   more vendored files (add them to `vendored-files.txt`).
-- [ ] Settings drawer: appearance, text size, increase contrast
+- [x] Settings drawer: appearance, text size, increase contrast
   (`simctl ui <udid> appearance|content_size|increase_contrast`), each control
-  showing the value read back after a change.
-- [ ] Permissions, simulated location, push notifications, open URL
-  (`simctl privacy`, `simctl location`, `simctl push`, `simctl openurl`).
+  showing the value read back after a change. A toolbar popover, and
+  `device_set_appearance` for agents.
+- [x] Permissions, simulated location, push notifications, open URL
+  (`simctl privacy`, `simctl location`, `simctl push`, `simctl openurl`). In
+  the same popover, and as `device_set_permission`, `device_set_location`,
+  `device_push` and `device_open_url`.
 - [x] Install and launch an app (`simctl install`, `simctl launch`), for
   example from a run script's build output. Agents (`device_install`,
-  `device_launch`) and drag and drop; run scripts not yet.
+  `device_launch`), drag and drop, and run scripts with `# alas-app:`.
 - [ ] Clipboard both ways (`simctl pbcopy`, `simctl pbpaste`).
 - [ ] Screenshot and screen recording (`simctl io <udid> screenshot|recordVideo`,
   or a PNG from the frames Alas already receives).
