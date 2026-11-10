@@ -1,0 +1,9 @@
+{
+  "version": "0.23.5",
+  "headline": {
+    "title": "Simulator app loop",
+    "body": "In the experimental, default-off Simulator controls, agents can install and launch apps built with Xcode 26.6; this uses private Simulator APIs.",
+    "action": "openComputerUseSettings",
+    "actionLabel": "Try it"
+  }
+}
