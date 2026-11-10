@@ -367,9 +367,12 @@ public final class ACPSessionRunner {
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
     private var steeringRowPersistencePending = false
-    /// Optional answers submitted while a steering row was persisting; they
-    /// are recorded once it settles, see `recordOptionalAnswer`.
-    private var deferredOptionalAnswers: [String] = []
+    private enum DeferredInputAnswer {
+        case question(ACPAnsweredQuestion)
+        case optionalReply(String)
+    }
+    /// Input history waits until a steering row can no longer roll back.
+    private var deferredInputAnswers: [DeferredInputAnswer] = []
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -5894,6 +5897,25 @@ extension ACPSessionRunner {
         persistFromIndex(before)
     }
 
+    /// Drain pre-answer output before adding the permanent question record.
+    public func recordQuestionAnswer(_ answer: ACPAnsweredQuestion) {
+        guard !steeringRowPersistencePending else {
+            deferredInputAnswers.append(.question(answer))
+            return
+        }
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        flushStreamingPersist()
+        let before = session.transcript.messages.count
+        session.appendQuestionAnswer(answer)
+        let index = session.transcript.messages.count - 1
+        var dirty: Set<Int> = []
+        if session.foregroundTurnActive() || session.transcript.streamingState == .sending {
+            // An answer splits narration, but introduces no provider user message.
+            dirty = beginOutputBoundary(beforeUserMessageAt: index, followingUserCount: 0).dirty
+        }
+        persistIndices(dirty.union(before...index))
+    }
+
     /// Record an answered optional question as the user row the adapter
     /// replays for it. The agent reads the answer mid-turn, like a native
     /// steer, so the row splits the running output the same way; it is not a
@@ -5905,7 +5927,7 @@ extension ACPSessionRunner {
     /// reopen the late-replay guard and tag the finished turn's rows.
     public func recordOptionalAnswer(_ text: String) {
         guard !steeringRowPersistencePending else {
-            deferredOptionalAnswers.append(text)
+            deferredInputAnswers.append(.optionalReply(text))
             return
         }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -5927,9 +5949,14 @@ extension ACPSessionRunner {
     private func endSteeringRowPersistence() {
         steeringRowPersistencePending = false
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: stopped)
-        let answers = deferredOptionalAnswers
-        deferredOptionalAnswers.removeAll()
-        answers.forEach(recordOptionalAnswer)
+        let answers = deferredInputAnswers
+        deferredInputAnswers.removeAll()
+        for answer in answers {
+            switch answer {
+            case .question(let question): recordQuestionAnswer(question)
+            case .optionalReply(let text): recordOptionalAnswer(text)
+            }
+        }
     }
 
     /// Append a system notice and report whether it actually reached the

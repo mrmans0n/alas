@@ -7525,6 +7525,37 @@ struct ACPSessionRunnerTests {
         await second.open()
     }
 
+    @Test("resolved questions follow buffered output and survive hydration")
+    func resolvedQuestionFollowsBufferedOutputAndSurvivesHydration() async throws {
+        let (runner, mock) = try makeRunner(incomingUpdateCoalesceNanos: 60_000_000_000)
+        defer { runner.stop() }
+        runner.start()
+        runner.session.transcript.streamingState = .streaming
+        runner.session.foregroundTurnActive = { true }
+        mock.emit(.init(sessionId: "s", update: agentChunk("Before the answer", id: "m1")))
+        try await waitUntil { runner.pendingIncomingUpdateCountForTesting == 1 }
+        let request = ACPUserInputRequest.cursor(.init(id: .number(1), params: .stub(title: "Choose")))
+        let answer = ACPAnsweredQuestion(request: request, action: .submit(["q1": .string("o1")]))
+
+        runner.recordQuestionAnswer(answer)
+
+        #expect(runner.session.transcript.messages.map(\.kind) == ["agent", "system"])
+        #expect(runner.session.transcript.messages.last == .questionAnswer(answer))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: agentChunk("After the answer", id: "m1")))
+        #expect(runner.session.transcript.messages.map(\.kind) == ["agent", "system", "agent"])
+        await runner.flushPersistence()
+        let hydrated = try await runner.persistence.hydrate(sessionId: "s")
+        let restored = hydrated.wireMessages.map { $0.toMessage() }
+        #expect(restored.map(\.kind) == ["agent", "system", "agent"])
+        try #require(restored.count == 3)
+        #expect(restored[1] == .questionAnswer(answer))
+        let text = restored.compactMap { message -> String? in
+            if case .agent(_, _, let buffer) = message { return buffer.value }
+            return nil
+        }
+        #expect(text == ["Before the answer", "After the answer"])
+    }
+
     /// An answered optional question is recorded the way the adapter replays
     /// it: a user row that is not a new prompt, so the title stays. During a
     /// turn it splits the agent's running message like a native steer; at
