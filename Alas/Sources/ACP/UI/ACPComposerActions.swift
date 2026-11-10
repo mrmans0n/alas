@@ -25,6 +25,9 @@ final class ACPComposerActions: ObservableObject {
     /// Published by the coordinator; opens an image picker and inserts the
     /// chosen files as chips.
     var presentImagePicker: (() -> Void)?
+    /// Published by the coordinator; focuses the composer and pastes the
+    /// clipboard into it, as ⌘V would.
+    var pasteFromClipboard: (() -> Void)?
     /// Published by the coordinator; applies a live dictation transcript
     /// update to the composer's tracked dictation span.
     var applyDictationTranscript: ((_ text: String, _ isFinal: Bool) -> Void)?
