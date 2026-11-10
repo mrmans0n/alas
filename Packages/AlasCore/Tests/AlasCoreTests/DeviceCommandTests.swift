@@ -26,6 +26,16 @@ struct DeviceCommandTests {
         ("device_button", #"{"udid":"U","name":"home"}"#, .button(udid: "U", name: .home, includeScreenshot: false)),
         ("device_install", #"{"udid":"U","app_path":"/b/Hello.app"}"#, .install(udid: "U", appPath: "/b/Hello.app")),
         ("device_launch", #"{"udid":"U","bundle_id":"com.example.hello"}"#, .launch(udid: "U", bundleID: "com.example.hello")),
+        ("device_set_appearance", #"{"udid":"U","appearance":"dark","text_size":"large"}"#,
+         .setAppearance(udid: "U", appearance: .dark, textSize: .large, increaseContrast: nil)),
+        ("device_set_permission", #"{"udid":"U","bundle_id":"b","service":"photos","action":"grant"}"#,
+         .setPermission(udid: "U", bundleID: "b", service: .photos, action: .grant)),
+        ("device_set_location", #"{"udid":"U","latitude":41.3874,"longitude":2.1686}"#,
+         .setLocation(udid: "U", location: SimulatorLocation(latitude: 41.3874, longitude: 2.1686))),
+        ("device_set_location", #"{"udid":"U","clear":true}"#, .setLocation(udid: "U", location: nil)),
+        ("device_push", #"{"udid":"U","bundle_id":"b","payload":{"aps":{"alert":"hi"}}}"#,
+         .push(udid: "U", bundleID: "b", payload: #"{"aps":{"alert":"hi"}}"#)),
+        ("device_open_url", #"{"udid":"U","url":"myapp://home"}"#, .openURL(udid: "U", url: "myapp://home")),
     ] as [(String, String, DeviceCommand)])
     func decodesEachActionWithDefaults(command: String, params: String, expected: DeviceCommand) throws {
         #expect(try decode(command, params) == .device(expected))
@@ -48,6 +58,13 @@ struct DeviceCommandTests {
         ("device_install", #"{"udid":"U","app_path":"relative/Hello.app"}"#),
         ("device_launch", #"{"udid":"U","bundle_id":""}"#),
         ("device_launch", #"{"udid":"U","bundle_id":"x","include_screenshot":true}"#),
+        ("device_set_appearance", #"{"udid":"U"}"#),
+        ("device_set_appearance", #"{"udid":"U","text_size":"huge"}"#),
+        ("device_set_permission", #"{"udid":"U","bundle_id":"b","service":"camera","action":"grant"}"#),
+        ("device_set_location", #"{"udid":"U","latitude":91,"longitude":0}"#),
+        ("device_set_location", #"{"udid":"U","latitude":1,"longitude":2,"clear":true}"#),
+        ("device_push", #"{"udid":"U","bundle_id":"b","payload":{"alert":"hi"}}"#),
+        ("device_open_url", #"{"udid":"U","url":"no scheme"}"#),
     ])
     func refusesWhatAnActionDoesNotTake(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.malformed) { try decode(command, params) }

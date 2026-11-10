@@ -1035,11 +1035,119 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid", "bundle_id"]
             }
         }),
+        json!({
+            "name": "device_set_appearance",
+            "description": format!("Change the simulator's appearance (light or dark), text size (Dynamic Type) and Increase Contrast; pass at least one. Returns the three values read back; a value is \"unsupported\" when the runtime lacks that setting. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "appearance": { "type": "string", "enum": ["light", "dark"] },
+                    "text_size": { "type": "string", "enum": DEVICE_TEXT_SIZES },
+                    "increase_contrast": { "type": "boolean" }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_set_permission",
+            "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+                    "service": { "type": "string", "enum": DEVICE_PRIVACY_SERVICES },
+                    "action": { "type": "string", "enum": ["grant", "revoke", "reset"] }
+                },
+                "required": ["udid", "bundle_id", "service", "action"]
+            }
+        }),
+        json!({
+            "name": "device_set_location",
+            "description": format!("Set the simulator's simulated location, or clear it. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+                    "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+                    "clear": { "type": "boolean", "description": "Clear the simulated location instead of setting one." }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_push",
+            "description": format!("Deliver a push notification to an installed app. payload is the notification's JSON, with an aps object, at most {DEVICE_PUSH_MAX_BYTES} bytes. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+                    "payload": { "type": "object", "description": "For example {\"aps\":{\"alert\":{\"title\":\"Hi\",\"body\":\"There\"}}}." }
+                },
+                "required": ["udid", "bundle_id", "payload"]
+            }
+        }),
+        json!({
+            "name": "device_open_url",
+            "description": format!("Open a URL on the simulator: a web page in Safari, or a deep link into an app. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "url": { "type": "string", "minLength": 1, "maxLength": 4096 }
+                },
+                "required": ["udid", "url"]
+            }
+        }),
     ]
 }
 
 /// The longest `device_type` text accepted.
 const DEVICE_TYPE_MAX_BYTES: usize = 4096;
+
+/// simctl's text sizes, smallest first.
+const DEVICE_TEXT_SIZES: &[&str] = &[
+    "extra-small",
+    "small",
+    "medium",
+    "large",
+    "extra-large",
+    "extra-extra-large",
+    "extra-extra-extra-large",
+    "accessibility-medium",
+    "accessibility-large",
+    "accessibility-extra-large",
+    "accessibility-extra-extra-large",
+    "accessibility-extra-extra-extra-large",
+];
+
+/// simctl privacy's services.
+const DEVICE_PRIVACY_SERVICES: &[&str] = &[
+    "all",
+    "calendar",
+    "contacts-limited",
+    "contacts",
+    "location",
+    "location-always",
+    "photos-add",
+    "photos",
+    "media-library",
+    "microphone",
+    "motion",
+    "reminders",
+    "siri",
+];
+
+/// The largest push payload simctl delivers.
+const DEVICE_PUSH_MAX_BYTES: usize = 4096;
 
 /// The input schema shared by the actions that operate a window and return a
 /// fresh read of it.
@@ -1971,6 +2079,81 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::Launch {
                 udid: required_limited_string(args, "udid", 64)?,
                 bundle_id: required_limited_string(args, "bundle_id", 255)?,
+            }))
+        }
+        "device_set_appearance" => {
+            reject_arguments(args, name, &["udid", "appearance", "text_size", "increase_contrast"])?;
+            let appearance = optional_enum(args, "appearance", &["light", "dark"])?.map(String::from);
+            let text_size = optional_enum(args, "text_size", DEVICE_TEXT_SIZES)?.map(String::from);
+            let increase_contrast = optional_bool(args, "increase_contrast")?;
+            if appearance.is_none() && text_size.is_none() && increase_contrast.is_none() {
+                return Err("pass at least one of appearance, text_size, increase_contrast".into());
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::SetAppearance {
+                udid: required_limited_string(args, "udid", 64)?,
+                appearance,
+                text_size,
+                increase_contrast,
+            }))
+        }
+        "device_set_permission" => {
+            reject_arguments(args, name, &["udid", "bundle_id", "service", "action"])?;
+            let service = optional_enum(args, "service", DEVICE_PRIVACY_SERVICES)?
+                .ok_or_else(|| "missing required argument 'service'".to_string())?;
+            let action = optional_enum(args, "action", &["grant", "revoke", "reset"])?
+                .ok_or_else(|| "missing required argument 'action'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::SetPermission {
+                udid: required_limited_string(args, "udid", 64)?,
+                bundle_id: required_limited_string(args, "bundle_id", 255)?,
+                service: service.into(),
+                action: action.into(),
+            }))
+        }
+        "device_set_location" => {
+            reject_arguments(args, name, &["udid", "latitude", "longitude", "clear"])?;
+            let clear = optional_bool(args, "clear")?.unwrap_or(false);
+            let location = match (args.get("latitude"), args.get("longitude"), clear) {
+                (Some(_), Some(_), false) => Some((
+                    required_bounded_f64(args, "latitude", -90.0, 90.0)?,
+                    required_bounded_f64(args, "longitude", -180.0, 180.0)?,
+                )),
+                (None, None, true) => None,
+                _ => return Err("pass latitude and longitude, or clear: true".into()),
+            };
+            Ok(Command::Device(alas_client::DeviceCommand::SetLocation {
+                udid: required_limited_string(args, "udid", 64)?,
+                location,
+            }))
+        }
+        "device_push" => {
+            reject_arguments(args, name, &["udid", "bundle_id", "payload"])?;
+            let payload = args.get("payload").cloned().unwrap_or(Value::Null);
+            let fits = payload.get("aps").is_some_and(Value::is_object)
+                && serde_json::to_vec(&payload).is_ok_and(|bytes| bytes.len() <= DEVICE_PUSH_MAX_BYTES);
+            if !payload.is_object() || !fits {
+                return Err(format!(
+                    "payload must be a JSON object with an 'aps' object, at most {DEVICE_PUSH_MAX_BYTES} bytes"
+                ));
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::Push {
+                udid: required_limited_string(args, "udid", 64)?,
+                bundle_id: required_limited_string(args, "bundle_id", 255)?,
+                payload,
+            }))
+        }
+        "device_open_url" => {
+            reject_arguments(args, name, &["udid", "url"])?;
+            let url = required_limited_string(args, "url", 4096)?;
+            let has_scheme = url.split_once(':').is_some_and(|(scheme, _)| {
+                scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+            });
+            if !has_scheme {
+                return Err("url must have a scheme, such as https: or myapp:".into());
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::OpenUrl {
+                udid: required_limited_string(args, "udid", 64)?,
+                url,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4119,6 +4302,11 @@ mod tests {
                 "device_button",
                 "device_install",
                 "device_launch",
+                "device_set_appearance",
+                "device_set_permission",
+                "device_set_location",
+                "device_push",
+                "device_open_url",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4964,6 +5152,34 @@ mod tests {
                 bundle_id: "com.example.hello".into()
             })
         );
+        assert_eq!(
+            map("device_set_appearance", json!({ "udid": "U", "appearance": "dark" })).unwrap(),
+            Command::Device(DeviceCommand::SetAppearance {
+                udid: "U".into(),
+                appearance: Some("dark".into()),
+                text_size: None,
+                increase_contrast: None
+            })
+        );
+        assert_eq!(
+            map("device_set_location", json!({ "udid": "U", "clear": true })).unwrap(),
+            Command::Device(DeviceCommand::SetLocation {
+                udid: "U".into(),
+                location: None
+            })
+        );
+        assert_eq!(
+            map(
+                "device_push",
+                json!({ "udid": "U", "bundle_id": "b", "payload": { "aps": { "alert": "hi" } } })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::Push {
+                udid: "U".into(),
+                bundle_id: "b".into(),
+                payload: json!({ "aps": { "alert": "hi" } })
+            })
+        );
         for (name, args, error) in [
             ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
             ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
@@ -4977,6 +5193,12 @@ mod tests {
             ("device_open", json!({}), "missing required argument 'udid'"),
             ("device_install", json!({ "udid": "U" }), "missing required argument 'app_path'"),
             ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
+            ("device_set_appearance", json!({ "udid": "U" }), "pass at least one of appearance, text_size, increase_contrast"),
+            ("device_set_permission", json!({ "udid": "U", "bundle_id": "b", "service": "camera", "action": "grant" }), "service must be one of all, calendar, contacts-limited, contacts, location, location-always, photos-add, photos, media-library, microphone, motion, reminders, siri"),
+            ("device_set_location", json!({ "udid": "U", "latitude": 91, "longitude": 0 }), "latitude must be a number from -90 to 90"),
+            ("device_set_location", json!({ "udid": "U" }), "pass latitude and longitude, or clear: true"),
+            ("device_push", json!({ "udid": "U", "bundle_id": "b", "payload": { "alert": "hi" } }), "payload must be a JSON object with an 'aps' object, at most 4096 bytes"),
+            ("device_open_url", json!({ "udid": "U", "url": "nothing" }), "url must have a scheme, such as https: or myapp:"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }
@@ -5021,7 +5243,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

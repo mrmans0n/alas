@@ -45,6 +45,7 @@ final class DeviceAgentControl {
     @ObservationIgnored private let boot: (String) async throws -> Void
     @ObservationIgnored private let install: (String, URL) async throws -> Void
     @ObservationIgnored private let launch: (String, String) async throws -> Int32
+    @ObservationIgnored private let settings: any SimulatorSettingsControl
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
@@ -82,6 +83,7 @@ final class DeviceAgentControl {
         boot: @escaping (String) async throws -> Void,
         install: @escaping (String, URL) async throws -> Void,
         launch: @escaping (String, String) async throws -> Int32,
+        settings: any SimulatorSettingsControl,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
@@ -92,6 +94,7 @@ final class DeviceAgentControl {
         self.boot = boot
         self.install = install
         self.launch = launch
+        self.settings = settings
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
@@ -171,7 +174,8 @@ final class DeviceAgentControl {
         // so input calls to a device run one at a time, in arrival order;
         // installing and launching take their turn too.
         let isInput = switch command {
-        case .tap, .swipe, .type, .button, .install, .launch: true
+        case .tap, .swipe, .type, .button, .install, .launch,
+             .setAppearance, .setPermission, .setLocation, .push, .openURL: true
         case .list, .open, .snapshot, .screenshot: false
         }
         var inputTurn: UUID?
@@ -321,11 +325,51 @@ final class DeviceAgentControl {
             do {
                 return .text([Self.json(["pid": Int(try await launch(udid, bundleID))])])
             } catch SimulatorLaunchError.notInstalled {
-                return .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
+                return Self.notInstalled(bundleID, on: device)
             } catch {
                 return .error("device_launch_failed: \(error.localizedDescription)")
             }
+        case .setAppearance(_, let appearance, let textSize, let increaseContrast):
+            return await settingsCall {
+                .text([Self.json(try await settings.setDisplay(
+                    udid: udid, appearance: appearance, textSize: textSize, increaseContrast: increaseContrast
+                ).json)])
+            }
+        case .setPermission(_, let bundleID, let service, let action):
+            guard await settings.isInstalled(udid: udid, bundleID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
+            return await settingsCall {
+                try await settings.setPermission(udid: udid, bundleID: bundleID, service: service, action: action)
+                return .text([Self.json(["ok": true])])
+            }
+        case .setLocation(_, let location):
+            return await settingsCall {
+                try await settings.setLocation(udid: udid, location)
+                return .text([Self.json(["ok": true])])
+            }
+        case .push(_, let bundleID, let payload):
+            guard await settings.isInstalled(udid: udid, bundleID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
+            return await settingsCall {
+                try await settings.push(udid: udid, bundleID: bundleID, payload: Data(payload.utf8))
+                return .text([Self.json(["ok": true])])
+            }
+        case .openURL(_, let url):
+            return await settingsCall {
+                try await settings.openURL(udid: udid, url: url)
+                return .text([Self.json(["ok": true])])
+            }
         }
+    }
+
+    private func settingsCall(_ body: () async throws -> AlasCLIResponse) async -> AlasCLIResponse {
+        do {
+            return try await body()
+        } catch {
+            return .error("device_settings_failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func notInstalled(_ bundleID: String, on device: SimulatorDevice) -> AlasCLIResponse {
+        .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
     }
 
     private func takeInputTurn(_ udid: String) -> UUID {
