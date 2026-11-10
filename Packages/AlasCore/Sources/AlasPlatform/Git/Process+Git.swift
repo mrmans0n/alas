@@ -199,14 +199,17 @@ extension Process {
     /// path, never a glob or pathspec magic.
     @TaskLocal public static var gitLiteralPathspecs = false
 
-    /// Builds the environment for every git invocation Alas spawns.
+    /// Builds the environment for every git invocation Alas spawns, and for
+    /// the CLIs that run git and the user's hooks (gg, gh, glab).
     ///
-    /// Starts from the parent process env (so `PATH`, `HOME`, etc. work) and
-    /// sets `GIT_OPTIONAL_LOCKS=0`. The latter tells git not to take
-    /// optional locks like `.git/index.lock` on read-class commands
-    /// (`status`, `diff`, ...). Without it, alas's background monitoring
-    /// loop fights terminal git (`gg sync`, `git commit`) for the index
-    /// lock and the terminal call fails with
+    /// Starts from the parent process env (so `PATH`, `HOME`, etc. work)
+    /// with the login shell's environment over it, so hooks and the tools
+    /// they call see what they would in a terminal: rbenv's shims on `PATH`,
+    /// `ANDROID_HOME` for `./gradlew`. Then sets `GIT_OPTIONAL_LOCKS=0`,
+    /// which tells git not to take optional locks like `.git/index.lock` on
+    /// read-class commands (`status`, `diff`, ...). Without it, alas's
+    /// background monitoring loop fights terminal git (`gg sync`,
+    /// `git commit`) for the index lock and the terminal call fails with
     /// `fatal: Unable to create '.git/index.lock': File exists.`
     ///
     /// This dict is applied to the *child* process only — we never
@@ -220,9 +223,13 @@ extension Process {
     /// credentials or an ssh passphrase.
     public static func gitEnv(
         base: [String: String] = ProcessInfo.processInfo.environment,
+        shellEnvironment: [String: String]? = ShellEnvResolver.shared.resolvedEnvironment,
         neverPrompts: Bool = Process.neverPromptsForGit
     ) -> [String: String] {
         var env = base
+        if let shellEnvironment {
+            env.merge(shellEnvironment) { _, shell in shell }
+        }
         env["GIT_OPTIONAL_LOCKS"] = "0"
         // Force git to emit messages in English. We parse stderr in several
         // places (e.g. WorktreeService submodule/dirty/LFS matchers) and those
@@ -230,6 +237,10 @@ extension Process {
         // otherwise hit translated errors that no matcher recognizes. POSIX:
         // LC_ALL overrides LC_MESSAGES and LANG, so this is sufficient.
         env["LC_ALL"] = "C"
+        // No editor can run without a terminal. The shell's GIT_EDITOR
+        // (nvim, `code --wait`) outranks `-c core.editor=true`, so
+        // `rebase --continue` would wait on it or fail; keep the message.
+        env["GIT_EDITOR"] = "true"
         if neverPrompts {
             env["GIT_TERMINAL_PROMPT"] = "0"
             env["GCM_INTERACTIVE"] = "never"
@@ -237,9 +248,6 @@ extension Process {
             if env["GIT_SSH_COMMAND"] == nil, env["GIT_SSH"] == nil {
                 env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
             }
-        }
-        if let shellPath = ShellEnvResolver.shared.resolvedPath {
-            env["PATH"] = shellPath
         }
         return env
     }

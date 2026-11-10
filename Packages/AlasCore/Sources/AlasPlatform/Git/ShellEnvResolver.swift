@@ -2,58 +2,67 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-/// All mutable state (`_resolvedPath`, `resolveTask`) is guarded by `lock` on
-/// every access path, so concurrent use is safe.
+/// The environment of the user's login shell. Alas starts from launchd, whose
+/// environment lacks what startup files set up: PATH entries for Homebrew,
+/// nvm or rbenv, and variables such as ANDROID_HOME that tools Alas runs
+/// (gg's lint hooks, git hooks) need. All mutable state
+/// (`_resolvedEnvironment`, `resolveTask`) is guarded by `lock` on every
+/// access path, so concurrent use is safe.
 public final class ShellEnvResolver: @unchecked Sendable {
     public static let shared = ShellEnvResolver()
 
     private let lock = NSLock()
-    private var _resolvedPath: String?
+    private var _resolvedEnvironment: [String: String]?
     private var resolveTask: Task<Void, Never>?
 
-    public var resolvedPath: String? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _resolvedPath
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _resolvedPath = newValue
-        }
+    /// The login shell's environment, nil until it has resolved or when no
+    /// shell gave one.
+    public var resolvedEnvironment: [String: String]? {
+        get { lock.withLock { _resolvedEnvironment } }
+        set { lock.withLock { _resolvedEnvironment = newValue } }
     }
+
+    /// The login shell's PATH, nil until it has resolved.
+    public var resolvedPath: String? { resolvedEnvironment?["PATH"] }
 
     public func resolve() {
         let task = Task {
-            let path = await Self.discoverShellPath()
-            lock.withLock { _resolvedPath = path }
+            let environment = await Self.discoverShellEnvironment()
+            lock.withLock { _resolvedEnvironment = environment }
         }
         lock.lock()
         resolveTask = task
         lock.unlock()
     }
 
-    /// Awaits the in-flight PATH resolution started by `resolve()`, if any.
+    /// Awaits the in-flight resolution started by `resolve()`, if any.
     /// Returns immediately when resolution already finished or never started.
-    /// Callers that need the login-shell PATH before probing an external CLI
-    /// (e.g. `gg`) should await this instead of racing `resolve()`'s
-    /// fire-and-forget Task.
+    /// Callers that need the login-shell environment before probing an
+    /// external CLI (e.g. `gg`) should await this instead of racing
+    /// `resolve()`'s fire-and-forget Task.
     public func waitUntilResolved() async {
         let task = lock.withLock { resolveTask }
         await task?.value
     }
 
-    /// The PATH of the user's shell: interactive and login first, since nvm,
-    /// fnm and mise are set up in `.zshrc`, which zsh reads only for an
-    /// interactive shell; a plain login shell when that yields nothing.
-    static func discoverShellPath(candidates: [String] = shellCandidates()) async -> String? {
+    /// Variables that describe the shell process itself, not the user's
+    /// setup. A child started elsewhere must not inherit the shell's working
+    /// directory as `PWD`.
+    static let shellProcessKeys: Set<String> = ["PWD", "OLDPWD", "SHLVL", "_"]
+
+    /// The environment of the user's shell: interactive and login first,
+    /// since nvm, fnm, rbenv and mise are set up in `.zshrc`, which zsh reads
+    /// only for an interactive shell; a plain login shell when that yields
+    /// no PATH.
+    static func discoverShellEnvironment(candidates: [String] = shellCandidates()) async -> [String: String]? {
         for shell in candidates {
             for interactive in [true, false] {
-                if let path = await runShellAndGetPATH(shell: shell, interactive: interactive) {
-                    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty { return trimmed }
-                }
+                guard var environment = await runShellAndGetEnvironment(shell: shell, interactive: interactive) else { continue }
+                let path = environment["PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !path.isEmpty else { continue }
+                environment["PATH"] = path
+                for key in shellProcessKeys { environment[key] = nil }
+                return environment
             }
         }
         return nil
@@ -67,7 +76,7 @@ public final class ShellEnvResolver: @unchecked Sendable {
         return list
     }
 
-    private static let sentinelStart = "___ALAS_PATH___"
+    private static let sentinelStart = "___ALAS_ENV___"
     private static let sentinelEnd = "___ALAS_END___"
 
     /// Runs the shell in a session of its own, without a terminal: an
@@ -77,10 +86,11 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// leave a helper behind that holds the output open; the read ends at the
     /// end sentinel, whatever the shell's exit status, or past `timeout`, and
     /// then everything left in the shell's session is killed.
-    private static func runShellAndGetPATH(shell: String, interactive: Bool) async -> String? {
+    private static func runShellAndGetEnvironment(shell: String, interactive: Bool) async -> [String: String]? {
         let output = Pipe()
         let errors = Pipe()
-        let script = #"printf '%s' "\#(sentinelStart)"; printenv PATH; printf '%s' "\#(sentinelEnd)""#
+        // NUL-separated, so values may contain newlines.
+        let script = #"printf '%s' "\#(sentinelStart)"; /usr/bin/env -0; printf '%s' "\#(sentinelEnd)""#
         guard let child = try? SpawnedProcess(
             executable: URL(fileURLWithPath: shell),
             arguments: (interactive ? ["-i", "-l", "-c"] : ["-l", "-c"]) + [script],
@@ -103,11 +113,16 @@ public final class ShellEnvResolver: @unchecked Sendable {
         // Whatever the shell left behind, a stalled shell itself or helpers
         // its startup files started, is in its session: end all of it.
         killSession(child.pid)
-        let text = String(decoding: raw, as: UTF8.self)
-        guard let start = text.range(of: sentinelStart)?.upperBound,
-              let end = text.range(of: sentinelEnd, range: start..<text.endIndex)?.lowerBound,
-              start < end else { return "" }
-        return text[start..<end].trimmingCharacters(in: .newlines)
+        guard let start = raw.range(of: Data(sentinelStart.utf8))?.upperBound,
+              let end = raw.range(of: Data(sentinelEnd.utf8), in: start..<raw.endIndex)?.lowerBound,
+              start < end else { return nil }
+        var environment: [String: String] = [:]
+        for entry in raw[start..<end].split(separator: 0) {
+            let text = String(decoding: entry, as: UTF8.self)
+            guard let equals = text.firstIndex(of: "="), equals != text.startIndex else { continue }
+            environment[String(text[..<equals])] = String(text[text.index(after: equals)...])
+        }
+        return environment
     }
 
     /// Kills every process in session `id`. A shell's background jobs get

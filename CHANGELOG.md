@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Detect Claude and Codex adapters that npm left without their platform binary after an interrupted download, fail such installs instead of reporting success, and add Reinstall to the launch-failure banner and to each managed agent's settings. Installs and repairs now remove the old package first; updates still install over it.
+- Run gg, git, and code-host CLIs with the login shell's environment, not only its PATH, so `stack_ship` and stack syncs pass lint hooks that need variables such as `ANDROID_HOME`. A shell `GIT_EDITOR` no longer stalls Continue. When gg sync fails, `stack_ship` and Alas now show gg's error message instead of `GGServiceError error 0` (#2426).
 
 ## [0.23.4] - 2026-11-09
 

@@ -154,14 +154,14 @@ struct ProcessGitTests {
     @Test func gitEnvPreservesAllParentVariables() {
         // Stronger than the keyed tests above: a broken implementation that
         // returned a hardcoded minimal dict (PATH/HOME only) would pass the
-        // single-key checks. Verify the whole parent env round-trips, with
-        // the deliberate exceptions of GIT_OPTIONAL_LOCKS (always overridden),
-        // PATH (overridden when ShellEnvResolver discovered a login-shell
-        // PATH, which happens in integration test environments), and LC_ALL
-        // (always pinned to "C" so git emits English-parseable messages).
+        // single-key checks. Without a login-shell environment, the whole
+        // parent env round-trips, with the deliberate exceptions of
+        // GIT_OPTIONAL_LOCKS (always overridden), LC_ALL (always pinned to
+        // "C" so git emits English-parseable messages) and GIT_EDITOR
+        // (always "true": no editor runs without a terminal).
         let parent = ProcessInfo.processInfo.environment
-        let env = Process.gitEnv()
-        for (key, value) in parent where !["GIT_OPTIONAL_LOCKS", "PATH", "LC_ALL"].contains(key) {
+        let env = Process.gitEnv(shellEnvironment: nil)
+        for (key, value) in parent where !["GIT_OPTIONAL_LOCKS", "LC_ALL", "GIT_EDITOR"].contains(key) {
             #expect(env[key] == value, "key \(key) was dropped or changed")
         }
     }
@@ -293,24 +293,5 @@ struct ProcessGitTests {
         await #expect(throws: ProcessError.self) {
             _ = try await Process.git(["status", "--porcelain"], cwd: directory)
         }
-    }
-
-    @Test func gitEnvPrefersResolvedShellPath() {
-        let prior = ShellEnvResolver.shared.resolvedPath
-        ShellEnvResolver.shared.resolvedPath = "/custom/shell/bin"
-        defer { ShellEnvResolver.shared.resolvedPath = prior }
-
-        let env = Process.gitEnv()
-        #expect(env["PATH"] == "/custom/shell/bin")
-        #expect(env["GIT_OPTIONAL_LOCKS"] == "0")
-    }
-
-    @Test func gitEnvFallsBackToProcessPathWhenResolverIsNil() {
-        let prior = ShellEnvResolver.shared.resolvedPath
-        ShellEnvResolver.shared.resolvedPath = nil
-        defer { ShellEnvResolver.shared.resolvedPath = prior }
-
-        let env = Process.gitEnv()
-        #expect(env["PATH"] == ProcessInfo.processInfo.environment["PATH"])
     }
 }

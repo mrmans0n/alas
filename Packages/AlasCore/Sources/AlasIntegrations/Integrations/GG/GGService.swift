@@ -692,15 +692,23 @@ public struct GGService: Sendable {
                             cwd: URL(fileURLWithPath: worktreePath)
                         )
                         var sawSummary = false
-                        for try await line in lines {
-                            let events = GGSyncEvent.parseEvents(line: line)
-                            for event in events {
-                                continuation.yield(event)
+                        var reportedError: String?
+                        do {
+                            for try await line in lines {
+                                let events = GGSyncEvent.parseEvents(line: line)
+                                for event in events {
+                                    if reportedError == nil, case .error(let position, _, let message) = event {
+                                        reportedError = position.map { "[\($0)] \(message)" } ?? message
+                                    }
+                                    continuation.yield(event)
+                                }
+                                if events.contains(.summary) {
+                                    sawSummary = true
+                                    break
+                                }
                             }
-                            if events.contains(.summary) {
-                                sawSummary = true
-                                break
-                            }
+                        } catch {
+                            throw Self.syncFailure(error, reportedError: reportedError)
                         }
                         guard sawSummary else {
                             throw GGServiceError.malformedOutput(
@@ -708,9 +716,13 @@ public struct GGService: Sendable {
                             )
                         }
                         let postSummaryDeadline = syncPostSummaryDeadlineNanoseconds
-                        try await withThrowingTaskGroup(of: Void.self) { group in
+                        try await withThrowingTaskGroup(of: Void.self) { [reportedError] group in
                             group.addTask {
-                                for try await _ in lines {}
+                                do {
+                                    for try await _ in lines {}
+                                } catch {
+                                    throw Self.syncFailure(error, reportedError: reportedError)
+                                }
                             }
                             group.addTask {
                                 // Cleanup may take three seconds, followed by up to two seconds draining pipes.
@@ -740,6 +752,14 @@ public struct GGService: Sendable {
                 }
             }
         }
+    }
+
+    /// gg reports what failed a sync (a failing lint hook, a rejected push)
+    /// as an error event on stdout, then exits non-zero, often with nothing
+    /// on stderr. That event, not stderr, explains the exit.
+    private static func syncFailure(_ error: Error, reportedError: String?) -> Error {
+        guard let reportedError, case GGServiceError.commandFailed = error else { return error }
+        return GGServiceError.commandFailed(stderr: reportedError)
     }
 
     /// Lands ready entries (bottom-up). `until` lands up to a target
