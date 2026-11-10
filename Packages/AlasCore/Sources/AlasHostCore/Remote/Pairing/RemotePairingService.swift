@@ -225,6 +225,25 @@ public final class RemotePairingService {
         return true
     }
 
+    /// Lowers the other devices carrying `deviceId`'s peer identity to its
+    /// scope, when that scope is narrower. A re-pair keeps the earlier
+    /// devices, so the peer's rollback still has a token that works, but a
+    /// peer that asked for less must not keep more through one of them.
+    /// Returns the ids it lowered; their open sockets still hold the old scope.
+    @discardableResult
+    public func narrowOtherDevices(toScopeOf deviceId: String) -> [String] {
+        guard let device = device(id: deviceId), device.kind == .alasInstance, device.scope == .delegation,
+              let serverId = device.peerServerId, !serverId.isEmpty else { return [] }
+        var narrowed: [String] = []
+        for i in devices.indices where devices[i].id != deviceId && devices[i].kind == .alasInstance
+            && devices[i].peerServerId == serverId && devices[i].scope == .full {
+            devices[i].scope = .delegation
+            narrowed.append(devices[i].id)
+        }
+        if !narrowed.isEmpty { saveDevices() }
+        return narrowed
+    }
+
     public func touch(deviceId: String) {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         devices[i].lastSeenAt = now()
