@@ -318,3 +318,7 @@ Alas/Sources/Center/DiffReview/DiffReviewComments.swift
 Alas/Sources/Updates/UpdateAvailableSheet.swift
 Alas/Sources/Updates/UpdateProgressSheet.swift
 Alas/Sources/Updates/WhatsNewCard.swift
+Alas/Sources/Center/Diff/DiffPaneView.swift
+Alas/Sources/Center/Diff/DiffPaneTextDocumentView.swift
+Alas/Sources/Center/Diff/Scroller/DiffPaneRowPlan.swift
+Alas/Sources/Center/Diff/Scroller/DiffSplitCoreTextRowView.swift

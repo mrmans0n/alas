@@ -1648,7 +1648,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             accent.setFill()
             NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 12, weight: .bold),
+                .font: NSFont.systemFont(ofSize: 12, weight: .bold), // design-literal: glyph drawn by the CoreText row renderer, not a scaled label
                 .foregroundColor: palette.bg1,
             ]
             let plus = "+" as NSString
