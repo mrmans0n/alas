@@ -54,6 +54,11 @@ private struct AppKitDiffReviewCardRowToken: Equatable {
     let theme: Theme
 }
 
+private struct AppKitDiffReviewScaledToken: Equatable {
+    let content: AppKitDiffRowEqualityToken
+    let scale: DesignScale
+}
+
 struct AppKitDiffReviewRowToken: Equatable {
     let rowID: String
     let contentSignature: Int
@@ -63,6 +68,7 @@ struct AppKitDiffReviewRowToken: Equatable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
+    let scale: DesignScale
     let lspWorktreeID: String?
     let lspRelativePath: String?
     let lspLanguage: String?
@@ -93,6 +99,9 @@ struct AppKitDiffReviewRowInput {
     var annotations: [DiffInlineAnnotation] = []
     let state: AppKitDiffReviewFileState
     let theme: Theme
+    /// Hosted rows do not inherit the SwiftUI environment, so the density's
+    /// scale travels with the input and is injected into every row root.
+    var scale: DesignScale = .comfortable
     var layoutMode: DiffLayoutMode = .split
     var wrapLines = false
     var showWhitespace = false
@@ -118,6 +127,7 @@ struct AppKitDiffReviewRowInput {
         annotations: [DiffInlineAnnotation] = [],
         state: AppKitDiffReviewFileState,
         theme: Theme,
+        scale: DesignScale = .comfortable,
         layoutMode: DiffLayoutMode = .split,
         wrapLines: Bool = false,
         showWhitespace: Bool = false,
@@ -144,6 +154,7 @@ struct AppKitDiffReviewRowInput {
         self.annotations = annotations
         self.state = state
         self.theme = theme
+        self.scale = scale
         self.layoutMode = layoutMode
         self.wrapLines = wrapLines
         self.showWhitespace = showWhitespace
@@ -737,12 +748,12 @@ enum AppKitDiffReviewRowPlanBuilder {
                 var spec = AppKitDiffRowSpec(
                     id: groupID,
                     ownerID: input.file.id.rawValue,
-                    equalityToken: hunk.equalityToken,
+                    equalityToken: .init(AppKitDiffReviewScaledToken(content: hunk.equalityToken, scale: input.scale)),
                     contentSignature: hunk.contentSignature,
                     estimatedHeight: hunk.estimatedHeight,
                     retention: hunk.retention
                 ) {
-                    hunk.build()
+                    AnyView(hunk.build().environment(\.designScale, input.scale))
                 }
                 if usesCoreTextRows {
                     spec.native = coreTextRow(
@@ -995,6 +1006,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             wrapLines: input.wrapLines, showWhitespace: input.showWhitespace,
             codeFontFamily: input.codeFontFamily, codeFontSize: input.codeFontSize,
             theme: input.theme,
+            scale: input.scale,
             lspWorktreeID: input.lspContext?.worktreeId,
             lspRelativePath: input.lspContext?.relativePath,
             lspLanguage: input.lspContext?.language,
@@ -1022,7 +1034,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             estimatedHeight: height,
             retention: retention,
             contextRowCount: contextRowCount,
-            build: build
+            build: { AnyView(build().environment(\.designScale, input.scale)) }
         ))
     }
 
@@ -1084,25 +1096,26 @@ enum AppKitDiffReviewRowPlanBuilder {
 }
 
 struct AppKitDiffReviewHeaderRowBody: View {
+    @Environment(\.designScale) private var scale
     let input: AppKitDiffReviewRowInput
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space[3]) {
             Text(input.file.summary.status.glyph)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .font(scale.meta.font(weight: .semibold, design: .monospaced))
                 .foregroundColor(statusColor)
                 .frame(width: 16)
             Button {
                 input.state.copyFeedback.copy(input.file.summary.path)
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: scale.space[0]) {
                     Text(input.file.summary.path)
                         .font(CenterTypography.codeFont(family: input.codeFontFamily, size: input.codeFontSize))
                         .foregroundColor(input.theme.color("fg"))
                         .lineLimit(1).truncationMode(.middle)
                     if let originalPath = input.file.summary.originalPath {
                         Text("from \(originalPath)")
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(input.theme.color("fg-faint"))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1115,25 +1128,25 @@ struct AppKitDiffReviewHeaderRowBody: View {
             .accessibilityLabel("Copy \(input.file.summary.path)")
             if input.showsSourceBadge, let title = input.file.summary.groupTitle {
                 Text(title.uppercased())
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(sourceColor)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(sourceColor.opacity(0.16))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                     .background(DiffReviewAccessibilityMarker(
                         identifier: "diff-review-source-badge-\(input.file.id.rawValue)",
                         label: title.uppercased()
                     ))
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: scale.space[3])
             if input.allowsNonLineDraftCommentCreation {
                 Button("Comment", action: input.beginFileDraft)
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(input.theme.color("fg-muted"))
-                    .padding(.horizontal, 8).frame(height: 24)
+                    .padding(.horizontal, scale.space[2]).frame(height: 24)
                     .background(input.theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     .accessibilityIdentifier("diff-review-comment-file-\(input.file.id.rawValue)")
                     .help("Comment on this file")
             }
@@ -1141,11 +1154,11 @@ struct AppKitDiffReviewHeaderRowBody: View {
                 additions: input.file.summary.additions,
                 deletions: input.file.summary.deletions
             ) {
-                HStack(spacing: 9) {
+                HStack(spacing: scale.space[2]) {
                     Text("+\(input.file.summary.additions)").foregroundColor(input.theme.color("add"))
                     Text("-\(input.file.summary.deletions)").foregroundColor(input.theme.color("del"))
                 }
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(scale.meta.font(weight: .medium, design: .monospaced))
             }
             if let pair = displayedImagePair {
                 ImageDiffControls(
@@ -1161,11 +1174,11 @@ struct AppKitDiffReviewHeaderRowBody: View {
             if input.file.openFile != nil,
                let title = DiffReviewFileSectionActions.openFileButtonTitle(for: input.file) {
                 Button(action: input.state.actionRelay.openCurrentFile) {
-                    Text(title).font(.system(size: 11, weight: .semibold))
+                    Text(title).font(scale.meta.font(weight: .semibold))
                         .foregroundColor(input.theme.color("fg-muted"))
-                        .padding(.horizontal, 8).frame(height: 24)
+                        .padding(.horizontal, scale.space[2]).frame(height: 24)
                         .background(input.theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
                 .buttonStyle(.plain).help(title)
                 .accessibilityIdentifier("diff-review-open-file-\(input.file.id.rawValue)")
@@ -1173,11 +1186,11 @@ struct AppKitDiffReviewHeaderRowBody: View {
             }
             if input.file.stagedMutationActions?.unstageFile != nil {
                 Button("Unstage", action: input.state.actionRelay.unstageFile)
-                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                    .buttonStyle(.plain).font(scale.meta.font(weight: .semibold))
                     .foregroundColor(input.theme.color("fg-muted"))
-                    .padding(.horizontal, 8).frame(height: 24)
+                    .padding(.horizontal, scale.space[2]).frame(height: 24)
                     .background(input.theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     .accessibilityIdentifier("diff-review-unstage-file-\(input.file.id.rawValue)")
                     .background(ReviewDraftCommentActionPressMarker(
                         identifier: "diff-review-unstage-file-\(input.file.id.rawValue)",
@@ -1187,7 +1200,7 @@ struct AppKitDiffReviewHeaderRowBody: View {
                     })
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
         .background(input.theme.color("bg-2"))
         .background(DiffReviewAccessibilityMarker(
             identifier: "diff-review-file-section-\(input.file.id.rawValue)",
@@ -1396,6 +1409,7 @@ private struct AppKitDiffReviewCardBorderShape: Shape {
 }
 
 struct AppKitDiffReviewPlaceholderRowBody: View {
+    @Environment(\.designScale) private var scale
     let input: AppKitDiffReviewRowInput
     let isDeferred: Bool
     let isAggregateDeferred: Bool
@@ -1414,34 +1428,34 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
         if input.file.isPending {
             DiffReviewSkeletonLines(lineWidths: [0.55, 0.4, 0.65])
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 14).padding(.vertical, 18).background(input.theme.color("bg-1"))
+                .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[4]).background(input.theme.color("bg-1"))
         } else {
             message
         }
     }
 
     private var message: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             Text(title)
-                .font(.system(size: 12, weight: isDeferred ? .semibold : .regular))
+                .font(scale.meta.font(weight: isDeferred ? .semibold : .regular))
                 .foregroundColor(isDeferred ? input.theme.color("fg") : input.theme.color("fg-dim"))
             if isDeferred {
                 Text("\((input.file.summary.additions + input.file.summary.deletions).formatted()) changed lines. Rendering may be slow.")
-                    .font(.system(size: 12)).foregroundColor(input.theme.color("fg-dim"))
+                    .font(scale.meta.font).foregroundColor(input.theme.color("fg-dim"))
                 let hiddenItems = input.inlineFeedback.count + input.draftComments.count + input.threads.count
                 if hiddenItems > 0 {
                     Text("^[\(hiddenItems) comment](inflect: true) hidden — show the full diff to view.")
-                        .font(.system(size: 12)).foregroundColor(input.theme.color("fg-dim"))
+                        .font(scale.meta.font).foregroundColor(input.theme.color("fg-dim"))
                         .accessibilityIdentifier("diff-review-render-budget-hidden-comments-\(input.file.id.rawValue)")
                 }
                 Button {
                     input.state.showFullDiffOverride = true
                 } label: {
-                    Text("Show full diff").font(.system(size: 11, weight: .semibold))
+                    Text("Show full diff").font(scale.meta.font(weight: .semibold))
                         .foregroundColor(input.theme.color("fg-muted"))
-                        .padding(.horizontal, 10).frame(height: 24)
+                        .padding(.horizontal, scale.space[3]).frame(height: 24)
                         .background(input.theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("diff-review-show-full-diff-\(input.file.id.rawValue)")
@@ -1454,7 +1468,7 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14).padding(.vertical, 18).background(input.theme.color("bg-1"))
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[4]).background(input.theme.color("bg-1"))
         .background(DiffReviewAccessibilityMarker(
             identifier: isDeferred
                 ? "diff-review-render-budget-\(input.file.id.rawValue)"
@@ -1465,13 +1479,14 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
 }
 
 struct AppKitDiffReviewImageRowBody: View {
+    @Environment(\.designScale) private var scale
     let input: AppKitDiffReviewRowInput
     var loadsImage = false
 
     var body: some View {
         Group {
             if input.state.imageState.isLoading {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 12)
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, scale.space[3])
                     .background(DiffReviewAccessibilityMarker(
                         identifier: "diff-review-image-loading-\(input.file.id.rawValue)",
                         label: "Loading image diff"
@@ -1485,15 +1500,15 @@ struct AppKitDiffReviewImageRowBody: View {
                     annotation: annotationPresentation(for: pair)
                 )
                 if let message = failureMessage(in: pair) {
-                    HStack(spacing: 10) {
-                        Text(message).font(.system(size: 11)).foregroundColor(input.theme.color("warn"))
+                    HStack(spacing: scale.space[3]) {
+                        Text(message).font(scale.meta.font).foregroundColor(input.theme.color("warn"))
                         Spacer()
                         Button("Retry") { Task { await input.state.imageState.retry() } }
-                            .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                            .buttonStyle(.plain).font(scale.meta.font(weight: .semibold))
                             .foregroundColor(input.theme.color("fg-muted"))
-                            .padding(.horizontal, 8).frame(height: 24)
+                            .padding(.horizontal, scale.space[2]).frame(height: 24)
                             .background(input.theme.color("bg-3"))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                             .accessibilityIdentifier("diff-review-image-retry-\(input.file.id.rawValue)")
                             .background(ReviewDraftCommentActionPressMarker(
                                 identifier: "diff-review-image-retry-\(input.file.id.rawValue)",
@@ -1502,7 +1517,7 @@ struct AppKitDiffReviewImageRowBody: View {
                                 Task { await input.state.imageState.retry() }
                             })
                     }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
                     .background(DiffReviewAccessibilityMarker(
                         identifier: "diff-review-image-failure-\(input.file.id.rawValue)", label: message
                     ))
@@ -1560,17 +1575,18 @@ struct AppKitDiffReviewImageRowBody: View {
 }
 
 struct DiffReviewContextErrorRowBody: View {
+    @Environment(\.designScale) private var scale
     let fileID: DiffReviewFileID
     let message: String
     let theme: Theme
 
     var body: some View {
         Text("Could not load surrounding context: \(message)")
-            .font(.system(size: 11))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("warn"))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[2])
             .background(theme.color("bg-2"))
             .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
             .background(DiffReviewAccessibilityMarker(
@@ -1581,6 +1597,7 @@ struct DiffReviewContextErrorRowBody: View {
 }
 
 struct AppKitDiffReviewImageThreadRowBody: View {
+    @Environment(\.designScale) private var scale
     let thread: DiffInlineCommentThread
     let input: AppKitDiffReviewRowInput
 
@@ -1609,12 +1626,13 @@ struct AppKitDiffReviewImageThreadRowBody: View {
             identifier: "diff-review-image-thread-\(thread.id)",
             label: "Image review thread"
         ))
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
         .background(input.theme.color("bg-1"))
     }
 }
 
 struct AppKitDiffReviewImageAnnotationRowBody: View {
+    @Environment(\.designScale) private var scale
     let annotation: DiffInlineAnnotation
     let input: AppKitDiffReviewRowInput
 
@@ -1624,12 +1642,13 @@ struct AppKitDiffReviewImageAnnotationRowBody: View {
                 identifier: "diff-review-image-annotation-\(annotation.id)",
                 label: annotation.message
             ))
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
             .background(input.theme.color("bg-1"))
     }
 }
 
 struct AppKitDiffReviewInlineFeedbackRowBody: View {
+    @Environment(\.designScale) private var scale
     let item: DiffReviewInlineFeedback
     let input: AppKitDiffReviewRowInput
     var rows: [DiffDisplayRow]? = nil
@@ -1642,12 +1661,12 @@ struct AppKitDiffReviewInlineFeedbackRowBody: View {
                 layoutMode: input.layoutMode,
                 rows: rows
             ) {
-                card.padding(.horizontal, 14)
+                card.padding(.horizontal, scale.space[4])
             }
-            .padding(.vertical, 10).background(input.theme.color("bg-1"))
+            .padding(.vertical, scale.space[3]).background(input.theme.color("bg-1"))
             .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
         } else {
-            card.padding(.horizontal, 14).padding(.vertical, 10).background(input.theme.color("bg-1"))
+            card.padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3]).background(input.theme.color("bg-1"))
                 .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
     }
@@ -1674,6 +1693,7 @@ struct AppKitDiffReviewInlineFeedbackRowBody: View {
 }
 
 struct AppKitDiffReviewDraftCommentRowBody: View {
+    @Environment(\.designScale) private var scale
     let comment: ReviewDraftComment
     let input: AppKitDiffReviewRowInput
     var rows: [DiffDisplayRow]? = nil
@@ -1686,12 +1706,12 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
                 layoutMode: input.layoutMode,
                 rows: rows
             ) {
-                card.padding(.horizontal, 14)
+                card.padding(.horizontal, scale.space[4])
             }
-            .padding(.vertical, 10).background(input.theme.color("bg-1"))
+            .padding(.vertical, scale.space[3]).background(input.theme.color("bg-1"))
             .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
         } else {
-            card.padding(.horizontal, 14).padding(.vertical, 10).background(input.theme.color("bg-1"))
+            card.padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3]).background(input.theme.color("bg-1"))
                 .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
     }
@@ -1730,15 +1750,16 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
 }
 
 struct AppKitDiffReviewGroupHeaderRowBody: View {
+    @Environment(\.designScale) private var scale
     let group: DiffDisplayGroup
     let input: AppKitDiffReviewRowInput
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             Text(group.header)
                 .font(CenterTypography.codeFont(family: input.codeFontFamily, size: input.codeFontSize - 1))
                 .foregroundColor(input.theme.color("fg-muted")).lineLimit(1)
-            Spacer(minLength: 12)
+            Spacer(minLength: scale.space[3])
             if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
                 let expanded = DiffCollapsedContextController.isExpanded(
                     group, expandedIDs: input.state.expandedCollapsedRowIDs
@@ -1749,7 +1770,7 @@ struct AppKitDiffReviewGroupHeaderRowBody: View {
                     )
                 } label: {
                     Image(systemName: expanded ? "minus.square" : "plus.square")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(input.theme.color("fg-muted"))
                         .frame(width: 22, height: 20)
                 }
@@ -1765,7 +1786,7 @@ struct AppKitDiffReviewGroupHeaderRowBody: View {
                 })
             }
         }
-        .padding(.horizontal, 13).padding(.vertical, 8).background(input.theme.color("bg-2"))
+        .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[2]).background(input.theme.color("bg-2"))
         .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 }
@@ -1836,6 +1857,7 @@ struct AppKitDiffReviewAnnotationRowBody: View {
 }
 
 struct AppKitDiffReviewComposerRowBody: View {
+    @Environment(\.designScale) private var scale
     let rows: [DiffDisplayRow]
     let input: AppKitDiffReviewRowInput
     @FocusState private var isFocused: Bool
@@ -1859,10 +1881,10 @@ struct AppKitDiffReviewComposerRowBody: View {
 
     var body: some View {
         DiffFeedbackLaneView(lane: input.state.pendingDraftAnchor.map(DiffFeedbackLaneResolver.lane) ?? .full, layoutMode: input.layoutMode, rows: rows) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 if let composerContext {
                     Text(composerContext.headerText)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(input.theme.color("fg-dim"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1878,9 +1900,9 @@ struct AppKitDiffReviewComposerRowBody: View {
                     focusRequestGeneration: input.state.draftComposerFocusRequestGeneration,
                     codeBlockStyle: .standard(
                         theme: input.theme,
-                        baseFont: .systemFont(ofSize: 12),
+                        baseFont: .systemFont(ofSize: 12), // design-literal: AppKit text view font
                         baseColor: NSColor(input.theme.color("fg")),
-                        monoSize: 12
+                        monoSize: 12 // design-literal: AppKit text view font
                     ),
                     composerContext: composerContext,
                     insertCodeGeneration: input.state.insertCodeGeneration,
@@ -1897,38 +1919,38 @@ struct AppKitDiffReviewComposerRowBody: View {
                             )
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7)
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                         .stroke(input.theme.color("accent").opacity(0.65), lineWidth: 0.75))
                     .accessibilityIdentifier("diff-review-draft-composer")
                 HStack {
                     if composerContext?.codeSnippet != nil {
                         Button("Insert code") { input.state.insertCodeGeneration &+= 1 }
-                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                            .buttonStyle(.plain).font(scale.caption.font(weight: .semibold))
                             .foregroundColor(input.theme.color("fg-muted"))
-                            .padding(.horizontal, 8).frame(height: 24)
+                            .padding(.horizontal, scale.space[2]).frame(height: 24)
                             .background(input.theme.color("bg-3"))
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                             .accessibilityIdentifier("diff-review-draft-composer-insert-code")
                     }
                     Spacer()
                     Button("Cancel", action: input.clearPendingDraft)
-                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                        .buttonStyle(.plain).font(scale.caption.font(weight: .semibold))
                         .foregroundColor(input.theme.color("fg-muted"))
-                        .padding(.horizontal, 8).frame(height: 24)
+                        .padding(.horizontal, scale.space[2]).frame(height: 24)
                         .background(input.theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                         .accessibilityIdentifier("diff-review-draft-composer-cancel")
                     Button("Save", action: input.savePendingDraft)
-                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                        .buttonStyle(.plain).font(scale.caption.font(weight: .semibold))
                         .foregroundColor(input.theme.color("bg-1"))
-                        .padding(.horizontal, 9).frame(height: 24)
+                        .padding(.horizontal, scale.space[2]).frame(height: 24)
                         .background(input.theme.color("accent"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                         .accessibilityIdentifier("diff-review-draft-composer-save")
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 12).background(input.theme.color("bg-1"))
+            .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3]).background(input.theme.color("bg-1"))
             .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
             .background(DiffReviewAccessibilityMarker(
                 identifier: "diff-review-draft-composer-marker", label: "Draft comment composer"

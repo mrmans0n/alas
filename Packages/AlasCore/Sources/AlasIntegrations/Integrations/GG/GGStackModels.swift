@@ -19,7 +19,11 @@ public enum GGServiceError: Error, Equatable, Sendable {
     case undoRefused(message: String, hint: String?)
 }
 
-extension GGServiceError {
+extension GGServiceError: LocalizedError {
+    /// Callers that only see `Error` (`stack_ship`, `pr_create`) read gg's
+    /// message through `localizedDescription`.
+    public var errorDescription: String? { userMessage }
+
     /// User-facing message for the stack drawer's error strip.
     public var userMessage: String {
         switch self {

@@ -116,6 +116,7 @@ struct ReviewChangesTabView: View {
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }
+        .designCaptureReviewScroll(comments: draftCommentController?.comments ?? [], select: selectDraftComment)
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
         }
@@ -353,7 +354,11 @@ struct ReviewChangesTabView: View {
             draftCommentScrollCommand: draftCommentScrollCommand,
             draftCommentActions: draftCommentActions(),
             onSelectDraftComment: selectDraftComment,
-            onSaveDraftComment: saveDraftComment
+            onSaveDraftComment: saveDraftComment,
+            threads: DesignCaptureReview.shared.threads,
+            annotations: DesignCaptureReview.shared.annotations,
+            canReply: !DesignCaptureReview.shared.threads.isEmpty,
+            canResolve: !DesignCaptureReview.shared.threads.isEmpty
         )
     }
 

@@ -6,8 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+### 🐛 Fixes
 
+- Run gg, git, and code-host CLIs with the login shell's environment, not only its PATH, so `stack_ship` and stack syncs pass lint hooks that need variables such as `ANDROID_HOME`. A shell `GIT_EDITOR` no longer stalls Continue. When gg sync fails, `stack_ship` and Alas now show gg's error message instead of `GGServiceError error 0` (#2426).
 - Restore sidebar hover controls, including the new-worktree button, when lazy rows reappear after scrolling.
 
 ## [0.23.5] - 2026-11-10

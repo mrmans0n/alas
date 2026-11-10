@@ -116,6 +116,7 @@ struct ReviewDraftSummaryInlineRowToken: Equatable {
     let focusedFeedbackID: String?
     let status: ReviewDraftSummaryRailStatus
     let theme: Theme
+    var scale: DesignScale = .comfortable
     // Included so every keystroke forces AppKitDiffScrollerReconciler.apply
     // to refresh its stored spec instead of short-circuiting on an
     // unchanged token. Without this, scrolling the row out of the mount
