@@ -485,6 +485,24 @@ struct GGServiceActionsTests {
         }
     }
 
+    /// A fatal `gg sync --jsonl` error (a failing lint hook) arrives as an
+    /// error event on stdout with nothing on stderr; `stack_ship` reports
+    /// the error's localized description.
+    @Test func syncJSONLFatalErrorReportsGGsMessage() async {
+        let message = "Lint failed for one or more commits. Sync aborted; repository restored to its original state."
+        let runner = RecordingGGRunner(
+            stdout: #"{"version":1,"command":"sync","status":"error","event":"error","message":"\#(message)"}"#,
+            exitCode: 1
+        )
+        let service = GGService(runner: runner)
+
+        let error = await #expect(throws: GGServiceError.self) {
+            for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+        }
+        #expect(error == .commandFailed(stderr: message))
+        #expect(error?.localizedDescription == message)
+    }
+
     @Test func syncJSONLPreservesDelayedNonzeroExitAfterSummary() async {
         // A nonzero exit that arrives after the summary but inside the
         // post-summary deadline is the command's real outcome, not a hang.

@@ -2005,11 +2005,11 @@ final class AppState {
             VMDiskSession.detachStaleSessions(under: Paths.vmsRoot)
         }
 
-        // Kick off a background resolution of the user's login-shell PATH so
-        // every `Process.git()` invocation uses the same environment a terminal
-        // session would (Homebrew, nvm, rbenv, etc.). Fire-and-forget: if it
-        // hasn't finished by the first git command, gitEnv() falls back to the
-        // process PATH (same behaviour as before).
+        // Kick off a background resolution of the user's login-shell
+        // environment so every `Process.git()` and gg invocation, and the
+        // hooks they run, see what a terminal session would (Homebrew, nvm,
+        // rbenv, ANDROID_HOME, etc.). Fire-and-forget: if it hasn't finished
+        // by the first git command, gitEnv() falls back to the process env.
         ShellEnvResolver.shared.resolve()
 
         // Probe gg CLI availability once at startup so the stacked-diffs

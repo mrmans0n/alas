@@ -69,9 +69,9 @@ struct CodeHostProviderTests {
     }
 
     @Test func processRunnerUsesShellResolvedPath() async throws {
-        let prior = ShellEnvResolver.shared.resolvedPath
-        ShellEnvResolver.shared.resolvedPath = "/custom/provider/bin:/usr/bin:/bin"
-        defer { ShellEnvResolver.shared.resolvedPath = prior }
+        let prior = ShellEnvResolver.shared.resolvedEnvironment
+        ShellEnvResolver.shared.resolvedEnvironment = ["PATH": "/custom/provider/bin:/usr/bin:/bin"]
+        defer { ShellEnvResolver.shared.resolvedEnvironment = prior }
 
         let result = try await ProcessCodeHostCommandRunner().run(
             "/usr/bin/env",
