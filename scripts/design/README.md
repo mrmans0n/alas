@@ -43,6 +43,15 @@ a peer session and a cleanup reminder. The rows replace the real store's aggrega
 in this Debug build. `attention-rollup` also runs the roll-up, with scripted groups instead
 of a model. The popover is composited onto `window.png` like the editor popups.
 
+Set `ALAS_CAPTURE_CENTER` to `update-available` (direct download), `update-available-brew`
+(Homebrew) or `update-available-nightly` for the update sheet over a scripted 0.24.0 release
+with multi-section notes, to `update-progress-<state>` (`refreshing`, `installing`,
+`installed`, `pending` for a Homebrew tap that lags, `failed`, `start-failed`, `cancelled`) for
+the progress sheet, or to `whats-new` for the What's New card with a bundled picture
+(`DesignCaptureUpdates`). Nothing is checked, downloaded or installed: the progress sheet runs
+the real updater over a `/bin/sh` script that exits with the app, and the What's New "seen"
+version is never written. Sheets are composited like the editor popups.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14

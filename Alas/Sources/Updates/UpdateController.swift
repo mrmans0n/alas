@@ -54,7 +54,24 @@ final class UpdateController {
     }
 
     /// Where this copy was installed — used by the sheet to tailor the action.
-    var source: InstallSource { installSource }
+    var source: InstallSource {
+        #if DEBUG
+        demoSource ?? installSource
+        #else
+        installSource
+        #endif
+    }
+
+    #if DEBUG
+    /// Design captures only (`DesignCaptureUpdates`): shows a scripted release and install source.
+    @ObservationIgnored private var demoSource: InstallSource?
+
+    func installDemo(release: ReleaseInfo, source: InstallSource, installed: Bool = false) {
+        demoSource = source
+        availableUpdate = release
+        installedUpdateID = installed ? release.id : nil
+    }
+    #endif
 
     /// Which release track this build belongs to. Surfaced for the sheet so
     /// the nightly variant can force the direct action row.
