@@ -10,7 +10,11 @@
 # that tab instead of Changes.
 # ALAS_CAPTURE_DIALOG (new-project, new-worktree, repo-selector, review-target,
 # run-script, agent-launcher, file-search, peer-new-session) opens that dialog before the capture.
-# ALAS_CAPTURE_CENTER (gg-inbox, gg-landing) opens that tab, backed by the
+# ALAS_CAPTURE_CENTER (gg-inbox, gg-landing, editor-find, editor-lsp-status,
+# editor-completion, editor-hover, editor-definitions, editor-code-actions,
+# editor-rename, editor-edit-preview, editor-banners, editor-banners-blocked,
+# markdown, mermaid-viewer; the editor-* ones draw over the file ALAS_CAPTURE_CLI
+# opened) opens that tab, backed by the
 # profile's scripted gg (bin/gg), before the capture. peer-session, peer-permission,
 # peer-diff, peer-file and peer-console install two scripted paired Macs (Studio Mac,
 # MacBook Air; DesignCaptureDemoPeer) in-process and open that view of Studio Mac.
@@ -300,7 +304,11 @@ DistributedNotificationCenter.default().postNotificationName(
     object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
 )
 SWIFT
-  /bin/sleep 1.5
+  # The editor, Markdown and Mermaid targets open a file first, then draw over it.
+  case "$ALAS_CAPTURE_CENTER" in
+    editor-*|markdown|mermaid-viewer) /bin/sleep 6 ;;
+    *) /bin/sleep 1.5 ;;
+  esac
 fi
 
 # Ready once two captures a second apart match. Status indicators keep pulsing,
@@ -340,6 +348,55 @@ check_window_size() {
   fi
 }
 check_window_size
+
+# Popups, hover cards and sheets are windows of their own, which
+# screencapture -l leaves out of window.png (and can't grab: it returns the
+# parent instead). The Debug build draws them itself; see
+# DesignCaptureCode.snapshotWindows. Each is written whole as
+# window-extra-<n>.png and drawn onto window.png at its position.
+rm -f "$out_dir"/window-extra-*.png
+snap_dir="$shot/windows"
+/usr/bin/swift - "snapshot:$snap_dir" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+wait_for 15 test -e "$snap_dir/windows.json" || echo "warning: no popup snapshots" >&2
+swift - "$snap_dir" "$shot/window.png" "$out_dir" <<'SWIFT' 2>/dev/null || echo "warning: couldn't composite popup windows" >&2
+import CoreGraphics
+import Foundation
+import ImageIO
+
+let args = CommandLine.arguments
+let snapDir = URL(fileURLWithPath: args[1]), mainURL = URL(fileURLWithPath: args[2]), outDir = URL(fileURLWithPath: args[3])
+guard let data = try? Data(contentsOf: snapDir.appendingPathComponent("windows.json")),
+      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let main = manifest["main"] as? [Double],
+      let windows = manifest["windows"] as? [[String: Any]], !windows.isEmpty else { exit(0) }
+let mainImage = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithURL(mainURL as CFURL, nil)!, 0, nil)!
+let scale = CGFloat(mainImage.width) / main[2]
+let context = CGContext(
+    data: nil, width: mainImage.width, height: mainImage.height, bitsPerComponent: 8, bytesPerRow: 0,
+    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+)!
+context.draw(mainImage, in: CGRect(x: 0, y: 0, width: mainImage.width, height: mainImage.height))
+// Back to front, so what sits on top ends on top.
+for (index, window) in windows.enumerated() {
+    guard let file = window["file"] as? String, let frame = window["frame"] as? [Double],
+          let source = CGImageSourceCreateWithURL(snapDir.appendingPathComponent(file) as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { continue }
+    try? FileManager.default.copyItem(at: snapDir.appendingPathComponent(file), to: outDir.appendingPathComponent("window-extra-\(index + 1).png"))
+    // Screen frames have their origin at the bottom left, like the context.
+    let x = (CGFloat(frame[0]) - CGFloat(main[0])) * scale
+    let y = (CGFloat(frame[1]) - CGFloat(main[1])) * scale
+    context.draw(image, in: CGRect(x: x, y: y, width: CGFloat(frame[2]) * scale, height: CGFloat(frame[3]) * scale))
+}
+let out = CGImageDestinationCreateWithURL(mainURL as CFURL, "public.png" as CFString, 1, nil)!
+CGImageDestinationAddImage(out, context.makeImage()!, nil)
+CGImageDestinationFinalize(out)
+SWIFT
 
 mv "$shot/window.png" "$out_dir/window.png"
 echo "$window_size" > "$out_dir/window-size.txt"

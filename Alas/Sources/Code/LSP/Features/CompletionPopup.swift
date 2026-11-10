@@ -20,6 +20,7 @@ struct CompletionPopup: View {
     let onChoose: (Int) -> Void
     let onWillPresentMermaidViewer: () -> Void
     var listHeight: CGFloat = popupMaxHeight
+    private var scale: DesignScale { HostedDesignScale.current }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -61,10 +62,10 @@ struct CompletionPopup: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func scrollSelection(_ selection: Int, proxy: ScrollViewProxy) {
@@ -80,19 +81,19 @@ struct CompletionPopup: View {
     private func rowView(_ row: CompletionPopupRow) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(kindLabel(row.kind, source: row.source))
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(scale.caption.font(weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.label)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 if let detail = row.detail, !detail.isEmpty {
                     Text(detail)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -100,8 +101,8 @@ struct CompletionPopup: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, 6) // design-literal: row pitch feeds the compact popup height (28 per row)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

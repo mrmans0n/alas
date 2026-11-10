@@ -17,6 +17,7 @@ struct MarkdownTabView: View {
     let onRevealInFiles: (String) -> Void
     var onStartupRecoveryReady: () -> Void = {}
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     @State private var renderCache = MarkdownPreviewCache<MarkdownRenderResult>()
     @State private var debounceTask: Task<Void, Never>?
@@ -239,7 +240,7 @@ struct MarkdownTabView: View {
                 (MarkdownViewMode.preview, "eye"),
             ])
         }
-        .padding(.horizontal, 12).frame(height: 28)
+        .padding(.horizontal, scale.space[3]).frame(height: 28)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
@@ -249,12 +250,12 @@ struct MarkdownTabView: View {
         let lastIndex = components.count - 1
         return HStack(spacing: 6) {
             if components.isEmpty {
-                Text("").font(.system(size: 11, design: .monospaced))
+                Text("").font(scale.meta.font(design: .monospaced))
             } else {
                 ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
                     let pathPrefix = components[0...i].joined(separator: "/")
                     Text(String(comp))
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
                         .onTapGesture { onRevealInFiles(String(pathPrefix)) }
                         .onHover { inside in
@@ -396,6 +397,7 @@ private struct StandaloneMermaidPreviewView: View {
     var onRenderComplete: () -> Void = {}
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         ScrollView(.vertical) {
@@ -404,7 +406,7 @@ private struct StandaloneMermaidPreviewView: View {
                 profile: .full,
                 onRenderComplete: onRenderComplete
             )
-                .padding(16)
+                .padding(scale.space[4])
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(theme.color("bg-1"))

@@ -592,6 +592,11 @@ enum DesignCaptureBridge {
                 openGGTab(target)
             } else if target.hasPrefix("peer-") {
                 openPeerView(target)
+            } else if target.hasPrefix("snapshot:") {
+                let directory = String(target.dropFirst("snapshot:".count))
+                MainActor.assumeIsolated { DesignCaptureCode.snapshotWindows(to: directory) }
+            } else if DesignCaptureCode.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureCode.open(target, state: state) } }
             } else if let name = localNotification(for: target) {
                 NotificationCenter.default.post(name: name, object: nil)
             }

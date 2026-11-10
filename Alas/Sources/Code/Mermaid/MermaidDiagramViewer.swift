@@ -266,6 +266,7 @@ private struct MermaidDiagramViewerRootView: View {
             service: service
         )
         .environment(\.theme, themeModel.theme)
+        .environment(\.designScale, HostedDesignScale.current)
     }
 }
 
@@ -274,6 +275,7 @@ struct MermaidDiagramViewerView: View {
     var service: MermaidRenderService
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var renderState = MermaidRenderRequestState()
     @State private var interactionState = MermaidViewerInteractionState()
     @GestureState private var dragTranslation: CGSize = .zero
@@ -389,7 +391,7 @@ struct MermaidDiagramViewerView: View {
                             .textSelection(.enabled)
                     }
                     .multilineTextAlignment(.center)
-                    .padding(24)
+                    .padding(scale.space[5])
                 case nil:
                     ProgressView()
                         .controlSize(.regular)
@@ -531,11 +533,12 @@ private struct MermaidDiagramViewerToolbar: View {
     let adjustZoom: (MermaidViewerZoomAdjustment) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 12) {
             Text("MERMAID")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.4)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer(minLength: 0)
@@ -585,10 +588,10 @@ private struct MermaidDiagramViewerToolbar: View {
             }
             .keyboardShortcut(MermaidViewerAction.copySource.shortcut.asKeyboardShortcut())
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(scale.meta.font(weight: .medium))
         .buttonStyle(.plain)
         .foregroundStyle(theme.color("fg-muted"))
-        .padding(.horizontal, 14)
+        .padding(.horizontal, scale.space[3])
         .frame(height: 40)
         .background(theme.color("bg-2"))
         .overlay(alignment: .bottom) {

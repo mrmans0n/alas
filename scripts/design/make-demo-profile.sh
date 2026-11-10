@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=7
+fixture_version=8
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -91,6 +91,40 @@ struct Invoice: Identifiable, Hashable {
     }
 }
 SWIFT
+  # A document for the Markdown preview, with a Mermaid diagram.
+  cat > "$tmp/lantern/docs/architecture.md" <<'MARKDOWN'
+# Lantern architecture
+
+Lantern bills small teams for invoices and metered usage. Every request goes through one
+API, and the ledger is the only place money is written.
+
+## Services
+
+- **Billing API** validates requests and prices usage.
+- **Ledger** stores invoices and payments, append-only.
+- **Exporter** streams invoices out as CSV for accountants.
+
+## Request flow
+
+```mermaid
+flowchart LR
+    Client[Client] --> API[Billing API]
+    API --> Tax{Tax rules}
+    Tax -->|EU| VAT[VAT service]
+    Tax -->|US| Sales[Sales tax]
+    API --> Ledger[(Ledger)]
+    Ledger --> Export[CSV export]
+```
+
+## Pricing
+
+```swift
+let invoice = Invoice(customer: "Acme", lines: usage.lines)
+let total = invoice.total(applying: rules)
+```
+
+See `src/billing/Invoice.swift` for the full model.
+MARKDOWN
   # An image for the preview tab.
   /usr/bin/python3 - "$tmp/lantern/docs/usage-chart.png" <<'PY'
 import struct, sys, zlib

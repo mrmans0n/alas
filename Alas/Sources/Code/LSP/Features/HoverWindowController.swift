@@ -58,6 +58,8 @@ struct HoverPopupView: View {
     let onWillPresentMermaidViewer: () -> Void
     let onOpenLink: (URL) -> Bool
 
+    private var scale: DesignScale { HostedDesignScale.current }
+
     var body: some View {
         HoverPopupContent(
             result: result,
@@ -68,10 +70,10 @@ struct HoverPopupView: View {
         )
             .background(Color(nsColor: NSColor(theme.color("bg-1"))))
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 }
 

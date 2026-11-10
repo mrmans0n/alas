@@ -189,6 +189,9 @@ struct RootView: View {
             // dark theme, which is how light mode got dark dialogs.
             .environment(\.theme, state.themeStore.current)
             .environment(\.designScale, .resolved(for: state.config.density))
+            .onChange(of: state.config.density, initial: true) { _, density in
+                HostedDesignScale.current = .resolved(for: density)
+            }
     }
 
     private var rootContent: some View {

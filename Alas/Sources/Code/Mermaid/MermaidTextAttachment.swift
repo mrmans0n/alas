@@ -455,7 +455,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         colors: DrawingColors
     ) {
         let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: colors.muted
         ]
         let label = "MERMAID" as NSString
@@ -479,7 +479,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     private func drawButton(_ title: String, in frame: NSRect, color: NSColor) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: color
         ]
         let text = title as NSString
@@ -535,7 +535,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         colors: DrawingColors
     ) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: colors.muted
         ]
         let text = "Show Mermaid diagram" as NSString
@@ -551,7 +551,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     private func drawLoading(in frame: NSRect, colors: DrawingColors) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+            .font: NSFont.systemFont(ofSize: 12), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: colors.muted
         ]
         let text = "Rendering Mermaid diagram…" as NSString
@@ -571,11 +571,11 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         colors: DrawingColors
     ) {
         let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: colors.foreground
         ]
         let diagnosticAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10),
+            .font: NSFont.systemFont(ofSize: 10), // design-literal: attachment text drawn at fixed metrics that size the diagram cell
             .foregroundColor: colors.muted
         ]
         let title = "Couldn't render Mermaid diagram" as NSString
@@ -596,10 +596,10 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         in frame: NSRect
     ) -> FailureTextFrames {
         let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold) // design-literal: attachment text drawn at fixed metrics that size the diagram cell
         ]
         let diagnosticAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10)
+            .font: NSFont.systemFont(ofSize: 10) // design-literal: attachment text drawn at fixed metrics that size the diagram cell
         ]
         let title = "Couldn't render Mermaid diagram" as NSString
         let diagnostic = failure.mermaidDisplayDiagnostic as NSString
@@ -645,10 +645,10 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         profile: MermaidPresentationProfile
     ) -> CGFloat {
         let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold) // design-literal: attachment text drawn at fixed metrics that size the diagram cell
         ]
         let diagnosticAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10)
+            .font: NSFont.systemFont(ofSize: 10) // design-literal: attachment text drawn at fixed metrics that size the diagram cell
         ]
         let titleSize = ("Couldn't render Mermaid diagram" as NSString)
             .size(withAttributes: titleAttributes)
@@ -716,7 +716,7 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     private func buttonWidth(for title: String) -> CGFloat {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium)
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium) // design-literal: attachment text drawn at fixed metrics that size the diagram cell
         ]
         return ceil((title as NSString).size(withAttributes: attributes).width) + 16
     }

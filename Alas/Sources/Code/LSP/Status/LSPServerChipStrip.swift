@@ -7,6 +7,7 @@ struct LSPServerChipStrip: View {
     let appState: AppState
 
     @State private var popoverOpen = false
+    @Environment(\.designScale) private var scale
     @State private var expansionOverrides: [String: Bool] = [:]
 
     var body: some View {
@@ -50,7 +51,7 @@ struct LSPServerChipStrip: View {
                             set: { expansionOverrides[chip.id] = $0 }
                         )) {
                             LSPServerChipPopoverBody(model: chip, appState: appState) { popoverOpen = false }
-                                .padding(.leading, 4)
+                                .padding(.leading, scale.space[1])
                         } label: {
                             LSPStatusPill(state: state)
                                 .accessibilityElement(children: .ignore)
@@ -58,7 +59,7 @@ struct LSPServerChipStrip: View {
                         }
                     }
                 }
-                .padding(10)
+                .padding(scale.space[3])
             }
             .frame(width: 320)
             .frame(maxHeight: 420)

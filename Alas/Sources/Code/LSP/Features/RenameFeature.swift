@@ -249,6 +249,7 @@ struct RenameNameView: View {
     let cancel: () -> Void
     let submit: () -> Void
     @FocusState private var focused: Bool
+    private var scale: DesignScale { HostedDesignScale.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -263,7 +264,7 @@ struct RenameNameView: View {
                 Button("Rename", action: submit).keyboardShortcut(.defaultAction).disabled(!canSubmit)
             }
         }
-        .padding(12).frame(width: 300)
+        .padding(scale.space[3]).frame(width: 300)
         .onAppear { focused = true }
     }
 
