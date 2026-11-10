@@ -101,6 +101,7 @@ struct ImageDiffSideBySideView: View {
     let afterLabel: String
     @Binding var transform: ImageDiffTransform
     var annotation: ImageDiffAnnotationPresentation? = nil
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
     @GestureState private var dragTranslation: CGSize = .zero
 
@@ -173,12 +174,12 @@ struct ImageDiffSideBySideView: View {
         }
         .overlay(alignment: .topLeading) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .foregroundColor(.white)
-                .padding(.horizontal, 6).padding(.vertical, 2)
+                .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                 .background(.black.opacity(0.5))
-                .cornerRadius(3)
-                .padding(6)
+                .cornerRadius(scale.radius.small)
+                .padding(scale.space[1])
                 .allowsHitTesting(false)
         }
         .clipped()
@@ -192,7 +193,7 @@ struct ImageDiffSideBySideView: View {
             if let point = geometry.displayPoint(normalizedX: marker.normalizedX, normalizedY: marker.normalizedY) {
                 Button { annotation?.onMarkerSelected(marker.id) } label: {
                     Text("\(marker.number)")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(scale.caption.font(weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 22, height: 22)
                         .background(annotation?.focusedMarkerID == marker.id ? Color.accentColor : Color.red)
@@ -246,9 +247,9 @@ struct ImageDiffSideBySideView: View {
 
     private func placeholder(_ message: String) -> some View {
         Text(message)
-            .font(.system(size: 12))
+            .font(scale.meta.font)
             .foregroundColor(theme.color("fg-faint"))
-            .padding(16)
+            .padding(scale.space[4])
             .background(.black.opacity(0.25))
             .cornerRadius(6)
     }

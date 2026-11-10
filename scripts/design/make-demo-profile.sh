@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=9
+fixture_version=10
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -47,6 +47,29 @@ worktrees=(
   "spike/vector-search|0|0"
 )
 selected_branch="${worktrees[0]%%|*}"
+
+# write_chart <path> <width> <height> <r,g,b> <bar heights, comma separated>: a bar chart PNG.
+# Relative paths are relative to $tmp (the fixture being built) or the given root in $chart_root.
+write_chart() {
+  /usr/bin/python3 - "${chart_root:-$tmp/lantern}/$1" "$2" "$3" "$4" "$5" <<'PY'
+import struct, sys, zlib
+path, w, h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+color = tuple(int(c) for c in sys.argv[4].split(","))
+bars = [int(b) for b in sys.argv[5].split(",")]
+slot = w // (len(bars) * 2)
+rows = []
+for y in range(h):
+    row = bytearray([0])
+    for x in range(w):
+        index = x // slot
+        bar = index % 2 == 0 and index // 2 < len(bars) and y > h - bars[index // 2] * h // 270
+        row += bytes(color if bar else (30, 36, 42))
+    rows.append(bytes(row))
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+open(path, "wb").write(png)
+PY
+}
 
 build_fixture() {
   local tmp="$fixture.tmp"
@@ -158,21 +181,11 @@ let total = invoice.total(applying: rules)
 
 See `src/billing/Invoice.swift` for the full model.
 MARKDOWN
-  # An image for the preview tab.
-  /usr/bin/python3 - "$tmp/lantern/docs/usage-chart.png" <<'PY'
-import struct, sys, zlib
-w, h = 480, 270
-rows = []
-for y in range(h):
-    row = bytearray([0])
-    for x in range(w):
-        bar = (x // 60) % 2 == 0 and y > h - (40 + (x // 60) * 25)
-        row += bytes((95, 183, 196) if bar else (30, 36, 42))
-    rows.append(bytes(row))
-def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
-open(sys.argv[1], "wb").write(png)
-PY
+  # Bar charts for the preview tab and the image diff captures. usage-chart.png is committed here and
+  # redrawn (wider, other bars, another colour) in the selected worktree; legacy-chart.png is
+  # committed valid and corrupted there, for the review capture's failed image row.
+  write_chart docs/usage-chart.png 480 300 95,183,196 40,65,90,115,140,165,190,215
+  write_chart docs/legacy-chart.png 240 150 196,150,95 30,55,80,105
   # Run tab scripts, read from each worktree's .alas/scripts.
   mkdir -p "$tmp/lantern/.alas/scripts"
   printf '#!/bin/sh\n# alas-name: Dev server\n# alas-url: http://localhost:4173\nexec sleep 3600\n' \
@@ -231,8 +244,11 @@ edit("src/web/routes.ts", "  res.json(invoice);\n});\n", "  if (!invoice) {\n   
 with open(root / "src/generated/rates.csv", "a") as out:
     for i in range(22000):
         out.write(f"PC-{i:05d},{(i % 2500) / 10000:.4f}\n")
-(root / "docs/usage-chart.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00not a real image\x00")
+(root / "docs/legacy-chart.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00not a real image\x00")
 PY
+  # The image diff captures: the chart redrawn wider with other bars, and a chart with no committed side.
+  chart_root="$path" write_chart docs/usage-chart.png 520 300 230,120,80 90,60,140,170,110,200,150,230
+  chart_root="$path" write_chart docs/new-chart.png 320 200 120,200,120 50,100,150,200
 }
 
 if [[ "$(cat "$fixture/version" 2>/dev/null)" != "$fixture_version" ]]; then

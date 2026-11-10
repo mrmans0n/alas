@@ -623,6 +623,7 @@ struct DiffPaneView: View {
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var presentationState = DiffPanePresentationState()
     @State private var staticRowsWidth: CGFloat = 0
     @State private var activeThreadReplanGeneration = 0
@@ -775,7 +776,7 @@ struct DiffPaneView: View {
                 hunk(group, fusion: fusionStates[index], input: synchronizedRowPlanInput())
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 10) // design-literal: matches the 10pt scroller content inset and hunk fusion padding
         .padding(.top, outerTopPadding(for: fusionStates))
         .padding(.bottom, outerBottomPadding(for: fusionStates))
     }
@@ -814,8 +815,8 @@ struct DiffPaneView: View {
                 showWhitespace.toggle()
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .accessibilityIdentifier("diff-pane-toolbar")
         .background(DiffPaneToolbarMarker())
         .background(theme.color("bg-1"))
@@ -827,11 +828,11 @@ struct DiffPaneView: View {
             layoutButton(.split, systemName: "rectangle.split.2x1")
             layoutButton(.stacked, systemName: "rectangle.split.1x2")
         }
-        .padding(3)
+        .padding(scale.space[1])
         .background(theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
     }
@@ -843,15 +844,15 @@ struct DiffPaneView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: systemName)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                 Text(mode.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
             }
             .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 28)
             .background(active ? theme.color("bg-1") : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help(mode.title)
@@ -865,11 +866,11 @@ struct DiffPaneView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
                 .frame(width: 24, height: 22)
                 .background(isActive ? theme.color("accent-soft") : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -915,6 +916,7 @@ struct DiffPaneView: View {
             onStageReply: onStageReply,
             canAddToReview: canAddToReview,
             hunkFusionStates: hunkFusionStates,
+            scale: scale,
             hunkActions: hunkActions
         )
     }

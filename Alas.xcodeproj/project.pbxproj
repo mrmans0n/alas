@@ -1139,6 +1139,7 @@
 		99613CF61A0F19105D8E7A71 /* EmojiPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */; };
 		996B67B45E7247CDED5F98EF /* AppStateRemoteWorktreePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED0AAD3FE0E143D409A3E8B /* AppStateRemoteWorktreePathTests.swift */; };
 		997EBD6A47ACA408CD0FD6C8 /* DesignCaptureDemoPeer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */; };
+		2BB800C6E72B5D90CF1DE7C9 /* DesignCaptureDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */; };
 		48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */; };
 		F337A6B7FDB895D87FCAD809 /* DesignCaptureAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2962ECDE23ED56E609C0FC /* DesignCaptureAttention.swift */; };
 		5050BEB8D17F15D5B2F8E911 /* DesignCaptureReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7617B5D1D131EA6B70F63DFD /* DesignCaptureReview.swift */; };
@@ -3044,6 +3045,7 @@
 		8B94010802299E6AC5597E85 /* WorktreeCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCodableTests.swift; sourceTree = "<group>"; };
 		8BA7FA6A8011D88FDFEE30A0 /* ACPGoalPillTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPGoalPillTests.swift; sourceTree = "<group>"; };
 		8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureDemoPeer.swift; sourceTree = "<group>"; };
+		92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureDiff.swift; sourceTree = "<group>"; };
 		9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureCode.swift; sourceTree = "<group>"; };
 		5E2962ECDE23ED56E609C0FC /* DesignCaptureAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureAttention.swift; sourceTree = "<group>"; };
 		7617B5D1D131EA6B70F63DFD /* DesignCaptureReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureReview.swift; sourceTree = "<group>"; };
@@ -7044,6 +7046,7 @@
 				57DEA304B6038D986A372150 /* BundledFontRegistrar.swift */,
 				417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */,
 				8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */,
+				92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */,
 				9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */,
 				5E2962ECDE23ED56E609C0FC /* DesignCaptureAttention.swift */,
 				7617B5D1D131EA6B70F63DFD /* DesignCaptureReview.swift */,
@@ -7853,6 +7856,7 @@
 				ACD22D2C262833B77006E8BE /* DeleteFailedWorktreeView.swift in Sources */,
 				512A41C0AB75B8D35424EBCD /* DeletingWorktreeView.swift in Sources */,
 				997EBD6A47ACA408CD0FD6C8 /* DesignCaptureDemoPeer.swift in Sources */,
+				2BB800C6E72B5D90CF1DE7C9 /* DesignCaptureDiff.swift in Sources */,
 				48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */,
 				F337A6B7FDB895D87FCAD809 /* DesignCaptureAttention.swift in Sources */,
 				5050BEB8D17F15D5B2F8E911 /* DesignCaptureReview.swift in Sources */,

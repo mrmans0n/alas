@@ -121,6 +121,7 @@ struct DiffPaneHunkRowToken: Equatable {
     let canResolve: Bool
     let canAddToReview: Bool
     let actionPresence: DiffPaneHunkActionPresence
+    let scale: DesignScale
 }
 
 struct DiffPaneRowPlanInput {
@@ -149,6 +150,7 @@ struct DiffPaneRowPlanInput {
     var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var canAddToReview: Bool = false
     var hunkFusionStates: [DiffPaneHunkFusionState]? = nil
+    var scale: DesignScale = .comfortable
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 }
 
@@ -186,7 +188,8 @@ enum DiffPaneRowPlanBuilder {
                 canReply: input.canReply,
                 canResolve: input.canResolve,
                 canAddToReview: input.canAddToReview,
-                actionPresence: .init(actions)
+                actionPresence: .init(actions),
+                scale: input.scale
             )
             return AppKitDiffRowSpec(
                 id: "diff-hunk-\(group.id)",
@@ -201,7 +204,10 @@ enum DiffPaneRowPlanBuilder {
                 ),
                 retention: hunkRetention(for: hunkThreads, state: state)
             ) {
-                AnyView(DiffPaneHunkRow(group: group, fusion: fusion, input: input, state: state))
+                AnyView(
+                    DiffPaneHunkRow(group: group, fusion: fusion, input: input, state: state)
+                        .environment(\.designScale, input.scale)
+                )
             }
         }
         return AppKitDiffRowPlan(rows: rows)
@@ -290,6 +296,7 @@ struct DiffPaneHunkRow: View {
     let fusion: DiffPaneHunkFusionState
     let input: DiffPaneRowPlanInput
     @ObservedObject var state: DiffPanePresentationState
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let visibleRowsSnapshot = DiffPaneRowProjection.visibleRowsSnapshot(
@@ -409,8 +416,8 @@ struct DiffPaneHunkRow: View {
                 }
             }
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
         .background(input.theme.color("bg-2"))
         .overlay(Rectangle().fill(input.theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }

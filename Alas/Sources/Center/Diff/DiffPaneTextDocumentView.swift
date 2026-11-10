@@ -2675,7 +2675,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         path.fill()
 
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .bold),
+            .font: NSFont.systemFont(ofSize: 12, weight: .bold), // design-literal: glyph drawn by the text renderer, not a scaled label
             .foregroundColor: theme.nsColor("bg-1"),
         ]
         let string = "+" as NSString

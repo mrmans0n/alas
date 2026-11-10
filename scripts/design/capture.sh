@@ -28,6 +28,10 @@
 # review-comments, review-states, review-thread, review-annotation and review-image (with
 # ALAS_CAPTURE_CLI=review) seed draft comments, a provider thread and an annotation over the
 # Review Changes tab and scroll to one of them (DesignCaptureReview).
+# diff-file opens the plain diff tab of src/billing/Invoice.swift; image-diff-side, image-diff-swipe,
+# image-diff-overlay and image-diff-difference open the image diff tab of docs/usage-chart.png in that
+# mode, and image-diff-added the one for docs/new-chart.png, which has no committed side
+# (DesignCaptureDiff).
 # ALAS_CAPTURE_CENTER update-available, update-available-brew, update-available-nightly,
 # update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
 # and whats-new show the update sheets and the What's New card over scripted releases
