@@ -182,5 +182,14 @@ struct SidebarHoverTrackerTests {
         tracker.scrollSettled()
         try pointer(atViewportY: 75)
         #expect(log.hovered == 11)
+
+        // Lazy rows retain their geometry when they leave and re-enter the
+        // viewport. Returning to the top must restore the first header's hover.
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        window.layoutIfNeeded()
+        tracker.scrollSettled()
+        try pointer(atViewportY: 25)
+        #expect(log.hovered == 0)
     }
 }

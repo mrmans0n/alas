@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Install and launch simulator-built apps from agent tools or by dropping an `.app`; device calls now wait for manual simulator control to end before timing out (#2412).
 - Offer a **Paste image** shortcut when the clipboard contains a bitmap, without reading clipboard contents during detection (#2423).
-- Apply the density-aware `DesignScale` to the gg screens (#2411), remote screens (#2413), code editor screens (#2419), plugin screens (#2422), and Attention inbox (#2424).
+- Apply the density-aware `DesignScale` to the gg screens (#2411), remote screens (#2413), code editor screens (#2419), plugin screens (#2422), Attention inbox (#2424), update sheets and What's New card (#2425), and diff review views (#2427).
 
 ### 🐛 Fixes
 
@@ -21,11 +21,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Label each file above its diff in the remote web view and side-question approvals (#2416).
 - Let the local transcript and composer grow to 960 points on wide panes again (#2417).
 - Delete staged chat attachments when their worktree is deleted, while keeping attachments for archived worktrees (#2418).
+- Run gg, git, and code-host CLIs with the login shell's environment so stack syncs can use variables such as `ANDROID_HOME`, and show gg's sync error instead of a generic error code (#2428).
+- Restore sidebar hover controls, including the new-worktree button, when lazy rows reappear after scrolling (#2429).
 
 ### 🏗️ Internal
 
 - Update the `tree-sitter-sequel` SQL grammar to 0.3.12 (#2420).
-- Update the `tree-sitter-scala` grammar to 0.26.10 (#2421).
+- Update the `tree-sitter-scala` grammar through 0.26.11 (#2421, #2430).
 
 ## [0.23.4] - 2026-11-09
 
