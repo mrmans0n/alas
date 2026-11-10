@@ -314,3 +314,4 @@ Alas/Sources/Attention/AttentionRollUpCard.swift
 Alas/Sources/Center/DiffReview/AppKitDiffReviewRowPlan.swift
 Alas/Sources/Center/Review/DiffInlineCommentCard.swift
 Alas/Sources/Center/Review/DiffInlineAnnotationCard.swift
+Alas/Sources/Center/DiffReview/DiffReviewComments.swift
