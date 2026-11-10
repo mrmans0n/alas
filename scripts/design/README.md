@@ -28,6 +28,13 @@ Set `ALAS_CAPTURE_CENTER` to `peer-session`, `peer-permission`, `peer-diff`, `pe
 paired Mac. The Debug build installs two scripted peers in-process (`DesignCaptureDemoPeer`):
 no network, pairing or keychain. Their sidebar section is collapsed by default.
 
+Set `ALAS_CAPTURE_CENTER` to `attention-inbox` or `attention-rollup` to open the Attention
+inbox popover over demo rows (`DesignCaptureAttention`): action-required, informational,
+last-known, acknowledged and historical items across three projects and a remote host, plus
+a peer session and a cleanup reminder. The rows replace the real store's aggregation only
+in this Debug build. `attention-rollup` also runs the roll-up, with scripted groups instead
+of a model. The popover is composited onto `window.png` like the editor popups.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14

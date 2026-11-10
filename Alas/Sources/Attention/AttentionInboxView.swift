@@ -209,6 +209,11 @@ struct AttentionInboxView: View {
             .foregroundStyle(theme.color("fg"))
         }
         .onDisappear(perform: dismissRollUp)
+        #if DEBUG
+        .task {
+            if DesignCaptureAttention.shared.autoSummarize { summarize() }
+        }
+        #endif
     }
 
     private func summarize() {
