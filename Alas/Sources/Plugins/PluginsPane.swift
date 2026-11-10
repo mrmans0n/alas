@@ -146,8 +146,11 @@ struct PluginsPane: View {
             VStack(alignment: .leading, spacing: scale.space[2]) {
                 updateSlot(manager, plugin, updates)
                 if manager.isApproved(plugin) {
-                    HStack(spacing: scale.space[3]) { approvedControls(manager, plugin) }
-                    revokeButton(manager, plugin)
+                    HStack(spacing: scale.space[3]) {
+                        approvedControls(manager, plugin)
+                        Spacer()
+                        revokeButton(manager, plugin)
+                    }
                 } else {
                     approveButton(manager, plugin)
                 }
