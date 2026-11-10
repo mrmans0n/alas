@@ -37,7 +37,7 @@ struct ImageDiffPairPresentationIdentity: Equatable {
 @Observable
 @MainActor
 final class ImageDiffPresentationState {
-    var mode: ImageDiffMode = .sideBySide
+    var mode: ImageDiffMode = DesignCaptureDiff.initialImageMode
     var percentChanged: Double?
     var transform = ImageDiffTransform()
     @ObservationIgnored private var displayedPairIdentity: ImageDiffPairPresentationIdentity?

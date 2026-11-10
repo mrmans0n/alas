@@ -599,6 +599,8 @@ enum DesignCaptureBridge {
                 MainActor.assumeIsolated { if let state { DesignCaptureAttention.shared.open(target, state: state) } }
             } else if DesignCaptureReview.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureReview.shared.open(target, state: state) } }
+            } else if DesignCaptureDiff.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureDiff.open(target, state: state) } }
             } else if DesignCaptureUpdates.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureUpdates.open(target, state: state) } }
             } else if DesignCaptureCode.targets.contains(target) {
