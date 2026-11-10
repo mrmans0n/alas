@@ -33,6 +33,7 @@ enum PluginStatusText {
 struct PluginsPane: View {
     let state: AppState
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var approvals = PluginApprovalQueue()
     @State private var configuring: PluginPanelTarget?
     /// Install or update failures, by catalog entry id, until the next attempt.
@@ -42,24 +43,24 @@ struct PluginsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Plugins").font(.system(size: 18, weight: .semibold))
+                Text("Plugins").font(SettingsPaneStyle.titleFont)
                 Text("Plugins run sandboxed, with only the capabilities you approve.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
+                    .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
+                    .padding(.bottom, scale.space[3])
                 SettingsRow(name: "Enable plugins", desc: "Runs approved plugins. Turning this off stops them all.") {
                     AlasToggle(on: Binding(
                         get: { state.config.pluginsEnabled },
                         set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }))
                 }
-                .padding(.bottom, 12)
+                .padding(.bottom, scale.space[3])
                 if let manager = state.pluginManager {
                     content(manager)
                 } else {
                     Text("Plugins are off. Nothing is loaded or run, and the plugin catalog is not fetched.")
-                        .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
+                        .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[5])
         }
         .onAppear { approvals.isShown = true }
         .onDisappear { approvals.close() }
@@ -85,7 +86,7 @@ struct PluginsPane: View {
                 }
             }
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, scale.space[3])
         let updates = manager.catalogUpdates
         if !updates.isEmpty {
             updatesBanner(manager, updates)
@@ -95,38 +96,11 @@ struct PluginsPane: View {
         }
         ForEach(manager.plugins) { plugin in
             let hosts = manager.hosts(for: plugin)
-            SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)", verticalPadding: 8) {
+            SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)", verticalPadding: scale.space[2]) {
                 SettingsRow(name: plugin.id, desc: PluginStatusText.make(
                     approved: manager.isApproved(plugin), enabled: manager.isEnabled(plugin),
                     hostStates: hosts.map(\.host.state))) {
-                    HStack(spacing: 12) {
-                        if let update = updates.first(where: { $0.entry.id == plugin.id }) {
-                            updateButton(manager, update)
-                        }
-                        if manager.isApproved(plugin) {
-                            HStack(spacing: 12) {
-                                AlasToggle(on: Binding(
-                                    get: { manager.isEnabled(plugin) },
-                                    set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
-                                if let panel = plugin.manifest.configurePanel {
-                                    let host = state.pluginConfigureHost(plugin)
-                                    AlasButton(title: "Configure…", style: .normal) {
-                                        if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
-                                    }
-                                    .disabled(host == nil)
-                                    .help(host == nil ? "Open a project to configure this plugin" : "")
-                                }
-                                Spacer()
-                                AlasButton(title: "Revoke Approval", style: .subtle) { Task { await manager.revoke(plugin) } }
-                            }
-                        } else {
-                            AlasButton(title: "Approve…", style: .normal) {
-                                approvals.ask(PluginApprovalRequest(manifest: plugin.manifest) { approved in
-                                    if approved { Task { await manager.approve(plugin) } }
-                                })
-                            }
-                        }
-                    }
+                    pluginControls(manager, plugin, updates)
                 }
                 if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
                     PluginSettingsForm(settings: manager.settings(for: plugin))
@@ -139,7 +113,7 @@ struct PluginsPane: View {
                         ForEach(hosts, id: \.key) { entry in
                             hostRow(manager, entry)
                         }
-                        .padding(.leading, 14)
+                        .padding(.leading, scale.space[4])
                     }
                 }
             }
@@ -152,6 +126,70 @@ struct PluginsPane: View {
                 }
             }
         }
+    }
+
+    /// The row's buttons on one line when the column is wide enough, stacked otherwise, so no title is cut short.
+    private func pluginControls(_ manager: PluginManager, _ plugin: PluginManager.Plugin, _ updates: [Update]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: scale.space[3]) {
+                updateSlot(manager, plugin, updates)
+                if manager.isApproved(plugin) {
+                    HStack(spacing: scale.space[3]) {
+                        approvedControls(manager, plugin)
+                        Spacer()
+                        revokeButton(manager, plugin)
+                    }
+                } else {
+                    approveButton(manager, plugin)
+                }
+            }
+            VStack(alignment: .leading, spacing: scale.space[2]) {
+                updateSlot(manager, plugin, updates)
+                if manager.isApproved(plugin) {
+                    HStack(spacing: scale.space[3]) { approvedControls(manager, plugin) }
+                    revokeButton(manager, plugin)
+                } else {
+                    approveButton(manager, plugin)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func updateSlot(_ manager: PluginManager, _ plugin: PluginManager.Plugin, _ updates: [Update]) -> some View {
+        if let update = updates.first(where: { $0.entry.id == plugin.id }) {
+            updateButton(manager, update)
+        }
+    }
+
+    @ViewBuilder
+    private func approvedControls(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> some View {
+        AlasToggle(on: Binding(
+            get: { manager.isEnabled(plugin) },
+            set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
+        if let panel = plugin.manifest.configurePanel {
+            let host = state.pluginConfigureHost(plugin)
+            AlasButton(title: "Configure…", style: .normal) {
+                if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
+            }
+            .fixedSize()
+            .disabled(host == nil)
+            .help(host == nil ? "Open a project to configure this plugin" : "")
+        }
+    }
+
+    private func revokeButton(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> some View {
+        AlasButton(title: "Revoke Approval", style: .subtle) { Task { await manager.revoke(plugin) } }
+            .fixedSize()
+    }
+
+    private func approveButton(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> some View {
+        AlasButton(title: "Approve…", style: .normal) {
+            approvals.ask(PluginApprovalRequest(manifest: plugin.manifest) { approved in
+                if approved { Task { await manager.approve(plugin) } }
+            })
+        }
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -189,17 +227,17 @@ struct PluginsPane: View {
     private func updatesBanner(_ manager: PluginManager, _ updates: [Update]) -> some View {
         HStack {
             Text(updates.count == 1 ? "1 update available" : "\(updates.count) updates available")
-                .font(.system(size: 12.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
             Spacer()
             AlasButton(title: "Update All", style: .normal) {
                 Task { for update in updates { await install(manager, update.entry, update.version) } }
             }
             .disabled(updates.contains { busy.contains($0.entry.id) })
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("accent-soft"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(.bottom, 12)
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .padding(.bottom, scale.space[3])
     }
 
     @ViewBuilder
@@ -210,6 +248,7 @@ struct PluginsPane: View {
             AlasButton(title: "Update to \(update.version.version)", style: .normal) {
                 Task { await install(manager, update.entry, update.version) }
             }
+            .fixedSize()
         }
     }
 
@@ -248,20 +287,20 @@ struct PluginsPane: View {
                         : summaries.count == 1 ? "1 capability" : "\(summaries.count) capabilities")
                     if !summaries.isEmpty { Image(systemName: "info.circle") }
                 }
-                .font(.system(size: 11.5))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .help(Self.capabilitiesHelp(summaries, fullAccess: fullAccess))
                 if fullAccess {
                     Text("Full access")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .font(scale.captionFont)
+                        .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                         .background(theme.color("warn").opacity(0.18))
                         .foregroundColor(theme.color("warn"))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                         .help("It acts with your permissions, outside the sandbox.")
                 }
             }
-            .padding(.top, 2)
+            .padding(.top, scale.space[0])
         case .installed, .installedLocally, .incompatible:
             EmptyView()
         }
@@ -400,17 +439,19 @@ private struct PluginConfigureSheet: View {
     let target: PluginPanelTarget
     let done: () -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let host = target.host
         VStack(spacing: 0) {
-            Text(target.title).font(.headline)
+            Text(target.title)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+                .padding(scale.space[4])
             Divider()
             Group {
                 if case .failed(let reason) = host.state {
-                    Text("Plugin stopped: \(reason)").foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center)
+                    Text("Plugin stopped: \(reason)").font(scale.bodyFont).foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center)
                 } else if host.state == .active, host.panelTree(for: target.place) != nil {
                     PluginViewTabView(host: host, panel: target.place.panel)
                 } else {
@@ -424,7 +465,7 @@ private struct PluginConfigureSheet: View {
                 // Escape, not Return: Return belongs to the panel's text fields.
                 Button("Done", action: done).keyboardShortcut(.cancelAction)
             }
-            .padding(12)
+            .padding(scale.space[3])
         }
         .frame(minWidth: 400, idealWidth: 560, maxWidth: .infinity, minHeight: 300, idealHeight: 480, maxHeight: .infinity)
         .pluginPanelsVisible([target])
@@ -437,18 +478,19 @@ private struct PaneDisclosure<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var isExpanded = false
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { isExpanded.toggle() } label: {
                 HStack(spacing: 5) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.glyphFont)
                         .frame(width: 10)
-                    Text(title).font(.system(size: 11.5))
+                    Text(title).font(scale.metaFont)
                 }
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.vertical, 4)
+                .padding(.vertical, scale.space[1])
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -462,22 +504,23 @@ private struct PaneDisclosure<Content: View>: View {
 private struct HostLogDisclosure: View {
     let log: [PluginLogEntry]
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         PaneDisclosure(title: "Log (\(log.count))") {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(log.enumerated()), id: \.offset) { _, entry in
                     Text("[\(entry.level)] \(entry.message)")
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .textSelection(.enabled)
                         .foregroundColor(theme.color("fg-dim"))
                 }
             }
-            .padding(.vertical, 6)
-            .padding(.leading, 15)
+            .padding(.vertical, scale.space[2])
+            .padding(.leading, scale.space[4])
         }
-        .padding(.leading, 12)
-        .padding(.bottom, 10)
+        .padding(.leading, scale.space[3])
+        .padding(.bottom, scale.space[2])
     }
 }
 
@@ -526,26 +569,31 @@ private struct PluginApprovalSheet: View {
     let finish: (Bool) -> Void
     @State private var acceptsFullAccess = false
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let manifest = request.manifest
         let sandboxed = manifest.capabilities.filter { !$0.isFullAccess }
         let fullAccess = manifest.capabilities.filter(\.isFullAccess)
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             if let update = request.update {
-                Text("Update \(manifest.name) to \(manifest.version)?").font(.headline)
-                Text("\(manifest.id) · \(update.from) → \(manifest.version)").font(.caption).foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("New in this version:").font(.subheadline.weight(.semibold))
-                    ForEach(update.added, id: \.self) { Text("• \($0)") }
+                Text("Update \(manifest.name) to \(manifest.version)?")
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                Text("\(manifest.id) · \(update.from) → \(manifest.version)")
+                    .font(scale.meta.font(design: .monospaced)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: scale.space[1]) {
+                    Text("New in this version:").font(scale.meta.font(weight: .semibold))
+                    ForEach(update.added, id: \.self) { Text("• \($0)").font(scale.bodyFont) }
                 }
-                .padding(8)
+                .padding(scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.color("warn").opacity(0.13))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             } else {
-                Text("Approve \(manifest.name)?").font(.headline)
-                Text("\(manifest.id) · version \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+                Text("Approve \(manifest.name)?")
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
+                Text("\(manifest.id) · version \(manifest.version)")
+                    .font(scale.meta.font(design: .monospaced)).foregroundStyle(.secondary)
             }
             // A long disclosure scrolls, so the confirmation and the buttons below it stay on screen.
             ViewThatFits(in: .vertical) {
@@ -558,7 +606,7 @@ private struct PluginApprovalSheet: View {
             }
             Text(request.update.map { "If you cancel, \($0.from) keeps running." }
                 ?? "Changing the plugin's files requires approving it again.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(scale.metaFont).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
@@ -566,7 +614,7 @@ private struct PluginApprovalSheet: View {
                     .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
             }
         }
-        .padding(20)
+        .padding(scale.space[4])
         .frame(width: 460)
         // Closed some other way: an update waiting on the answer must still get one.
         .onDisappear { finish(false) }
@@ -574,37 +622,38 @@ private struct PluginApprovalSheet: View {
 
     private func disclosure(sandboxed: [PluginCapability], fullAccess: [PluginCapability]) -> some View {
         let manifest = request.manifest
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: scale.space[3]) {
             if manifest.capabilities.isEmpty {
                 Text("It requests no capabilities.")
             }
             if !sandboxed.isEmpty || manifest.web != nil {
-                Text("Sandboxed. It will be able to:").font(.subheadline.weight(.semibold))
+                Text("Sandboxed. It will be able to:").font(scale.meta.font(weight: .semibold))
                 ForEach(sandboxed, id: \.self) { Text("• \($0.summary)") }
                 if let summary = manifest.webSummary { Text("• \(summary)") }
             }
             if !manifest.network.isEmpty {
                 Text("Web requests: " + manifest.network.joined(separator: ", "))
-                    .font(.callout).textSelection(.enabled)
+                    .font(scale.metaFont).textSelection(.enabled)
             }
             ForEach(manifest.settings.filter { $0.kind == .secret }, id: \.key) { secret in
                 Text("• Can use \(secret.title) with \(secret.hosts.joined(separator: ", "))")
             }
             if !fullAccess.isEmpty {
                 Text("Full access. With your permissions, outside any sandbox, it will be able to:")
-                    .font(.subheadline.weight(.semibold))
+                    .font(scale.meta.font(weight: .semibold))
                 ForEach(fullAccess, id: \.self) { Text("• \($0.summary)") }
                 ForEach(manifest.processes, id: \.id) { process in
                     Text(PluginArgv.display(process.command) + (process.appendArgs ? " …" : ""))
-                        .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                        .padding(.leading, 12)
+                        .font(scale.meta.font(design: .monospaced)).textSelection(.enabled)
+                        .padding(.leading, scale.space[3])
                 }
             }
             if let remote = Self.remoteSummary(manifest) {
-                Text("On SSH hosts").font(.subheadline.weight(.semibold))
+                Text("On SSH hosts").font(scale.meta.font(weight: .semibold))
                 Text(remote)
             }
         }
+        .font(scale.bodyFont)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

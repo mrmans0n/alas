@@ -288,3 +288,4 @@ Alas/Sources/Remote/Native/NativePeerNewSessionSheet.swift
 Alas/Sources/Remote/Settings/RemoteServerPane.swift
 Alas/Sources/Remote/Settings/HostSSHSetupSheet.swift
 Alas/Sources/Remote/Pairing/RemotePairingApprovalView.swift
+Alas/Sources/Plugins/PluginsPane.swift
