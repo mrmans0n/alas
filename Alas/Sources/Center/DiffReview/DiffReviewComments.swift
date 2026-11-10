@@ -261,7 +261,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     private func applyTheme(to scrollView: NSScrollView, textView: NSTextView) {
         scrollView.wantsLayer = true
         scrollView.layer?.backgroundColor = NSColor(theme.color("bg-2")).cgColor
-        textView.font = .systemFont(ofSize: 12)
+        textView.font = .systemFont(ofSize: 12) // design-literal: AppKit text view font
         textView.textColor = NSColor(theme.color("fg"))
         textView.insertionPointColor = NSColor(theme.color("accent"))
     }
@@ -620,6 +620,57 @@ struct ReviewDraftCommentEditorState: Equatable {
     var editingBody = ""
 }
 
+/// One text button of a draft or feedback card's action row.
+struct ReviewActionItem: Identifiable {
+    let id: String
+    let title: String
+    let action: () -> Void
+}
+
+/// Trailing-aligned action row that reflows instead of truncating labels.
+///
+/// Cards shown inline in a diff can be narrower than their buttons, so the row
+/// tries one line first, then the text buttons with the `trailing` control
+/// (Send) on its own line, then the text buttons split over two lines.
+struct ReviewActionRow<ActionButton: View, Trailing: View>: View {
+    @Environment(\.designScale) private var scale
+    let items: [ReviewActionItem]
+    let hasTrailing: Bool
+    @ViewBuilder let button: (ReviewActionItem) -> ActionButton
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        let split = (items.count + 1) / 2
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: scale.space[1]) {
+                Spacer(minLength: 0)
+                buttons(items)
+                if hasTrailing { trailing() }
+            }
+            VStack(alignment: .trailing, spacing: scale.space[1]) {
+                row { buttons(items) }
+                if hasTrailing { row { trailing() } }
+            }
+            VStack(alignment: .trailing, spacing: scale.space[1]) {
+                row { buttons(Array(items[..<split])) }
+                row { buttons(Array(items[split...])) }
+                if hasTrailing { row { trailing() } }
+            }
+        }
+    }
+
+    private func buttons(_ items: [ReviewActionItem]) -> some View {
+        ForEach(items) { item in button(item) }
+    }
+
+    private func row<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: scale.space[1]) {
+            Spacer(minLength: 0)
+            content()
+        }
+    }
+}
+
 struct ReviewDraftCommentCard: View {
     let comment: ReviewDraftComment
     let file: DiffReviewFileSummary
@@ -633,22 +684,23 @@ struct ReviewDraftCommentCard: View {
     var editorState: Binding<ReviewDraftCommentEditorState>?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var localEditorState = ReviewDraftCommentEditorState()
     @FocusState private var editorFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             cardContent
                 .background(selectionPressMarker)
 
             actionRow
         }
-        .padding(8)
+        .padding(scale.space[2])
         .frame(minHeight: ReviewDraftCommentDisplayPolicy.cardMinimumHeight, alignment: .top)
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(isFocused ? theme.color("accent") : statusColor.opacity(0.65), lineWidth: isFocused ? 1 : 0.75)
         )
         .background(
@@ -671,32 +723,32 @@ struct ReviewDraftCommentCard: View {
     }
 
     private var cardContent: some View {
-        HStack(alignment: .top, spacing: 8) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(alignment: .top, spacing: scale.space[2]) {
+            RoundedRectangle(cornerRadius: 2) // design-literal: 3pt status stripe
                 .fill(statusColor)
                 .frame(width: 3)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: selectWhenNotEditing)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
+                HStack(spacing: scale.space[1]) {
                     Text(draftLabel)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(statusColor)
 
                     if let markerNumber {
                         Text("#\(markerNumber)")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("accent"))
                     }
 
                     Text(lineDescription)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-faint"))
 
                     if comment.state == .resolved {
                         Text(resolvedLabel)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-faint"))
                     }
                 }
@@ -707,7 +759,7 @@ struct ReviewDraftCommentCard: View {
                 ForEach(providerStateLabels.indices, id: \.self) { index in
                     let label = providerStateLabels[index]
                     Text(label.text)
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(label.color)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -720,31 +772,31 @@ struct ReviewDraftCommentCard: View {
                         isFocused: $editorFocused,
                         codeBlockStyle: .standard(
                             theme: theme,
-                            baseFont: .systemFont(ofSize: 12),
+                            baseFont: .systemFont(ofSize: 12), // design-literal: AppKit text view font
                             baseColor: NSColor(theme.color("fg")),
-                            monoSize: 12
+                            monoSize: 12 // design-literal: AppKit text view font
                         ),
                         onSave: saveEditingComment,
                         onCancel: cancelEditingComment
                     )
                     .frame(minHeight: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .stroke(theme.color("line"), lineWidth: 0.75)
                     )
                     .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: scale.space[1]) {
                         DiffReviewInlineFeedbackMarkdown.view(
                             comment.bodyMarkdown,
                             noninteractiveTapAction: selectWhenNotEditing
                         )
 
                         ForEach(comment.allReplies) { reply in
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: scale.space[0]) {
                                 Text(reply.author.displayName)
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(scale.caption.font(weight: .semibold))
                                     .foregroundColor(theme.color("accent"))
                                 DiffReviewInlineFeedbackMarkdown.view(
                                     reply.bodyMarkdown,
@@ -752,9 +804,9 @@ struct ReviewDraftCommentCard: View {
                                 )
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                            .padding(.leading, 8)
+                            .padding(.leading, scale.space[2])
                             .overlay(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 1)
+                                RoundedRectangle(cornerRadius: 1) // design-literal: 2pt reply stripe
                                     .fill(theme.color("accent"))
                                     .frame(width: 2)
                             }
@@ -805,52 +857,49 @@ struct ReviewDraftCommentCard: View {
             || availability.canShowSendToAgent
             || availability.canPublishProvider
         {
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                if editorStateBinding.wrappedValue.isEditing {
-                    actionButton(id: "save", title: "Save") {
-                        saveEditingComment()
-                    }
-                    actionButton(id: "cancel", title: "Cancel") {
-                        cancelEditingComment()
-                    }
-                } else if availability.canEdit {
-                    actionButton(id: "edit", title: "Edit") {
-                        editorStateBinding.wrappedValue.editingBody = comment.bodyMarkdown
-                        editorStateBinding.wrappedValue.isEditing = true
-                        editorFocused = true
-                    }
-                }
-                if availability.canDelete {
-                    actionButton(id: "delete", title: "Delete") {
-                        actions.delete(comment)
-                    }
-                }
-                if availability.canResolve {
-                    actionButton(id: "resolve", title: "Resolve") {
-                        actions.resolve(comment)
-                    }
-                }
-                if availability.canDismiss {
-                    actionButton(id: "dismiss", title: "Dismiss") {
-                        actions.dismiss(comment)
-                    }
-                }
-                if availability.canCopyPrompt {
-                    actionButton(id: "copy", title: "Copy") {
-                        actions.copyPrompt(feedbackBundle)
-                    }
-                }
-                if availability.canPublishProvider {
-                    actionButton(id: "publish", title: "Publish") {
-                        actions.publishProvider(comment)
-                    }
-                }
-                if availability.canShowSendToAgent {
+            ReviewActionRow(
+                items: textActionItems(availability),
+                hasTrailing: availability.canShowSendToAgent,
+                button: { item in
+                    actionButton(id: item.id, title: item.title, action: item.action)
+                },
+                trailing: {
                     sendToAgentControl(isEnabled: availability.canSendToAgent)
                 }
-            }
+            )
         }
+    }
+
+    /// The text buttons of the action row, in display order. The Send control
+    /// is not one of them: it is the row's trailing control.
+    private func textActionItems(_ availability: ReviewDraftCommentActionAvailability) -> [ReviewActionItem] {
+        var items: [ReviewActionItem] = []
+        if editorStateBinding.wrappedValue.isEditing {
+            items.append(.init(id: "save", title: "Save") { saveEditingComment() })
+            items.append(.init(id: "cancel", title: "Cancel") { cancelEditingComment() })
+        } else if availability.canEdit {
+            items.append(.init(id: "edit", title: "Edit") {
+                editorStateBinding.wrappedValue.editingBody = comment.bodyMarkdown
+                editorStateBinding.wrappedValue.isEditing = true
+                editorFocused = true
+            })
+        }
+        if availability.canDelete {
+            items.append(.init(id: "delete", title: "Delete") { actions.delete(comment) })
+        }
+        if availability.canResolve {
+            items.append(.init(id: "resolve", title: "Resolve") { actions.resolve(comment) })
+        }
+        if availability.canDismiss {
+            items.append(.init(id: "dismiss", title: "Dismiss") { actions.dismiss(comment) })
+        }
+        if availability.canCopyPrompt {
+            items.append(.init(id: "copy", title: "Copy") { actions.copyPrompt(feedbackBundle) })
+        }
+        if availability.canPublishProvider {
+            items.append(.init(id: "publish", title: "Publish") { actions.publishProvider(comment) })
+        }
+        return items
     }
 
     @ViewBuilder
@@ -932,22 +981,23 @@ struct ReviewDraftCommentCard: View {
     }
 
     private func sendActionLabel(enabled: Bool, showsMenuIndicator: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: scale.space[1]) {
             Image(systemName: "paperplane.fill")
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(scale.glyph.font)
             Text("Send")
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
+                .fixedSize()
             if showsMenuIndicator {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .bold))
-                    .padding(.leading, 1)
+                    .font(scale.glyph.font(weight: .bold))
+                    .padding(.leading, 1) // design-literal: optical gap before the menu chevron
             }
         }
         .foregroundColor(enabled ? theme.color("bg-0") : theme.color("fg-faint"))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 22)
         .background(enabled ? theme.color("accent") : theme.color("bg-3"))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func actionButton(
@@ -958,12 +1008,13 @@ struct ReviewDraftCommentCard: View {
     ) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
+                .fixedSize()
                 .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
-                .padding(.horizontal, 7)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -1139,10 +1190,11 @@ struct DiffReviewInlineFeedbackCard: View {
     var replyEditorState: Binding<DiffReviewInlineFeedbackReplyEditorState>?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var localReplyEditor = DiffReviewInlineFeedbackReplyEditorState()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             cardContent
                 .background(
                     ReviewDraftCommentActionPressMarker(
@@ -1154,12 +1206,12 @@ struct DiffReviewInlineFeedbackCard: View {
 
             actionRow
         }
-        .padding(8)
+        .padding(scale.space[2])
         .frame(minHeight: DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight, alignment: .top)
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(isFocused ? theme.color("accent") : theme.color("line"), lineWidth: isFocused ? 1 : 0.5)
         )
         .background(
@@ -1178,28 +1230,28 @@ struct DiffReviewInlineFeedbackCard: View {
     }
 
     private var cardContent: some View {
-        HStack(alignment: .top, spacing: 8) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(alignment: .top, spacing: scale.space[2]) {
+            RoundedRectangle(cornerRadius: 2) // design-literal: 3pt status stripe
                 .fill(statusColor)
                 .frame(width: 3)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: select)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
+                HStack(spacing: scale.space[1]) {
                     Text(item.providerName)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(scale.caption.font(weight: .semibold))
                         .foregroundColor(statusColor)
 
                     if let author = item.author, !author.isEmpty {
                         Text(author)
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-muted"))
                     }
 
                     if let line = item.anchor.line {
                         Text("line \(line)")
-                            .font(.system(size: 10))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundColor(theme.color("fg-faint"))
                     }
                 }
@@ -1237,37 +1289,37 @@ struct DiffReviewInlineFeedbackCard: View {
     private var actionRow: some View {
         let availability = actions.availability(item, file)
         if replyEditorBinding.wrappedValue.isReplying {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 PairedTextEditor(
                     text: replyEditorBinding.body,
-                    font: .systemFont(ofSize: 11.5),
+                    font: .systemFont(ofSize: 11.5), // design-literal: AppKit text view font
                     textColor: NSColor(theme.color("fg")),
                     placeholder: "Reply",
                     codeBlockStyle: .standard(
                         theme: theme,
-                        baseFont: .systemFont(ofSize: 11.5),
+                        baseFont: .systemFont(ofSize: 11.5), // design-literal: AppKit text view font
                         baseColor: NSColor(theme.color("fg")),
-                        monoSize: 11.5
+                        monoSize: 11.5 // design-literal: AppKit text view font
                     )
                 )
                     .frame(minHeight: 32, maxHeight: 96)
-                    .padding(7)
+                    .padding(scale.space[2])
                     .background(theme.color("bg-1"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                     .overlay(alignment: .topLeading) {
                         if replyEditorBinding.wrappedValue.body.isEmpty {
                             Text("Reply")
-                                .font(.system(size: 11.5))
+                                .font(scale.meta.font)
                                 .foregroundColor(theme.color("fg-muted"))
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 9)
+                                .padding(.horizontal, 11) // design-literal: lines the placeholder up with the AppKit text view inset
+                                .padding(.vertical, 9) // design-literal: lines the placeholder up with the AppKit text view inset
                                 .allowsHitTesting(false)
                         }
                     }
                     .accessibilityLabel("Reply")
                     .accessibilityIdentifier("diff-review-inline-feedback-reply-\(item.id)")
 
-                HStack(spacing: 6) {
+                HStack(spacing: scale.space[1]) {
                     Spacer(minLength: 0)
                     inlineActionButton(id: "reply-save", title: "Save") {
                         _ = replyEditorBinding.wrappedValue.save(item) { feedback, body in
@@ -1285,57 +1337,68 @@ struct DiffReviewInlineFeedbackCard: View {
             || availability.canReplyProvider
             || availability.canResolveProvider
             || availability.canUnresolveProvider {
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                if availability.canOpenProvider {
-                    inlineActionButton(id: "open", title: "Open") {
-                        DiffReviewInlineFeedbackCardInteraction.open(item) { feedback in
-                            actions.openProvider(feedback, file)
-                        }
-                    }
-                }
-                if availability.canCopyContext {
-                    inlineActionButton(id: "copy", title: "Copy") {
-                        DiffReviewInlineFeedbackCardInteraction.copy(item) { feedback in
-                            actions.copyContext(feedback, file)
-                        }
-                    }
-                }
-                if availability.canSendToAgent {
-                    inlineActionButton(id: "send", title: "Send") {
-                        DiffReviewInlineFeedbackCardInteraction.send(item) { feedback in
-                            actions.sendToAgent(feedback, file)
-                        }
-                    }
-                }
-                if availability.canReplyProvider {
-                    inlineActionButton(id: "reply", title: "Reply") {
-                        replyEditorBinding.wrappedValue.start()
-                    }
-                }
-                if availability.canResolveProvider {
-                    inlineActionButton(id: "resolve", title: "Resolve") {
-                        actions.resolveProvider(item, file)
-                    }
-                }
-                if availability.canUnresolveProvider {
-                    inlineActionButton(id: "unresolve", title: "Unresolve") {
-                        actions.unresolveProvider(item, file)
-                    }
-                }
-            }
+            ReviewActionRow(
+                items: inlineActionItems(availability),
+                hasTrailing: false,
+                button: { item in
+                    inlineActionButton(id: item.id, title: item.title, action: item.action)
+                },
+                trailing: { EmptyView() }
+            )
         }
+    }
+
+    private func inlineActionItems(_ availability: DiffReviewInlineFeedbackActionAvailability) -> [ReviewActionItem] {
+        var items: [ReviewActionItem] = []
+        if availability.canOpenProvider {
+            items.append(.init(id: "open", title: "Open") {
+                DiffReviewInlineFeedbackCardInteraction.open(item) { feedback in
+                    actions.openProvider(feedback, file)
+                }
+            })
+        }
+        if availability.canCopyContext {
+            items.append(.init(id: "copy", title: "Copy") {
+                DiffReviewInlineFeedbackCardInteraction.copy(item) { feedback in
+                    actions.copyContext(feedback, file)
+                }
+            })
+        }
+        if availability.canSendToAgent {
+            items.append(.init(id: "send", title: "Send") {
+                DiffReviewInlineFeedbackCardInteraction.send(item) { feedback in
+                    actions.sendToAgent(feedback, file)
+                }
+            })
+        }
+        if availability.canReplyProvider {
+            items.append(.init(id: "reply", title: "Reply") {
+                replyEditorBinding.wrappedValue.start()
+            })
+        }
+        if availability.canResolveProvider {
+            items.append(.init(id: "resolve", title: "Resolve") {
+                actions.resolveProvider(item, file)
+            })
+        }
+        if availability.canUnresolveProvider {
+            items.append(.init(id: "unresolve", title: "Unresolve") {
+                actions.unresolveProvider(item, file)
+            })
+        }
+        return items
     }
 
     private func inlineActionButton(id: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
+                .fixedSize()
                 .foregroundColor(theme.color("fg-muted"))
-                .padding(.horizontal, 7)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
                 .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         }
         .buttonStyle(.plain)
         .help(title)
@@ -1458,16 +1521,17 @@ struct DiffReviewInlineFeedbackMoreRow: View {
     let hiddenCount: Int
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         Text("+\(hiddenCount) more feedback")
-            .font(.system(size: 10.5, weight: .medium))
+            .font(scale.caption.font(weight: .medium))
             .foregroundColor(theme.color("fg-muted"))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 20)
             .background(theme.color("bg-2"))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
             .background(
                 DiffReviewAccessibilityMarker(
                     identifier: "diff-review-inline-feedback-more",

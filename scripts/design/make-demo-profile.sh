@@ -20,7 +20,7 @@ profile="$(cd -P "$1" && pwd)"
 fixture="$profile/fixture"
 repo="$fixture/lantern"
 # Bump when build_fixture changes, so an older fixture is rebuilt.
-fixture_version=8
+fixture_version=9
 
 # Fixed so commit metadata never varies between profiles.
 export GIT_AUTHOR_NAME="Demo Author" GIT_AUTHOR_EMAIL="demo@example.invalid"
@@ -91,6 +91,39 @@ struct Invoice: Identifiable, Hashable {
     }
 }
 SWIFT
+  # Committed versions of the files the selected worktree edits for the review captures.
+  mkdir -p "$tmp/lantern/src/generated"
+  cat > "$tmp/lantern/src/billing/TaxRules.swift" <<'SWIFT'
+import Foundation
+
+/// Tax rates by customer.
+struct TaxRules {
+    var rates: [String: Decimal]
+    var defaultRate: Decimal = 0
+
+    func tax(on subtotal: Decimal, for customer: String) -> Decimal {
+        let rate = rates[customer] ?? defaultRate
+        return subtotal * rate
+    }
+}
+SWIFT
+  cat > "$tmp/lantern/src/web/routes.ts" <<'TS'
+import { Router } from "express";
+import { getInvoice, listInvoices } from "./invoices";
+
+export const routes = Router();
+
+routes.get("/invoices", async (req, res) => {
+  const invoices = await listInvoices();
+  res.json(invoices);
+});
+
+routes.get("/invoices/:id", async (req, res) => {
+  const invoice = await getInvoice(req.params.id);
+  res.json(invoice);
+});
+TS
+  printf 'region,rate\nDE,0.19\nFR,0.20\nES,0.21\nUS-CA,0.0725\nUS-NY,0.04\n' > "$tmp/lantern/src/generated/rates.csv"
   # A document for the Markdown preview, with a Mermaid diagram.
   cat > "$tmp/lantern/docs/architecture.md" <<'MARKDOWN'
 # Lantern architecture
@@ -173,6 +206,33 @@ PY
   path="$fixture/worktrees/${selected_branch//\//-}"
   printf '# Runbook\n\nRotate the billing keys before the March close.\n' > "$path/docs/runbook.md"
   git -C "$path" stash push -q -m "runbook notes for the March close" -- docs/runbook.md
+
+  # Edits for the Review Changes captures: small hunks in three source files, a
+  # generated file large enough to be deferred ("Show full diff"), and an image
+  # that fails to decode (the failed row with Retry).
+  /usr/bin/python3 - "$path" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+def edit(name, old, new):
+    f = root / name
+    text = f.read_text()
+    assert old in text, name
+    f.write_text(text.replace(old, new, 1))
+edit("src/billing/Invoice.swift", "    var issuedAt: Date\n", "    var issuedAt: Date\n    var dueDate: Date\n")
+edit("src/billing/Invoice.swift", "        subtotal + rules.tax(on: subtotal, for: customer)\n",
+     "        let tax = rules.tax(on: subtotal, for: customer)\n        return max(0, subtotal + tax - discount)\n")
+edit("src/billing/Invoice.swift", "    /// Sum of every line, before tax.\n", "    /// Credit applied before the invoice is issued.\n    var discount: Decimal = 0\n\n    /// Sum of every line, before tax.\n")
+edit("src/billing/TaxRules.swift", "    var defaultRate: Decimal = 0\n", "    var defaultRate: Decimal = 0\n    var exemptCustomers: Set<String> = []\n")
+edit("src/billing/TaxRules.swift", "        let rate = rates[customer] ?? defaultRate\n        return subtotal * rate\n",
+     "        if exemptCustomers.contains(customer) { return 0 }\n        let rate = rates[customer] ?? defaultRate\n        var result = subtotal * rate\n        var rounded = Decimal()\n        NSDecimalRound(&rounded, &result, 2, .bankers)\n        return rounded\n")
+edit("src/web/routes.ts", "  const invoices = await listInvoices();\n  res.json(invoices);\n",
+     "  const limit = Math.min(Number(req.query.limit ?? 50), 200);\n  const invoices = await listInvoices({ limit });\n  res.json(invoices);\n")
+edit("src/web/routes.ts", "  res.json(invoice);\n});\n", "  if (!invoice) {\n    res.status(404).json({ error: \"invoice not found\" });\n    return;\n  }\n  res.json(invoice);\n});\n")
+with open(root / "src/generated/rates.csv", "a") as out:
+    for i in range(22000):
+        out.write(f"PC-{i:05d},{(i % 2500) / 10000:.4f}\n")
+(root / "docs/usage-chart.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00not a real image\x00")
+PY
 }
 
 if [[ "$(cat "$fixture/version" 2>/dev/null)" != "$fixture_version" ]]; then

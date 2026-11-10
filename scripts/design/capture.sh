@@ -25,6 +25,9 @@
 # with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
 # attention-inbox opens the Attention inbox popover over demo rows (DesignCaptureAttention);
 # attention-rollup does the same and runs its roll-up with scripted groups.
+# review-comments, review-states, review-thread, review-annotation and review-image (with
+# ALAS_CAPTURE_CLI=review) seed draft comments, a provider thread and an annotation over the
+# Review Changes tab and scroll to one of them (DesignCaptureReview).
 # ALAS_CAPTURE_CENTER update-available, update-available-brew, update-available-nightly,
 # update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
 # and whats-new show the update sheets and the What's New card over scripted releases

@@ -92,6 +92,7 @@ struct DiffReviewSurface: View {
     var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.reviewDraftSummaryRailStatus) private var summaryRailStatus
     @State private var inlineSummaryActionRelay = ReviewDraftSummaryInlineActionRelay()
     /// The draft-summary editor's in-progress state, mirrored from whichever
@@ -375,6 +376,7 @@ struct DiffReviewSurface: View {
             focusedFeedbackID: focusedFeedbackID,
             status: summaryRailStatus,
             theme: theme,
+            scale: scale,
             editingCommentID: summaryEditingCommentID,
             editingBody: summaryEditingBody
         )
@@ -394,6 +396,7 @@ struct DiffReviewSurface: View {
         // Hosted rows do not inherit this view's SwiftUI environment, so the
         // theme and send status travel with the row explicitly.
         let theme = theme
+        let scale = scale
         let status = summaryRailStatus
         let relay = inlineSummaryActionRelay
         // Captured by value at this render pass so a fresh mount (the
@@ -438,6 +441,7 @@ struct DiffReviewSurface: View {
                             }
                         )
                         .environment(\.theme, theme)
+                        .environment(\.designScale, scale)
                         .environment(\.reviewDraftSummaryRailStatus, status)
                     )
                 }
@@ -502,6 +506,7 @@ struct DiffReviewSurface: View {
                 annotations: inlineAnnotations(for: file.summary.path),
                 state: state,
                 theme: theme,
+                scale: scale,
                 layoutMode: layoutMode,
                 wrapLines: wrapLines,
                 showWhitespace: showWhitespace,
