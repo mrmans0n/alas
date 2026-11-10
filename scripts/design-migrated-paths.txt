@@ -311,3 +311,5 @@ Alas/Sources/Plugins/PluginPanelView.swift
 Alas/Sources/Plugins/PluginDecorations.swift
 Alas/Sources/Attention/AttentionInboxView.swift
 Alas/Sources/Attention/AttentionRollUpCard.swift
+Alas/Sources/Updates/UpdateAvailableSheet.swift
+Alas/Sources/Updates/UpdateProgressSheet.swift
