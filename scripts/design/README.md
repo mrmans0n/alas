@@ -28,6 +28,14 @@ Set `ALAS_CAPTURE_CENTER` to `peer-session`, `peer-permission`, `peer-diff`, `pe
 paired Mac. The Debug build installs two scripted peers in-process (`DesignCaptureDemoPeer`):
 no network, pairing or keychain. Their sidebar section is collapsed by default.
 
+Set `ALAS_CAPTURE_CENTER` to `plugin-tab` (Release Notes web tab), `plugin-view-tab` (Standup
+view tab), `plugin-panel` (Standup view panel in the right pane) or `plugin-web-panel` (Release
+Notes changelog web panel), or `ALAS_CAPTURE_SETTINGS=plugins`, to capture the plugin screens.
+The seed carries five demo plugins in its own `Plugins/` folder (`demo-plugins/`, plus the
+hello-workspace sample); the Debug build starts them through `DesignCapturePlugins`, approves
+them inside the demo profile, and serves an offline catalog. Sidebar badges, rail badges and
+the Settings states (update available, disabled, stopped with an error, not loaded) come with them.
+
 Set `ALAS_CAPTURE_CENTER` to `attention-inbox` or `attention-rollup` to open the Attention
 inbox popover over demo rows (`DesignCaptureAttention`): action-required, informational,
 last-known, acknowledged and historical items across three projects and a remote host, plus

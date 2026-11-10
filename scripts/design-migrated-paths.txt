@@ -303,5 +303,11 @@ Alas/Sources/Code/Markdown/MarkdownTabView.swift
 Alas/Sources/Code/Mermaid/MermaidDiagramBlockView.swift
 Alas/Sources/Code/Mermaid/MermaidDiagramViewer.swift
 Alas/Sources/Code/Mermaid/MermaidTextAttachment.swift
+Alas/Sources/Plugins/PluginsPane.swift
+Alas/Sources/Plugins/PluginTabView.swift
+Alas/Sources/Plugins/PluginViewTabView.swift
+Alas/Sources/Plugins/PluginWebView.swift
+Alas/Sources/Plugins/PluginPanelView.swift
+Alas/Sources/Plugins/PluginDecorations.swift
 Alas/Sources/Attention/AttentionInboxView.swift
 Alas/Sources/Attention/AttentionRollUpCard.swift

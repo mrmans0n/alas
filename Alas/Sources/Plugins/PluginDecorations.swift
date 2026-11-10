@@ -29,15 +29,16 @@ struct PluginDecorationBadges: View {
     let items: [PluginDecorationItem]
     let run: (PluginDecorationItem) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         ForEach(items) { item in
             let color = theme.color((item.decoration.tone ?? .dim).colorKey)
             let badge = Text(item.decoration.text)
-                .font(.system(size: 9.5, weight: .medium))
+                .font(scale.captionFont)
                 .lineLimit(1)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .padding(.horizontal, scale.space[1])
+                .padding(.vertical, scale.space[0])
                 .foregroundColor(color)
                 .background(Capsule().fill(color.opacity(0.15)))
                 .fixedSize()

@@ -572,9 +572,22 @@ enum DesignCaptureBridge {
             forName: notification, object: nil, queue: .main
         ) { note in
             guard let target = note.object as? String else { return }
-            if target.hasPrefix("settings:") {
+            if target.hasPrefix("plugin-") {
+                Task { @MainActor in
+                    guard let state else { return }
+                    await DesignCapturePlugins.open(target, state: state)
+                }
+            } else if target.hasPrefix("settings:") {
                 let section = SettingsSection(rawValue: String(target.dropFirst("settings:".count)))
-                NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+                if section == .plugins {
+                    // The pane lists nothing until plugins run, so start the demo ones first.
+                    Task { @MainActor in
+                        if let state { await DesignCapturePlugins.start(state: state) }
+                        NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+                    }
+                } else {
+                    NotificationCenter.default.post(name: .alasOpenSettings, object: section)
+                }
             } else if target == "gg-inbox" || target == "gg-landing" {
                 openGGTab(target)
             } else if target.hasPrefix("peer-") {

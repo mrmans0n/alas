@@ -119,6 +119,11 @@ struct ACPInputField: NSViewRepresentable {
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
             tv.presentImagePicker()
         }
+        actions.pasteFromClipboard = { [weak coord] in
+            guard let coord, let tv = coord.textView as? ACPNSTextView, tv.isEditable else { return }
+            tv.window?.makeFirstResponder(tv)
+            tv.paste(nil)
+        }
         actions.applyDictationTranscript = { [weak coord] text, isFinal in
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
             tv.replaceDictationRegion(text, isFinal: isFinal)
@@ -2586,7 +2591,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard isEditable else { return }
         invalidateNextPromptSuggestion()
         if insertComposerDraft(from: NSPasteboard.general) { return }
-        if insertImages(from: NSPasteboard.general) { return }
+        if insertImages(from: NSPasteboard.general) {
+            ACPClipboardImageWatcher.shared.markPasted()
+            return
+        }
         if let text = NSPasteboard.general.string(forType: .string) {
             // File URLs on the pasteboard carry a text rendition (the path);
             // that is never a paste to collapse.

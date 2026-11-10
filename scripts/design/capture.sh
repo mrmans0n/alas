@@ -18,6 +18,11 @@
 # profile's scripted gg (bin/gg), before the capture. peer-session, peer-permission,
 # peer-diff, peer-file and peer-console install two scripted paired Macs (Studio Mac,
 # MacBook Air; DesignCaptureDemoPeer) in-process and open that view of Studio Mac.
+# ALAS_CAPTURE_CENTER plugin-tab (Release Notes web tab), plugin-view-tab (Standup view
+# tab), plugin-panel (Standup right-pane panel) and plugin-web-panel (Release Notes
+# right-pane web panel) start the demo plugins seeded in the profile's Plugins folder
+# (scripts/design/demo-plugins, offline catalog) and open that view. ALAS_CAPTURE_SETTINGS
+# with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
 # attention-inbox opens the Attention inbox popover over demo rows (DesignCaptureAttention);
 # attention-rollup does the same and runs its roll-up with scripted groups.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes

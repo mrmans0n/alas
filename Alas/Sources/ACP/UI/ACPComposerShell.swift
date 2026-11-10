@@ -572,17 +572,60 @@ struct ACPComposer: View {
                     mirrorToolbar
                 } else {
                     ViewThatFits(in: .horizontal) {
-                        expandedToolbar(showShortcuts: true)
-                        expandedToolbar(showShortcuts: false)
+                        // The paste offer is timely and the key hints are always true,
+                        // so the key hints give way first.
+                        if showsPasteImageHint {
+                            expandedToolbar(showPasteHint: true, showShortcuts: true)
+                            expandedToolbar(showPasteHint: true, showShortcuts: false)
+                        }
+                        expandedToolbar(showPasteHint: false, showShortcuts: true)
+                        expandedToolbar(showPasteHint: false, showShortcuts: false)
                         twoRowToolbar
                         compactToolbar
                     }
+                    .animation(.easeOut(duration: 0.15), value: showsPasteImageHint)
                 }
             }
             .padding(.horizontal, scale.space[0])
         }
         .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
         .acpComposerPill(focused: inputFocused)
+        .onAppear { ACPClipboardImageWatcher.shared.startWatching() }
+        .onDisappear { ACPClipboardImageWatcher.shared.stopWatching() }
+    }
+
+    /// Offers the clipboard's image while this composer can still take one.
+    private var showsPasteImageHint: Bool {
+        guard ACPClipboardImageWatcher.shared.offersImage, !isMirror else { return false }
+        let images = composer.draft.segments.count { if case .image = $0 { true } else { false } }
+        return images < ACPImageStaging.maxImagesPerMessage
+    }
+
+    private var pasteImageHint: some View {
+        Button {
+            actions.pasteFromClipboard?()
+        } label: {
+            HStack(spacing: scale.space[1]) {
+                Image(systemName: "photo")
+                    .font(scale.caption.font(weight: .medium))
+                    .foregroundStyle(theme.color("accent"))
+                Text("Paste image")
+                    .font(scale.meta.font(weight: .medium))
+                    .foregroundStyle(theme.color("fg"))
+                kbdLabel("⌃V")
+            }
+            .padding(.leading, scale.space[2])
+            .padding(.trailing, scale.space[1])
+            .frame(height: 24)
+            .background(Capsule().fill(theme.color("accent").opacity(0.12)))
+            .overlay(Capsule().strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.75))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .transition(.opacity)
+        .accessibilityLabel("Paste image from clipboard")
+        .help("Paste the image on your clipboard. ⌃V or ⌘V does the same.")
     }
 
     private var isMirror: Bool { manager.isMirror(sessionId: session.id) }
@@ -642,8 +685,9 @@ struct ACPComposer: View {
 
     /// Tools, then the configuration cluster, then the action, each group
     /// with a wider gap around it than inside it.
-    private func expandedToolbar(showShortcuts: Bool) -> some View {
+    private func expandedToolbar(showPasteHint: Bool, showShortcuts: Bool) -> some View {
         HStack(spacing: scale.space[3]) {
+            if showPasteHint { pasteImageHint }
             if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
             HStack(spacing: scale.space[2]) {

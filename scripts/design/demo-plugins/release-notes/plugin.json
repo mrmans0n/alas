@@ -1,0 +1,14 @@
+{
+  "id": "io.example.demo-release-notes",
+  "name": "Release Notes",
+  "version": "1.2.0",
+  "api": 15,
+  "entry": "plugin.js",
+  "web": "ui.js",
+  "capabilities": ["workspace.read"],
+  "contributes": {
+    "tabs": [{ "id": "notes", "title": "Release notes", "kind": "web" }],
+    "panels": [{ "id": "changelog", "title": "Changelog", "icon": "list.bullet.rectangle", "location": "right", "kind": "web" }],
+    "commands": [{ "id": "open-notes", "title": "Release notes", "icon": "doc.text", "slots": ["palette", "repo.menu"], "opens": "notes" }]
+  }
+}
