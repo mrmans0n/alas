@@ -29,6 +29,7 @@ struct DiffInlineCommentCard: View {
     var editorState: Binding<DiffInlineCommentCardEditorState>?
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var isExpanded: Bool
     @State private var localEditorState = DiffInlineCommentCardEditorState()
     @State private var isHovered = false
@@ -98,23 +99,23 @@ struct DiffInlineCommentCard: View {
         Button {
             isExpanded = true
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[1]) {
                 Text(pillIcon)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                 if let first = thread.comments.first {
                     Text("\(first.author):")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(.primary)
                     Text(DiffReviewInlineFeedbackMarkdown.plainText(first.body))
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(NSColor.controlBackgroundColor))
             .overlay(
@@ -135,52 +136,52 @@ struct DiffInlineCommentCard: View {
             Button {
                 isExpanded = false
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: scale.space[1]) {
                     Text(pillIcon)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                     Text(threadStatusLabel)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(.secondary)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(scale.glyph.font)
                         .foregroundColor(.secondary)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[1])
             }
             .buttonStyle(.plain)
 
             Divider()
 
             // Comments
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space[3]) {
                 ForEach(thread.comments) { comment in
                     commentRow(comment)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
 
             // Inline reply composer
             if editorStateBinding.wrappedValue.isComposerOpen {
                 Divider()
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: scale.space[1]) {
+                    HStack(spacing: scale.space[1]) {
                         Text("Reply")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(scale.meta.font(weight: .semibold))
                             .foregroundColor(.secondary)
                         Spacer(minLength: 0)
                         Button("Suggest") {
                             editorStateBinding.wrappedValue.replyDraft = "```suggestion\n\n```"
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.accentColor)
                     }
                     PairedTextEditor(
                         text: editorStateBinding.replyDraft,
-                        font: .systemFont(ofSize: 11),
+                        font: .systemFont(ofSize: 11), // design-literal: AppKit text view font
                         isFocused: Binding(
                             get: { focusedEditor == .reply },
                             set: { value in
@@ -193,27 +194,27 @@ struct DiffInlineCommentCard: View {
                         ),
                         codeBlockStyle: .standard(
                             theme: theme,
-                            baseFont: .systemFont(ofSize: 11),
+                            baseFont: .systemFont(ofSize: 11), // design-literal: AppKit text view font
                             baseColor: .labelColor,
-                            monoSize: 11
+                            monoSize: 11 // design-literal: AppKit text view font
                         )
                     )
                         .frame(minHeight: 60)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: scale.radius.small)
                                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                         )
                         .onAppear {
                             focusedEditor = .reply
                         }
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         Button("Comment") {
                             onReply(editorStateBinding.wrappedValue.replyDraft)
                             clearReplyComposer()
                             focusedEditor = nil
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(.accentColor)
 
                         if canAddToReview {
@@ -223,7 +224,7 @@ struct DiffInlineCommentCard: View {
                                 focusedEditor = nil
                             }
                             .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(scale.meta.font(weight: .semibold))
                             .foregroundColor(.accentColor)
                         }
 
@@ -232,44 +233,44 @@ struct DiffInlineCommentCard: View {
                             focusedEditor = nil
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.secondary)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, scale.space[3])
+                .padding(.vertical, scale.space[2])
             }
 
             Divider()
 
             // Action buttons
-            HStack(spacing: 8) {
+            HStack(spacing: scale.space[2]) {
                 if canReply {
                     Button("Reply") {
                         editorStateBinding.wrappedValue.isComposerOpen.toggle()
                         focusedEditor = editorStateBinding.wrappedValue.isComposerOpen ? .reply : nil
                     }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.accentColor)
                 }
 
                 if canResolve && !thread.isResolved {
                     Button("Resolve") { onResolve() }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.secondary)
                 } else if canResolve && thread.isResolved && thread.viewerCanUnresolve {
                     Button("Unresolve") { onUnresolve() }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.secondary)
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(NSColor.controlBackgroundColor))
@@ -287,13 +288,13 @@ struct DiffInlineCommentCard: View {
     private func commentRow(_ comment: DiffInlineComment) -> some View {
         if editorStateBinding.wrappedValue.editingCommentID == comment.id {
             // Edit mode for this comment
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
                 Text(comment.author)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(.primary)
                 PairedTextEditor(
                     text: editorStateBinding.editDraft,
-                        font: .systemFont(ofSize: 11),
+                        font: .systemFont(ofSize: 11), // design-literal: AppKit text view font
                         isFocused: Binding(
                             get: { focusedEditor == .edit(comment.id) },
                             set: { value in
@@ -306,27 +307,27 @@ struct DiffInlineCommentCard: View {
                         ),
                         codeBlockStyle: .standard(
                             theme: theme,
-                            baseFont: .systemFont(ofSize: 11),
+                            baseFont: .systemFont(ofSize: 11), // design-literal: AppKit text view font
                             baseColor: .labelColor,
-                            monoSize: 11
+                            monoSize: 11 // design-literal: AppKit text view font
                         )
                     )
                     .frame(minHeight: 60)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: scale.radius.small)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                     )
                     .onAppear {
                         focusedEditor = .edit(comment.id)
                     }
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space[2]) {
                     Button("Save") {
                         onEdit(comment, editorStateBinding.wrappedValue.editDraft)
                         clearEditComposer()
                         focusedEditor = nil
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(.accentColor)
 
                     Button("Cancel") {
@@ -334,17 +335,17 @@ struct DiffInlineCommentCard: View {
                         focusedEditor = nil
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             // Display mode for this comment
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[0]) {
+                HStack(alignment: .top, spacing: scale.space[1]) {
                     Text(comment.author)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(.primary)
                     Spacer(minLength: 0)
                     if canEdit && comment.viewerCanUpdate {
@@ -354,7 +355,7 @@ struct DiffInlineCommentCard: View {
                             focusedEditor = .edit(comment.id)
                         } label: {
                             Image(systemName: "pencil")
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
@@ -365,7 +366,7 @@ struct DiffInlineCommentCard: View {
                             onDelete(comment)
                         } label: {
                             Image(systemName: "trash")
-                                .font(.system(size: 10))
+                                .font(scale.caption.font(weight: .regular))
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)

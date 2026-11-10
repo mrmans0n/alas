@@ -5,6 +5,7 @@ struct DiffInlineAnnotationCard: View {
 
     @State private var showDetails = false
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -13,13 +14,13 @@ struct DiffInlineAnnotationCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .stroke(accentColor.opacity(0.4), lineWidth: 0.75)
         )
-        .padding(.horizontal, 1)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 1) // design-literal: 1pt inset so the card's stroke is not clipped
+        .padding(.vertical, scale.space[0])
     }
 
     private var accentBar: some View {
@@ -27,8 +28,8 @@ struct DiffInlineAnnotationCard: View {
             .frame(width: 3)
             .clipShape(
                 UnevenRoundedRectangle(
-                    topLeadingRadius: 6,
-                    bottomLeadingRadius: 6,
+                    topLeadingRadius: scale.radius.medium,
+                    bottomLeadingRadius: scale.radius.medium,
                     bottomTrailingRadius: 0,
                     topTrailingRadius: 0
                 )
@@ -36,18 +37,18 @@ struct DiffInlineAnnotationCard: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: levelIcon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(accentColor)
                 Text(annotation.checkName)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.caption.font)
                     .foregroundColor(theme.color("fg-muted"))
                     .lineLimit(1)
             }
             Text(annotation.message)
-                .font(.system(size: 12))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg"))
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -56,24 +57,24 @@ struct DiffInlineAnnotationCard: View {
                     showDetails.toggle()
                 } label: {
                     Text(showDetails ? "Hide details" : "Show details")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(scale.caption.font)
                         .foregroundColor(theme.color("accent"))
                 }
                 .buttonStyle(.plain)
 
                 if showDetails {
                     Text(rawDetails)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(scale.meta.font(design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(8)
+                        .padding(scale.space[2])
                         .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[2])
     }
 
     private var cardBackground: Color {
