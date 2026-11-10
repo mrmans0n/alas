@@ -63,8 +63,7 @@ public enum SimulatorControl {
         )
         if result.exitCode == 0, let pid = launchedPID(result.stdout, bundleID: bundleID) { return pid }
         // simctl's launch error doesn't say the app is missing; its container lookup does.
-        let container = try await Process.run(xcrun, args: ["simctl", "get_app_container", udid, bundleID])
-        if container.exitCode != 0 { throw SimulatorLaunchError.notInstalled }
+        if await !isInstalled(udid: udid, bundleID: bundleID) { throw SimulatorLaunchError.notInstalled }
         throw SimulatorControlError(result)
     }
 
@@ -77,6 +76,62 @@ public enum SimulatorControl {
             }
         }
         return nil
+    }
+
+    public static func isInstalled(udid: String, bundleID: String) async -> Bool {
+        (try? await Process.run(xcrun, args: ["simctl", "get_app_container", udid, bundleID]))?.exitCode == 0
+    }
+
+    /// Runs `simctl ui <udid> <option> <value>`.
+    static func ui(udid: String, _ option: String, _ value: String) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "ui", udid, option, value])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func display(udid: String) async throws -> SimulatorDisplaySettings {
+        func read(_ option: String) async throws -> String {
+            let result = try await Process.run(xcrun, args: ["simctl", "ui", udid, option])
+            guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+            return result.stdout
+        }
+        return SimulatorDisplaySettings.parse(
+            appearance: try await read("appearance"),
+            contentSize: try await read("content_size"),
+            increaseContrast: try await read("increase_contrast")
+        )
+    }
+
+    public static func privacy(
+        udid: String, action: SimulatorPrivacyAction, service: SimulatorPrivacyService, bundleID: String
+    ) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "privacy", udid, action.rawValue, service.rawValue, bundleID])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    /// Sets the simulated location, or clears it when `location` is nil.
+    public static func location(udid: String, _ location: SimulatorLocation?) async throws {
+        let args = location.map { ["simctl", "location", udid, "set", "\($0.latitude),\($0.longitude)"] }
+            ?? ["simctl", "location", udid, "clear"]
+        let result = try await Process.run(xcrun, args: args)
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func push(udid: String, bundleID: String, payload: Data) async throws {
+        let result = try await Process.run(
+            xcrun, args: ["simctl", "push", udid, bundleID, "-"], stdin: String(decoding: payload, as: UTF8.self)
+        )
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func openURL(udid: String, url: String) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "openurl", udid, url])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func userApps(udid: String) async throws -> [SimulatorApp] {
+        let result = try await Process.run(xcrun, args: ["simctl", "listapps", udid])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        return SimulatorAppList.parse(Data(result.stdout.utf8))
     }
 
     /// Whether Xcode's simulator tools are installed and selected.
