@@ -9,9 +9,12 @@ struct UpdateAvailableSheet: View {
     let onDismiss: () -> Void
     let onRunUpdate: () -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     private let brewCommand = SelfUpdateCommand.homebrew.displayCommandLine
-    private static let notesTypography = ACPChatTypography(fontFamily: "", fontSize: 12)
+    private var notesTypography: ACPChatTypography {
+        ACPChatTypography(fontFamily: "", fontSize: Int(scale.meta.size))
+    }
 
     private var subtitleText: String {
         switch info {
@@ -42,27 +45,27 @@ struct UpdateAvailableSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text(titleText)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                     .foregroundColor(theme.color("fg"))
                 Text(subtitleText)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 6)
+            .padding(.horizontal, scale.space[5]).padding(.top, scale.space[4]).padding(.bottom, scale.space[2])
 
             ScrollView {
                 Group {
                     if info.releaseNotes.isEmpty {
                         Text("No release notes provided.")
-                            .font(.system(size: 12))
+                            .font(scale.metaFont)
                             .foregroundColor(theme.color("fg-muted"))
                     } else {
                         ACPMarkdownText(
                             raw: info.releaseNotes,
-                            typography: Self.notesTypography,
+                            typography: notesTypography,
                             showsCodeBlockCopyButton: false,
                             // Release notes keep the spacing they had before the transcript's scale.
                             spacing: .init(block: 8, line: 0)
@@ -71,40 +74,62 @@ struct UpdateAvailableSheet: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 220)
-            .padding(.horizontal, 22).padding(.vertical, 12)
+            .frame(height: 220) // design-literal: fixed release-notes viewport
+            .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[3])
 
             actionRow
         }
-        .frame(width: 480)
+        .frame(width: 480) // design-literal: fixed sheet width
         .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     @ViewBuilder private var actionRow: some View {
-        HStack(spacing: 8) {
-            switch source {
-            case .homebrew:
-                Text(brewCommand)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundColor(theme.color("fg"))
-                    .textSelection(.enabled)
-                AlasButton(title: "Copy", style: .subtle) { Clipboard.copy(brewCommand) }
-                Spacer()
-                AlasButton(title: "View Release", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
-                AlasButton(title: "Update", style: .primary, action: onRunUpdate)
-                AlasButton(title: "Later", style: .subtle, action: onDismiss)
-            case .direct:
+        switch source {
+        case .homebrew:
+            VStack(alignment: .leading, spacing: scale.space[2]) {
+                HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
+                    Text(brewCommand)
+                        .font(scale.meta.font(design: .monospaced))
+                        .foregroundColor(theme.color("fg"))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    AlasButton(title: "Copy", style: .subtle) { Clipboard.copy(brewCommand) }
+                        .fixedSize()
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: scale.space[2]) {
+                    AlasButton(title: viewReleaseLabel, style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                        .fixedSize()
+                    Spacer()
+                    AlasButton(title: "Later", style: .subtle, action: onDismiss)
+                        .fixedSize()
+                    AlasButton(title: "Update", style: .primary, action: onRunUpdate)
+                        .fixedSize()
+                }
+            }
+            .actionRowChrome(theme: theme, horizontal: scale.space[4], vertical: scale.space[3])
+        case .direct:
+            HStack(spacing: scale.space[2]) {
                 AlasButton(title: viewReleaseLabel, style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                    .fixedSize()
                 Spacer()
                 AlasButton(title: "Later", style: .subtle, action: onDismiss)
+                    .fixedSize()
                 AlasButton(title: "Download", style: .primary) {
                     NSWorkspace.shared.open(info.dmgURL ?? info.htmlURL)
                 }
+                .fixedSize()
             }
+            .actionRowChrome(theme: theme, horizontal: scale.space[4], vertical: scale.space[3])
         }
-        .padding(.horizontal, 18).padding(.vertical, 12)
-        .background(theme.color("bg-2"))
-        .overlay(Divider().opacity(0.5), alignment: .top)
+    }
+}
+
+private extension View {
+    func actionRowChrome(theme: Theme, horizontal: CGFloat, vertical: CGFloat) -> some View {
+        padding(.horizontal, horizontal).padding(.vertical, vertical)
+            .background(theme.color("bg-2"))
+            .overlay(Divider().opacity(0.5), alignment: .top)
     }
 }

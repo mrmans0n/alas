@@ -25,6 +25,10 @@
 # with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
 # attention-inbox opens the Attention inbox popover over demo rows (DesignCaptureAttention);
 # attention-rollup does the same and runs its roll-up with scripted groups.
+# ALAS_CAPTURE_CENTER update-available, update-available-brew, update-available-nightly,
+# update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
+# and whats-new show the update sheets and the What's New card over scripted releases
+# (DesignCaptureUpdates); nothing is downloaded, installed or relaunched.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",

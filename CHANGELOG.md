@@ -8,8 +8,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
-- Detect Claude and Codex adapters that npm left without their platform binary after an interrupted download, fail such installs instead of reporting success, and add Reinstall to the launch-failure banner and to each managed agent's settings. Installs and repairs now remove the old package first; updates still install over it.
 - Run gg, git, and code-host CLIs with the login shell's environment, not only its PATH, so `stack_ship` and stack syncs pass lint hooks that need variables such as `ANDROID_HOME`. A shell `GIT_EDITOR` no longer stalls Continue. When gg sync fails, `stack_ship` and Alas now show gg's error message instead of `GGServiceError error 0` (#2426).
+
+## [0.23.5] - 2026-11-10
+
+### ✨ Features
+
+- Install and launch simulator-built apps from agent tools or by dropping an `.app`; device calls now wait for manual simulator control to end before timing out (#2412).
+- Offer a **Paste image** shortcut when the clipboard contains a bitmap, without reading clipboard contents during detection (#2423).
+- Apply the density-aware `DesignScale` to the gg screens (#2411), remote screens (#2413), code editor screens (#2419), plugin screens (#2422), and Attention inbox (#2424).
+
+### 🐛 Fixes
+
+- Judge child-agent plan reviews against the child's own plan revisions and context resets (#2414).
+- Detect incomplete ACP adapter native payloads and offer a clean reinstall locally or over SSH (#2415).
+- Label each file above its diff in the remote web view and side-question approvals (#2416).
+- Let the local transcript and composer grow to 960 points on wide panes again (#2417).
+- Delete staged chat attachments when their worktree is deleted, while keeping attachments for archived worktrees (#2418).
+
+### 🏗️ Internal
+
+- Update the `tree-sitter-sequel` SQL grammar to 0.3.12 (#2420).
+- Update the `tree-sitter-scala` grammar to 0.26.10 (#2421).
 
 ## [0.23.4] - 2026-11-09
 

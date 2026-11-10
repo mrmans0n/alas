@@ -1068,6 +1068,7 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                     }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .environment(\.designScale, .resolved(for: state.config.density))
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
     }
