@@ -313,3 +313,4 @@ Alas/Sources/Attention/AttentionInboxView.swift
 Alas/Sources/Attention/AttentionRollUpCard.swift
 Alas/Sources/Updates/UpdateAvailableSheet.swift
 Alas/Sources/Updates/UpdateProgressSheet.swift
+Alas/Sources/Updates/WhatsNewCard.swift
