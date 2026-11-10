@@ -314,6 +314,8 @@ struct RightPaneView: View {
         ).stage else { return nil }
         return AnyView(DevicesActions(
             device: device, booted: stage == .booted, client: state.simulatorStreams,
+            canChangeSettings: stage == .booted
+                && VMDriver.allowsViewInput(state.deviceControl.driver(udid: device.udid)),
             onShutDown: { Task { await state.devicePane.shutDown(device) } }
         ))
     }
