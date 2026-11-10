@@ -18,6 +18,11 @@
 # profile's scripted gg (bin/gg), before the capture. peer-session, peer-permission,
 # peer-diff, peer-file and peer-console install two scripted paired Macs (Studio Mac,
 # MacBook Air; DesignCaptureDemoPeer) in-process and open that view of Studio Mac.
+# ALAS_CAPTURE_CENTER plugin-tab (Release Notes web tab), plugin-view-tab (Standup view
+# tab), plugin-panel (Standup right-pane panel) and plugin-web-panel (Release Notes
+# right-pane web panel) start the demo plugins seeded in the profile's Plugins folder
+# (scripts/design/demo-plugins, offline catalog) and open that view. ALAS_CAPTURE_SETTINGS
+# with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
@@ -173,7 +178,7 @@ gg_shell_args=()
 if [[ -x "$profile/bin/shell" ]]; then
   gg_shell_args=(--env "SHELL=$profile/bin/shell")
 fi
-open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" \
+open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env ALAS_DESIGN_CAPTURE=1 --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" \
   ${gg_shell_args[@]+"${gg_shell_args[@]}"} "$app" --args \
   -ApplePersistenceIgnoreState YES "-$frame_key" "100 100 $launch_width_pt $launch_height_pt 0 0 1728 1084"
 

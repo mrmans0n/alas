@@ -1642,6 +1642,7 @@
 		DCC9C6C1C9DB7661438FC397 /* NextPromptInference+Engine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C540CAFB3C9DEC31DA12027 /* NextPromptInference+Engine.swift */; };
 		DCF52CA0F7607995402CED3D /* PairedDelimiterEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1B501810079EB9A18E70D3 /* PairedDelimiterEditingTests.swift */; };
 		DCFE09C4572BA6B534DEE15A /* NativePeerHosts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3BC1E6ECAE9F720D9E0540 /* NativePeerHosts.swift */; };
+		DD13142CDD377145EC215892 /* DesignCapturePlugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF236E06277E41DAA6BF281C /* DesignCapturePlugins.swift */; };
 		DD18C5FF006D18BC66964D94 /* TerminalTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */; };
 		DD20128CD6A7F60EAAE66EBE /* ACPUpstreamReferenceHover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 791A44F599AD12B254F9E2A6 /* ACPUpstreamReferenceHover.swift */; };
 		DD2553E3635BFE3B15355E08 /* ACPLaunchPathResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D911D138AF8A0E99191C862 /* ACPLaunchPathResolverTests.swift */; };
@@ -3643,6 +3644,7 @@
 		DEFCC9CAC7B3254708748815 /* OpenSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenSessionsTests.swift; sourceTree = "<group>"; };
 		DF0CB94DB8949712B0274413 /* RemoteStatusFingerprintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStatusFingerprintTests.swift; sourceTree = "<group>"; };
 		DF1820ABEDF87597B8AF977D /* EditorBufferUndoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferUndoManager.swift; sourceTree = "<group>"; };
+		DF236E06277E41DAA6BF281C /* DesignCapturePlugins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCapturePlugins.swift; sourceTree = "<group>"; };
 		DF32A1544E13321E9E223AFF /* DiffPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneView.swift; sourceTree = "<group>"; };
 		DF60F86EC55C4F3DCD4916CB /* LocalTextModelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextModelSettings.swift; sourceTree = "<group>"; };
 		DF6280BD9B7BF9BDF765B8C6 /* RemoteDiscoveredInstanceResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveredInstanceResolverTests.swift; sourceTree = "<group>"; };
@@ -7037,6 +7039,7 @@
 				417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */,
 				8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */,
 				9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */,
+				DF236E06277E41DAA6BF281C /* DesignCapturePlugins.swift */,
 				90E9DAE6A3C83B64305D5805 /* EditorCommands.swift */,
 				B44D759586280250330A9A04 /* FontSizeCommands.swift */,
 				C18DE414CB2E7F817B9FCEAA /* PlatformServices.swift */,
@@ -7842,6 +7845,7 @@
 				512A41C0AB75B8D35424EBCD /* DeletingWorktreeView.swift in Sources */,
 				997EBD6A47ACA408CD0FD6C8 /* DesignCaptureDemoPeer.swift in Sources */,
 				48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */,
+				DD13142CDD377145EC215892 /* DesignCapturePlugins.swift in Sources */,
 				E0260EEB182BE92BB7447832 /* DesignScale.swift in Sources */,
 				C3E21103CE07E4DF23EF7B45 /* DeviceAgentControl.swift in Sources */,
 				6B80542CE6343425CF9D4D72 /* DevicePaneModel.swift in Sources */,

@@ -38,6 +38,7 @@ struct PluginPanelView: View {
     let projectID: String
     let item: PluginPanelItem
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let manager = state.pluginManager
@@ -65,8 +66,9 @@ struct PluginPanelView: View {
                     }
                 }
             case .stopped(let reason):
-                VStack(spacing: 12) {
+                VStack(spacing: scale.space[3]) {
                     Text("Plugin stopped: \(reason)")
+                        .font(scale.bodyFont)
                         .foregroundColor(theme.color("fg-dim"))
                         .multilineTextAlignment(.center)
                     AlasButton(title: "Restart", style: .normal) {
@@ -76,9 +78,9 @@ struct PluginPanelView: View {
                         }
                     }
                 }
-                .padding(24)
+                .padding(scale.space[5])
             case .loading, .unavailable:
-                Text("Loading…").foregroundColor(theme.color("fg-dim"))
+                Text("Loading…").font(scale.bodyFont).foregroundColor(theme.color("fg-dim"))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,18 +130,19 @@ extension View {
 struct PluginPanelSectionView: View {
     let target: PluginPanelTarget
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let root = target.host.panelTree(for: target.place) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(target.title)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
                 PluginViewNodeView(node: root, events: PluginViewEvents(host: target.host, tabIndex: 0, panel: target.place))
                     .id(root.id)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[2])
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

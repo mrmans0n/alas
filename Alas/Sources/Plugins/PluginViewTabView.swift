@@ -25,6 +25,7 @@ struct PluginViewTabView: View {
     let host: PluginHost
     var tabIndex = 0
     var panel: String?
+    @Environment(\.designScale) private var scale
 
     private var root: PluginViewNode? {
         if let panel { host.panelViews[panel] } else { host.views[tabIndex] }
@@ -36,7 +37,7 @@ struct PluginViewTabView: View {
             PluginViewNodeView(
                 node: root, events: PluginViewEvents(host: host, tabIndex: tabIndex, panel: panel.map { PluginPanelPlace(panel: $0) }))
                 .id(root.id)
-                .padding(16)
+                .padding(scale.space[4])
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
@@ -66,6 +67,7 @@ struct PluginViewNodeView: View {
     let node: PluginViewNode
     let events: PluginViewEvents
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.inClickableCard) private var inClickableCard
     @FocusState private var cardFocused: Bool
 
@@ -94,9 +96,9 @@ struct PluginViewNodeView: View {
             }
         case .badge:
             Text(node.text ?? "")
-                .font(.caption)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .font(scale.caption.font(weight: .regular))
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[0])
                 .foregroundColor(color(node.tone))
                 .background(Capsule().fill(color(node.tone).opacity(0.15)))
         case .button:
@@ -126,7 +128,7 @@ struct PluginViewNodeView: View {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
                     .accessibilityLabel(node.text ?? "Loading")
                 if let text = node.text {
-                    Text(text).font(.caption).foregroundColor(color(.dim)).accessibilityHidden(true)
+                    Text(text).font(scale.caption.font(weight: .regular)).foregroundColor(color(.dim)).accessibilityHidden(true)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -150,14 +152,14 @@ struct PluginViewNodeView: View {
 
     @ViewBuilder private var card: some View {
         let content = VStack(alignment: .leading) { children }
-            .padding(10)
+            .padding(scale.space[3])
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(theme.color("bg-2")))
+            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2")))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .strokeBorder(node.tone.map { color($0) } ?? theme.color("line"), lineWidth: 1))
             .frame(width: width)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         if node.clickable {
             // Not a Button: that would merge the card into one accessibility element and hide its
             // inner buttons and menus. Inner controls still win the hit test over the tap gesture.
@@ -194,7 +196,7 @@ struct PluginViewNodeView: View {
             .frame(width: barWidth, height: 4)
             .clipShape(Capsule())
             if let text = node.text {
-                Text(text).font(.caption).foregroundColor(color(.dim))
+                Text(text).font(scale.caption.font(weight: .regular)).foregroundColor(color(.dim))
             }
         }
         .accessibilityElement(children: .ignore)
@@ -208,10 +210,10 @@ struct PluginViewNodeView: View {
 
     private var font: Font {
         switch node.style {
-        case "caption": .caption
-        case "title": .title3.weight(.semibold)
-        case "monospaced": .system(.body, design: .monospaced)
-        default: .body
+        case "caption": scale.caption.font(weight: .regular)
+        case "title": scale.titleFont
+        case "monospaced": scale.body.font(design: .monospaced)
+        default: scale.bodyFont
         }
     }
 
@@ -233,13 +235,15 @@ struct PluginViewNodeView: View {
 private struct PluginMarkdownView: View {
     let text: String
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
             ForEach(Array(ACPMarkdownText.parse(text).enumerated()), id: \.offset) { _, block in
                 self.block(block)
             }
         }
+        .font(scale.bodyFont)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
         .environment(\.openURL, OpenURLAction { url in
@@ -252,16 +256,16 @@ private struct PluginMarkdownView: View {
     @ViewBuilder private func block(_ block: ACPMarkdownText.Block) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(Self.inline(text)).font(level <= 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
+            Text(Self.inline(text)).font(level <= 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : scale.titleFont)
         case .paragraph(let text):
             Text(Self.inline(text))
         case .quote(let text):
             Text(Self.inline(text))
                 .foregroundColor(theme.color("fg-dim"))
-                .padding(.leading, 10)
+                .padding(.leading, scale.space[3])
                 .overlay(alignment: .leading) { Rectangle().fill(theme.color("accent").opacity(0.55)).frame(width: 2) }
         case .taskList(let items):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: item.isChecked ? "checkmark.square" : "square").accessibilityLabel(item.isChecked ? "Done" : "To do")
@@ -271,14 +275,14 @@ private struct PluginMarkdownView: View {
             }
         case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
             Text(body)
-                .font(.system(.body, design: .monospaced))
-                .padding(8)
+                .font(scale.body.font(design: .monospaced))
+                .padding(scale.space[2])
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2")))
+                .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-2")))
         case .image(let alt, let source):
             Text(alt.isEmpty ? source : alt).foregroundColor(theme.color("fg-dim"))
         case .table(let header, let rows):
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+            Grid(alignment: .leading, horizontalSpacing: scale.space[3], verticalSpacing: scale.space[1]) {
                 GridRow { ForEach(Array(header.enumerated()), id: \.offset) { Text(Self.inline($0.element)).bold() } }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     GridRow { ForEach(Array(row.enumerated()), id: \.offset) { Text(Self.inline($0.element)) } }
@@ -300,6 +304,7 @@ private struct PluginTextFieldView: View {
     @State private var lastIncoming: String
     @FocusState private var editorFocused: Bool
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     init(node: PluginViewNode, submit: @escaping (String) -> Void) {
         self.node = node
@@ -319,19 +324,20 @@ private struct PluginTextFieldView: View {
     @ViewBuilder private var field: some View {
         if node.multiline {
             TextEditor(text: $text)
-                .font(.body)
+                .font(scale.bodyFont)
                 .scrollContentBackground(.hidden)
-                .padding(4)
+                .padding(scale.space[1])
                 // Capped so a long prompt scrolls inside the editor instead of pushing the rest of the view down.
                 .frame(minHeight: 64, maxHeight: 140)
-                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("field-bg")))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("field-bg")))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty, let placeholder = node.placeholder {
                         Text(placeholder)
+                            .font(scale.bodyFont)
                             .foregroundColor(theme.color("fg-faint"))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, 9) // design-literal: lines the placeholder up with the editor's own text inset
+                            .padding(.vertical, 4) // design-literal: lines the placeholder up with the editor's own text inset
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
