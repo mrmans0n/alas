@@ -204,7 +204,7 @@ struct AttentionInboxView: View {
                     .padding(scale.space[4])
                 }
             }
-            .frame(width: 400) // design-literal: fixed popover width
+            .frame(width: 440) // design-literal: fixed popover width; fits roll-up item lines at meta size
             .frame(maxHeight: 520) // design-literal: fixed popover height cap
             .background(theme.color("bg-1"))
             .foregroundStyle(theme.color("fg"))
