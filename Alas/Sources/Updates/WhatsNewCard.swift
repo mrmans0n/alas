@@ -4,8 +4,7 @@ import SwiftUI
 /// Non-modal corner card announcing a release's headline feature. It never
 /// takes keyboard focus and stays until one of its controls is used.
 struct WhatsNewCard: View {
-    private static let width: CGFloat = 320
-    private static let padding: CGFloat = 14
+    private static let width: CGFloat = 320 // design-literal: fixed card width
 
     let entry: WhatsNewEntry
     let mediaURL: URL?
@@ -13,57 +12,58 @@ struct WhatsNewCard: View {
     let onReleaseNotes: () -> Void
     let onDismiss: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
             header
             if let mediaURL {
-                WhatsNewMedia(url: mediaURL, width: Self.width - 2 * Self.padding)
+                WhatsNewMedia(url: mediaURL, width: Self.width - 2 * scale.space[4])
                     .id(mediaURL)
             }
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 Text(entry.headline.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg"))
                 Text(entry.headline.body)
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !entry.also.isEmpty {
                 Divider().opacity(0.5)
                 Text("Also: " + entry.also.map(\.title).joined(separator: " · "))
-                    .font(.system(size: 11.5))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-muted"))
                     .fixedSize(horizontal: false, vertical: true)
             }
             actionRow
         }
-        .padding(Self.padding)
+        .padding(scale.space[4])
         .frame(width: Self.width, alignment: .leading)
         .background(theme.color("bg-1"))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
             Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("accent"))
             Text(entry.headerTitle)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundColor(theme.color("fg-muted"))
             Spacer()
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundColor(theme.color("fg-muted"))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 18, height: 18) // design-literal: dismiss hit target
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -72,7 +72,7 @@ struct WhatsNewCard: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             if let action = entry.headline.action {
                 AlasButton(title: entry.headline.actionLabel ?? "Try it", style: .primary) {
                     onAction(action)
@@ -86,9 +86,10 @@ struct WhatsNewCard: View {
 
 /// Scales the image to the card's width, keeping its aspect ratio. GIFs animate.
 private struct WhatsNewMedia: View {
-    private static let maxHeight: CGFloat = 200
+    private static let maxHeight: CGFloat = 200 // design-literal: media height cap
 
     /// Loaded once per view identity; callers key the view by URL so a new file reloads.
+    @Environment(\.designScale) private var scale
     @State private var image: NSImage?
     let width: CGFloat
 
@@ -105,7 +106,7 @@ private struct WhatsNewMedia: View {
             let height = min(Self.maxHeight, width * image.size.height / image.size.width)
             AnimatedImageView(image: image)
                 .frame(width: height * image.size.width / image.size.height, height: height)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
                 .frame(maxWidth: .infinity)
         }
     }
