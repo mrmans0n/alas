@@ -34,6 +34,10 @@ final class DesignCaptureAttention {
     }
 
     func open(_ target: String, state: AppState) {
+        // Another Debug instance also receives the distributed capture notification; only the one
+        // capture.sh launched on a demo profile may swap in demo rows.
+        let env = ProcessInfo.processInfo.environment
+        guard env["ALAS_DESIGN_CAPTURE"] == "1", env["ALAS_APP_SUPPORT_DIR"] != nil else { return }
         Task { @MainActor in
             let deadline = Date().addingTimeInterval(30)
             while state.projects.isEmpty || state.projectsManager.worktrees(projectId: state.projects[0].id).isEmpty {
@@ -53,7 +57,8 @@ final class DesignCaptureAttention {
     /// `{"id": n, "kind": "..."}` in inbox order.
     private static func rollUpJSON(for request: LocalTextGenerationRequest) -> String? {
         struct Payload: Decodable {
-            struct Item: Decodable { let id: Int; let kind: String }
+            struct Item: Decodable { let id: Int
+            let kind: String }
             let items: [Item]
         }
         guard let user = request.messageCandidates.first?.last(where: { $0.role == .user }),
