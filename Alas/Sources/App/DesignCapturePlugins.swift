@@ -14,7 +14,18 @@ enum DesignCapturePlugins {
 
     /// Starts plugins once: approves the demo plugins, leaves the sample disabled, and waits until the
     /// two that draw something are running in the demo project.
+    /// The demo plugins `make-demo-profile.sh` seeds; nothing else is ever approved here.
+    private static let demoPluginIDs: Set<String> = [releaseNotes, standup, hello, digest, "io.example.legacy-wasm"]
+
+    /// Only an instance capture.sh launched on a demo profile may change plugin state; another Debug
+    /// instance also receives the distributed capture notification and must ignore it.
+    private static var isCaptureInstance: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["ALAS_DESIGN_CAPTURE"] == "1" && env["ALAS_APP_SUPPORT_DIR"] != nil
+    }
+
     static func start(state: AppState) async {
+        guard isCaptureInstance else { return }
         let deadline = Date().addingTimeInterval(30)
         while state.projects.isEmpty {
             guard Date() < deadline else { return }
@@ -28,7 +39,7 @@ enum DesignCapturePlugins {
                 catalog: PluginCatalog(fetch: { _ in try await MainActor.run { try offlineIndex() } }))
             state.pluginManager = manager
             await manager.reload()
-            for plugin in manager.plugins where plugin.id != hello {
+            for plugin in manager.plugins where plugin.id != hello && demoPluginIDs.contains(plugin.id) {
                 await manager.approve(plugin)
             }
             if let plugin = manager.plugins.first(where: { $0.id == hello }) {
@@ -51,6 +62,7 @@ enum DesignCapturePlugins {
     /// `plugin-tab` (Release Notes web tab), `plugin-view-tab` (Standup view tab), `plugin-panel` (Standup view
     /// panel in the right pane) or `plugin-web-panel` (Release Notes changelog web panel).
     static func open(_ target: String, state: AppState) async {
+        guard isCaptureInstance else { return }
         await start(state: state)
         guard let worktree = state.selectedWorktreeId else { return }
         switch target {

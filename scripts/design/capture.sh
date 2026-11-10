@@ -178,7 +178,7 @@ gg_shell_args=()
 if [[ -x "$profile/bin/shell" ]]; then
   gg_shell_args=(--env "SHELL=$profile/bin/shell")
 fi
-open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" \
+open -g -n --env "ALAS_APP_SUPPORT_DIR=$support" --env ALAS_DESIGN_CAPTURE=1 --env "ALAS_CAPTURE_RIGHT_TAB=${ALAS_CAPTURE_RIGHT_TAB:-}" \
   ${gg_shell_args[@]+"${gg_shell_args[@]}"} "$app" --args \
   -ApplePersistenceIgnoreState YES "-$frame_key" "100 100 $launch_width_pt $launch_height_pt 0 0 1728 1084"
 
