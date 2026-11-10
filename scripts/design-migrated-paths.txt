@@ -322,3 +322,7 @@ Alas/Sources/Center/Diff/DiffPaneView.swift
 Alas/Sources/Center/Diff/DiffPaneTextDocumentView.swift
 Alas/Sources/Center/Diff/Scroller/DiffPaneRowPlan.swift
 Alas/Sources/Center/Diff/Scroller/DiffSplitCoreTextRowView.swift
+Alas/Sources/Center/ImageDiff/ImageDiffOverlayView.swift
+Alas/Sources/Center/ImageDiff/ImageDiffPresentation.swift
+Alas/Sources/Center/ImageDiff/ImageDiffSideBySideView.swift
+Alas/Sources/Center/ImageDiff/ImageDiffSwipeView.swift
