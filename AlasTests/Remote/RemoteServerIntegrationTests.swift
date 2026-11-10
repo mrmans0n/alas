@@ -1245,6 +1245,57 @@ struct RemoteServerIntegrationTests {
         #expect(replies.first?.2 == .response(id: 7, result: .done))
     }
 
+    /// A Mac that went away without closing leaves a socket that looks open,
+    /// and a route on it. One that sends nothing between two pings is
+    /// closed, and its route goes with it; one that spoke keeps its route.
+    @Test func aPeerSocketSilentBetweenTwoPingsLosesItsRoute() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let live = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Live", peerServerId: "srv-live")
+        let silent = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Silent", peerServerId: "srv-silent")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let reverse = HostProtocolCapability.delegationReverseV1
+        let ack = try JSONEncoder().encode(RemoteClientMessage.helloAck(
+            protocolVersion: RemoteProtocolVersion.current, capabilities: [reverse]))
+
+        let liveSocket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(port)/ws")),
+                                                         protocols: [live.token])
+        liveSocket.resume()
+        defer { liveSocket.cancel(with: .goingAway, reason: nil) }
+        _ = try await receiveServerMessage(liveSocket) // hello
+        try await liveSocket.send(.data(ack))
+
+        // A raw socket answers no ping, as a vanished peer's would not.
+        let conn = loopbackConnection(port: port)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.silent-peer")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+        try await send([
+            "GET /ws HTTP/1.1", "Host: 127.0.0.1", "Upgrade: websocket", "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(silent.token)",
+        ].joined(separator: "\r\n") + "\r\n\r\n", on: conn)
+        _ = try await receiveHTTPResponse(from: conn, on: queue)
+        try await send(WebSocketFrame.encode(opcode: .text, payload: ack), on: conn)
+        try await eventually("both routes are acknowledged") {
+            server.route(toDevice: live.deviceId, acknowledging: reverse) != nil
+                && server.route(toDevice: silent.deviceId, acknowledging: reverse) != nil
+        }
+
+        server.probeConnections()
+        let before = server.route(toDevice: live.deviceId, acknowledging: reverse)
+        try await liveSocket.send(.data(ack))
+        try await eventually("the live socket was heard after the ping") {
+            server.route(toDevice: live.deviceId, acknowledging: reverse) != before
+        }
+        server.probeConnections()
+
+        try await eventually("the silent socket's route closes") {
+            server.route(toDevice: silent.deviceId, acknowledging: reverse) == nil
+        }
+        #expect(server.route(toDevice: live.deviceId, acknowledging: reverse) != nil)
+    }
+
     @Test func aConnectionOpenedAfterFederationIsSetSeesPeerRows() async throws {
         let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "local", title: "L", agentId: "claude", status: "idle", canDrive: true)]
@@ -1323,8 +1374,12 @@ struct RemoteServerIntegrationTests {
     }
 
     private func send(_ request: String, on conn: NWConnection) async throws {
+        try await send(Data(request.utf8), on: conn)
+    }
+
+    private func send(_ data: Data, on conn: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            conn.send(content: Data(request.utf8), completion: .contentProcessed { error in
+            conn.send(content: data, completion: .contentProcessed { error in
                 if let error {
                     continuation.resume(throwing: error)
                 } else {

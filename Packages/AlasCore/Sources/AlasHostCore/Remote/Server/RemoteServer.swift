@@ -28,6 +28,11 @@ public final class RemoteServer {
     /// back, and when it said so, which orders a device's sockets.
     private var acknowledged: [ObjectIdentifier: (order: Int, capabilities: Set<String>)] = [:]
     private var acknowledgements = 0
+    /// How often the sockets of paired Alas instances are pinged. One that
+    /// sent nothing between two pings is closed, so a peer that vanished
+    /// without closing is gone within twice this, and so are its routes.
+    public var livenessInterval: Duration = .seconds(20)
+    private var livenessTask: Task<Void, Never>?
     /// Cap on simultaneous sockets. An unauthenticated peer can open a socket
     /// (auth only happens at WS upgrade), so bound the count defensively.
     private let maxConnections = 64
@@ -192,9 +197,28 @@ public final class RemoteServer {
         listener.service = advertisement?.service
         listener.start(queue: queue)
         self.listener = listener
+        let interval = livenessInterval
+        livenessTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { return }
+                self?.probeConnections()
+            }
+        }
+    }
+
+    /// Pings every socket a paired Alas instance holds, closing those that
+    /// stayed silent since the last round. Browsers are left alone: a
+    /// suspended tab cannot answer, and nothing routes through it.
+    public func probeConnections() {
+        for (oid, deviceId) in connectionDevice where pairing.device(id: deviceId)?.kind == .alasInstance {
+            connections[oid]?.probe()
+        }
     }
 
     public func stop() {
+        livenessTask?.cancel()
+        livenessTask = nil
         listener?.cancel()
         listener = nil
         port = nil
