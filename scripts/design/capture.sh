@@ -28,6 +28,10 @@
 # review-comments, review-states, review-thread, review-annotation and review-image (with
 # ALAS_CAPTURE_CLI=review) seed draft comments, a provider thread and an annotation over the
 # Review Changes tab and scroll to one of them (DesignCaptureReview).
+# ALAS_CAPTURE_CENTER update-available, update-available-brew, update-available-nightly,
+# update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
+# and whats-new show the update sheets and the What's New card over scripted releases
+# (DesignCaptureUpdates); nothing is downloaded, installed or relaunched.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",

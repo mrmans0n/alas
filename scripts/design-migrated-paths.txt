@@ -315,3 +315,6 @@ Alas/Sources/Center/DiffReview/AppKitDiffReviewRowPlan.swift
 Alas/Sources/Center/Review/DiffInlineCommentCard.swift
 Alas/Sources/Center/Review/DiffInlineAnnotationCard.swift
 Alas/Sources/Center/DiffReview/DiffReviewComments.swift
+Alas/Sources/Updates/UpdateAvailableSheet.swift
+Alas/Sources/Updates/UpdateProgressSheet.swift
+Alas/Sources/Updates/WhatsNewCard.swift

@@ -12,6 +12,7 @@ struct UpdateProgressSheet: View {
     let onRelaunch: () -> Void
     let onDone: () -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @State private var showsDetails = false
 
     private let manualCommand = SelfUpdateCommand.homebrew.displayCommandLine
@@ -60,32 +61,32 @@ struct UpdateProgressSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
+            HStack(spacing: scale.space[2]) {
                 if isSuccess {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(theme.color("add"))
                 }
                 Text(titleText)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                     .foregroundColor(theme.color("fg"))
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, scale.space[2])
 
             status
-                .padding(.bottom, 12)
+                .padding(.bottom, scale.space[3])
 
             if !updater.logLines.isEmpty {
                 detailsToggle
                 if showsDetails {
-                    log.padding(.top, 8)
+                    log.padding(.top, scale.space[2])
                 }
             }
 
             actionRow
-                .padding(.top, 16)
+                .padding(.top, scale.space[4])
         }
-        .padding(22)
-        .frame(width: 520)
+        .padding(scale.space[5])
+        .frame(width: 520) // design-literal: fixed sheet width
         .background(theme.color("bg-1"))
         .interactiveDismissDisabled(true)
         .onChange(of: isFailure) { _, failed in
@@ -95,34 +96,34 @@ struct UpdateProgressSheet: View {
 
     @ViewBuilder private var status: some View {
         if isRunning {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 Text(updater.currentStepTitle.map { "\($0)…" } ?? "Starting…")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 ProgressView()
                     .progressViewStyle(.linear)
             }
         } else if isSuccess {
             Text("Relaunch to switch to the new version. Terminals keep running.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
         } else if isNotPublishedYet {
             Text("New releases take a few minutes to reach the Homebrew tap. Try again shortly.")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 if case .failed(let message) = updater.state {
                     Text(message)
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg"))
                         .textSelection(.enabled)
                 }
                 Text("You can also run it manually in a terminal:")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                 Text(manualCommand)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg"))
                     .textSelection(.enabled)
             }
@@ -133,11 +134,11 @@ struct UpdateProgressSheet: View {
         Button {
             showsDetails.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: scale.space[1]) {
                 Image(systemName: showsDetails ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                 Text(showsDetails ? "Hide details" : "Show details")
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
             }
             .foregroundColor(theme.color("fg-dim"))
             .contentShape(Rectangle())
@@ -148,20 +149,20 @@ struct UpdateProgressSheet: View {
     private var log: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 1) { // design-literal: tight log line pitch
                     ForEach(Array(updater.logLines.enumerated()), id: \.offset) { idx, line in
                         Text(line.isEmpty ? " " : line)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id(idx)
                     }
                 }
                 .textSelection(.enabled)
-                .padding(8)
+                .padding(scale.space[2])
             }
-            .frame(height: 220)
+            .frame(height: 220) // design-literal: fixed log viewport
             .background(theme.color("bg-0"))
-            .overlay(RoundedRectangle(cornerRadius: 6)
+            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5))
             .onAppear { proxy.scrollTo(updater.logLines.count - 1, anchor: .bottom) }
             .onChange(of: updater.logLines.count) { _, newCount in
@@ -172,7 +173,7 @@ struct UpdateProgressSheet: View {
     }
 
     @ViewBuilder private var actionRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             if isFailure, !updater.logLines.isEmpty {
                 AlasButton(title: "Copy Log", style: .subtle) {
                     Clipboard.copy(updater.logLines.joined(separator: "\n"))
