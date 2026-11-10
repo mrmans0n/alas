@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Restore sidebar hover controls, including the new-worktree button, when lazy rows reappear after scrolling.
+
 ## [0.23.5] - 2026-11-10
 
 ### ✨ Features

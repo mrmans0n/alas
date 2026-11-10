@@ -142,6 +142,7 @@ private struct SidebarHoverModifier: ViewModifier {
     let perform: (Bool) -> Void
     @Environment(\.sidebarHoverTracker) private var tracker
     @State private var id = UUID()
+    @State private var frame: CGRect?
 
     func body(content: Content) -> some View {
         if let tracker {
@@ -149,7 +150,12 @@ private struct SidebarHoverModifier: ViewModifier {
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named(SidebarHoverTracker.coordinateSpace))
                 } action: { frame in
+                    self.frame = frame
                     tracker.update(id, frame: frame, perform: perform)
+                }
+                .onAppear {
+                    // Lazy rows can reappear without another geometry change.
+                    if let frame { tracker.update(id, frame: frame, perform: perform) }
                 }
                 .onDisappear { tracker.remove(id) }
         } else {
