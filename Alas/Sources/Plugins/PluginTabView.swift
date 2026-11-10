@@ -41,6 +41,7 @@ struct PluginTabView: View {
     let worktree: Worktree
     let tab: PluginTabState
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let manager = state.pluginManager
@@ -94,11 +95,11 @@ struct PluginTabView: View {
     }
 
     private func placeholder(_ text: String, button: String, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 12) {
-            Text(text).foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center)
+        VStack(spacing: scale.space[3]) {
+            Text(text).font(scale.bodyFont).foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center)
             AlasButton(title: button, style: .normal, action: action)
         }
-        .padding(24)
+        .padding(scale.space[5])
     }
 }
 
@@ -146,7 +147,7 @@ struct PluginCanvasView: View {
                             height: CGFloat(max(0, region.rect[3])) * scale)
                         .overlay {
                             if focused == index {
-                                RoundedRectangle(cornerRadius: 2).stroke(Color.accentColor, lineWidth: 2)
+                                RoundedRectangle(cornerRadius: 2).stroke(Color.accentColor, lineWidth: 2) // design-literal: focus ring hugging a plugin canvas region, drawn in frame pixels
                             }
                         }
                         .offset(

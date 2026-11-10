@@ -324,6 +324,7 @@ struct PluginWebTabView: View {
     let surface: PluginSurface
     let script: Data
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var page: PluginWebPage?
     @State private var refused = false
     @State private var problem: String?
@@ -340,15 +341,15 @@ struct PluginWebTabView: View {
                     .overlay(alignment: .top) {
                         if let problem {
                             Text("\(host.manifest.name)'s page: \(problem) — more in Settings → Plugins")
-                                .font(.caption).foregroundColor(theme.color("del")).lineLimit(3)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 6))
-                                .padding(8)
+                                .font(scale.caption.font(weight: .regular)).foregroundColor(theme.color("del")).lineLimit(3)
+                                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
+                                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                                .padding(scale.space[2])
                         }
                     }
             } else if refused {
                 Text("\(host.manifest.name) already shows \(PluginWebPolicy.maxLivePagesPerPlugin) web pages. Close one to show this one.")
-                    .foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center).padding(24)
+                    .font(scale.bodyFont).foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center).padding(scale.space[5])
             }
         }
         .onAppear(perform: open)
