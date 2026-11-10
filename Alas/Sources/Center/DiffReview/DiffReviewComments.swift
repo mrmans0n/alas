@@ -632,11 +632,11 @@ struct ReviewActionItem: Identifiable {
 /// Cards shown inline in a diff can be narrower than their buttons, so the row
 /// tries one line first, then the text buttons with the `trailing` control
 /// (Send) on its own line, then the text buttons split over two lines.
-struct ReviewActionRow<Button: View, Trailing: View>: View {
+struct ReviewActionRow<ActionButton: View, Trailing: View>: View {
     @Environment(\.designScale) private var scale
     let items: [ReviewActionItem]
     let hasTrailing: Bool
-    @ViewBuilder let button: (ReviewActionItem) -> Button
+    @ViewBuilder let button: (ReviewActionItem) -> ActionButton
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
