@@ -11,21 +11,22 @@ struct AttentionRollUpCard: View {
     let onCancel: () -> Void
     let onDismiss: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "text.bubble")
-                    .font(.system(size: 10))
+                    .font(scale.glyph.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-dim"))
                     .accessibilityHidden(true)
                 Text("Roll-up")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                 Spacer()
                 actions
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(scale.glyph.font(weight: .medium))
                         .foregroundStyle(theme.color("fg-dim"))
                 }
                 .buttonStyle(.plain)
@@ -34,10 +35,10 @@ struct AttentionRollUpCard: View {
             }
             content
         }
-        .padding(12)
+        .padding(scale.space[3])
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 1) }
+        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay { RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 1) }
         .accessibilityElement(children: .contain)
     }
 
@@ -71,7 +72,7 @@ struct AttentionRollUpCard: View {
             ForEach(Array(rollUp.groups.enumerated()), id: \.offset) { _, group in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(group.summary)
-                        .font(.system(size: 12))
+                        .font(scale.body.font)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(rollUp.items(in: group), id: \.eventID) { item in
                         source(AttentionInboxRowPresentation(item: item, now: now))
@@ -80,7 +81,7 @@ struct AttentionRollUpCard: View {
             }
             if let disclosure = rollUp.coverage.disclosure {
                 Text(disclosure)
-                    .font(.system(size: 10.5))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("warn"))
             }
             note("On-device grouping. Each line lists the items it describes; state and actions are on the items below.")
@@ -90,11 +91,11 @@ struct AttentionRollUpCard: View {
     private func source(_ row: AttentionInboxRowPresentation) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: row.emphasizesAction ? "exclamationmark.circle" : "clock")
-                .font(.system(size: 9))
+                .font(scale.glyph.font)
                 .foregroundStyle(theme.color(row.emphasizesAction ? "warn" : "fg-dim"))
                 .accessibilityHidden(true)
             Text("\(row.title) · \(row.attribution)")
-                .font(.system(size: 10.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -106,7 +107,7 @@ struct AttentionRollUpCard: View {
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5))
+            .font(scale.meta.font)
             .foregroundStyle(theme.color("fg-dim"))
             .fixedSize(horizontal: false, vertical: true)
     }

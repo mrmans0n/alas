@@ -519,12 +519,28 @@ private struct SidebarAttentionHeader: View {
     let onHideSidebar: () -> Void
     @Binding var showingNewWorkspace: Bool
 
+    private static func inputs(for state: AppState) -> (
+        aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary],
+        cleanupReminders: [WorktreeCleanupReminder], rollUpSummarizer: AttentionRollUpSummarizer
+    ) {
+        #if DEBUG
+        if let demo = DesignCaptureAttention.shared.content,
+           let summarizer = DesignCaptureAttention.shared.summarizer(engine: state.localTextInference) {
+            return (demo.aggregation, demo.peerRows, demo.cleanupReminders, summarizer)
+        }
+        #endif
+        return (state.attentionAggregation, state.nativePeerSessions?.attentionRows ?? [],
+                state.worktreeCleanupReminders, state.makeAttentionRollUpSummarizer())
+    }
+
     var body: some View {
-        let aggregation = state.attentionAggregation
-        let peerRows = state.nativePeerSessions?.attentionRows ?? []
+        let inputs = Self.inputs(for: state)
+        let aggregation = inputs.aggregation
+        let peerRows = inputs.peerRows
         let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
         let appUpdate = state.updates.availableUpdate
-        let cleanupReminders = state.worktreeCleanupReminders
+        let cleanupReminders = inputs.cleanupReminders
+        let rollUpSummarizer = inputs.rollUpSummarizer
         let presentation = SidebarAttentionPresentation(
             aggregation: aggregation,
             peerRows: peerRows, pluginUpdateCount: pluginUpdates.count, appUpdate: appUpdate,
@@ -572,7 +588,7 @@ private struct SidebarAttentionHeader: View {
                 state.presentWorktreeCleanup(projectId: projectId)
             },
             onDismissWorktreeCleanup: { state.dismissWorktreeCleanupReminder(projectId: $0) },
-            attentionRollUpSummarizer: state.makeAttentionRollUpSummarizer()
+            attentionRollUpSummarizer: rollUpSummarizer
         )
         // The catalog throttles itself, so a long-running app picks up new releases without fetching on every open.
         .onChange(of: state.isAttentionInboxOpen) { _, isOpen in

@@ -13,7 +13,7 @@
 # ALAS_CAPTURE_CENTER (gg-inbox, gg-landing, editor-find, editor-lsp-status,
 # editor-completion, editor-hover, editor-definitions, editor-code-actions,
 # editor-rename, editor-edit-preview, editor-banners, editor-banners-blocked,
-# markdown, mermaid-viewer; the editor-* ones draw over the file ALAS_CAPTURE_CLI
+# markdown, mermaid-viewer, attention-inbox, attention-rollup; the editor-* ones draw over the file ALAS_CAPTURE_CLI
 # opened) opens that tab, backed by the
 # profile's scripted gg (bin/gg), before the capture. peer-session, peer-permission,
 # peer-diff, peer-file and peer-console install two scripted paired Macs (Studio Mac,
@@ -23,6 +23,8 @@
 # right-pane web panel) start the demo plugins seeded in the profile's Plugins folder
 # (scripts/design/demo-plugins, offline catalog) and open that view. ALAS_CAPTURE_SETTINGS
 # with "plugins" starts them too, so Settings > Plugins lists them in mixed states.
+# attention-inbox opens the Attention inbox popover over demo rows (DesignCaptureAttention);
+# attention-rollup does the same and runs its roll-up with scripted groups.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",

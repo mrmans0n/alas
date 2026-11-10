@@ -36,6 +36,13 @@ hello-workspace sample); the Debug build starts them through `DesignCapturePlugi
 them inside the demo profile, and serves an offline catalog. Sidebar badges, rail badges and
 the Settings states (update available, disabled, stopped with an error, not loaded) come with them.
 
+Set `ALAS_CAPTURE_CENTER` to `attention-inbox` or `attention-rollup` to open the Attention
+inbox popover over demo rows (`DesignCaptureAttention`): action-required, informational,
+last-known, acknowledged and historical items across three projects and a remote host, plus
+a peer session and a cleanup reminder. The rows replace the real store's aggregation only
+in this Debug build. `attention-rollup` also runs the roll-up, with scripted groups instead
+of a model. The popover is composited onto `window.png` like the editor popups.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14
