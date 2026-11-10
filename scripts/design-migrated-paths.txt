@@ -303,3 +303,4 @@ Alas/Sources/Code/Markdown/MarkdownTabView.swift
 Alas/Sources/Code/Mermaid/MermaidDiagramBlockView.swift
 Alas/Sources/Code/Mermaid/MermaidDiagramViewer.swift
 Alas/Sources/Code/Mermaid/MermaidTextAttachment.swift
+Alas/Sources/Attention/AttentionInboxView.swift

@@ -132,6 +132,7 @@ struct AttentionInboxView: View {
     /// Nil hides the roll-up entirely, leaving the ordinary inbox.
     var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var historyExpanded = false
     @State private var rollUpVisible = false
     @State private var rollUp: AttentionRollUp?
@@ -151,13 +152,13 @@ struct AttentionInboxView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
                     Image(systemName: "tray")
-                        .font(.system(size: 12))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color(presentation.totalCount > 0 ? "warn" : "fg-muted"))
                         .accessibilityHidden(true)
                     Text("Inbox")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(scale.title.font)
                     Text("\(presentation.totalCount)")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(theme.color("fg-muted"))
                         .accessibilityLabel("\(presentation.totalCount) items needing attention")
@@ -176,8 +177,8 @@ struct AttentionInboxView: View {
                     }
                 }
                 .foregroundStyle(theme.color("fg"))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, scale.space[4])
+                .padding(.vertical, scale.space[3])
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -200,11 +201,11 @@ struct AttentionInboxView: View {
                                            onOpenWorktreeCleanup: onOpenWorktreeCleanup,
                                            onDismissWorktreeCleanup: onDismissWorktreeCleanup)
                     }
-                    .padding(14)
+                    .padding(scale.space[4])
                 }
             }
-            .frame(width: 400)
-            .frame(maxHeight: 520)
+            .frame(width: 400) // design-literal: fixed popover width
+            .frame(maxHeight: 520) // design-literal: fixed popover height cap
             .background(theme.color("bg-1"))
             .foregroundStyle(theme.color("fg"))
         }
@@ -252,6 +253,7 @@ struct AttentionInboxList: View {
     var onOpenWorktreeCleanup: (String) -> Void = { _ in }
     var onDismissWorktreeCleanup: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 10) {
@@ -260,12 +262,12 @@ struct AttentionInboxList: View {
             }
             if let emptyTitle = presentation.emptyTitle {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(emptyTitle).font(.system(size: 13, weight: .medium))
+                    Text(emptyTitle).font(scale.emphasis.font)
                     Text("New requests will appear here. Acknowledged events and other activity remain below.")
-                        .font(.system(size: 12))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-muted"))
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, scale.space[4])
             }
             ForEach(presentation.activeRows) { row in
                 AttentionInboxRow(presentation: row, isHistory: false,
@@ -273,46 +275,46 @@ struct AttentionInboxList: View {
             }
             if !presentation.peerRows.isEmpty {
                 Text("Peer sessions")
-                    .font(.caption.weight(.semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
                 ForEach(presentation.peerRows, id: \.id) { row in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "desktopcomputer")
                             .foregroundStyle(theme.color("warn"))
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(row.title).font(.system(size: 13, weight: .medium))
+                            Text(row.title).font(scale.emphasis.font)
                             Text(row.serverName ?? "Peer")
-                                .font(.system(size: 11))
+                                .font(scale.meta.font)
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                         Spacer()
                         Button("Open") { onOpenPeer(row) }
                             .controlSize(.small)
                     }
-                    .padding(10)
-                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(scale.space[3])
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
             }
             if let update = presentation.appUpdate {
                 Text("App update")
-                    .font(.caption.weight(.semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "arrow.down.app")
                         .foregroundStyle(theme.color("accent"))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Alas").font(.system(size: 13, weight: .medium))
+                        Text("Alas").font(scale.emphasis.font)
                         let status = presentation.appUpdateReadyToRelaunch ? "installed" : "available"
                         switch update {
                         case .stable(let release):
                             Text("Version \(release.version.description) \(status)")
-                                .font(.system(size: 11))
+                                .font(scale.meta.font)
                                 .foregroundStyle(theme.color("fg-muted"))
                         case .nightly(let release):
                             Text("Nightly \(release.shortSHA) \(status)")
-                                .font(.system(size: 11))
+                                .font(scale.meta.font)
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                     }
@@ -321,22 +323,22 @@ struct AttentionInboxList: View {
                            action: onOpenAppUpdate)
                         .controlSize(.small)
                 }
-                .padding(10)
-                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                .padding(scale.space[3])
+                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
             }
             if !presentation.cleanupReminders.isEmpty {
                 Text("Worktree cleanup")
-                    .font(.caption.weight(.semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
                 ForEach(presentation.cleanupReminders) { reminder in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "archivebox")
                             .foregroundStyle(theme.color("accent"))
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(reminder.projectName).font(.system(size: 13, weight: .medium))
+                            Text(reminder.projectName).font(scale.emphasis.font)
                             Text("\(reminder.readyCount) worktrees look ready to clean up")
-                                .font(.system(size: 11))
+                                .font(scale.meta.font)
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                         Spacer()
@@ -346,36 +348,36 @@ struct AttentionInboxList: View {
                         Button("Clean Up…") { onOpenWorktreeCleanup(reminder.projectId) }
                             .controlSize(.small)
                     }
-                    .padding(10)
-                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(scale.space[3])
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
             }
             if !presentation.pluginUpdates.isEmpty {
                 Text("Plugin updates")
-                    .font(.caption.weight(.semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
                 ForEach(presentation.pluginUpdates, id: \.entry.id) { update in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "puzzlepiece.extension")
                             .foregroundStyle(theme.color("accent"))
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(update.entry.name).font(.system(size: 13, weight: .medium))
+                            Text(update.entry.name).font(scale.emphasis.font)
                             Text("Version \(update.version.version) available")
-                                .font(.system(size: 11))
+                                .font(scale.meta.font)
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                         Spacer()
                         Button("Open Settings", action: onOpenPluginSettings)
                             .controlSize(.small)
                     }
-                    .padding(10)
-                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(scale.space[3])
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
                 }
             }
             if !presentation.historyRows.isEmpty {
                 AttentionInboxHistoryToggle(count: presentation.historyRows.count, isExpanded: $historyExpanded)
-                    .padding(.top, 10)
+                    .padding(.top, scale.space[3])
                 if historyExpanded {
                     ForEach(presentation.historyRows) { row in
                         AttentionInboxRow(presentation: row, isHistory: true,
@@ -394,6 +396,7 @@ struct AttentionInboxRow: View {
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var opening = false
 
     var body: some View {
@@ -404,36 +407,36 @@ struct AttentionInboxRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(presentation.title)
-                        .font(.system(size: 13, weight: isHistory ? .regular : .medium))
+                        .font(isHistory ? scale.body.font : scale.emphasis.font)
                     Text(presentation.attribution)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-muted"))
                         .textSelection(.enabled)
                 }
                 Spacer(minLength: 0)
                 Text(presentation.timestampText)
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("fg-muted"))
                     .fixedSize()
                     .help(presentation.absoluteTimestamp)
                     .accessibilityLabel(presentation.absoluteTimestamp)
             }
             Text(presentation.stateExplanation)
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-muted"))
             if let body = presentation.item.body, !body.isEmpty {
                 Text(body)
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color("fg-muted"))
                     .textSelection(.enabled)
             }
             if let error = navigationError ?? (isHistory && presentation.item.jumpTarget == .none ? nil : presentation.unavailableReason) {
-                Text(error).font(.system(size: 11)).foregroundStyle(theme.color("warn"))
+                Text(error).font(scale.meta.font).foregroundStyle(theme.color("warn"))
             }
             HStack {
                 if let acknowledgment = presentation.acknowledgmentText {
                     Text(acknowledgment)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-muted"))
                         .help(presentation.acknowledgmentHelp ?? acknowledgment)
                         .accessibilityLabel(presentation.acknowledgmentHelp ?? acknowledgment)
@@ -458,9 +461,9 @@ struct AttentionInboxRow: View {
                 }
             }
         }
-        .padding(14)
-        .background(theme.color(isHistory ? "bg-1" : "bg-2"), in: RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 1) }
+        .padding(scale.space[4])
+        .background(theme.color(isHistory ? "bg-1" : "bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay { RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 1) }
         .foregroundStyle(theme.color(isHistory ? "fg-muted" : "fg"))
         .accessibilityElement(children: .contain)
     }
@@ -472,6 +475,7 @@ private struct AttentionInboxHistoryToggle: View {
     let count: Int
     @Binding var isExpanded: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
@@ -480,13 +484,13 @@ private struct AttentionInboxHistoryToggle: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyph.font)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .accessibilityHidden(true)
                 Text("Activity")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                 Text("\(count)")
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .monospacedDigit()
                     .accessibilityHidden(true)
                 Spacer(minLength: 0)
@@ -506,17 +510,18 @@ private struct AttentionInboxErrorRow: View {
     let title: String
     let message: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label(title, systemImage: "exclamationmark.triangle")
-                .font(.system(size: 12, weight: .medium))
-            Text(message).font(.system(size: 11)).textSelection(.enabled)
+                .font(scale.meta.font(weight: .medium))
+            Text(message).font(scale.meta.font).textSelection(.enabled)
         }
         .foregroundStyle(theme.color("warn"))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+        .padding(scale.space[3])
+        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .accessibilityElement(children: .combine)
     }
 }
