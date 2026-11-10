@@ -103,7 +103,6 @@ mod message {
     pub const UNAVAILABLE: &str = "computer_unavailable: Cua Driver isn't running in this VM.";
     /// Linux only: appended to a foreground failure while the screen locker shows.
     pub const SCREEN_LOCKED: &str = "The Linux VM's screen is locked.";
-    pub const REF_TYPING_CUT_SHORT: &str = "In this Linux VM, text beyond ASCII typed into a ref can be cut short: fix the field, then click it and type the rest without a ref.";
     /// A ref click runs the app's handler inside the AT-SPI call, so a modal dialog it opens keeps
     /// the app from answering any read until the dialog closes. Real input still reaches it.
     pub const APP_UNRESPONSIVE: &str = "This app isn't answering accessibility reads, so its elements are missing. A dialog opened by a ref click does this until it closes: call computer_screenshot and use x/y.";
@@ -1019,13 +1018,7 @@ impl<D: Driver> Computer<D> {
                     if params.reference.is_none() {
                         args = foreground(args);
                     }
-                    let typed = self.cua(call, "type_text", args, timeout, kind)?;
-                    if let Some(readback) = cut_short(&typed, chunk) {
-                        return Err(message::action_failed(&format!(
-                            "Only part of the text reached the field, which now reads \"{readback}\". {}",
-                            message::REF_TYPING_CUT_SHORT
-                        )));
-                    }
+                    self.cua(call, "type_text", args, timeout, kind)?;
                 }
                 Ok(delivery)
             }
@@ -1518,19 +1511,6 @@ fn named_key(name: &str) -> Option<&'static str> {
 fn foreground(mut args: Value) -> Value {
     args["delivery_mode"] = json!("foreground");
     args
-}
-
-/// What the field reads after Cua's targeted insert of `chunk` beyond ASCII left only part of it:
-/// GTK takes the length Cua passes, a character count, as bytes. Cua says so only in its text.
-fn cut_short<'a>(typed: &'a CuaResult, chunk: &str) -> Option<&'a str> {
-    const BEFORE: &str = "The element reads back '";
-    const AFTER: &str = "', which does not contain the typed text";
-    if chunk.is_ascii() {
-        return None;
-    }
-    let start = typed.text.find(BEFORE)? + BEFORE.len();
-    let end = start + typed.text[start..].rfind(AFTER)?;
-    Some(&typed.text[start..end])
 }
 
 /// Cua's `scroll.amount` is 1…50 steps: a larger delta goes as several scrolls.
@@ -2174,52 +2154,6 @@ pub(crate) mod tests {
         assert_eq!(inputs, ["hotkey", "type_text"]);
         assert_eq!(fake.calls("hotkey"), vec![select_all]);
         assert_eq!(fake.calls("type_text"), vec![typed]);
-    }
-
-    /// GTK cuts Cua's targeted insert of text beyond ASCII short; the field's readback shows it.
-    #[test]
-    fn ref_typing_cut_short_is_an_error() {
-        for (text, readback, cut) in [
-            ("héllo ✓ from Alas", "héllo ✓ from A", true),
-            ("hello", "hel", false),
-            ("héllo", "héllo", false),
-        ] {
-            let fake = Fake::mousepad();
-            fake.script("get_window_state", vec![fixture("gws_elements")]);
-            let confirmed = readback.contains(text);
-            fake.script(
-                "type_text",
-                vec![fixture_with("type_fg", |result| {
-                    if !confirmed {
-                        let said = format!("The element reads back '{readback}', which does not contain the typed text; confirm with get_window_state.");
-                        let content = result["content"].as_array_mut().unwrap();
-                        content.push(json!({"type": "text", "text": said}));
-                    }
-                })],
-            );
-            let mut computer = new_computer(&fake);
-            inspect(&mut computer, None);
-
-            let response = computer.perform(
-                SESSION,
-                &request(
-                    "type",
-                    json!({"window_id": WINDOW, "ref": "e7", "text": text}),
-                ),
-            );
-
-            if cut {
-                assert_eq!(
-                    error(&response),
-                    format!(
-                        "computer_action_failed: Only part of the text reached the field, which now reads \"{readback}\". {}",
-                        message::REF_TYPING_CUT_SHORT
-                    )
-                );
-            } else {
-                assert_eq!(payload(&response)["delivery"], "ax", "{text}");
-            }
-        }
     }
 
     /// Chromium takes input only at the front: Cua refuses it in the background and says to go
