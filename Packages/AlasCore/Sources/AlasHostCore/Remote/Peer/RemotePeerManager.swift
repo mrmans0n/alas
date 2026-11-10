@@ -79,8 +79,8 @@ public final class RemotePeerManager {
 
     public private(set) var peers: [RemotePeer]
     public private(set) var states: [String: RemotePeerConnection.State] = [:]
-    /// Called with a `RemoteDevice.id` when forgetting a peer should also cut
-    /// its live inbound socket. `AppState` points this at
+    /// Called with a `RemoteDevice.id` when forgetting a peer, or narrowing
+    /// one of its devices, should also cut its live inbound socket. `AppState` points this at
     /// `RemoteServer.disconnectDevice`, which is what makes `forget` sever a
     /// peer's access immediately: revoking the device record alone would leave
     /// an already-open socket authorized until it happened to close.
@@ -549,6 +549,7 @@ public final class RemotePeerManager {
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
                 if shouldPublish() {
+                    narrowEarlierDevices(peerId: peer.id)
                     if expectedPeer == nil, previousState?.isInboundOnly == true {
                         inheritAgentAccess(from: previousState, peerId: peer.id)
                     } else {
@@ -899,6 +900,7 @@ public final class RemotePeerManager {
             // provisional the way `addPeer`'s own initial upsert is.
             if let confirmed = peers.first(where: { $0.serverId == request.peerServerId }) {
                 durableStateByServerId[request.peerServerId] = confirmed
+                narrowEarlierDevices(peerId: confirmed.id)
             }
             resetAgentAccess(serverId: request.peerServerId)
         } else {
@@ -987,9 +989,21 @@ public final class RemotePeerManager {
         upsert(serverId: request.peerServerId, name: request.peerName, origins: existing?.origins ?? request.origins,
                lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
-        durableStateByServerId[request.peerServerId] = peers.first { $0.serverId == request.peerServerId }
+        let recorded = peers.first { $0.serverId == request.peerServerId }
+        durableStateByServerId[request.peerServerId] = recorded
+        if let recorded { narrowEarlierDevices(peerId: recorded.id) }
         resetAgentAccess(serverId: request.peerServerId)
         return true
+    }
+
+    /// Once a pairing is durable, the device it gave the peer here caps the
+    /// ones an earlier pairing left: a host that re-paired for delegation only
+    /// keeps no full device. Those devices stay, lowered, because the peer's
+    /// own attempt can still roll back to the token it held before. Their
+    /// sockets are cut, so the peer reconnects under the scope it has now.
+    private func narrowEarlierDevices(peerId: String) {
+        guard let deviceId = peers.first(where: { $0.id == peerId })?.localDeviceId else { return }
+        for narrowed in pairing.narrowOtherDevices(toScopeOf: deviceId) { onRevokeDevice?(narrowed) }
     }
 
     public func setSSHDestination(_ destination: String?, peerId: String) {

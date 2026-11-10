@@ -804,6 +804,35 @@ struct RemotePeerManagerTests {
         #expect(ad["counterCode"] == nil)
     }
 
+    /// A host paired before delegation-only tokens holds a full device here.
+    /// Re-pairing for delegation lowers it and cuts its socket, rather than
+    /// revoking it, since the host can still roll back to that token.
+    @Test(arguments: [false, true])
+    func aDelegationRePairLowersTheHostsEarlierFullDevice(inboundOnly: Bool) async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let hostKey = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        let old = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Host", peerServerId: "srv-h")
+        let code = pairing.beginPairing()
+        let new = try pairing.redeemPeer(code: code, deviceName: "Host", peerServerId: "srv-h",
+                                         peerPublicKey: hostKey.publicKey,
+                                         proof: hostKey.redeemProof(code: code, serverId: "srv-h"), scope: .delegation)
+        let manager = makeManager(
+            pairing: pairing,
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokH","serverId":"srv-h","name":"Host"}"#)], requests: Requests()),
+            links: Links())
+        var cut: [String] = []
+        manager.onRevokeDevice = { cut.append($0) }
+
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-h", peerName: "Host", origins: ["http://10.0.0.1:8765"],
+            counterCode: inboundOnly ? nil : "CC", localDeviceId: new.deviceId, redeemedCode: code,
+            inboundOnly: inboundOnly))
+
+        #expect(manager.peers.first?.localDeviceId == new.deviceId)
+        #expect(pairing.device(id: old.deviceId)?.scope == .delegation)
+        #expect(cut == [old.deviceId])
+    }
+
     /// The pair-back proves the peer's key, so the device that peer reaches
     /// this Mac with records it. The redeem carries this Mac's own proof.
     @Test func aPairBackRecordsTheKeyItProvedAndSendsThisMacsProof() async throws {
