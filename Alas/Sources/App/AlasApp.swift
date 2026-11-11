@@ -567,7 +567,15 @@ enum DesignCaptureBridge {
     static let notification = Notification.Name("io.nlopez.alas.dev.capture.open")
     @MainActor static weak var state: AppState?
 
+    /// Only an instance capture.sh launched on a demo profile may react; every other
+    /// Debug instance also receives the distributed notification and must ignore it.
+    static var isCaptureInstance: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["ALAS_DESIGN_CAPTURE"] == "1" && env["ALAS_APP_SUPPORT_DIR"] != nil
+    }
+
     static func install() {
+        guard isCaptureInstance else { return }
         DistributedNotificationCenter.default().addObserver(
             forName: notification, object: nil, queue: .main
         ) { note in
