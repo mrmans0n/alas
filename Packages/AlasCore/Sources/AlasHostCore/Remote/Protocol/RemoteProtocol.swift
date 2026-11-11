@@ -41,22 +41,26 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     public let consoleCapabilities: [String]
     /// The `HostProtocolCapability` values this server serves.
     public let hostCapabilities: [String]
+    /// The release a headless host runs, when it knows it.
+    public let hostVersion: String?
 
     public init(
         serverId: String, name: String, peers: [RemoteHelloPeer] = [],
-        consoleCapabilities: [String] = PeerConsoleCapability.appHost, hostCapabilities: [String] = HostProtocolCapability.served
+        consoleCapabilities: [String] = PeerConsoleCapability.appHost, hostCapabilities: [String] = HostProtocolCapability.served,
+        hostVersion: String? = nil
     ) {
         self.serverId = serverId
         self.name = name
         self.peers = peers
         self.consoleCapabilities = consoleCapabilities
         self.hostCapabilities = hostCapabilities
+        self.hostVersion = hostVersion
     }
 
     /// The same identity naming no other paired Macs.
     public var withoutPeers: RemoteServerIdentity {
         RemoteServerIdentity(serverId: serverId, name: name, consoleCapabilities: consoleCapabilities,
-                             hostCapabilities: hostCapabilities)
+                             hostCapabilities: hostCapabilities, hostVersion: hostVersion)
     }
 }
 
@@ -866,7 +870,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
     /// `capabilities` lists optional features this Mac serves, such as
     /// `PeerConsoleCapability.v1`; absent on older Macs.
     case hello(protocolVersion: Int, serverId: String, name: String,
-               federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [], capabilities: [String] = [])
+               federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [], capabilities: [String] = [],
+               hostVersion: String? = nil)
     /// Answer to a `helloAck` that carried a challenge: this Mac's public
     /// key and a signature over the asking peer's own nonce. Sent on the
     /// socket that will carry traffic, so what is proved is the identity of
@@ -988,7 +993,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, workingTreeTruncated, operation, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, portForward, host, peerHost
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, hostVersion, console, portForward, host, peerHost
         case challenge, publicKey, signature
         case visualId
         case hook
@@ -1006,7 +1011,8 @@ extension RemoteServerMessage: Codable {
                 name: try c.decode(String.self, forKey: .name),
                 federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false,
                 peers: try c.decodeIfPresent([RemoteHelloPeer].self, forKey: .peers) ?? [],
-                capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities) ?? [])
+                capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities) ?? [],
+                hostVersion: try c.decodeIfPresent(String.self, forKey: .hostVersion))
         case "console":
             self = .console(try c.decode(PeerConsoleEvent.self, forKey: .console))
         case "portForward":
@@ -1279,7 +1285,7 @@ extension RemoteServerMessage: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .hello(let protocolVersion, let serverId, let name, let federationEnabled, let peers, let capabilities):
+        case .hello(let protocolVersion, let serverId, let name, let federationEnabled, let peers, let capabilities, let hostVersion):
             try c.encode("hello", forKey: .type)
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(serverId, forKey: .serverId)
@@ -1289,6 +1295,7 @@ extension RemoteServerMessage: Codable {
             try c.encode(federationEnabled, forKey: .federationEnabled)
             if !peers.isEmpty { try c.encode(peers, forKey: .peers) }
             if !capabilities.isEmpty { try c.encode(capabilities, forKey: .capabilities) }
+            try c.encodeIfPresent(hostVersion, forKey: .hostVersion)
         case .console(let event):
             try c.encode("console", forKey: .type)
             try c.encode(event, forKey: .console)
@@ -1585,7 +1592,8 @@ extension RemoteServerMessage {
             federationEnabled: true,
             peers: identity.peers,
             capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1]
-                + identity.hostCapabilities)
+                + identity.hostCapabilities,
+            hostVersion: identity.hostVersion)
     }
 }
 
@@ -1674,6 +1682,9 @@ public enum HostProtocolCapability: Sendable {
     /// it serves them on that link, and then serves `v1`, `eventsV1` and
     /// `delegationV1` there too: it never sends that host a `hello` to say so.
     public static let delegationReverseV1 = "host.delegation.reverse.v1"
+    /// Advertised by a headless host that can upgrade itself through
+    /// Homebrew: it serves `updateHost`.
+    public static let updateV1 = "host.update.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,

@@ -271,10 +271,12 @@ struct RemoteServerPane: View {
                         ForEach(state.remotePeers.peers) { peer in
                             SettingsRow(name: peer.name, desc: hostActivity[peer.id] ?? peerStatus(peer)) {
                                 HStack(spacing: 8) {
-                                    if peer.sshDestination != nil {
+                                    if peer.sshDestination != nil || updatesOverPeer(peer) {
                                         AlasButton(title: "Update host", style: .subtle) {
                                             confirmingHostUpdate = peer
                                         }
+                                    }
+                                    if peer.sshDestination != nil {
                                         AlasButton(title: "Host log", style: .subtle) {
                                             readHostLog(peer)
                                         }
@@ -388,7 +390,29 @@ struct RemoteServerPane: View {
         }
     }
 
+    /// Whether `peer` is an online host that updates itself through Homebrew.
+    private func updatesOverPeer(_ peer: RemotePeer) -> Bool {
+        state.remotePeers.states[peer.id] == .online
+            && state.remotePeers.peerSupports(HostProtocolCapability.updateV1, serverId: peer.serverId)
+    }
+
     private func updateHost(_ peer: RemotePeer) {
+        if updatesOverPeer(peer), let channel = state.nativePeerSessions?.hosts?.channel(for: peer.serverId) {
+            peerError = nil
+            hostActivity[peer.id] = "Updating the host with Homebrew…"
+            Task { @MainActor in
+                defer { hostActivity[peer.id] = nil }
+                // Homebrew may download a whole release; the SSH update allows it as long.
+                let response = await channel.request(.updateHost, timeout: .seconds(900))
+                // A host the upgrade replaced restarts, dropping the connection
+                // before it answers; it comes back online on the new version.
+                if case .failure(let error) = response,
+                   error != .failed(message: FederatedSessionsProvider.peerUnavailableMessage) {
+                    peerError = "\(peer.name): " + PeerWorktreeRemoval.message(for: error)
+                }
+            }
+            return
+        }
         guard let destination = peer.sshDestination else { return }
         let setup = HostSSHSetup(destination: destination, bundleResources: HostSSHSetupSheet.bundleResources)
         peerError = nil
@@ -556,10 +580,19 @@ struct RemoteServerPane: View {
         }
     }
 
+    /// The release a headless host runs, and whether it is older than this app.
+    nonisolated static func hostVersionNote(_ hostVersion: String?, appVersion: SemanticVersion) -> String? {
+        guard let hostVersion else { return nil }
+        let isOlder = SemanticVersion(parsing: hostVersion).map { $0 < appVersion } ?? false
+        return " · alas-host \(hostVersion)" + (isOlder ? ", older than this Mac's Alas" : "")
+    }
+
     private func peerStatus(_ peer: RemotePeer) -> String {
         let status: String
         switch state.remotePeers.states[peer.id] ?? .idle {
-        case .online: status = "Online via \(peer.lastOrigin ?? peer.origins.first ?? "")"
+        case .online:
+            status = "Online via \(peer.lastOrigin ?? peer.origins.first ?? "")"
+                + (Self.hostVersionNote(state.remotePeers.hostVersions[peer.serverId], appVersion: BuildIdentity.current().version) ?? "")
         case .connecting: status = "Connecting…"
         case .offline: status = "Offline. Retrying."
         case .unauthorized: status = "This Mac's token was revoked there. Forget and pair again."

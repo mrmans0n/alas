@@ -402,6 +402,17 @@ public final class HostProtocolConnection {
                 throw HostError.failed(message: "That peer never proved its identity here. Pair it again to allow this.")
             }
             return .done
+        case .updateHost:
+            // A person's request: a paired Mac or the local user, not an agent.
+            switch caller {
+            case .remotePeer, .localUser: break
+            default: throw HostError.failed(message: "Only a paired Mac updates this host.")
+            }
+            guard let update = host.selfUpdate else {
+                throw HostError.failed(message: "This host can't update itself; it wasn't installed with Homebrew.")
+            }
+            try await update()
+            return .done
         case .readWorktree(let ref, let read):
             // Needs no lease, as for a session: seeing a worktree is enough
             // to read its code. Only a listed worktree is read: an archived

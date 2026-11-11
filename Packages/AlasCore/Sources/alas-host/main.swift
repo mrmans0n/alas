@@ -212,6 +212,8 @@ do {
 }
 host.serveCLI()
 
+let hostVersion = executablePath.flatMap(HostSelfUpdate.version(executablePath:))
+
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
@@ -327,7 +329,8 @@ if let listen = config.hostRemoteListen {
                 consoleCapabilities: (shells.isAvailable ? PeerConsoleCapability.headlessHost : []) + [PeerPortForwardCapability.v1],
                 // A Mac that paired here inbound-only can serve this host's
                 // agents over its own link, which no app asks of it.
-                hostCapabilities: host.servedCapabilities + [HostProtocolCapability.delegationReverseV1]
+                hostCapabilities: host.servedCapabilities + [HostProtocolCapability.delegationReverseV1],
+                hostVersion: hostVersion
             )
         },
         signer: identityKey
@@ -491,6 +494,19 @@ if executableFD >= 0 {
     stopSources.append(source)
     // Replaced between the check after the lock and now.
     if executableWasReplaced() { stop() }
+}
+
+// Only as the launch agent, which starts the upgraded host again.
+if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePath: executablePath) {
+    host.selfUpdate = {
+        try await HostSelfUpdate.upgrade(cask: cask)
+        // The file watch stops the host once the upgrade replaced it; this
+        // covers an upgrade it missed, a second later so the answer goes out.
+        // Already up to date, nothing was replaced and the host keeps serving.
+        if executableWasReplaced() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { stop() } }
+        }
+    }
 }
 
 print(socket.path)

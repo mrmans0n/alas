@@ -127,6 +127,10 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case addPeer(link: String)
     /// Sets what agents on a paired Mac may do on this one; local client only.
     case setPeerAgentAccess(peerID: String, access: RemoteDeviceAgentAccess)
+    /// Upgrades the Homebrew cask this host runs from and restarts it on the
+    /// new version (`host.update.v1`). The connection usually drops before
+    /// the answer, when the upgrade replaces the running executable.
+    case updateHost
     /// Reads a listed worktree's code as a session in it would
     /// (`host.worktrees.read.v1`).
     case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)

@@ -399,7 +399,7 @@ struct HostProtocolTests {
 
     @Test(arguments: [[], PeerConsoleCapability.appHost, PeerConsoleCapability.headlessHost])
     func helloAdvertisesExactlyTheConsoleCapabilitiesItServes(_ console: [String]) {
-        guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
+        guard case .hello(_, _, _, _, _, let caps, _) = RemoteServerMessage.hello(
             RemoteServerIdentity(serverId: "s", name: "n", consoleCapabilities: console)) else {
             Issue.record("expected hello")
             return
