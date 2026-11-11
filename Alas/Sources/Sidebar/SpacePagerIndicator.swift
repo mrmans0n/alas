@@ -130,6 +130,7 @@ struct SpacePagerIndicator: View {
     let onEditSpaces: () -> Void
     let onScrollPage: (Int) -> Void
     @Environment(\.theme) var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selectionHighlight
 
@@ -137,7 +138,7 @@ struct SpacePagerIndicator: View {
         VStack(spacing: 6) {
             if let active = spaces.first(where: { $0.id == activeSpaceId }) {
                 Text(active.name)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
                     .lineLimit(1)
                     .opacity(titleVisible ? 1 : 0)
@@ -154,7 +155,7 @@ struct SpacePagerIndicator: View {
                             .frame(width: 22, height: 22)
                             .background {
                                 if space.id == activeSpaceId {
-                                    RoundedRectangle(cornerRadius: 6)
+                                    RoundedRectangle(cornerRadius: scale.radius.medium)
                                         .fill(theme.color("fg-muted").opacity(0.15))
                                         .matchedGeometryEffect(id: "selection", in: selectionHighlight)
                                 }
@@ -173,7 +174,7 @@ struct SpacePagerIndicator: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
+        .padding(.vertical, scale.space[3])
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: activeSpaceId)
         .accessibilityElement(children: .contain)

@@ -331,3 +331,13 @@ Alas/Sources/Workspace/UI/WorkspaceCheckoutDetailView.swift
 Alas/Sources/VM/VMChrome.swift
 Alas/Sources/VM/VMSlotCard.swift
 Alas/Sources/VM/VirtualMachineTabView.swift
+Alas/Sources/RunScripts/NewRunScriptDialog.swift
+Alas/Sources/RunScripts/RunReportTabView.swift
+Alas/Sources/RunScripts/RunScriptWritingHelpDialog.swift
+Alas/Sources/FailureBriefs/RunFailureBriefSection.swift
+Alas/Sources/WebPreview/WebPreviewTabView.swift
+Alas/Sources/Sidebar/SpacePagerIndicator.swift
+Alas/Sources/RepoHooks/RepoHookApprovalSheet.swift
+Alas/Sources/ComputerUse/ComputerUseBadge.swift
+Alas/Sources/App/RootView.swift
+Alas/Sources/Diagnostics/MemoryReportWindow.swift
