@@ -115,7 +115,8 @@ enum DesignCaptureWorkspace {
         func stack(_ published: Int, _ total: Int) -> GGStack? {
             let list = entries(published, total).map { e -> [String: Any] in
                 var d: [String: Any] = ["position": e.position, "sha": e.sha, "title": e.title, "ggId": e.ggId ?? "", "approved": false, "isCurrent": false]
-                if let pr = e.prNumber { d["prNumber"] = pr; d["prState"] = "open" }
+                if let pr = e.prNumber { d["prNumber"] = pr
+                d["prState"] = "open" }
                 return d
             }
             let object: [String: Any] = ["name": "billing-export", "base": "main", "totalCommits": total, "syncedCommits": published, "entries": list]

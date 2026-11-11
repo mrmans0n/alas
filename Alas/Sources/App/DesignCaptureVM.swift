@@ -39,8 +39,10 @@ enum DesignCaptureVM {
         var body: some View {
             let cells = Self.cells(for: target)
             VStack(spacing: 12) {
-                HStack(spacing: 12) { cell(cells[0]); cell(cells[1]) }
-                HStack(spacing: 12) { cell(cells[2]); cell(cells[3]) }
+                HStack(spacing: 12) { cell(cells[0])
+                cell(cells[1]) }
+                HStack(spacing: 12) { cell(cells[2])
+                cell(cells[3]) }
             }
             .padding(14)
             .background(theme.color("bg-0"))
