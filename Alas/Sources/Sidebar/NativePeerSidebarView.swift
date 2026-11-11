@@ -46,9 +46,9 @@ final class NativePeerSidebarModel {
     private func expandedHeight(ofPeer id: String, repos: [NativePeerRepoGroup]) -> CGFloat {
         repos.reduce(0) { total, repo in
             let rows = collapsedRepoIDs.contains("\(id)\u{1F}\(repo.id)") ? 0 : repo.worktrees.reduce(CGFloat(0)) {
-                $0 + ($1.updatedAt > 0 || $1.status != nil ? 46 : 33)
+                $0 + ($1.updatedAt > 0 || $1.status != nil ? 43 : 41) // design-literal: comfortable row height estimate
             }
-            return total + 30 + rows
+            return total + 36 + rows // design-literal: comfortable repo header height estimate
         }
     }
 }
@@ -81,6 +81,7 @@ struct NativePeerSidebarView: View {
     /// Gap above the section, from whatever precedes it in the sidebar.
     var topSpacing: CGFloat = 0
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     /// Every header and row is its own element, so a lazy stack around the
     /// section mounts only the rows on screen. Insets a wrapping VStack used
@@ -100,7 +101,7 @@ struct NativePeerSidebarView: View {
 
     /// Puts each repo's chevron under the peer's tile, one level in, the way
     /// worktrees sit under their repo.
-    private static let repoIndent: CGFloat = 19
+    private var repoIndent: CGFloat { 12 + scale.space[2] } // 12 = chevron slot, as the local glyph slot
 
     @ViewBuilder
     private func peerGroup(_ group: NativePeerGroup) -> some View {
@@ -142,7 +143,7 @@ struct NativePeerSidebarView: View {
             }
         )
         .equatable()
-        .padding(.leading, Self.repoIndent)
+        .padding(.leading, repoIndent)
         if !collapsed {
             ForEach(Array(repo.worktrees.enumerated()), id: \.element.id) { index, worktree in
                 let selection = NativePeerWorktreeSelection(serverId: peer.serverId, worktreeId: worktree.id)
@@ -158,17 +159,17 @@ struct NativePeerSidebarView: View {
                 .equatable()
                 .contextMenu { worktreeMenu(worktree, peer: peer) }
                 .padding(.top, index == 0 ? 0 : 1)
-                .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
-                .padding(.trailing, 6)
+                .padding(.leading, repoIndent + RepoGroupView.worktreeIndent)
+                .padding(.trailing, scale.space[1])
             }
             if let hosts = client.hosts, let projectId = repo.projectId {
                 let archived = (hosts.archivedWorktrees[peer.serverId] ?? []).filter { $0.project.id == projectId }
                 ForEach(archived, id: \.snapshot.worktree.id) { worktree in
                     NativePeerArchivedWorktreeRow(worktree: worktree)
                         .contextMenu { archivedWorktreeMenu(worktree, hosts: hosts, peer: peer) }
-                        .padding(.top, 1)
-                        .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
-                        .padding(.trailing, 6)
+                        .padding(.top, 1) // design-literal: 1pt gap between sibling rows, as in the local list
+                        .padding(.leading, repoIndent + RepoGroupView.worktreeIndent)
+                        .padding(.trailing, scale.space[1])
                 }
             }
         }
@@ -249,12 +250,13 @@ private struct NativePeerSectionHeader: View {
     let model: NativePeerSidebarModel
     let onAddPeer: (() -> Void)?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 6) {
             Text("Peers")
                 .textCase(.uppercase)
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
                 .tracking(0.8)
                 .foregroundColor(theme.color("fg-faint"))
             Spacer(minLength: 0)
@@ -264,7 +266,7 @@ private struct NativePeerSectionHeader: View {
                          color: model.plusHovering ? theme.color("fg") : theme.color("fg-faint"))
                         .frame(width: 19, height: 19)
                         .background(model.plusHovering ? theme.color("bg-4") : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 }
                 .buttonStyle(.plain)
                 .sidebarHover { model.plusHovering = $0 }
@@ -274,16 +276,16 @@ private struct NativePeerSectionHeader: View {
             }
         }
         .frame(minHeight: 19)
-        .padding(.leading, 7)
-        .padding(.trailing, 5)
-        .padding(.top, 10)
-        .padding(.bottom, 2)
+        .padding(.leading, scale.space[2])
+        .padding(.trailing, scale.space[1])
+        .padding(.top, scale.space[3])
+        .padding(.bottom, scale.space[0])
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(theme.color("line"))
                 .frame(height: 1)
         }
-        .padding(.top, 6)
+        .padding(.top, scale.space[2])
         .contentShape(Rectangle())
         .sidebarHover { model.headerHovering = $0 }
     }
@@ -307,12 +309,13 @@ private struct NativePeerHeaderRow: View, Equatable {
     let expanded: Bool
     let onToggle: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     private var online: Bool { group.state.carriesSessions }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
             Group {
                 if online {
                     Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
@@ -321,11 +324,10 @@ private struct NativePeerHeaderRow: View, Equatable {
                 }
             }
             .frame(width: 12, height: 14)
-            HStack(spacing: 7) {
+            HStack(spacing: scale.space[2]) {
                 tile
                 Text(group.name)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(-0.12)
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -334,14 +336,15 @@ private struct NativePeerHeaderRow: View, Equatable {
             Spacer(minLength: 0)
             trailing
         }
-        .padding(5)
+        .padding(.horizontal, scale.space[1])
+        .padding(.vertical, scale.space[2])
         .background(hovering && online ? theme.color("bg-3").opacity(0.55) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+                    in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(hovering && online ? 0.75 : 0), lineWidth: 0.75)
         }
-        .padding(.top, 3)
+        .padding(.top, scale.space[1])
         .contentShape(Rectangle())
         .sidebarHover { hovering = $0 }
         .onTapGesture(perform: onToggle)
@@ -352,12 +355,12 @@ private struct NativePeerHeaderRow: View, Equatable {
 
     private var tile: some View {
         Image(systemName: "laptopcomputer")
-            .font(.system(size: 10, weight: .medium))
+            .font(scale.captionFont)
             .foregroundColor(theme.color("fg-muted"))
-            .frame(width: 19, height: 19)
-            .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: 5))
+            .frame(width: 19, height: 19) // design-literal: icon tile
+            .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: scale.radius.small))
             .overlay {
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: scale.radius.small)
                     .strokeBorder(theme.color("line"), lineWidth: 1)
             }
             // E1 rings the dot in the sidebar color. The sidebar here is a
@@ -387,17 +390,17 @@ private struct NativePeerHeaderRow: View, Equatable {
                     NativePeerAttentionCount(count: group.attentionCount)
                 }
                 Text("\(repoCount)")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-faint"))
                     .monospacedDigit()
             }
-            .padding(.trailing, 3)
+            .padding(.trailing, scale.space[1])
         } else {
             Text(group.state.label.lowercased())
-                .font(.system(size: 10))
+                .font(scale.caption.font(weight: .regular))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)
-                .padding(.trailing, 3)
+                .padding(.trailing, scale.space[1])
         }
     }
 
@@ -428,26 +431,26 @@ private struct NativePeerRepoHeaderRow: View, Equatable {
     let onNewSession: (() -> Void)?
     let onToggle: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 7) {
-            HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
+            HStack(spacing: scale.space[2]) {
                 Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                     .frame(width: 12, height: 14)
                 if let icon {
                     ProjectIconView(icon: icon, fallbackName: repo.name, size: .repoHeader)
                 } else {
                     Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(scale.glyph.font(weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
-                        .frame(width: 19, height: 19)
-                        .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: 5))
+                        .frame(width: 19, height: 19) // design-literal: icon tile
+                        .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: scale.radius.small))
                         .accessibilityHidden(true)
                 }
                 Text(repo.name)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(-0.12)
+                    .font(scale.titleFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -470,20 +473,21 @@ private struct NativePeerRepoHeaderRow: View, Equatable {
                     )
                 } else {
                     Text("\(repo.worktrees.count)")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(scale.captionFont)
                         .foregroundColor(theme.color("fg-faint"))
                         .monospacedDigit()
                 }
             }
-            .padding(.trailing, 3)
+            .padding(.trailing, scale.space[1])
         }
-        .padding(5)
-        .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, scale.space[1])
+        .padding(.vertical, scale.space[2])
+        .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
         }
-        .padding(.top, 1)
+        .padding(.top, 1) // design-literal: 1pt gap above a repo header, as in the local list
         .contentShape(Rectangle())
         .sidebarHover { hovering = $0 }
     }
@@ -506,16 +510,22 @@ private struct NativePeerWorktreeRow: View, Equatable {
     let onSelect: () -> Void
     let onSelectTab: (NativePeerTab) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
+
+    /// Width of the slot that holds the branch icon; the second line starts
+    /// where the name does, as in the local row.
+    private static let glyphSlotWidth: CGFloat = 12
+    private var textInset: CGFloat { Self.glyphSlotWidth + scale.space[2] }
 
     var body: some View {
         let status = worktree.status
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 7) {
-                Icon(name: "branch", size: 12,
+        VStack(alignment: .leading, spacing: scale.space[0]) {
+            HStack(spacing: scale.space[2]) {
+                Icon(name: "branch", size: Self.glyphSlotWidth,
                      color: theme.color(status == NativePeerWorktreeGroup.running ? "add" : "fg-faint"))
                 Text(worktree.title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(isSelected ? scale.emphasisFont : scale.bodyFont)
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -525,23 +535,22 @@ private struct NativePeerWorktreeRow: View, Equatable {
             .frame(minHeight: HarnessSessionBadge.diameter)
             secondLine(status: status)
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, scale.space[2])
+        .padding(.vertical, scale.space[1])
+        .frame(maxWidth: .infinity, minHeight: scale.sidebarRowMinHeight, alignment: .leading)
         .background {
             if isSelected {
-                RoundedRectangle(cornerRadius: 9)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("accent-soft"))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 9)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                     )
             } else if hovering {
-                RoundedRectangle(cornerRadius: 9)
+                RoundedRectangle(cornerRadius: scale.radius.medium)
                     .fill(theme.color("bg-3").opacity(0.55))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 9)
+                        RoundedRectangle(cornerRadius: scale.radius.medium)
                             .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
                     )
             }
@@ -554,8 +563,33 @@ private struct NativePeerWorktreeRow: View, Equatable {
         .accessibilityAddTraits(.isButton)
     }
 
+    @ViewBuilder
     private func secondLine(status: WorktreeRowView.StatusPresentation?) -> some View {
-        HStack(spacing: 7) {
+        if status != nil {
+            // Everything a row knows stays on screen: narrow sidebars drop the
+            // diff bar, then the time, before the status word is cut short.
+            ViewThatFits(in: .horizontal) {
+                secondLineContents(status: status, showsDiffBar: true, showsTime: true)
+                secondLineContents(status: status, showsDiffBar: false, showsTime: true)
+                secondLineContents(status: status, showsDiffBar: false, showsTime: false)
+            }
+            .font(scale.metaFont)
+            .foregroundColor(theme.color("fg-dim"))
+            .padding(.leading, textInset)
+        } else {
+            secondLineContents(status: nil, showsDiffBar: true, showsTime: true)
+                .font(scale.metaFont)
+                .foregroundColor(theme.color("fg-dim"))
+                .padding(.leading, textInset)
+        }
+    }
+
+    private func secondLineContents(
+        status: WorktreeRowView.StatusPresentation?,
+        showsDiffBar: Bool,
+        showsTime: Bool
+    ) -> some View {
+        HStack(spacing: scale.space[2]) {
             if let status {
                 HStack(spacing: 5) {
                     StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
@@ -565,6 +599,7 @@ private struct NativePeerWorktreeRow: View, Equatable {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                .layoutPriority(1)
                 .help(status.note)
             } else if worktree.sessions.count == 1, let session = worktree.sessions.first {
                 // Nothing to report, so the chat's own title fills the slot a
@@ -582,14 +617,16 @@ private struct NativePeerWorktreeRow: View, Equatable {
                    added: summary.addedLines, deleted: summary.deletedLines
                ) {
                 HStack(spacing: 5) {
-                    HStack(spacing: 1.5) {
-                        ForEach(0..<5) { tick in
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(theme.color(tick < additionTicks ? "add" : "del"))
-                                .frame(width: 2, height: 7)
+                    if showsDiffBar {
+                        HStack(spacing: 1.5) {
+                            ForEach(0..<5) { tick in
+                                RoundedRectangle(cornerRadius: 1) // design-literal: 2pt-wide diff tick
+                                    .fill(theme.color(tick < additionTicks ? "add" : "del"))
+                                    .frame(width: 2, height: 7)
+                            }
                         }
+                        .accessibilityHidden(true)
                     }
-                    .accessibilityHidden(true)
                     if summary.addedLines > 0 {
                         Text("+\(summary.addedLines)").foregroundColor(theme.color("add"))
                     }
@@ -597,13 +634,13 @@ private struct NativePeerWorktreeRow: View, Equatable {
                         Text("−\(summary.deletedLines)").foregroundColor(theme.color("del"))
                     }
                 }
-                .font(.system(size: 10, design: .monospaced))
+                .monospacedDigit()
                 .fixedSize()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(summary.addedLines) lines added, \(summary.deletedLines) lines deleted")
             }
             Spacer(minLength: 0)
-            if worktree.updatedAt > 0 {
+            if showsTime, worktree.updatedAt > 0 {
                 // Keeps aging on its own: a row only re-renders when its data changes.
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     Text(Self.relative(worktree.updatedAt, now: context.date))
@@ -612,9 +649,6 @@ private struct NativePeerWorktreeRow: View, Equatable {
                 }
             }
         }
-        .font(.system(size: 10))
-        .foregroundColor(theme.color("fg-dim"))
-        .padding(.leading, 19)
     }
 
     /// The worktree's tabs in the host's order, sharing the visible-badge limit.
@@ -670,7 +704,7 @@ private struct NativePeerWorktreeRow: View, Equatable {
                     }
                 } label: {
                     Text("+\(hiddenBadges.count)")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .font(scale.glyph.font(weight: .medium, design: .monospaced))
                         .foregroundStyle(theme.color("fg-dim"))
                         .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
                 }
@@ -745,20 +779,21 @@ private struct NativePeerWorktreeRow: View, Equatable {
 private struct NativePeerArchivedWorktreeRow: View {
     let worktree: PeerHostWorktree
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         let title = worktree.snapshot.worktree.title
-        HStack(spacing: 7) {
+        HStack(spacing: scale.space[2]) {
             Icon(name: "archivebox", size: 12, color: theme.color("fg-faint"))
             Text(title)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(scale.bodyFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .frame(minHeight: 28)
+        .padding(.horizontal, scale.space[2])
+        .frame(minHeight: 28) // design-literal: single-line archived row
         .contentShape(Rectangle())
         .help("\(title) is archived on the host")
         .accessibilityElement(children: .ignore)
@@ -828,6 +863,7 @@ private struct OptionalBadgeChrome: ViewModifier {
 private struct NativePeerAttentionCount: View {
     let count: Int
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         HStack(spacing: 4) {
@@ -835,7 +871,7 @@ private struct NativePeerAttentionCount: View {
                 .fill(theme.color("mod"))
                 .frame(width: 5, height: 5)
             Text("\(count)")
-                .font(.system(size: 10, weight: .medium))
+                .font(scale.captionFont)
                 .monospacedDigit()
         }
         .foregroundColor(theme.color("mod"))
