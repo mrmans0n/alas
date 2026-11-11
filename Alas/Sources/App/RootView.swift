@@ -58,7 +58,8 @@ struct RootView: View {
                     RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
                         .frame(maxWidth: 380)
                 }
-                .padding(16)
+                // This overlay sits outside the scope that injects the scale.
+                .padding(DesignScale.resolved(for: state.config.density).space[4])
             }
             .onPreferenceChange(ApprovalStackHeightKey.self) { approvalStackHeight = $0 }
             .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
@@ -760,6 +761,7 @@ private struct WorkspaceOverviewView: View {
     let onNewCheckout: () -> Void
     let onEdit: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 18) {
@@ -770,12 +772,12 @@ private struct WorkspaceOverviewView: View {
                     icon: icon,
                     size: .overview
                 )
-                    .padding(.bottom, 4)
+                    .padding(.bottom, scale.space[1])
                 Text(workspace.name)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold)) // design-literal: workspace overview hero title
                     .foregroundColor(theme.color("fg"))
                 Text("\(workspace.members.count) \(workspace.members.count == 1 ? "repository" : "repositories") on \(workspace.executionLocation.sshHost ?? "This Mac")")
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg-dim"))
             }
             ScrollView {
@@ -788,7 +790,7 @@ private struct WorkspaceOverviewView: View {
                                 Icon(name: "folder", size: 14)
                             }
                             Text(member.fallbackProjectName)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(scale.meta.font(weight: .medium))
                                 .foregroundColor(theme.color("fg-muted"))
                                 .lineLimit(1)
                         }

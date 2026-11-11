@@ -40,6 +40,7 @@ struct RunFailureBriefSection: View {
     let codeFont: NSFont
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         ScrollView {
@@ -47,8 +48,8 @@ struct RunFailureBriefSection: View {
                 observed
                 suggested
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, scale.space[4])
+            .padding(.vertical, scale.space[3])
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: 280)
@@ -63,7 +64,7 @@ struct RunFailureBriefSection: View {
             HStack {
                 sectionTitle(presentation.observedTitle)
                 if let note = presentation.truncationNote {
-                    Text(note).font(.system(size: 10)).foregroundStyle(theme.color("fg-faint"))
+                    Text(note).font(scale.caption.font(weight: .regular)).foregroundStyle(theme.color("fg-faint"))
                 }
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -77,7 +78,7 @@ struct RunFailureBriefSection: View {
                             Text(text).foregroundStyle(theme.color("fg"))
                         }
                     case .gap:
-                        Text("⋯").foregroundStyle(theme.color("fg-faint")).padding(.leading, 44)
+                        Text("⋯").foregroundStyle(theme.color("fg-faint")).padding(.leading, 44) // design-literal: lines up under the 36pt line-number column plus its 8pt gap
                     }
                 }
             }
@@ -92,16 +93,16 @@ struct RunFailureBriefSection: View {
         case .generating:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Summarizing on-device…").font(.system(size: 11)).foregroundStyle(theme.color("fg-dim"))
+                Text("Summarizing on-device…").font(scale.meta.font).foregroundStyle(theme.color("fg-dim"))
             }
         case let .ready(brief):
             VStack(alignment: .leading, spacing: 4) {
                 sectionTitle("Suggested — on-device model, may be wrong")
-                Text(brief.summary).font(.system(size: 12, weight: .semibold)).foregroundStyle(theme.color("fg"))
-                Text(brief.cause).font(.system(size: 12)).foregroundStyle(theme.color("fg"))
+                Text(brief.summary).font(scale.meta.font(weight: .semibold)).foregroundStyle(theme.color("fg"))
+                Text(brief.cause).font(scale.meta.font).foregroundStyle(theme.color("fg"))
                 ForEach(brief.checks, id: \.self) { check in
                     Label(check, systemImage: "magnifyingglass")
-                        .font(.system(size: 12))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
             }
@@ -113,7 +114,7 @@ struct RunFailureBriefSection: View {
 
     private func sectionTitle(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
+            .font(scale.caption.font(weight: .semibold))
             .foregroundStyle(theme.color("fg-dim"))
     }
 }
