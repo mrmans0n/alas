@@ -69,7 +69,14 @@ public final class GGStackActionState {
         inFlightAction = nil
     }
 
-    public func appendSyncEvent(_ event: GGSyncEvent) { syncProgress.append(event) }
+    /// Also told every sync event, for a caller that follows one sync
+    /// (`stack_ship` reporting its progress); it clears this when done.
+    @ObservationIgnored public var syncEventObserver: (@MainActor (GGSyncEvent) -> Void)?
+
+    public func appendSyncEvent(_ event: GGSyncEvent) {
+        syncProgress.append(event)
+        syncEventObserver?(event)
+    }
     public func clearSyncProgress() { if !syncProgress.isEmpty { syncProgress = [] } }
     public var canDismissCompletedSyncFailure: Bool {
         inFlightAction == nil && pausedOperation == nil && syncHasTerminalFailure

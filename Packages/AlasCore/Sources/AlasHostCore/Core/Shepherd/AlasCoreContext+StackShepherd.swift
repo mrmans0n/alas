@@ -31,7 +31,7 @@ extension AlasCoreContext {
     ///
     /// With `replyWithin`, as the agent's call passes it, a ship still
     /// running by then keeps going in the background: the reply says so, a
-    /// turn reports how it ended, and `pr_status` reports its phase until
+    /// turn reports how it ended, and `pr_status` reports its progress until
     /// then. gg's lint can make a sync outlast any tool timeout.
     public func shipStack(
         sessionID: String, worktreeID: String, plan: StackShipPlan? = nil, replyWithin: Duration? = nil
@@ -51,36 +51,27 @@ extension AlasCoreContext {
         stackShipFailures[worktreeID] = nil
         let job = StackShipJob(sessionID: sessionID, startedAt: Date())
         stackShipJobs[worktreeID] = job
-        let reply = StackShipReply()
-        return await withCheckedContinuation { continuation in
-            reply.continuation = continuation
-            Task { @MainActor in
-                let response = await self.serializedPublish(worktreeID: worktreeID) {
-                    let result = try await self.publishShepherdedStack(
-                        sessionID: sessionID, worktreeID: worktreeID, plan: plan,
-                        progress: { [weak self] phase in
-                            if self?.stackShipJobs[worktreeID]?.id == job.id { self?.stackShipJobs[worktreeID]?.phase = phase }
-                        }
-                    )
-                    return ReviewCommentWireDTO.jsonLine(result)
-                }
-                let repliedEarly = self.stackShipJobs[worktreeID]?.repliedEarly ?? false
-                if self.stackShipJobs[worktreeID]?.id == job.id { self.stackShipJobs[worktreeID] = nil }
-                if repliedEarly {
-                    await self.reportStackShipOutcome(response, sessionID: sessionID, worktreeID: worktreeID)
-                } else {
-                    reply.resume(response)
-                }
+        let task = Task { @MainActor in
+            let response = await self.serializedPublish(worktreeID: worktreeID) {
+                let result = try await self.publishShepherdedStack(
+                    sessionID: sessionID, worktreeID: worktreeID, plan: plan,
+                    progress: { [weak self] change in
+                        guard let self, var current = self.stackShipJobs[worktreeID], current.id == job.id else { return }
+                        change(&current.progress)
+                        self.stackShipJobs[worktreeID] = current
+                    }
+                )
+                return ReviewCommentWireDTO.jsonLine(result)
             }
-            Task { @MainActor in
-                try? await Task.sleep(for: replyWithin)
-                guard let running = self.stackShipJobs[worktreeID], running.id == job.id else { return }
-                self.stackShipJobs[worktreeID]?.repliedEarly = true
-                reply.resume(.text([ReviewCommentWireDTO.jsonLine(
-                    self.stackShipProgress(running, alreadyRunning: false, for: sessionID)
-                )]))
-            }
+            if self.stackShipJobs[worktreeID]?.id == job.id { self.stackShipJobs[worktreeID] = nil }
+            return response
         }
+        if let response = await Self.response(of: task, within: replyWithin) { return response }
+        let running = stackShipJobs[worktreeID].flatMap { $0.id == job.id ? $0 : nil } ?? job
+        Task { @MainActor in
+            await self.reportStackShipOutcome(await task.value, sessionID: sessionID, worktreeID: worktreeID)
+        }
+        return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: false, for: sessionID))])
     }
 
     /// Only the ship's own caller gets the turn reporting how it ended.
@@ -88,19 +79,21 @@ extension AlasCoreContext {
         let lead = alreadyRunning
             ? "A stack_ship is already running in this worktree"
             : "Alas is still shipping the stack"
-        let phase = switch job.phase {
+        let step = switch job.progress.phase {
         case .checking: "listing the stack and checking origin for landed entries"
         case .rebasing: "running gg rebase to drop landed entries"
-        case .syncing: "running gg sync, which runs gg's lint before it pushes"
+        case .syncing: "running gg sync"
+        case .linting: "gg sync is running the configured lint on each entry before it pushes"
+        case .pushing: "gg sync is pushing entries and updating their requests"
         case .reading: "reading the published requests"
         }
         let outcome = job.sessionID == sessionID
             ? "Alas sends this session a turn when it finishes, with the result or the error; pr_status reports its progress until then."
             : "Another session started it and gets its result; pr_status reports its progress until it finishes."
         return StackShipProgressWire(
-            phase: job.phase,
+            progress: job.progress,
             elapsedSeconds: max(0, Int(Date().timeIntervalSince(job.startedAt))),
-            message: "\(lead) (\(phase)). \(outcome) Do not run gg sync or call stack_ship again meanwhile."
+            message: "\(lead): \(step) (\(job.progress.label)). \(outcome) Do not run gg sync or call stack_ship again meanwhile."
         )
     }
 
@@ -143,9 +136,9 @@ extension AlasCoreContext {
         sessionID: String,
         worktreeID: String,
         plan explicitPlan: StackShipPlan?,
-        progress: @MainActor (StackShipPhase) -> Void
+        progress: @escaping @MainActor (_ change: (inout StackShipProgress) -> Void) -> Void
     ) async throws -> StackShipResultWire {
-        progress(.checking)
+        progress { $0 = .init(phase: .checking) }
         let (effects, context) = try stackShepherdTarget(worktreeID, sessionID: sessionID)
         guard let stack = try await loadStack(effects, path: context.path) else {
             throw PRShepherdCLIError(message: "gg does not list a stack for this worktree. Check out the stack's branch, then call stack_ship again.")
@@ -186,7 +179,7 @@ extension AlasCoreContext {
             // The checks above read this stack; the rebase refuses to run on
             // whatever the worktree moved to while they ran.
             let inspected = GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: top.sha)
-            progress(.rebasing)
+            progress { $0 = .init(phase: .rebasing) }
             do {
                 try await effects.rebaseStack(worktreeID, inspected)
             } catch GGMutationError.staleConfirmation {
@@ -214,13 +207,13 @@ extension AlasCoreContext {
         guard let plan = (try? chosen.resolved(in: toSync)) ?? (isUsersChoice ? nil : chosen.recovered(in: toSync)) else {
             throw Self.missingShipEntryError(toSync)
         }
-        progress(.syncing)
+        progress { $0 = .init(phase: .syncing) }
         do {
-            try await effects.syncStack(worktreeID, plan)
+            try await effects.syncStack(worktreeID, plan) { event in progress { $0.apply(event) } }
         } catch {
             throw PRShepherdCLIError(message: "gg sync did not finish: \(Self.prShepherdErrorMessage(error))")
         }
-        progress(.reading)
+        progress { $0 = .init(phase: .reading) }
         let published = try await publishedStack(
             effects, context: context, shipPlan: plan, unpublishedHint: "gg sync did not open one"
         )
@@ -547,24 +540,10 @@ struct StackShipJob {
     let id = UUID()
     let sessionID: String
     let startedAt: Date
-    var phase: StackShipPhase = .checking
-    /// The caller already got the in-progress reply, so a turn reports the end.
-    var repliedEarly = false
+    var progress = StackShipProgress(phase: .checking)
 }
 
 struct StackShipFailure {
     let sessionID: String
     let message: String
-}
-
-/// Resumes the `stack_ship` call once: with the result, or with the progress
-/// reply at the deadline, whichever comes first.
-@MainActor
-private final class StackShipReply {
-    var continuation: CheckedContinuation<AlasCLIResponse, Never>?
-
-    func resume(_ response: AlasCLIResponse) {
-        continuation?.resume(returning: response)
-        continuation = nil
-    }
 }

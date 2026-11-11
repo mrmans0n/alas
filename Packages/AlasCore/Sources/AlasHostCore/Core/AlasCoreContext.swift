@@ -123,6 +123,9 @@ public final class AlasCoreContext {
     /// kept until `pr_status` or a turn reports it.
     @ObservationIgnored var stackShipJobs: [String: StackShipJob] = [:]
     @ObservationIgnored var stackShipFailures: [String: StackShipFailure] = [:]
+    /// Each agent `pr_status` read still running, and the last one read.
+    @ObservationIgnored var prStatusReads: [PRStatusReadKey: Task<AlasCLIResponse, Never>] = [:]
+    @ObservationIgnored var prStatusCache: [PRStatusReadKey: CachedPRStatus] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
     /// Agents' turns and usage limits, as usage views and plugins read them.

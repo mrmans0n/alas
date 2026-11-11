@@ -73,10 +73,56 @@ extension AlasCoreContext {
         return Self.normalizedBaseBranch(base ?? context.baseBranch, remoteNames: Set(remotes.map(\.name)))
     }
 
-    /// Fresh status of the gg stack or PR/MR bound to the calling session,
-    /// else of the worktree's stack in gg mode, else of its branch's PR/MR.
-    func prStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
+    /// `task`'s response if it ends within `deadline`, else nil; `task`
+    /// keeps running either way.
+    static func response(of task: Task<AlasCLIResponse, Never>, within deadline: Duration) async -> AlasCLIResponse? {
+        let reply = OneShotReply()
+        return await withCheckedContinuation { continuation in
+            reply.continuation = continuation
+            let timer = Task { @MainActor in
+                try? await Task.sleep(for: deadline)
+                reply.resume(nil)
+            }
+            Task { @MainActor in
+                reply.resume(await task.value)
+                timer.cancel()
+            }
+        }
+    }
+
+    /// Status of the gg stack or PR/MR bound to the calling session, else of
+    /// the worktree's stack in gg mode, else of its branch's PR/MR.
+    ///
+    /// With `replyWithin`, as the agent's call passes it, one read per
+    /// session and worktree runs at a time and keeps going past the reply:
+    /// a read still running by then answers with the last status read,
+    /// marked `stale` with its `as_of` time, or says it is still reading.
+    /// `gg ls` alone can take over 30 seconds on a large GitLab stack.
+    func prStatus(sessionID: String, worktreeID: String, replyWithin: Duration? = nil) async -> AlasCLIResponse {
         if let ship = stackShipStatus(sessionID: sessionID, worktreeID: worktreeID) { return ship }
+        guard let replyWithin else { return await freshPRStatus(sessionID: sessionID, worktreeID: worktreeID) }
+        let key = PRStatusReadKey(sessionID: sessionID, worktreeID: worktreeID)
+        let task: Task<AlasCLIResponse, Never>
+        if let running = prStatusReads[key] {
+            task = running
+        } else {
+            let startedAt = Date()
+            task = Task { @MainActor in
+                let response = await self.freshPRStatus(sessionID: sessionID, worktreeID: worktreeID)
+                if case .text(let lines) = response, let line = lines.first {
+                    self.prStatusCache[key] = CachedPRStatus(line: line, readAt: startedAt)
+                }
+                self.prStatusReads[key] = nil
+                return response
+            }
+            prStatusReads[key] = task
+        }
+        if let response = await Self.response(of: task, within: replyWithin) { return response }
+        if let cached = prStatusCache[key] { return .text([cached.staleLine]) }
+        return .text([ReviewCommentWireDTO.jsonLine(PRStatusReadingWire())])
+    }
+
+    private func freshPRStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
         do {
             if let stack = try await shepherdedStackStatus(sessionID: sessionID, worktreeID: worktreeID) {
                 return .text([ReviewCommentWireDTO.jsonLine(stack)])
@@ -462,9 +508,51 @@ public struct PRsAPI {
         await core.createPR(sessionID: sessionID, worktreeID: worktreeID, title: title, body: body, draft: draft, base: base)
     }
 
-    /// Fresh status of the PR/MR bound to session `sessionID`, else of the
-    /// worktree branch's.
+    /// Status of the PR/MR bound to session `sessionID`, else of the
+    /// worktree branch's. Replies within `StackShipJob.agentReplyDeadline`;
+    /// a slower read answers with the last status, marked stale.
     public func status(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
-        await core.prStatus(sessionID: sessionID, worktreeID: worktreeID)
+        await core.prStatus(sessionID: sessionID, worktreeID: worktreeID, replyWithin: StackShipJob.agentReplyDeadline)
+    }
+}
+
+/// One agent `pr_status` read: its result depends on the session's binding.
+struct PRStatusReadKey: Hashable {
+    let sessionID: String
+    let worktreeID: String
+}
+
+/// The last `pr_status` an agent read, for answering while the next one runs.
+struct CachedPRStatus {
+    let line: String
+    let readAt: Date
+
+    /// `line` with `stale: true` and `as_of` added.
+    var staleLine: String {
+        guard var object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { return line }
+        object["stale"] = true
+        object["as_of"] = ISO8601DateFormatter().string(from: readAt)
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8)
+        else { return line }
+        return text
+    }
+}
+
+/// `pr_status` while its first read still runs and no earlier one is kept.
+struct PRStatusReadingWire: Encodable {
+    var status = "in_progress"
+    var message = "Alas is still reading the status: listing a gg stack and reading its pull/merge requests can be slow. "
+        + "The read keeps going; call pr_status again in a moment."
+}
+
+/// Resumes one continuation once, with whichever answer comes first.
+@MainActor
+final class OneShotReply {
+    var continuation: CheckedContinuation<AlasCLIResponse?, Never>?
+
+    func resume(_ response: AlasCLIResponse?) {
+        continuation?.resume(returning: response)
+        continuation = nil
     }
 }
