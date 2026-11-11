@@ -36,6 +36,12 @@
 # update-progress-<refreshing|installing|installed|pending|failed|start-failed|cancelled>
 # and whats-new show the update sheets and the What's New card over scripted releases
 # (DesignCaptureUpdates); nothing is downloaded, installed or relaunched.
+# ALAS_CAPTURE_SIDEBAR peers, peers-hover or peers-rename installs the scripted peers with extra
+# sidebar rows (an offline Mac, failed and in-flight host operations, an archived worktree, an
+# "Other sessions" bucket, an empty project, an overflowing tab row), expands both online Macs,
+# collapses the local projects and selects a peer worktree. peers-hover also hovers the Peers
+# header so the "+" pair control shows; peers-rename opens the peer worktree rename sheet
+# (DesignCaptureSidebar).
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
@@ -322,6 +328,18 @@ SWIFT
     editor-*|markdown|mermaid-viewer) /bin/sleep 6 ;;
     *) /bin/sleep 1.5 ;;
   esac
+fi
+
+# ALAS_CAPTURE_SIDEBAR expands the peer section of the sidebar the same way.
+if [[ -n "${ALAS_CAPTURE_SIDEBAR:-}" ]]; then
+  /usr/bin/swift - "$ALAS_CAPTURE_SIDEBAR" <<'SWIFT' 2>/dev/null
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(
+    Notification.Name("io.nlopez.alas.dev.capture.open"),
+    object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true
+)
+SWIFT
+  /bin/sleep 4
 fi
 
 # Ready once two captures a second apart match. Status indicators keep pulsing,

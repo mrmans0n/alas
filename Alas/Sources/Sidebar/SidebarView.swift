@@ -400,6 +400,9 @@ struct SidebarView: View {
             hideTitleTask?.cancel()
             hideTitleTask = nil
         }
+        #if DEBUG
+        .onAppear { DesignCaptureSidebar.peerModel = peerSidebarModel }
+        #endif
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
         }

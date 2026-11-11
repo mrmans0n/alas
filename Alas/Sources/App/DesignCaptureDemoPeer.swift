@@ -20,6 +20,8 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
         let added: Int
         let deleted: Int
         let changedFiles: Int
+        var operation: WorktreeOperation? = nil
+        var isArchived = false
         var id: String { Worktree.makeId(path: URL(fileURLWithPath: path)) }
     }
 
@@ -64,11 +66,43 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
               worktree: worktrees[5], age: 900),
     ]
 
+    /// Extra rows for the sidebar targets: a failed and an in-flight host operation, an archived
+    /// worktree, an "Other sessions" bucket and a worktree with more tabs than its row can badge.
+    private static let variantWorktrees: [DemoWorktree] = [
+        .init(serverId: studio.serverId, projectId: "demo-lantern", projectName: "lantern", name: "webhook-signing",
+              branch: "fix/webhook-signing", path: "/Users/demo/Code/lantern/.worktrees/webhook-signing",
+              isMain: false, added: 0, deleted: 0, changedFiles: 0,
+              operation: .createFailed(message: "fatal: a branch named 'fix/webhook-signing' already exists")),
+        .init(serverId: studio.serverId, projectId: "demo-lantern", projectName: "lantern", name: "old-importer",
+              branch: "chore/old-importer", path: "/Users/demo/Code/lantern/.worktrees/old-importer",
+              isMain: false, added: 0, deleted: 0, changedFiles: 0, isArchived: true),
+        .init(serverId: air.serverId, projectId: "demo-lantern-air", projectName: "lantern", name: "ledger-migration",
+              branch: "feat/ledger-migration", path: "/Users/demo/Developer/lantern/.worktrees/ledger-migration",
+              isMain: false, added: 0, deleted: 0, changedFiles: 0, operation: .creating),
+    ]
+
+    private static let variantSessions: [DemoSession] = [
+        .init(id: "charts-csv", title: "Wire up the CSV download", agentId: "codex", status: "streaming",
+              worktree: worktrees[5], age: 120),
+        .init(id: "charts-tooltip", title: "Fix tooltip clipping", agentId: "claude", status: "awaitingInput",
+              worktree: worktrees[5], age: 200),
+        .init(id: "charts-axis", title: "Tidy axis labels", agentId: "claude", status: "streaming",
+              worktree: worktrees[5], age: 260),
+        .init(id: "charts-lib", title: "Bump the chart library", agentId: "codex", status: "streaming",
+              worktree: worktrees[5], age: 320),
+    ]
+
+    private static let emptyProject = RemoteProjectOption(id: "demo-docs", name: "docs-site")
+
     private static let consoleId = "demo-console-tests"
 
     // MARK: Links
 
     var sessionCarryingPeers: [FederatedPeerInfo] = []
+    /// Adds the sidebar-only rows above and a third Mac that is offline.
+    var sidebarVariants = false
+    private var worktrees: [DemoWorktree] { Self.worktrees + (sidebarVariants ? Self.variantWorktrees : []) }
+    private var sessions: [DemoSession] { Self.sessions + (sidebarVariants ? Self.variantSessions : []) }
     var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
 
     private let anchor = Date()
@@ -100,7 +134,9 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
         return NativePeerSessions(
             federation: provider,
             peers: { [weak self] in
-                (self?.sessionCarryingPeers ?? []).map { .init(serverId: $0.serverId, name: $0.name, state: "online") }
+                let online = (self?.sessionCarryingPeers ?? []).map { RemoteHelloPeer(serverId: $0.serverId, name: $0.name, state: "online") }
+                return online + (self?.sidebarVariants == true
+                    ? [RemoteHelloPeer(serverId: "demo-mini", name: "Mac mini", state: "offline")] : [])
             },
             consoles: consoles,
             hosts: hosts
@@ -131,7 +167,7 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
         case .listProjects:
             deliver(.projectList(projects: projects(of: serverId)), from: serverId)
         case .listWorktrees:
-            deliver(.worktreeList(worktrees: Self.worktrees.filter { $0.serverId == serverId }.map { worktree in
+            deliver(.worktreeList(worktrees: worktrees.filter { $0.serverId == serverId }.map { worktree in
                 RemoteWorktreeOption(
                     id: worktree.id, projectName: worktree.projectName, worktreeName: worktree.name, branch: worktree.branch,
                     path: worktree.path, metricsAvailable: true, comparisonRef: "origin/main", commitCount: worktree.isMain ? 0 : 2,
@@ -168,13 +204,13 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
     }
 
     private func projects(of serverId: String) -> [RemoteProjectOption] {
-        let ids = Set(Self.worktrees.filter { $0.serverId == serverId }.map(\.projectId))
-        return Self.worktrees.filter { $0.serverId == serverId && ids.contains($0.projectId) }
+        let rows = worktrees.filter { $0.serverId == serverId }
             .reduce(into: [RemoteProjectOption]()) { rows, worktree in
                 if !rows.contains(where: { $0.id == worktree.projectId }) {
                     rows.append(.init(id: worktree.projectId, name: worktree.projectName))
                 }
             }
+        return sidebarVariants && serverId == Self.studio.serverId ? rows + [Self.emptyProject] : rows
     }
 
     private func summary(_ worktree: DemoWorktree) -> RemoteWorktreeSummary {
@@ -186,18 +222,23 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
     }
 
     private func sessionRows(of serverId: String) -> [RemoteSessionSummary] {
-        Self.sessions.filter { $0.worktree.serverId == serverId }.enumerated().map { index, session in
+        let rows = sessions.filter { $0.worktree.serverId == serverId }.enumerated().map { index, session in
             RemoteSessionSummary(
                 id: session.id, title: session.title, agentId: session.agentId, status: session.status, canDrive: true,
                 tabIndex: index, projectId: session.worktree.projectId, worktreeId: session.worktree.id,
                 updatedAt: Int64(anchor.timeIntervalSince1970) - session.age, worktree: summary(session.worktree))
         }
+        guard sidebarVariants, serverId == Self.air.serverId else { return rows }
+        // No project or worktree: lands in the "Other sessions" bucket.
+        return rows + [RemoteSessionSummary(
+            id: "scratch", title: "Draft the release announcement", agentId: "claude", status: "idle", canDrive: true,
+            tabIndex: rows.count, updatedAt: Int64(anchor.timeIntervalSince1970) - 7200)]
     }
 
     // MARK: Transcripts
 
     private func subscribe(sessionId id: String, serverId: String) {
-        guard let session = Self.sessions.first(where: { $0.id == id }) else { return }
+        guard let session = sessions.first(where: { $0.id == id }) else { return }
         let rows = Self.transcript(for: session.id)
         deliver(.sessionConfig(RemoteSessionConfig(
             sessionId: id, models: [.init(id: "opus", name: "Opus"), .init(id: "sonnet", name: "Sonnet")],
@@ -407,7 +448,7 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
     }
 
     private func hostSnapshot(serverId: String) -> HostSnapshot {
-        let mine = Self.worktrees.filter { $0.serverId == serverId }
+        let mine = worktrees.filter { $0.serverId == serverId }
         var seen = Set<String>()
         let projects = mine.compactMap { worktree -> ProjectSnapshot? in
             guard seen.insert(worktree.projectId).inserted else { return nil }
@@ -424,7 +465,7 @@ final class DesignCaptureDemoPeer: FederatedPeerLinks {
                         path: URL(fileURLWithPath: worktree.path), isMainWorktree: worktree.isMain,
                         status: worktree.changedFiles > 0 ? .dirty : .clean,
                         lastActivity: anchor.addingTimeInterval(-600), addedLines: worktree.added, deletedLines: worktree.deleted),
-                    operation: nil, isArchived: false)
+                    operation: worktree.operation, isArchived: worktree.isArchived)
             },
             workspaceCheckouts: [], runs: [], sessions: [])
     }
