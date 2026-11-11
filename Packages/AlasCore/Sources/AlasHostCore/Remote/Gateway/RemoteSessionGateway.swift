@@ -1480,6 +1480,8 @@ public final class RemoteSessionGateway {
                 isHidden: document.hidden ? true : nil)
         case .questionAnswer(let answer):
             return .init(stableId: sid, kind: "system", text: answer.displayText, json: nil, index: index)
+        case .outcomeCard(let card):
+            return .init(stableId: sid, kind: "system", text: card.text, json: nil, index: index)
         case .visualAid(let visual):
             // Without json the phone falls back to a plain-text row with the title.
             return .init(

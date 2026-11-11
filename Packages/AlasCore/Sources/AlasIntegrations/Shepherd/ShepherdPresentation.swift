@@ -466,6 +466,42 @@ public enum ShepherdNotification {
         }
     }
 
+    /// The transcript card for an event that ends the shepherd's work on a
+    /// request, and the notice text readers without cards show. Nil for
+    /// events that don't end it.
+    public static func outcomeCard(for event: ReviewShepherd.Event) -> (card: ACPPromptCard, text: String)? {
+        let record: ShepherdRecord
+        let title: String
+        let origin: ACPPromptCard.Origin
+        switch event {
+        case .merged(let r, let t): (record, title, origin) = (r, t, .merged)
+        case .closed(let r, let t): (record, title, origin) = (r, t, .closed)
+        case .queued(let r, let t): (record, title, origin) = (r, t, .queued)
+        case .ready, .escalated: return nil
+        }
+        let card = ACPPromptCard(
+            origin: origin,
+            title: "\(reference(record)) · \(title)",
+            facts: [.init(kind: .branch, text: "\(record.branch) → \(record.baseBranch)")],
+            action: .url(record.remote.reviewRequestURL(number: record.id.requestNumber))
+        )
+        return (card, review(for: event, host: { _ in nil }).body)
+    }
+
+    /// The transcript card for a finished stack; nil for every other event.
+    public static func outcomeCard(for event: StackShepherd.Event) -> (card: ACPPromptCard, text: String)? {
+        guard case .finished(let record, let outcome) = event else { return nil }
+        let card = ACPPromptCard(
+            origin: outcome == .merged ? .merged : .closed,
+            title: "gg stack \(record.id.stackName)",
+            facts: [
+                .init(kind: .branch, text: "\(record.id.stackName) → \(record.base)"),
+                .init(kind: .provider, text: record.remote.kind.displayName),
+            ]
+        )
+        return (card, stack(for: event, host: { _ in nil }).body)
+    }
+
     private static func reference(_ record: ShepherdRecord) -> String {
         let kind = record.id.providerKind
         return "\(kind.displayName) \(kind.reviewRequestNumberPrefix)\(record.id.requestNumber)"

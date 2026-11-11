@@ -171,7 +171,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
                     messageId: isSteeringSegment(wire) ? nil : messageId,
                     isSteeringSegment: isSteeringSegment(wire)
                 )
-            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer:
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer, .outcomeCard:
                 nil
             }
         }
@@ -208,7 +208,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         let next = decoded[(boundaryIndex + 1)...].first { wire in
             switch wire {
             case .user, .agent: true
-            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer: false
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer, .outcomeCard: false
             }
         }
         guard case .user = next else { return nil }
@@ -251,6 +251,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             liveCall.toolCallId == storedCall.toolCallId
         case let (.questionAnswer(liveAnswer), .questionAnswer(storedAnswer)):
             liveAnswer == storedAnswer
+        case let (.outcomeCard(liveCard), .outcomeCard(storedCard)):
+            liveCard.id == storedCard.id
         case let (.visualAid(liveVisual), .visualAid(storedVisual)):
             liveVisual.id == storedVisual.id
         case (.fileEdit, .fileEdit), (.plan, .plan), (.systemNotice, .systemNotice):
@@ -298,7 +300,7 @@ public enum ACPSessionForkSourceCheck: Sendable {
                 ids.insert(id)
             case .toolCall(let call):
                 ids.insert(call.toolCallId)
-            case .user, .agent, .thought, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer:
+            case .user, .agent, .thought, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer, .outcomeCard:
                 break
             }
         }
@@ -313,7 +315,7 @@ extension ACPMessage {
             .user
         case .agent:
             .agent
-        case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer:
+        case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer, .outcomeCard:
             nil
         }
     }

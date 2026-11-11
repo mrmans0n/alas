@@ -43,6 +43,8 @@ extension ACPSession {
                 total &+= UInt64(incident.displayText.utf8.count)
             case .questionAnswer(let answer):
                 total &+= UInt64(answer.displayText.utf8.count)
+            case .outcomeCard(let card):
+                total &+= UInt64(card.text.utf8.count)
             case .visualAid(let visual):
                 total &+= UInt64(visual.title.utf8.count + visual.html.utf8.count)
             }

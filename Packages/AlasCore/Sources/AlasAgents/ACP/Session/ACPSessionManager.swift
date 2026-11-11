@@ -10009,6 +10009,18 @@ extension ACPSessionManager {
         return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
     }
 
+    /// Append an outcome card to a session this instance writes, without
+    /// running a turn. False when the session has no live runner or another
+    /// instance owns it; the card is not kept for later.
+    public func appendOutcomeCard(_ card: ACPOutcomeCard, into sessionId: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard !mergingForks.contains(sessionId), let runner = runners[sessionId], isWriter(for: sessionId)
+        else { return false }
+        return runner.appendAndPersistOutcomeCard(card)
+    }
+
     /// Append a visual aid an agent showed. True only once its row is written,
     /// so `visual_show` never reports a visual that a reload would lose.
     public func showVisualAid(_ visual: ACPVisualAid, in sessionId: ACPSession.ID) async -> Bool {
