@@ -10,11 +10,11 @@ set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
-version="0.38.1-nightly.20261101.41272696578"
-release_tag="nightly-cua-driver-rs-v${version}"
-source_commit="8db684185a93e854bb7811189d69f933bb15f55d"
+version="0.46.1"
+release_tag="cua-driver-rs-v${version}"
+source_commit="93c9b500a0d4f9daa56063d3d3e3fb3c9e6070ee"
 asset="cua-driver-rs-${version}-linux-arm64-binary.tar.gz"
-asset_sha256="1a402d78d1fcaefac7f4bd2ba0535ee0293f28c799ab7956795f47b9e8a5f8ce"
+asset_sha256="c1cf1f9635153cf9c347310008669893928d5e043db7522b37dfc59f0caef5f5"
 url="https://github.com/trycua/cua/releases/download/${release_tag}/${asset}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
