@@ -103,6 +103,10 @@ extension AlasCoreContext {
         if let ship = stackShipStatus(sessionID: sessionID, worktreeID: worktreeID) { return ship }
         guard let replyWithin else { return await freshPRStatus(sessionID: sessionID, worktreeID: worktreeID) }
         let key = PRStatusReadKey(sessionID: sessionID, worktreeID: worktreeID)
+        // A read that failed after its caller got a reply says why, once.
+        if prStatusReads[key] == nil, let failure = prStatusFailures.removeValue(forKey: key) {
+            return .error(failure)
+        }
         let task: Task<AlasCLIResponse, Never>
         if let running = prStatusReads[key] {
             task = running
@@ -117,12 +121,19 @@ extension AlasCoreContext {
                    self.prStatusPublishes[worktreeID, default: 0] == publishes, self.prCreateTasks[worktreeID] == nil {
                     self.prStatusCache[key] = CachedPRStatus(line: line, readAt: startedAt)
                 }
+                switch response {
+                case .error(let message), .errorWithExitCode(let message, _): self.prStatusFailures[key] = message
+                case .text, .ok: self.prStatusFailures[key] = nil
+                }
                 self.prStatusReads[key] = nil
                 return response
             }
             prStatusReads[key] = task
         }
-        if let response = await Self.response(of: task, within: replyWithin) { return response }
+        if let response = await Self.response(of: task, within: replyWithin) {
+            prStatusFailures[key] = nil
+            return response
+        }
         if let cached = prStatusCache[key] { return .text([cached.staleLine]) }
         return .text([ReviewCommentWireDTO.jsonLine(PRStatusReadingWire())])
     }

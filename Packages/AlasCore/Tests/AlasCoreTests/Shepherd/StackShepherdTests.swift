@@ -1427,4 +1427,41 @@ struct StackShepherdTests {
         try await eventually { await probe.isSyncing }
         probe.finishSync()
     }
+
+    /// A read that fails after its caller got the in-progress reply reports
+    /// its error to the next call, once, rather than starting over unseen.
+    @Test func aSlowPRStatusReadThatFailsReportsItsErrorToTheNextCall() async throws {
+        let core = makeCore()
+        let probe = ShipProbe()
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            loadStack: { _ in
+                probe.listed += 1
+                await probe.sync()
+                throw GGServiceError.commandFailed(stderr: "glab: 401 Unauthorized")
+            },
+            syncStack: { _, _, _ in },
+            rebaseStack: { _, _ in },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+
+        let first = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(first).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        probe.finishSync()
+        try await eventually { await core.prStatusReads.isEmpty }
+
+        let next = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        guard case .error(let message) = next else {
+            Issue.record("expected the read's error, got \(next)")
+            return
+        }
+        #expect(message.contains("401 Unauthorized"))
+        #expect(probe.listed == 1)
+        #expect(core.prStatusFailures.isEmpty)
+    }
 }
