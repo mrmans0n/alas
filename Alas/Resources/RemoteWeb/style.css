@@ -520,6 +520,8 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .user-images:first-child { margin-top: 0; }
 .md img.user-image { display: block; max-width: 160px; max-height: 160px; border-radius: 8px; cursor: zoom-in; }
+.user-image-frame:not(.is-loaded) img.user-image { display: none; }
+.user-image-frame.is-loaded .user-image-label { display: none; }
 .image-viewer { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: rgba(0, 0, 0, 0.88); cursor: zoom-out; }

@@ -3243,16 +3243,22 @@ function userTextWithoutImageLabels(text, images) {
   return parts.join("\n\n");
 }
 
+// Each image keeps its label until its bytes load, so one the Mac can't
+// serve (deleted, too large) still says what was attached.
 function appendUserImages(node, images) {
   if (!images.length) return;
   const strip = el("div", "user-images");
   for (const image of images) {
+    const name = image.name || "Image";
+    const frame = el("span", "user-image-frame");
     const thumbnail = document.createElement("img");
     thumbnail.className = "user-image";
-    thumbnail.alt = image.name || "Image";
+    thumbnail.alt = name;
     thumbnail.dataset.transcriptImage = image.uri;
+    thumbnail.addEventListener("load", () => frame.classList.add("is-loaded"), { once: true });
     thumbnail.onclick = () => { if (thumbnail.complete && thumbnail.naturalWidth) showImageViewer(thumbnail); };
-    strip.append(thumbnail);
+    frame.append(el("span", "user-image-label", "🖼 " + name), thumbnail);
+    strip.append(frame);
   }
   node.append(strip);
 }

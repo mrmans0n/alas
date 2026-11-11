@@ -1720,9 +1720,10 @@ struct RemoteSessionGatewayTests {
         let msg = ACPMessage.user(id: UUID(), text: "see @App.swift", attachments: [
             .init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil),
             .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png"),
+            .init(uri: "data:image/png;base64,iVBORw0KGgo=", name: nil, mimeType: "image/png"),
         ])
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
-        #expect(wire.text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
+        #expect(wire.text == "see @App.swift\n\n🖼 shot.png\n\n🖼 Image\n\n📎 App.swift")
         #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
     }
 

@@ -1434,9 +1434,12 @@ public final class RemoteSessionGateway {
             let images = shown.filter(isImage)
             let rowText = userRowText(text: text, attachmentNames: images.map(\.name),
                                       resourceNames: shown.filter { !isImage($0) }.map(\.name))
+            // Only files travel as paths: an inline `data:` image would make
+            // the row too large to send, so it keeps its label.
+            let files = images.filter { $0.uri.hasPrefix("/") || $0.uri.lowercased().hasPrefix("file:") }
             return .init(stableId: sid, kind: "user", text: rowText, json: nil, index: index,
                          checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString,
-                         images: images.isEmpty ? nil : images.map { .init(uri: $0.uri, name: $0.name) })
+                         images: files.isEmpty ? nil : files.map { .init(uri: $0.uri, name: $0.name) })
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):

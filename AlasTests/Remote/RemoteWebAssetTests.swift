@@ -39,6 +39,7 @@ struct RemoteWebAssetTests {
         ("🖼 Image", [[String: String]()], ""),
         ("🖼 a.png\n\n🖼 a.png\n\n🖼 b.png", [["name": "a.png"], ["name": "b.png"]], "🖼 a.png"),
         ("hi\n\n🖼 a.png", [["name": "gone.png"]], "hi\n\n🖼 a.png"),
+        ("see\n\n🖼 a.png\n\n🖼 Image", [["name": "a.png"]], "see\n\n🖼 Image"),
     ])
     func browserUserBubbleDropsImageLabels(text: String, images: [[String: String]], expected: String) throws {
         let strip = try javascriptFunction("userTextWithoutImageLabels")
