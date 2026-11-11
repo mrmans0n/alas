@@ -57,7 +57,9 @@ Any paired host that runs from the `alas-host` or `alas` cask as its launch
 agent also shows **Update host** while it is online, set up over SSH or not: the
 host runs `brew upgrade --cask` itself and restarts on the new version, ending
 its running sessions. A peer's status names the host's release and says when it
-is older than the Mac's Alas.
+is older than the Mac's Alas. Such a host also shows in the Inbox under
+**Host updates**, with **Update** and **Dismiss**; a dismissed host comes back
+once it runs another version.
 
 ## Run
 
