@@ -3408,7 +3408,7 @@ final class ACPMentionPanel: NSPanel {
             filesProvider: filesProvider,
             panelLink: link,
             symbolPreview: symbolPreview
-        ))
+        ).environment(\.designScale, HostedDesignScale.current))
         host.safeAreaRegions = []
         host.frame = contentView?.bounds ?? NSRect(origin: .zero, size: ACPMentionPickerView.panelSize)
         host.autoresizingMask = [.width, .height]
