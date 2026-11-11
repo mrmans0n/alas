@@ -35,18 +35,19 @@ struct VMSlotCard: View {
 /// Shown in a session while one of its calls waits for its worktree's VM to boot.
 struct VMStartingCard: View {
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space[2]) {
             ProgressView().controlSize(.small)
             Text("Starting this worktree's VM…")
-                .font(.system(size: 12))
+                .font(scale.metaFont)
                 .foregroundStyle(theme.color("fg-muted"))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-2").opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 }

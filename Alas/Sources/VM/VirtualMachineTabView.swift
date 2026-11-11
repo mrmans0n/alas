@@ -40,6 +40,7 @@ struct VirtualMachineTabView: View {
     /// Bumped by each click on the look-only screen; the hint shows while set.
     @State private var lookOnlyHint: Int?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     private struct RunningElsewhere {
         let target: StartTarget
@@ -488,10 +489,10 @@ struct VirtualMachineTabView: View {
             .overlay {
                 if lookOnlyHint != nil, !VMDriver.allowsViewInput(current) {
                     Text("Take over to use the VM")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, scale.space[3])
+                        .padding(.vertical, scale.space[2])
                         .background(Capsule().fill(Color.black.opacity(0.75)))
                         .allowsHitTesting(false)
                         .transition(.opacity)
@@ -663,7 +664,7 @@ struct VirtualMachineTabView: View {
         }
         VMCallout(tone: .info, title: customized ? "Customize the base image" : "Finish the setup by hand") {
             VMNumberedSteps(steps: customized ? Self.customizeSteps : Self.manualSetupSteps)
-                .padding(.top, 2)
+                .padding(.top, scale.space[0])
         } actions: {
             // Not for a golden the user runs, which it would force off, nor
             // one reopened by Customize, which is for the user's own changes.
