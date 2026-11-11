@@ -226,17 +226,17 @@ without the hook; a session-open action can also be cancelled.
 Use Xcode 26.3 or later, which includes Swift 6.3 required by the MLX dependency,
 with the full Xcode installation selected as your active developer directory.
 CI builds on macOS 26; the app deployment target is macOS 15.
-Install XcodeGen, Zig 0.17, Zig 0.16, and rustup before building:
+Install XcodeGen, Zig 0.17, and rustup before building:
 
 ```bash
-brew install xcodegen zig@0.17 zig@0.16 rustup
+brew install xcodegen zig@0.17 rustup
 ```
 
 The build scripts install their pinned Rust toolchains and cross-compilation
 targets through rustup. They currently use Rust 1.96.1 for the SSH helper,
 1.97.0 for the CLI, and 1.97.1 for fff and the tree-sitter grammar pack.
-Ghostty 1.4 builds with Homebrew's `zig@0.17` (override with `ALAS_ZIG_BIN`);
-zmx requires `zig@0.16` (override with `ALAS_ZMX_ZIG_BIN`).
+Ghostty 1.4 and zmx 1.0 build with Homebrew's `zig@0.17` (override with
+`ALAS_ZIG_BIN` and `ALAS_ZMX_ZIG_BIN`).
 
 For a fresh checkout:
 
@@ -308,7 +308,7 @@ and test targets from [project.yml](project.yml).
 | Dependency | Checked-in version or revision | Role |
 |---|---|---|
 | Ghostty | `1547dd667ab6` | Embedded terminal, built from the submodule as `GhosttyKit.xcframework` |
-| zmx | `7f0ffdb99983` | Persistent terminal sessions; upstream `main` after v0.8.1 for the frozen v1 IPC |
+| zmx | v1.0.1 | Persistent terminal sessions over the frozen v1 IPC |
 | fff | `95fd777c2529` | File search through a Rust C ABI |
 | SwiftTreeSitter | 0.10.0 | Swift syntax-highlighting API |
 | tree-sitter | 0.25.10 | Runtime resolved through SwiftPM |

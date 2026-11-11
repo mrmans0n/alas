@@ -119,10 +119,10 @@ jobs:
           git config --global gc.auto 0
           git config --global receive.autogc false
 
-      - name: Install xcodegen + Zig 0.17 + Zig 0.16 + SwiftFormat
-        # Ghostty requires Zig 0.17 (build.zig.zon minimum_zig_version);
-        # zmx stays on Zig 0.16.
-        run: brew install xcodegen zig@0.17 zig@0.16 swiftformat ripgrep
+      - name: Install xcodegen + Zig 0.17 + SwiftFormat
+        # Ghostty and zmx both require Zig 0.17 (build.zig.zon
+        # minimum_zig_version).
+        run: brew install xcodegen zig@0.17 swiftformat ripgrep
 
       - name: Check formatting
         run: swiftformat Alas AlasTests Packages --lint --reporter github-actions-log
@@ -248,7 +248,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/fetch-cua-driver.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 

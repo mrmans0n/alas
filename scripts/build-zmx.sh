@@ -88,14 +88,18 @@ build_linux_binaries() {
 
         rm -f "${linux_output}"
         mkdir -p "${linux_prefix}"
+        # Zig 0.17 dropped `zig build --global-cache-dir`; the env var keeps the
+        # global cache under .build/zmx instead of ~/.cache/zig. Fetched
+        # packages stay in the submodule's gitignored zig-pkg/: moving them out
+        # with ZIG_LOCAL_PKG_DIR breaks Ghostty's relative `.path` dependencies.
         (
             cd "${zmx_src}"
-            "${zig_bin}" build \
+            ZIG_GLOBAL_CACHE_DIR="${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache" \
+                "${zig_bin}" build \
                 -Doptimize=ReleaseFast \
                 -Dtarget="${linux_target}" \
                 --prefix "${linux_prefix}" \
-                --cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache" \
-                --global-cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache"
+                --cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache"
         )
         [ -x "${linux_output}" ] || die "Linux zmx build produced no binary: ${linux_output}"
         printf '%s\n' "${linux_fingerprint}" > "${linux_marker}.tmp"
@@ -125,17 +129,18 @@ if [ "${target_arch}" = "universal" ]; then
     exit 0
 fi
 
-# zmx requires Zig 0.16; Ghostty uses its own Zig 0.17 toolchain.
+# zmx v1 requires Zig 0.17, the same series Ghostty uses. ALAS_ZMX_ZIG_BIN
+# overrides it separately from Ghostty's ALAS_ZIG_BIN.
 resolve_zig_bin() {
     if [ -n "${ALAS_ZMX_ZIG_BIN:-}" ]; then
         printf '%s\n' "${ALAS_ZMX_ZIG_BIN}"
     else
-        printf '%s/bin/zig\n' "$(brew --prefix zig@0.16 2>/dev/null)"
+        printf '%s/bin/zig\n' "$(brew --prefix zig@0.17 2>/dev/null)"
     fi
 }
 
 zig_bin="$(resolve_zig_bin)"
-[ -x "${zig_bin}" ] || skip_if_optional "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.16, or set ALAS_ZMX_ZIG_BIN"
+[ -x "${zig_bin}" ] || skip_if_optional "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.17, or set ALAS_ZMX_ZIG_BIN"
 
 mkdir -p "${zmx_build_root}" "${zmx_install_prefix}/bin" "${cache_root}"
 
@@ -195,12 +200,12 @@ run_zig_build_with_retries() {
         rm -f "${zmx_output}"
         if (
             cd "${zmx_src}"
-            "${zig_bin}" build \
+            ZIG_GLOBAL_CACHE_DIR="${zmx_global_cache_dir}" \
+                "${zig_bin}" build \
                 -Doptimize=ReleaseFast \
                 -Dtarget="${zig_arch}-macos.14.0" \
                 --prefix "${zmx_install_prefix}" \
-                --cache-dir "${zmx_local_cache_dir}" \
-                --global-cache-dir "${zmx_global_cache_dir}"
+                --cache-dir "${zmx_local_cache_dir}"
         ) && [ -x "${zmx_output}" ]; then
             return 0
         fi

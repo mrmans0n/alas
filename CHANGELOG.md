@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🏗️ Internal
+
+- Update the bundled zmx to the v1.0.1 release, built with Zig 0.17. The wire protocol is unchanged from the frozen v1 IPC Alas already speaks, and zig@0.16 is no longer needed to build.
+
 ## [0.23.5] - 2026-11-10
 
 ### ✨ Features
