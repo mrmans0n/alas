@@ -1418,5 +1418,13 @@ struct StackShepherdTests {
         #expect(Self.text(stale).contains(#""name":"auth""#) && Self.text(stale).contains(#""stale":true"#))
         try await eventually { await probe.isSyncing }
         probe.finishSync()
+        try await eventually { await core.prStatusReads.isEmpty }
+
+        // A publish makes the kept status wrong; a slow read then says so.
+        _ = await core.serializedPublish(worktreeID: "wt-1") { "{}" }
+        let afterPublish = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(afterPublish).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        probe.finishSync()
     }
 }

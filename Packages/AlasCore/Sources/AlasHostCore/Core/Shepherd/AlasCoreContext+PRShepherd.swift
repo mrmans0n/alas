@@ -64,6 +64,7 @@ extension AlasCoreContext {
         if prCreateTasks[worktreeID] == task {
             prCreateTasks[worktreeID] = nil
         }
+        forgetPRStatus(worktreeID: worktreeID)
         return response
     }
 
@@ -107,9 +108,13 @@ extension AlasCoreContext {
             task = running
         } else {
             let startedAt = Date()
+            // A read overlapping a publish may see the stack half pushed.
+            let publishes = prStatusPublishes[worktreeID, default: 0]
+            let publishing = prCreateTasks[worktreeID] != nil
             task = Task { @MainActor in
                 let response = await self.freshPRStatus(sessionID: sessionID, worktreeID: worktreeID)
-                if case .text(let lines) = response, let line = lines.first {
+                if case .text(let lines) = response, let line = lines.first, !publishing,
+                   self.prStatusPublishes[worktreeID, default: 0] == publishes, self.prCreateTasks[worktreeID] == nil {
                     self.prStatusCache[key] = CachedPRStatus(line: line, readAt: startedAt)
                 }
                 self.prStatusReads[key] = nil
@@ -120,6 +125,13 @@ extension AlasCoreContext {
         if let response = await Self.response(of: task, within: replyWithin) { return response }
         if let cached = prStatusCache[key] { return .text([cached.staleLine]) }
         return .text([ReviewCommentWireDTO.jsonLine(PRStatusReadingWire())])
+    }
+
+    /// A publish changes what `pr_status` reads: the status kept from before
+    /// would describe the stack or PR as it was.
+    private func forgetPRStatus(worktreeID: String) {
+        prStatusPublishes[worktreeID, default: 0] += 1
+        prStatusCache = prStatusCache.filter { $0.key.worktreeID != worktreeID }
     }
 
     private func freshPRStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {

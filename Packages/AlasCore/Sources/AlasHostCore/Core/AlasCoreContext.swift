@@ -126,6 +126,8 @@ public final class AlasCoreContext {
     /// Each agent `pr_status` read still running, and the last one read.
     @ObservationIgnored var prStatusReads: [PRStatusReadKey: Task<AlasCLIResponse, Never>] = [:]
     @ObservationIgnored var prStatusCache: [PRStatusReadKey: CachedPRStatus] = [:]
+    /// Publishes finished per worktree, so a read that overlapped one is not kept.
+    @ObservationIgnored var prStatusPublishes: [String: Int] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
     /// Agents' turns and usage limits, as usage views and plugins read them.
