@@ -595,6 +595,8 @@ enum DesignCaptureBridge {
             } else if target.hasPrefix("snapshot:") {
                 let directory = String(target.dropFirst("snapshot:".count))
                 MainActor.assumeIsolated { DesignCaptureCode.snapshotWindows(to: directory) }
+            } else if DesignCaptureSidebar.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureSidebar.open(target, state: state) } }
             } else if DesignCaptureAttention.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureAttention.shared.open(target, state: state) } }
             } else if DesignCaptureReview.targets.contains(target) {
@@ -633,6 +635,32 @@ enum DesignCaptureBridge {
 
     @MainActor private static var demoPeer: DesignCaptureDemoPeer?
 
+    /// Installs the scripted paired Macs once; later calls are no-ops.
+    @MainActor static func installDemoPeer(state: AppState, sidebarVariants: Bool = false) {
+        guard state.nativePeerSessions == nil else { return }
+        let peer = DesignCaptureDemoPeer()
+        peer.sidebarVariants = sidebarVariants
+        let client = peer.makeClient { send in
+            NativePeerConsoles(
+                send: send,
+                supportsConsoles: { _ in true },
+                supportsTerminate: { _ in true },
+                supportsOpen: { _ in true },
+                makeSurface: { [weak state] executable, args, onExit in
+                    guard let state else { throw CancellationError() }
+                    return try state.terminal.makeTransientSurface(
+                        cfg: state.config.terminal, theme: state.themeStore.current,
+                        executable: executable, args: args, onExit: onExit
+                    )
+                }
+            )
+        }
+        demoPeer = peer
+        state.installNativePeerSessionsForTesting(client)
+        client.start()
+        peer.bringOnline()
+    }
+
     /// Installs the scripted paired Macs (see `DesignCaptureDemoPeer`) and opens
     /// one of their views through the entry points the sidebar uses.
     private static func openPeerView(_ target: String) {
@@ -643,28 +671,7 @@ enum DesignCaptureBridge {
                 guard Date() < deadline else { return }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            if state.nativePeerSessions == nil {
-                let peer = DesignCaptureDemoPeer()
-                let client = peer.makeClient { send in
-                    NativePeerConsoles(
-                        send: send,
-                        supportsConsoles: { _ in true },
-                        supportsTerminate: { _ in true },
-                        supportsOpen: { _ in true },
-                        makeSurface: { [weak state] executable, args, onExit in
-                            guard let state else { throw CancellationError() }
-                            return try state.terminal.makeTransientSurface(
-                                cfg: state.config.terminal, theme: state.themeStore.current,
-                                executable: executable, args: args, onExit: onExit
-                            )
-                        }
-                    )
-                }
-                demoPeer = peer
-                state.installNativePeerSessionsForTesting(client)
-                client.start()
-                peer.bringOnline()
-            }
+            installDemoPeer(state: state)
             guard let client = state.nativePeerSessions else { return }
             @MainActor func eventually(_ condition: @MainActor () -> Bool) async {
                 let limit = Date().addingTimeInterval(20)
