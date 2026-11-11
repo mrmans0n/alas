@@ -267,7 +267,7 @@ final class ACPMentionSymbolPreviewPanel: NSPanel {
         ignoresMouseEvents = true
         hidesOnDeactivate = true
         let host = NSHostingView(rootView: MentionSymbolPreviewView(model: model)
-            .transformEnvironment(\.theme) { if let theme = model.theme { $0 = theme } })
+            .transformEnvironment(\.theme) { if let theme = model.theme { $0 = theme } }.environment(\.designScale, HostedDesignScale.current))
         host.safeAreaRegions = []
         host.frame = contentView?.bounds ?? NSRect(origin: .zero, size: MentionSymbolPreviewView.windowSize)
         host.autoresizingMask = [.width, .height]
