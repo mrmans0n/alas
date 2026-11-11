@@ -406,4 +406,38 @@ extension DeviceAgentControlTests {
         let downs = input.keys.filter(\.down).map(\.usage)
         #expect(downs == [0x04, 0x05, 0x06, 0x07] || downs == [0x06, 0x07, 0x04, 0x05])
     }
+
+    /// The user's own install holds the simulator: an agent call started while
+    /// it runs goes after it, never in the middle.
+    @Test func anAgentCallWaitsForTheUsersInstall() async throws {
+        let input = FakeInput()
+        let control = control(input)
+        let (finish, finishInstall) = AsyncStream<Void>.makeStream()
+        let started = Installs()
+        let install = Task {
+            await control.whileUserHoldsInput(udid: "on") {
+                started.calls.append("install")
+                for await _ in finish {}
+            }
+        }
+        try await eventually("install runs") { started.calls == ["install"] }
+        async let typed = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
+        // The call counts as in flight before it waits for its input turn.
+        try await eventually("agent call is waiting") {
+            if case .agent = control.driver(udid: "on") { true } else { false }
+        }
+        #expect(input.keys.isEmpty)
+        finishInstall.finish()
+        #expect(await install.value)
+        #expect(await typed == .ok)
+        #expect(input.keys.filter(\.down).map(\.usage) == [0x04])
+    }
+
+    @Test func theUsersInstallIsRefusedWhileAnAgentDrives() async {
+        let control = control(FakeInput())
+        #expect(await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s") == .ok)
+        var ran = false
+        #expect(await control.whileUserHoldsInput(udid: "on") { ran = true } == false)
+        #expect(!ran)
+    }
 }

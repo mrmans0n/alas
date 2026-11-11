@@ -372,6 +372,21 @@ final class DeviceAgentControl {
         .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
     }
 
+    /// Runs the user's own operation on `udid`, such as installing and
+    /// launching an app, in an input turn: it waits for agent input already
+    /// queued, and agent input started meanwhile waits for it. Returns false
+    /// without running it while an agent drives the simulator.
+    func whileUserHoldsInput(udid: String, _ operation: () async -> Void) async -> Bool {
+        if case .agent = driver(udid: udid) { return false }
+        let turn = takeInputTurn(udid)
+        defer { endInputTurn(udid, turn) }
+        await waitForInputTurn(udid, turn)
+        // Agent input that ran first makes it the driver.
+        if case .agent = driver(udid: udid) { return false }
+        await operation()
+        return true
+    }
+
     private func takeInputTurn(_ udid: String) -> UUID {
         let turn = UUID()
         inputTurns[udid, default: []].append(turn)
