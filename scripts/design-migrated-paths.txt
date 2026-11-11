@@ -331,3 +331,8 @@ Alas/Sources/Workspace/UI/WorkspaceCheckoutDetailView.swift
 Alas/Sources/VM/VMChrome.swift
 Alas/Sources/VM/VMSlotCard.swift
 Alas/Sources/VM/VirtualMachineTabView.swift
+Alas/Sources/Devices/DevicesEmptyState.swift
+Alas/Sources/Devices/DeviceSettingsPopover.swift
+Alas/Sources/Devices/DevicesSwitcher.swift
+Alas/Sources/Devices/DeviceStage.swift
+Alas/Sources/Devices/VMDeviceCard.swift

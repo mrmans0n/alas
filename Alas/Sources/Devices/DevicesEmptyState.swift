@@ -16,32 +16,33 @@ struct DevicesEmptyState: View {
     var detailTone = "fg-dim"
     var action: Action?
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             if let symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 28, weight: .light))
+                    .font(.system(size: 28, weight: .light)) // design-literal: hero symbol
                     .foregroundStyle(theme.color("fg-faint"))
             } else {
                 ProgressView().controlSize(.small)
             }
             Text(LocalizedStringKey(title))
-                .font(.system(size: 12.5, weight: .medium))
+                .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg"))
             if let detail {
                 Text(LocalizedStringKey(detail))
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundStyle(theme.color(detailTone))
             }
             if let action {
                 AlasButton(title: action.title, icon: action.icon, style: .primary, action: action.run)
-                    .padding(.top, 4)
+                    .padding(.top, scale.space[1])
             }
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: 320)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
