@@ -792,10 +792,12 @@ extension AlasCoreContext {
         case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, byteSize: nil, message: nil)
         case .found(let found): worktree = found
         }
-        guard TranscriptImageFile.resolve(path, root: worktree.path) != nil else {
+        let root = TranscriptImageFile.readRoot(
+            for: path, worktreeRoot: worktree.path, attachments: Paths.acpAttachmentsDir(forWorktreeId: worktree.id))
+        guard TranscriptImageFile.resolve(path, root: root) != nil else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
-        guard let data = await TranscriptImageFile.read(path, root: worktree.path) else {
+        guard let data = await TranscriptImageFile.read(path, root: root) else {
             return .failure(reason: .notFound, byteSize: nil, message: nil)
         }
         guard TranscriptImageFile.isImage(data) else {
