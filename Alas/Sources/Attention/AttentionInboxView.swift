@@ -268,6 +268,7 @@ struct AttentionInboxList: View {
     var onDismissHostUpdate: (HostUpdateReminder) -> Void = { _ in }
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+    @State private var confirmingHostUpdate: HostUpdateReminder?
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 10) {
@@ -361,7 +362,7 @@ struct AttentionInboxList: View {
                             .controlSize(.small)
                             .disabled(updating)
                             .help("Hide until this host runs another version")
-                        Button(updating ? "Updating…" : "Update") { onUpdateHost(update) }
+                        Button(updating ? "Updating…" : "Update") { confirmingHostUpdate = update }
                             .controlSize(.small)
                             .disabled(updating)
                             .help("Upgrade the host with Homebrew; this ends its running sessions")
@@ -429,6 +430,16 @@ struct AttentionInboxList: View {
                     }
                 }
             }
+        }
+        .alert(
+            "Update this host?",
+            isPresented: Binding(get: { confirmingHostUpdate != nil }, set: { if !$0 { confirmingHostUpdate = nil } }),
+            presenting: confirmingHostUpdate
+        ) { update in
+            Button("Update") { onUpdateHost(update) }
+            Button("Cancel", role: .cancel) {}
+        } message: { update in
+            Text("Updating restarts \(update.name) and ends its running sessions.")
         }
     }
 }
