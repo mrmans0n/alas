@@ -2838,9 +2838,8 @@ const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 
 /// `pr_status` lists a gg stack with `gg ls` and reads every request from the
 /// provider before replying, which takes over 30 seconds on a large GitLab
-/// stack. Kept well short of `pr_create`'s bound, since MCP clients time out
-/// a request on their own.
-const PR_STATUS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// stack, so it gets `pr_create`'s bound.
+const PR_STATUS_READ_TIMEOUT: std::time::Duration = PR_CREATE_READ_TIMEOUT;
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -2972,13 +2971,10 @@ fn transport_error_result(command: &Command, err: &TransportError) -> Value {
             true,
         );
     }
-    // The app answered nothing in time, but it is up: it is still reading.
+    // Alas took the call but sent no reply: most likely still reading.
     if matches!(command, Command::PrStatus) && matches!(err, TransportError::Io) {
         return text_result(
-            format!(
-                "Alas is still working on pr_status after {} s: listing a gg stack and reading its pull/merge requests can be slow. Call pr_status again in a moment.",
-                PR_STATUS_READ_TIMEOUT.as_secs()
-            ),
+            "Alas took pr_status but did not reply in time. It is most likely still listing the gg stack and reading its pull/merge requests, which can be slow. Call pr_status again in a moment.".into(),
             true,
         );
     }
@@ -4560,7 +4556,7 @@ mod tests {
         assert_eq!(text(&Command::StackShip, TransportError::Connect), "could not reach Alas");
         assert_eq!(text(&Command::PrStatus, TransportError::Connect), "could not reach Alas");
         // pr_status reached Alas but got no reply in time: it is slow, not down.
-        assert!(text(&Command::PrStatus, TransportError::Io).contains("still working on pr_status"));
+        assert!(text(&Command::PrStatus, TransportError::Io).contains("did not reply in time"));
     }
 
     #[test]

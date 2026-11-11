@@ -46,7 +46,7 @@ extension AlasCoreContext {
         }
         // A second call while one runs would queue another sync behind it.
         if let running = stackShipJobs[worktreeID] {
-            return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: true))])
+            return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: true, for: sessionID))])
         }
         stackShipFailures[worktreeID] = nil
         let job = StackShipJob(sessionID: sessionID, startedAt: Date())
@@ -76,12 +76,15 @@ extension AlasCoreContext {
                 try? await Task.sleep(for: replyWithin)
                 guard let running = self.stackShipJobs[worktreeID], running.id == job.id else { return }
                 self.stackShipJobs[worktreeID]?.repliedEarly = true
-                reply.resume(.text([ReviewCommentWireDTO.jsonLine(self.stackShipProgress(running, alreadyRunning: false))]))
+                reply.resume(.text([ReviewCommentWireDTO.jsonLine(
+                    self.stackShipProgress(running, alreadyRunning: false, for: sessionID)
+                )]))
             }
         }
     }
 
-    private func stackShipProgress(_ job: StackShipJob, alreadyRunning: Bool) -> StackShipProgressWire {
+    /// Only the ship's own caller gets the turn reporting how it ended.
+    private func stackShipProgress(_ job: StackShipJob, alreadyRunning: Bool, for sessionID: String) -> StackShipProgressWire {
         let lead = alreadyRunning
             ? "A stack_ship is already running in this worktree"
             : "Alas is still shipping the stack"
@@ -91,11 +94,13 @@ extension AlasCoreContext {
         case .syncing: "running gg sync, which runs gg's lint before it pushes"
         case .reading: "reading the published requests"
         }
+        let outcome = job.sessionID == sessionID
+            ? "Alas sends this session a turn when it finishes, with the result or the error; pr_status reports its progress until then."
+            : "Another session started it and gets its result; pr_status reports its progress until it finishes."
         return StackShipProgressWire(
             phase: job.phase,
             elapsedSeconds: max(0, Int(Date().timeIntervalSince(job.startedAt))),
-            message: "\(lead) (\(phase)). Alas sends this session a turn when it finishes, with the result or the error; "
-                + "pr_status reports its progress until then. Do not run gg sync or call stack_ship again meanwhile."
+            message: "\(lead) (\(phase)). \(outcome) Do not run gg sync or call stack_ship again meanwhile."
         )
     }
 
@@ -125,7 +130,9 @@ extension AlasCoreContext {
     /// before anything lists the stack, so it never runs gg beside the sync.
     func stackShipStatus(sessionID: String, worktreeID: String) -> AlasCLIResponse? {
         if let running = stackShipJobs[worktreeID] {
-            return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: running.sessionID != sessionID))])
+            return .text([ReviewCommentWireDTO.jsonLine(
+                stackShipProgress(running, alreadyRunning: running.sessionID != sessionID, for: sessionID)
+            )])
         }
         guard let failure = stackShipFailures[worktreeID], failure.sessionID == sessionID else { return nil }
         stackShipFailures[worktreeID] = nil
