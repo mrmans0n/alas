@@ -39,6 +39,8 @@ extension EnvironmentValues {
 
 /// A turn Alas injected (review feedback, Ship, PR shepherd), shown from its
 /// structured card. The exact instruction the agent got is one click away.
+/// Outcome cards reuse it with empty `text`: nothing was sent, so there is
+/// nothing to disclose.
 struct PromptCardRow: View {
     @Environment(\.designScale) private var scale
     let card: ACPPromptCard
@@ -102,14 +104,17 @@ struct PromptCardRow: View {
     /// reach the disclosure the rest of the card offers by click.
     @ViewBuilder
     private var header: some View {
-        if isCompact {
-            headerContent
-        } else {
+        if discloses {
             Button(action: toggleInstruction) { headerContent }
                 .buttonStyle(.plain)
                 .accessibilityValue(showsInstruction ? "Expanded" : "Collapsed")
+        } else {
+            headerContent
         }
     }
+
+    /// Queue rows show only the header, and an outcome card sent nothing.
+    private var discloses: Bool { !isCompact && !text.isEmpty }
 
     private var headerContent: some View {
         let style = Self.style(for: card.origin)
@@ -127,7 +132,7 @@ struct PromptCardRow: View {
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if !isCompact {
+            if discloses {
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.down")
                     .font(scale.glyphFont)
@@ -270,7 +275,7 @@ struct PromptCardRow: View {
 
     /// The whole card discloses the exact instruction, like a tool card.
     private func toggleInstruction() {
-        guard !isCompact else { return }
+        guard discloses else { return }
         showsInstruction.toggle()
         onInstructionExpandedChange?(showsInstruction)
     }
@@ -307,6 +312,9 @@ struct PromptCardRow: View {
         case .review: OriginStyle(symbol: "text.bubble", label: "Review", tint: "accent")
         case .ship: OriginStyle(symbol: ShepherdBadgeState.noRequest.symbolName, label: "Ship", tint: "add")
         case .shepherd: OriginStyle(symbol: "arrow.triangle.2.circlepath", label: "PR shepherd", tint: "warn")
+        case .merged: OriginStyle(symbol: ShepherdBadgeState.merged.symbolName, label: "Merged", tint: "add")
+        case .closed: OriginStyle(symbol: ShepherdBadgeState.closed.symbolName, label: "Closed", tint: "fg-muted")
+        case .queued: OriginStyle(symbol: ShepherdBadgeState.queued.symbolName, label: "Merge queue", tint: "caution")
         default: OriginStyle(symbol: "sparkles", label: "Alas", tint: "fg-muted")
         }
     }

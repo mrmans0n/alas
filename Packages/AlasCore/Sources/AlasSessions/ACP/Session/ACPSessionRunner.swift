@@ -5897,6 +5897,16 @@ extension ACPSessionRunner {
         persistFromIndex(before)
     }
 
+    /// Append an outcome card and persist it, like `appendAndPersistSystemNotice`.
+    /// False on a read-only mirror, which leaves the transcript alone.
+    public func appendAndPersistOutcomeCard(_ card: ACPOutcomeCard) -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        let before = session.transcript.messages.count
+        session.appendOutcomeCard(card)
+        persistFromIndex(before)
+        return true
+    }
+
     /// Drain pre-answer output before adding the permanent question record.
     public func recordQuestionAnswer(_ answer: ACPAnsweredQuestion) {
         guard !steeringRowPersistencePending else {

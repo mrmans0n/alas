@@ -75,6 +75,8 @@ public enum ACPSessionTranscriptReader: Sendable {
                 append("system", text)
             case .questionAnswer(let answer):
                 append("system", answer.displayText)
+            case .outcomeCard(let card):
+                append("system", card.text)
             case .visualAid(let visual):
                 append("tool", visual.transcriptSummary)
             case .planDocument(_, let document):
