@@ -674,7 +674,7 @@ struct StackShepherdTests {
                 .init(worktreeID: worktreeID, path: URL(fileURLWithPath: "/tmp/\(worktreeID)"), stackName: contextStackName, isEligible: true)
             },
             loadStack: { _ in stack },
-            syncStack: { _, _ in },
+            syncStack: { _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
@@ -998,7 +998,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
             loadStack: { _ in nil },
-            syncStack: { _, _ in },
+            syncStack: { _, _, _ in },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1143,7 +1143,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
             loadStack: { _ in otherStack },
-            syncStack: { _, _ in synced += 1 },
+            syncStack: { _, _, _ in synced += 1 },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1183,7 +1183,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: repo, stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
-            syncStack: { _, plan in log.plans.append(plan) },
+            syncStack: { _, plan, _ in log.plans.append(plan) },
             rebaseStack: { _, _ in Issue.record("nothing landed, so nothing should be rebased") },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1234,7 +1234,7 @@ struct StackShepherdTests {
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
-            syncStack: { _, _ in synced += 1 },
+            syncStack: { _, _, _ in synced += 1 },
             rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
@@ -1290,5 +1290,179 @@ struct StackShepherdTests {
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
         #expect(log.plans == [Self.shipPlan(through: boundary, shas: shas)])
+    }
+
+    @MainActor private final class ShipProbe {
+        private var syncWaiter: CheckedContinuation<Void, Never>?
+        var isSyncing: Bool { syncWaiter != nil }
+        var listed = 0
+        var turns: [String] = []
+
+        func sync() async { await withCheckedContinuation { syncWaiter = $0 } }
+        func finishSync() { syncWaiter?.resume()
+        syncWaiter = nil }
+    }
+
+    private static func text(_ response: AlasCLIResponse) -> String {
+        if case .text(let lines) = response { return lines.joined(separator: "\n") }
+        return "\(response)"
+    }
+
+    /// gg's lint can keep `gg sync` running for minutes, past the agent's
+    /// tool timeout. The agent's `stack_ship` replies that it still runs;
+    /// `pr_status` and a second call report its phase without running gg
+    /// beside the sync; a turn reports how it ended, and `pr_status` keeps a
+    /// failure that turn could not deliver.
+    @Test(arguments: [ReviewShepherd.Delivery.delivered, .failed])
+    func anAgentStackShipOutlastingItsReplyFinishesInTheBackground(turnDelivery: ReviewShepherd.Delivery) async throws {
+        let (core, _, _, _) = try await stackShipCore(published: [false, false, false])
+        let probe = ShipProbe()
+        let loadStack = try #require(core.stackShepherd.effects?.loadStack)
+        core.stackShepherd.effects?.loadStack = { path in
+            probe.listed += 1
+            return try await loadStack(path)
+        }
+        core.stackShepherd.effects?.syncStack = { _, _, onEvent in
+            onEvent(.start(totalEntries: 3))
+            onEvent(.lintStarted(totalEntries: 3))
+            onEvent(.lintEntryStarted(position: 2, title: "t"))
+            await probe.sync()
+        }
+        core.stackShepherd.effects?.deliverPrompt = { _, _, prompt, _ in
+            probe.turns.append(prompt.text)
+            return turnDelivery
+        }
+
+        let reply = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(reply).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        let listedBeforeStatus = probe.listed
+
+        let status = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1")
+        let again = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+
+        #expect(Self.text(status).contains(#""progress":"linting 2\/3""#))
+        #expect(Self.text(again).contains("already running"))
+        #expect(probe.listed == listedBeforeStatus)
+
+        probe.finishSync()
+        try await eventually { await !probe.turns.isEmpty }
+        // The fake gg opens no request, so the publish fails after the sync.
+        #expect(probe.turns.count == 1)
+        #expect(probe.turns[0].contains("did not finish") && probe.turns[0].contains("has no pull request"))
+        let after = core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1")
+        if turnDelivery == .delivered {
+            #expect(after == nil)
+        } else {
+            guard case .error(let message) = after else {
+                Issue.record("expected the undelivered failure, got \(String(describing: after))")
+                return
+            }
+            #expect(message.contains("has no pull request"))
+            #expect(core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1") == nil)
+        }
+    }
+
+    /// gg sync streams lint, then push, events; `stack_ship` reports the
+    /// step and entry it is on.
+    @Test(arguments: [
+        ([GGSyncEvent.start(totalEntries: 3)], "syncing"),
+        ([.start(totalEntries: 3), .lintStarted(totalEntries: 3), .lintEntryStarted(position: 1, title: "a")], "linting 1/3"),
+        ([.lintStarted(totalEntries: 3), .lintEntryDone(position: 3, passed: true), .entryStarted(position: 2, title: "b")], "pushing 2/3"),
+        ([.pushStarted(position: 2), .pushDone(position: 2, forced: false)], "pushing entry 2"),
+    ])
+    func stackShipProgressFollowsGGSyncEvents(events: [GGSyncEvent], label: String) {
+        var progress = StackShipProgress(phase: .syncing)
+        for event in events { progress.apply(event) }
+        #expect(progress.label == label)
+    }
+
+    /// `gg ls` alone can outlast an agent's tool timeout. A slow `pr_status`
+    /// read keeps going past the reply, a call meanwhile joins it rather than
+    /// starting another, and once one has finished a slow read answers with
+    /// it, marked stale.
+    @Test func agentPRStatusAnswersWhileASlowReadKeepsGoing() async throws {
+        let core = makeCore()
+        let probe = ShipProbe()
+        var gated = true
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            loadStack: { _ in
+                probe.listed += 1
+                if gated { await probe.sync() }
+                return Self.stack(published: [false])
+            },
+            syncStack: { _, _, _ in },
+            rebaseStack: { _, _ in },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+
+        let first = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        let joined = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(first).contains(#""status":"in_progress""#))
+        #expect(Self.text(joined).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        #expect(probe.listed == 1)
+
+        gated = false
+        probe.finishSync()
+        try await eventually { await core.prStatusReads.isEmpty }
+        let fresh = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .seconds(60))
+        #expect(Self.text(fresh).contains(#""name":"auth""#) && !Self.text(fresh).contains("stale"))
+
+        gated = true
+        let stale = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(stale).contains(#""name":"auth""#) && Self.text(stale).contains(#""stale":true"#))
+        try await eventually { await probe.isSyncing }
+        probe.finishSync()
+        try await eventually { await core.prStatusReads.isEmpty }
+
+        // A publish makes the kept status wrong; a slow read then says so.
+        _ = await core.serializedPublish(worktreeID: "wt-1") { "{}" }
+        let afterPublish = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(afterPublish).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        probe.finishSync()
+    }
+
+    /// A read that fails after its caller got the in-progress reply reports
+    /// its error to the next call, once, rather than starting over unseen.
+    @Test func aSlowPRStatusReadThatFailsReportsItsErrorToTheNextCall() async throws {
+        let core = makeCore()
+        let probe = ShipProbe()
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            loadStack: { _ in
+                probe.listed += 1
+                await probe.sync()
+                throw GGServiceError.commandFailed(stderr: "glab: 401 Unauthorized")
+            },
+            syncStack: { _, _, _ in },
+            rebaseStack: { _, _ in },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+
+        let first = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(first).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        probe.finishSync()
+        try await eventually { await core.prStatusReads.isEmpty }
+
+        let next = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        guard case .error(let message) = next else {
+            Issue.record("expected the read's error, got \(next)")
+            return
+        }
+        #expect(message.contains("401 Unauthorized"))
+        #expect(probe.listed == 1)
+        #expect(core.prStatusFailures.isEmpty)
     }
 }

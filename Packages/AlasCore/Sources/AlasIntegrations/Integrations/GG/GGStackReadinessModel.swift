@@ -426,6 +426,13 @@ public struct GGStackReadinessModel: Equatable, Sendable {
                 sawStart = true
                 totalEntries = total
                 liveStatus = "Syncing 0 of \(total) commit\(total == 1 ? "" : "s")…"
+            case .lintStarted(let total):
+                liveStatus = "Linting \(total) commit\(total == 1 ? "" : "s")…"
+            case .lintEntryStarted(let position, let title):
+                if !title.isEmpty { entries[position, default: .init()].title = title }
+                liveStatus = titledStatus("Linting", position: position)
+            case .lintEntryDone:
+                break
             case .entryStarted(let position, let title):
                 entries[position, default: .init()].title = title
                 liveStatus = "Syncing [\(position)] \(title)…"

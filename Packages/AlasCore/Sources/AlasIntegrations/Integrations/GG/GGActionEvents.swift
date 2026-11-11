@@ -9,6 +9,11 @@ import AlasPlatform
 /// phase-1 stack models).
 public enum GGSyncEvent: Equatable, Sendable {
     case start(totalEntries: Int)
+    /// gg's configured lint, which `gg sync --lint` (or `sync_auto_lint`)
+    /// runs on every entry before it pushes; gg 0.10.7 streams it.
+    case lintStarted(totalEntries: Int)
+    case lintEntryStarted(position: Int, title: String)
+    case lintEntryDone(position: Int, passed: Bool)
     case entryStarted(position: Int, title: String)
     case pushStarted(position: Int)
     case pushDone(position: Int, forced: Bool)
@@ -55,6 +60,15 @@ public enum GGSyncEvent: Equatable, Sendable {
         case "start":
             guard let total = int("total_entries") else { return [] }
             return [.start(totalEntries: total)]
+        case "lint_started":
+            guard let total = int("total_entries") else { return [] }
+            return [.lintStarted(totalEntries: total)]
+        case "lint_entry_started":
+            guard let pos = int("position") else { return [] }
+            return [.lintEntryStarted(position: pos, title: eventObject["title"] as? String ?? "")]
+        case "lint_entry_done":
+            guard let pos = int("position") else { return [] }
+            return [.lintEntryDone(position: pos, passed: eventObject["passed"] as? Bool ?? false)]
         case "entry_started":
             guard let pos = int("position"), let title = eventObject["title"] as? String else { return [] }
             return [.entryStarted(position: pos, title: title)]

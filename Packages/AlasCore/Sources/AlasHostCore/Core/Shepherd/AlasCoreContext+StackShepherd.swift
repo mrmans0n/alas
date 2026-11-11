@@ -28,18 +28,115 @@ extension AlasCoreContext {
     /// `sessionID`. Runs one at a time with `pr_create` per worktree. `plan`
     /// is what to publish, as the Ship popover's Ship more passes it; nil
     /// takes `StackShepherd.shipPlan`, as the agent's `stack_ship` does.
-    public func shipStack(sessionID: String, worktreeID: String, plan: StackShipPlan? = nil) async -> AlasCLIResponse {
-        await serializedPublish(worktreeID: worktreeID) {
-            let result = try await self.publishShepherdedStack(sessionID: sessionID, worktreeID: worktreeID, plan: plan)
-            return ReviewCommentWireDTO.jsonLine(result)
+    ///
+    /// With `replyWithin`, as the agent's call passes it, a ship still
+    /// running by then keeps going in the background: the reply says so, a
+    /// turn reports how it ended, and `pr_status` reports its progress until
+    /// then. gg's lint can make a sync outlast any tool timeout.
+    public func shipStack(
+        sessionID: String, worktreeID: String, plan: StackShipPlan? = nil, replyWithin: Duration? = nil
+    ) async -> AlasCLIResponse {
+        guard let replyWithin else {
+            return await serializedPublish(worktreeID: worktreeID) {
+                let result = try await self.publishShepherdedStack(
+                    sessionID: sessionID, worktreeID: worktreeID, plan: plan, progress: { _ in }
+                )
+                return ReviewCommentWireDTO.jsonLine(result)
+            }
         }
+        // A second call while one runs would queue another sync behind it.
+        if let running = stackShipJobs[worktreeID] {
+            return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: true, for: sessionID))])
+        }
+        stackShipFailures[worktreeID] = nil
+        let job = StackShipJob(sessionID: sessionID, startedAt: Date())
+        stackShipJobs[worktreeID] = job
+        let task = Task { @MainActor in
+            let response = await self.serializedPublish(worktreeID: worktreeID) {
+                let result = try await self.publishShepherdedStack(
+                    sessionID: sessionID, worktreeID: worktreeID, plan: plan,
+                    progress: { [weak self] change in
+                        guard let self, var current = self.stackShipJobs[worktreeID], current.id == job.id else { return }
+                        change(&current.progress)
+                        self.stackShipJobs[worktreeID] = current
+                    }
+                )
+                return ReviewCommentWireDTO.jsonLine(result)
+            }
+            if self.stackShipJobs[worktreeID]?.id == job.id { self.stackShipJobs[worktreeID] = nil }
+            return response
+        }
+        if let response = await Self.response(of: task, within: replyWithin) { return response }
+        let running = stackShipJobs[worktreeID].flatMap { $0.id == job.id ? $0 : nil } ?? job
+        Task { @MainActor in
+            await self.reportStackShipOutcome(await task.value, sessionID: sessionID, worktreeID: worktreeID)
+        }
+        return .text([ReviewCommentWireDTO.jsonLine(stackShipProgress(running, alreadyRunning: false, for: sessionID))])
+    }
+
+    /// Only the ship's own caller gets the turn reporting how it ended.
+    private func stackShipProgress(_ job: StackShipJob, alreadyRunning: Bool, for sessionID: String) -> StackShipProgressWire {
+        let lead = alreadyRunning
+            ? "A stack_ship is already running in this worktree"
+            : "Alas is still shipping the stack"
+        let step = switch job.progress.phase {
+        case .checking: "listing the stack and checking origin for landed entries"
+        case .rebasing: "running gg rebase to drop landed entries"
+        case .syncing: "running gg sync"
+        case .linting: "gg sync is running the configured lint on each entry before it pushes"
+        case .pushing: "gg sync is pushing entries and updating their requests"
+        case .reading: "reading the published requests"
+        }
+        let outcome = job.sessionID == sessionID
+            ? "Alas sends this session a turn when it finishes, with the result or the error; pr_status reports its progress until then."
+            : "Another session started it and gets its result; pr_status reports its progress until it finishes."
+        return StackShipProgressWire(
+            progress: job.progress,
+            elapsedSeconds: max(0, Int(Date().timeIntervalSince(job.startedAt))),
+            message: "\(lead): \(step) (\(job.progress.label)). \(outcome) Do not run gg sync or call stack_ship again meanwhile."
+        )
+    }
+
+    /// Sends the ship's caller a turn with how it ended. A failure the turn
+    /// could not deliver is kept for the caller's next `pr_status`.
+    private func reportStackShipOutcome(_ response: AlasCLIResponse, sessionID: String, worktreeID: String) async {
+        let (failure, result): (String?, String) = switch response {
+        case .error(let message), .errorWithExitCode(let message, _): (message, message)
+        case .text(let lines): (nil, lines.joined(separator: "\n"))
+        case .ok: (nil, "{}")
+        }
+        if let failure { stackShipFailures[worktreeID] = StackShipFailure(sessionID: sessionID, message: failure) }
+        guard let effects = stackShepherd.effects else { return }
+        let prompt = StackShepherdPromptBuilder.shipOutcomePrompt(
+            stackName: effects.worktreeContext(worktreeID)?.stackName, result: result, failed: failure != nil
+        )
+        let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { true }
+        if delivery == .delivered, failure != nil, stackShipFailures[worktreeID]?.message == failure {
+            stackShipFailures[worktreeID] = nil
+        }
+    }
+
+    /// `pr_status` while the worktree's agent `stack_ship` still runs, or
+    /// right after one failed in the background; nil otherwise. Checked
+    /// before anything lists the stack, so it never runs gg beside the sync.
+    func stackShipStatus(sessionID: String, worktreeID: String) -> AlasCLIResponse? {
+        if let running = stackShipJobs[worktreeID] {
+            return .text([ReviewCommentWireDTO.jsonLine(
+                stackShipProgress(running, alreadyRunning: running.sessionID != sessionID, for: sessionID)
+            )])
+        }
+        guard let failure = stackShipFailures[worktreeID], failure.sessionID == sessionID else { return nil }
+        stackShipFailures[worktreeID] = nil
+        return .error("The last stack_ship did not finish: \(failure.message)")
     }
 
     private func publishShepherdedStack(
         sessionID: String,
         worktreeID: String,
-        plan explicitPlan: StackShipPlan?
+        plan explicitPlan: StackShipPlan?,
+        progress: @escaping @MainActor (_ change: (inout StackShipProgress) -> Void) -> Void
     ) async throws -> StackShipResultWire {
+        progress { $0 = .init(phase: .checking) }
         let (effects, context) = try stackShepherdTarget(worktreeID, sessionID: sessionID)
         guard let stack = try await loadStack(effects, path: context.path) else {
             throw PRShepherdCLIError(message: "gg does not list a stack for this worktree. Check out the stack's branch, then call stack_ship again.")
@@ -80,6 +177,7 @@ extension AlasCoreContext {
             // The checks above read this stack; the rebase refuses to run on
             // whatever the worktree moved to while they ran.
             let inspected = GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: top.sha)
+            progress { $0 = .init(phase: .rebasing) }
             do {
                 try await effects.rebaseStack(worktreeID, inspected)
             } catch GGMutationError.staleConfirmation {
@@ -107,11 +205,13 @@ extension AlasCoreContext {
         guard let plan = (try? chosen.resolved(in: toSync)) ?? (isUsersChoice ? nil : chosen.recovered(in: toSync)) else {
             throw Self.missingShipEntryError(toSync)
         }
+        progress { $0 = .init(phase: .syncing) }
         do {
-            try await effects.syncStack(worktreeID, plan)
+            try await effects.syncStack(worktreeID, plan) { event in progress { $0.apply(event) } }
         } catch {
             throw PRShepherdCLIError(message: "gg sync did not finish: \(Self.prShepherdErrorMessage(error))")
         }
+        progress { $0 = .init(phase: .reading) }
         let published = try await publishedStack(
             effects, context: context, shipPlan: plan, unpublishedHint: "gg sync did not open one"
         )
@@ -422,7 +522,26 @@ extension AlasCoreContext {
 extension PRsAPI {
     /// Publishes the gg stack of `worktreeID` with `gg sync` and binds the
     /// stack shepherd to session `sessionID`.
+    /// Replies within `StackShipJob.agentReplyDeadline`; a slower ship
+    /// finishes in the background.
     public func shipStack(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
-        await core.shipStack(sessionID: sessionID, worktreeID: worktreeID)
+        await core.shipStack(sessionID: sessionID, worktreeID: worktreeID, replyWithin: StackShipJob.agentReplyDeadline)
     }
+}
+
+/// An agent `stack_ship` of one worktree.
+struct StackShipJob {
+    /// How long the agent's `stack_ship` waits for the ship before replying
+    /// that it still runs: well inside MCP clients' own request timeouts.
+    static let agentReplyDeadline: Duration = .seconds(20)
+
+    let id = UUID()
+    let sessionID: String
+    let startedAt: Date
+    var progress = StackShipProgress(phase: .checking)
+}
+
+struct StackShipFailure {
+    let sessionID: String
+    let message: String
 }
