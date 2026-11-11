@@ -227,8 +227,9 @@ The manifest lists every command the plugin may run, as an exact argv prefix:
 ```
 
 At most 16 entries. `id` follows the command id rules, `command` is not empty
-and each of its arguments is at most 1 KiB. `processes` without `process.exec`,
-or `process.exec` without `processes`, is refused.
+and each of its arguments is at most 16 KiB, allowing embedded queries and
+scripts. `processes` without `process.exec`, or `process.exec` without
+`processes`, is refused. Runtime-appended `args` keep the separate 1 KiB limit below.
 
 | Request | Result |
 |---|---|
