@@ -100,6 +100,35 @@ extension StackShipResultWire {
     }
 }
 
+/// What a `stack_ship` is doing while it runs. gg's lint runs inside `gg
+/// sync` without reporting progress, so it counts as syncing.
+public enum StackShipPhase: String, Encodable, Sendable {
+    /// Listing the stack and checking origin for entries that already landed.
+    case checking
+    /// `gg rebase` dropping landed entries.
+    case rebasing
+    /// `gg sync`, including the lint gg runs before it pushes.
+    case syncing
+    /// Reading the published pull/merge requests and binding the shepherd.
+    case reading
+}
+
+/// `stack_ship`'s reply, and `pr_status`'s, while a ship still runs after
+/// Alas replied: the call returns before a slow gg sync (lint can take
+/// minutes) outlasts the agent's tool timeout.
+public struct StackShipProgressWire: Encodable, Equatable, Sendable {
+    public var status = "in_progress"
+    public var phase: StackShipPhase
+    public var elapsedSeconds: Int
+    public var message: String
+
+    public init(phase: StackShipPhase, elapsedSeconds: Int, message: String) {
+        self.phase = phase
+        self.elapsedSeconds = elapsedSeconds
+        self.message = message
+    }
+}
+
 /// `pr_status` for a gg stack. Optional fields encode as explicit `null` so
 /// agents always see the same keys.
 public struct StackStatusWire: Encodable, Equatable, Sendable {

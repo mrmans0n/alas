@@ -629,12 +629,12 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "pr_status",
-            "description": "Show the pull/merge request Alas watches for this session, else the one for this worktree's branch, as JSON from a fresh provider fetch: state, head_sha, merge_state, check counts with failing checks, actionable threads from trusted reviewers, required reviewers still missing on the current head, and the shepherd's phase and settings. pull_request is null when there is none; shepherd is null when Alas is not watching it. For a gg stack (one this session ships, or the worktree's stack in gg mode) it returns {stack, shepherd} instead: stack has name, base and its entries bottom-up, each with position, entry_id, title, its pull_request in the shape above (null until published) and the shepherd's phase for it; shepherd adds ready_to_land, and restack_needed when an entry landed while the stack still holds it (call stack_ship to rebase it away and publish the rest).",
+            "description": "Show the pull/merge request Alas watches for this session, else the one for this worktree's branch, as JSON from a fresh provider fetch: state, head_sha, merge_state, check counts with failing checks, actionable threads from trusted reviewers, required reviewers still missing on the current head, and the shepherd's phase and settings. pull_request is null when there is none; shepherd is null when Alas is not watching it. For a gg stack (one this session ships, or the worktree's stack in gg mode) it returns {stack, shepherd} instead: stack has name, base and its entries bottom-up, each with position, entry_id, title, its pull_request in the shape above (null until published) and the shepherd's phase for it; shepherd adds ready_to_land, and restack_needed when an entry landed while the stack still holds it (call stack_ship to rebase it away and publish the rest). While a stack_ship still runs in the background it returns that call's {status: \"in_progress\", phase, elapsed_seconds, message} instead.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
             "name": "stack_ship",
-            "description": "The pr_create of a gg stacked-diffs worktree: publish its stack with gg sync, one pull/merge request per entry, and have Alas watch every one of them. Offer this when the stack is ready for review, and call it only after the user agrees or asks; call it again after fixing entries to publish the fixes, and after entries at the bottom land. Run it from the top of the stack (gg last) with the work committed into stack entries. When entries already landed on the base, it first runs gg rebase to drop them, then syncs the rest; if that rebase stops on a conflict, resolve it, run gg continue, and call it again. Alas later sends this session one turn listing every entry with failing CI, threads from trusted reviewers, or conflicts, bottom-up, and one when an entry lands while the stack still holds it. It never lands: the user lands the stack with gg land. Returns JSON with stack, base, provider, entries (position, entry_id, title, number, url, state, draft), uncommitted_changes, restacked (whether it rebased landed entries away first), and the shepherd's auto_fix setting.",
+            "description": "The pr_create of a gg stacked-diffs worktree: publish its stack with gg sync, one pull/merge request per entry, and have Alas watch every one of them. Offer this when the stack is ready for review, and call it only after the user agrees or asks; call it again after fixing entries to publish the fixes, and after entries at the bottom land. Run it from the top of the stack (gg last) with the work committed into stack entries. When entries already landed on the base, it first runs gg rebase to drop them, then syncs the rest; if that rebase stops on a conflict, resolve it, run gg continue, and call it again. Alas later sends this session one turn listing every entry with failing CI, threads from trusted reviewers, or conflicts, bottom-up, and one when an entry lands while the stack still holds it. It never lands: the user lands the stack with gg land. Returns JSON with stack, base, provider, entries (position, entry_id, title, number, url, state, draft), uncommitted_changes, restacked (whether it rebased landed entries away first), and the shepherd's auto_fix setting. When the ship takes longer than about 20 seconds (gg sync runs gg's lint first, which can take minutes), it returns {status: \"in_progress\", phase (checking, rebasing, syncing or reading), elapsed_seconds, message} instead and keeps going: Alas then sends this session one turn with the result above or the error. Meanwhile pr_status reports its progress; do not run gg sync or call stack_ship again.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
     ];
@@ -2799,6 +2799,8 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     req.mcp_transport = Some(env.transport);
     if publishes(command) {
         alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
+    } else if matches!(command, Command::PrStatus) {
+        alas_client::send_with_timeout(&env.socket, &req, PR_STATUS_READ_TIMEOUT)
     } else if is_computer_call(command) {
         alas_client::send_with_timeout(&env.socket, &req, alas_client::COMPUTER_READ_TIMEOUT)
     } else {
@@ -2833,6 +2835,12 @@ fn dispatch_while(
 /// ssh, so it gets far longer than the default 30-second reply bound. The
 /// remote helper's relay waits slightly longer than this.
 const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `pr_status` lists a gg stack with `gg ls` and reads every request from the
+/// provider before replying, which takes over 30 seconds on a large GitLab
+/// stack. Kept well short of `pr_create`'s bound, since MCP clients time out
+/// a request on their own.
+const PR_STATUS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -2961,6 +2969,16 @@ fn transport_error_result(command: &Command, err: &TransportError) -> Value {
     if let Some(tool) = publish_tool(command).filter(|_| matches!(err, TransportError::Io)) {
         return text_result(
             format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."),
+            true,
+        );
+    }
+    // The app answered nothing in time, but it is up: it is still reading.
+    if matches!(command, Command::PrStatus) && matches!(err, TransportError::Io) {
+        return text_result(
+            format!(
+                "Alas is still working on pr_status after {} s: listing a gg stack and reading its pull/merge requests can be slow. Call pr_status again in a moment.",
+                PR_STATUS_READ_TIMEOUT.as_secs()
+            ),
             true,
         );
     }
@@ -4540,7 +4558,9 @@ mod tests {
         // Nothing was sent, or the call is read-only: a plain failure.
         assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
         assert_eq!(text(&Command::StackShip, TransportError::Connect), "could not reach Alas");
-        assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
+        assert_eq!(text(&Command::PrStatus, TransportError::Connect), "could not reach Alas");
+        // pr_status reached Alas but got no reply in time: it is slow, not down.
+        assert!(text(&Command::PrStatus, TransportError::Io).contains("still working on pr_status"));
     }
 
     #[test]

@@ -99,6 +99,41 @@ public enum StackShepherdPromptBuilder {
         return ShepherdPrompt(text: sections.joined(separator: "\n\n"), card: card(record, sections: cardSections))
     }
 
+    /// Reports a `stack_ship` that ended after Alas had already replied that
+    /// it was still running: `result` is its JSON on success, else the error.
+    public static func shipOutcomePrompt(stackName: String?, result: String, failed: Bool) -> ShepherdPrompt {
+        let stack = stackName.map { " · gg stack \"\($0)\"" } ?? ""
+        let fence = ShepherdPromptBuilder.fence(for: result)
+        let text = failed
+            ? """
+            \(header)\(stack)
+
+            The stack_ship you called earlier did not finish:
+            \(fence)
+            \(result)
+            \(fence)
+            Fix what it says, then call stack_ship again.
+            """
+            : """
+            \(header)\(stack)
+
+            The stack_ship you called earlier finished: the stack is published and Alas is watching it. Result:
+            \(fence)json
+            \(result)
+            \(fence)
+            Call pr_status any time to see the stack's current state.
+            """
+        let summary = failed ? result : "The stack is published and Alas is watching it."
+        return ShepherdPrompt(
+            text: text,
+            card: ACPPromptCard(
+                origin: .shepherd,
+                title: failed ? "stack_ship did not finish" : "stack_ship finished",
+                sections: [.init(title: nil, items: [.init(bodyMarkdown: summary, status: failed ? .failed : nil)])]
+            )
+        )
+    }
+
     // MARK: - Sections
 
     private static func identity(_ record: StackShepherdRecord) -> String {

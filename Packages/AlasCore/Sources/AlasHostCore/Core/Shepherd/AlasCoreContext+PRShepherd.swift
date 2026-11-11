@@ -76,6 +76,7 @@ extension AlasCoreContext {
     /// Fresh status of the gg stack or PR/MR bound to the calling session,
     /// else of the worktree's stack in gg mode, else of its branch's PR/MR.
     func prStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
+        if let ship = stackShipStatus(sessionID: sessionID, worktreeID: worktreeID) { return ship }
         do {
             if let stack = try await shepherdedStackStatus(sessionID: sessionID, worktreeID: worktreeID) {
                 return .text([ReviewCommentWireDTO.jsonLine(stack)])

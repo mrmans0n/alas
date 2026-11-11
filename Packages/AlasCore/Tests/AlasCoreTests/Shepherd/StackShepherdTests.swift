@@ -1291,4 +1291,69 @@ struct StackShepherdTests {
 
         #expect(log.plans == [Self.shipPlan(through: boundary, shas: shas)])
     }
+
+    @MainActor private final class ShipProbe {
+        private var syncWaiter: CheckedContinuation<Void, Never>?
+        var isSyncing: Bool { syncWaiter != nil }
+        var listed = 0
+        var turns: [String] = []
+
+        func sync() async { await withCheckedContinuation { syncWaiter = $0 } }
+        func finishSync() { syncWaiter?.resume(); syncWaiter = nil }
+    }
+
+    private static func text(_ response: AlasCLIResponse) -> String {
+        if case .text(let lines) = response { return lines.joined(separator: "\n") }
+        return "\(response)"
+    }
+
+    /// gg's lint can keep `gg sync` running for minutes, past the agent's
+    /// tool timeout. The agent's `stack_ship` replies that it still runs;
+    /// `pr_status` and a second call report its phase without running gg
+    /// beside the sync; a turn reports how it ended, and `pr_status` keeps a
+    /// failure that turn could not deliver.
+    @Test(arguments: [ReviewShepherd.Delivery.delivered, .failed])
+    func anAgentStackShipOutlastingItsReplyFinishesInTheBackground(turnDelivery: ReviewShepherd.Delivery) async throws {
+        let (core, _, _, _) = try await stackShipCore(published: [false, false, false])
+        let probe = ShipProbe()
+        let loadStack = try #require(core.stackShepherd.effects?.loadStack)
+        core.stackShepherd.effects?.loadStack = { path in
+            probe.listed += 1
+            return try await loadStack(path)
+        }
+        core.stackShepherd.effects?.syncStack = { _, _ in await probe.sync() }
+        core.stackShepherd.effects?.deliverPrompt = { _, _, prompt, _ in
+            probe.turns.append(prompt.text)
+            return turnDelivery
+        }
+
+        let reply = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+        #expect(Self.text(reply).contains(#""status":"in_progress""#))
+        try await eventually { await probe.isSyncing }
+        let listedBeforeStatus = probe.listed
+
+        let status = await core.prStatus(sessionID: "session-1", worktreeID: "wt-1")
+        let again = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1", replyWithin: .zero)
+
+        #expect(Self.text(status).contains(#""phase":"syncing""#))
+        #expect(Self.text(again).contains("already running"))
+        #expect(probe.listed == listedBeforeStatus)
+
+        probe.finishSync()
+        try await eventually { await !probe.turns.isEmpty }
+        // The fake gg opens no request, so the publish fails after the sync.
+        #expect(probe.turns.count == 1)
+        #expect(probe.turns[0].contains("did not finish") && probe.turns[0].contains("has no pull request"))
+        let after = core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1")
+        if turnDelivery == .delivered {
+            #expect(after == nil)
+        } else {
+            guard case .error(let message) = after else {
+                Issue.record("expected the undelivered failure, got \(String(describing: after))")
+                return
+            }
+            #expect(message.contains("has no pull request"))
+            #expect(core.stackShipStatus(sessionID: "session-1", worktreeID: "wt-1") == nil)
+        }
+    }
 }
