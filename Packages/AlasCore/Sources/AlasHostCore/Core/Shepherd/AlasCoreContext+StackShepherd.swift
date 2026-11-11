@@ -100,12 +100,10 @@ extension AlasCoreContext {
     /// Sends the ship's caller a turn with how it ended. A failure the turn
     /// could not deliver is kept for the caller's next `pr_status`.
     private func reportStackShipOutcome(_ response: AlasCLIResponse, sessionID: String, worktreeID: String) async {
-        let failure: String?
-        let result: String
-        switch response {
-        case .error(let message), .errorWithExitCode(let message, _): failure = message; result = message
-        case .text(let lines): failure = nil; result = lines.joined(separator: "\n")
-        case .ok: failure = nil; result = "{}"
+        let (failure, result): (String?, String) = switch response {
+        case .error(let message), .errorWithExitCode(let message, _): (message, message)
+        case .text(let lines): (nil, lines.joined(separator: "\n"))
+        case .ok: (nil, "{}")
         }
         if let failure { stackShipFailures[worktreeID] = StackShipFailure(sessionID: sessionID, message: failure) }
         guard let effects = stackShepherd.effects else { return }

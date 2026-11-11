@@ -1299,7 +1299,8 @@ struct StackShepherdTests {
         var turns: [String] = []
 
         func sync() async { await withCheckedContinuation { syncWaiter = $0 } }
-        func finishSync() { syncWaiter?.resume(); syncWaiter = nil }
+        func finishSync() { syncWaiter?.resume()
+        syncWaiter = nil }
     }
 
     private static func text(_ response: AlasCLIResponse) -> String {
