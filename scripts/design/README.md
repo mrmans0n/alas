@@ -35,6 +35,14 @@ worktree with more tabs than its row badges; the local projects collapse so the 
 `peers-hover` hovers the section header to show the "+" pair control, and `peers-rename` opens the
 peer worktree rename sheet.
 
+Set `ALAS_CAPTURE_CENTER` to `workspace-checkout` (or `workspace-checkout-bottom`, scrolled to the
+work items and review roll-ups) to capture the workspace checkout details sheet over a scripted
+three-repository checkout (one ready, one with a failed setup, one with a missing worktree, a stop
+request pending). Set it to `vm-setup`, `vm-stopped`, `vm-running` or `vm-attention` to capture a 2x2
+gallery of VM tab states (no VM and setup, stopped/paused/elsewhere, running/starting/no slot, callouts
+and agent cards). These are drawn in a panel from the tab's own chrome with scripted state; the VM
+display is a placeholder, and no workspace, VM, image or helper is touched.
+
 Set `ALAS_CAPTURE_CENTER` to `plugin-tab` (Release Notes web tab), `plugin-view-tab` (Standup
 view tab), `plugin-panel` (Standup view panel in the right pane) or `plugin-web-panel` (Release
 Notes changelog web panel), or `ALAS_CAPTURE_SETTINGS=plugins`, to capture the plugin screens.

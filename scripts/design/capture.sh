@@ -42,6 +42,10 @@
 # collapses the local projects and selects a peer worktree. peers-hover also hovers the Peers
 # header so the "+" pair control shows; peers-rename opens the peer worktree rename sheet
 # (DesignCaptureSidebar).
+# workspace-checkout and workspace-checkout-bottom show the workspace checkout details sheet (top, and
+# scrolled to work items and reviews) over a scripted three-repository checkout, and vm-setup, vm-stopped,
+# vm-running and vm-attention show 2x2 galleries of VM tab states built from the tab's chrome
+# (DesignCaptureWorkspace, DesignCaptureVM); no workspace, VM or image is touched.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
