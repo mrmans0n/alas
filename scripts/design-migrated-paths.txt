@@ -341,3 +341,8 @@ Alas/Sources/RepoHooks/RepoHookApprovalSheet.swift
 Alas/Sources/ComputerUse/ComputerUseBadge.swift
 Alas/Sources/App/RootView.swift
 Alas/Sources/Diagnostics/MemoryReportWindow.swift
+Alas/Sources/Devices/DevicesEmptyState.swift
+Alas/Sources/Devices/DeviceSettingsPopover.swift
+Alas/Sources/Devices/DevicesSwitcher.swift
+Alas/Sources/Devices/DeviceStage.swift
+Alas/Sources/Devices/VMDeviceCard.swift

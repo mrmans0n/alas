@@ -16,6 +16,7 @@ struct DeviceStage: View {
     let onDropApp: (URL) -> Void
     let onDismissAppInstall: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var streamError: String?
     @State private var streamGeneration = 0
     @State private var pulse = false
@@ -85,13 +86,13 @@ struct DeviceStage: View {
                 )
             } else if driver != .idle {
                 driverPill(driver)
-                    .padding(.top, 8)
+                    .padding(.top, scale.space[2])
             }
         }
         .overlay(alignment: .bottom) {
             if let appInstall {
                 appInstallPill(appInstall)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, scale.space[3])
             }
         }
     }
@@ -117,47 +118,77 @@ struct DeviceStage: View {
                     .foregroundStyle(theme.color("accent"))
             }
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(scale.caption.font)
         .lineLimit(2)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, scale.space[3])
+        .padding(.vertical, scale.space[1])
         .background(.ultraThinMaterial, in: Capsule())
         .background(theme.color("bg-2").opacity(0.6), in: Capsule())
         .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .padding(.horizontal, 12)
+        .padding(.horizontal, scale.space[3])
     }
 
     private func driverPill(_ driver: VMDriver) -> some View {
-        HStack(spacing: 6) {
-            switch driver {
-            case .agent(let sessionID, _, _):
-                Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
-                Text("\(agentName(sessionID)) is driving")
-                    .foregroundStyle(theme.color("fg"))
-                Button("Take over") { control.takeOver(udid: device.udid) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(theme.color("accent"))
-            case .user, .idle:
-                Text("You're driving")
-                    .foregroundStyle(theme.color("fg"))
-                if let waiting = control.waitingSessions(udid: device.udid).first {
-                    Text("· \(agentName(waiting)) is waiting")
-                        .foregroundStyle(theme.color("fg-dim"))
-                }
-                Button("Hand back") { control.handBack(udid: device.udid) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(theme.color("accent"))
-            }
+        // The one-line strip, or the same texts and button on two lines when the
+        // screen is too narrow for it.
+        ViewThatFits(in: .horizontal) {
+            driverPillContent(driver, stacked: false)
+            driverPillContent(driver, stacked: true)
         }
-        .font(.system(size: 10.5, weight: .medium))
-        .lineLimit(1)
-        .padding(.horizontal, 10)
-        .frame(height: 24)
+        .font(scale.caption.font)
         .background(.ultraThinMaterial, in: Capsule())
         .background(theme.color("bg-2").opacity(0.6), in: Capsule())
         .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
         .scaleEffect(pulse ? 1.06 : 1)
         .animation(.easeOut(duration: 0.2), value: pulse)
+    }
+
+    @ViewBuilder
+    private func driverPillContent(_ driver: VMDriver, stacked: Bool) -> some View {
+        let status = HStack(spacing: 6) {
+            switch driver {
+            case .agent(let sessionID, _, _):
+                Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
+                Text("\(agentName(sessionID)) is driving")
+                    .foregroundStyle(theme.color("fg"))
+                    .fixedSize()
+            case .user, .idle:
+                Text("You're driving")
+                    .foregroundStyle(theme.color("fg"))
+                    .fixedSize()
+                if let waiting = control.waitingSessions(udid: device.udid).first {
+                    Text("· \(agentName(waiting)) is waiting")
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .fixedSize()
+                }
+            }
+        }
+        let action = Group {
+            switch driver {
+            case .agent:
+                Button("Take over") { control.takeOver(udid: device.udid) }
+            case .user, .idle:
+                Button("Hand back") { control.handBack(udid: device.udid) }
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.color("accent"))
+        .fixedSize()
+        if stacked {
+            VStack(alignment: .trailing, spacing: scale.space[1]) {
+                status
+                action
+            }
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
+        } else {
+            HStack(spacing: 6) {
+                status
+                action
+            }
+            .padding(.horizontal, scale.space[3])
+            .frame(height: 24)
+        }
     }
 
     /// A click while an agent drives: draw the eye to Take over.
@@ -176,7 +207,7 @@ struct DeviceStage: View {
             hardwareButton("lock", help: "Lock", name: "lock")
             hardwareButton("mic", help: "Siri", name: "siri")
         }
-        .padding(4)
+        .padding(scale.space[1])
         .background(theme.color("bg-2"), in: Capsule())
         .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
         .disabled(!enabled)
@@ -186,7 +217,7 @@ struct DeviceStage: View {
 
     private func hardwareButton(_ symbol: String, help: String, name: String) -> some View {
         ToolbarBtn(
-            icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14)
+            icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
         ) {
             client.button(udid: device.udid, name: name)
         }

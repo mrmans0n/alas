@@ -13,26 +13,27 @@ struct VMDeviceCard: View {
     let onTakeOver: () -> Void
     let onHandBack: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: scale.space[3]) {
             Image(systemName: guest == .macOS ? "desktopcomputer" : "terminal")
-                .font(.system(size: 28, weight: .light))
+                .font(.system(size: 28, weight: .light)) // design-literal: hero symbol
                 .foregroundStyle(theme.color("fg-muted"))
             Text(guest == .macOS ? "macOS VM" : "Linux VM")
-                .font(.system(size: 13, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundStyle(theme.color("fg"))
             Text(stateLine)
-                .font(.system(size: 11.5))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg-dim"))
             if let driver, status == .running {
                 VStack(spacing: 2) {
                     Text(driver.title)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                         .foregroundStyle(theme.color(driver.tone.colorToken))
                     ForEach(driver.details, id: \.self) { detail in
                         Text(detail)
-                            .font(.system(size: 10.5))
+                            .font(scale.caption.font(weight: .regular))
                             .foregroundStyle(theme.color("fg-faint"))
                     }
                 }
@@ -50,13 +51,13 @@ struct VMDeviceCard: View {
                     }
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, scale.space[1])
         }
         .multilineTextAlignment(.center)
-        .padding(20)
+        .padding(scale.space[5])
         .frame(width: 260)
-        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
