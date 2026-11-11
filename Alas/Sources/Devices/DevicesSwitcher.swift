@@ -77,6 +77,7 @@ struct DevicesActions: View {
     let device: SimulatorDevice
     let booted: Bool
     let client: SimulatorStreamClient
+    let control: DeviceAgentControl
     /// Booted, and no agent drives it.
     let canChangeSettings: Bool
     let onShutDown: () -> Void
@@ -101,7 +102,7 @@ struct DevicesActions: View {
             ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Simulator settings") { showsSettings = true }
                 .disabled(!canChangeSettings)
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings())
+                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings(), control: control)
                 }
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)
                 .disabled(!booted)

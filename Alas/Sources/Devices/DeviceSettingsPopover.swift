@@ -3,9 +3,12 @@ import SwiftUI
 
 /// The selected simulator's settings: display, an app's permissions and
 /// notifications, location and URLs. Reads its values each time it opens.
+/// Changes take the simulator's input turn, so they never land in the middle
+/// of an agent's call.
 struct DeviceSettingsPopover: View {
     let udid: String
     let settings: any SimulatorSettingsControl
+    let control: DeviceAgentControl
     @Environment(\.theme) private var theme
 
     @State private var display: SimulatorDisplaySettings?
@@ -116,13 +119,22 @@ struct DeviceSettingsPopover: View {
 
     /// Applies a display change and shows what simctl read back.
     private func change(_ body: @escaping () async throws -> SimulatorDisplaySettings) {
-        Task {
+        mutate(report: { displayError = $0 }) {
             do {
                 display = try await body()
                 displayError = nil
             } catch {
                 displayError = error.localizedDescription
             }
+        }
+    }
+
+    /// Runs a change in the simulator's input turn: after agent input already
+    /// queued, and before any that starts meanwhile. Refused while an agent drives.
+    private func mutate(report: @escaping (String) -> Void, _ body: @escaping () async -> Void) {
+        Task {
+            let ran = await control.whileUserHoldsInput(udid: udid) { await body() }
+            if !ran { report("An agent is driving this simulator. Take over to change it.") }
         }
     }
 
@@ -163,7 +175,7 @@ struct DeviceSettingsPopover: View {
     private func setPermission(_ action: SimulatorPrivacyAction) {
         guard let appID else { return }
         let service = service
-        Task {
+        mutate(report: { appMessage = $0 }) {
             do {
                 try await settings.setPermission(udid: udid, bundleID: appID, service: service, action: action)
                 let verb = switch action {
@@ -185,7 +197,7 @@ struct DeviceSettingsPopover: View {
             appMessage = problem
             return
         }
-        Task {
+        mutate(report: { appMessage = $0 }) {
             do {
                 try await settings.push(udid: udid, bundleID: appID, payload: data)
                 appMessage = "Sent a notification to \(appName)."
@@ -234,7 +246,7 @@ struct DeviceSettingsPopover: View {
     }
 
     private func setLocation(_ location: SimulatorLocation?) {
-        Task {
+        mutate(report: { deviceMessage = $0 }) {
             do {
                 try await settings.setLocation(udid: udid, location)
                 deviceMessage = location.map { "Location set to \($0.latitude), \($0.longitude)." } ?? "Location cleared."
@@ -250,7 +262,7 @@ struct DeviceSettingsPopover: View {
             deviceMessage = "Add a scheme, such as https:// or myapp://."
             return
         }
-        Task {
+        mutate(report: { deviceMessage = $0 }) {
             do {
                 try await settings.openURL(udid: udid, url: target)
                 deviceMessage = "Opened \(target)."
