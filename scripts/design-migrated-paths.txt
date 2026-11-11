@@ -327,3 +327,7 @@ Alas/Sources/Center/ImageDiff/ImageDiffPresentation.swift
 Alas/Sources/Center/ImageDiff/ImageDiffSideBySideView.swift
 Alas/Sources/Center/ImageDiff/ImageDiffSwipeView.swift
 Alas/Sources/Sidebar/NativePeerSidebarView.swift
+Alas/Sources/Workspace/UI/WorkspaceCheckoutDetailView.swift
+Alas/Sources/VM/VMChrome.swift
+Alas/Sources/VM/VMSlotCard.swift
+Alas/Sources/VM/VirtualMachineTabView.swift

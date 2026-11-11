@@ -16,7 +16,7 @@ enum VMStatusTone {
 
 /// Toolbar control surface of the VM status bar: square, as tall as its compact buttons.
 extension ToolbarControlMetrics {
-    static let vmStatusBar = ToolbarControlMetrics(width: 24, height: 24, cornerRadius: 6)
+    static let vmStatusBar = ToolbarControlMetrics(width: 24, height: 24, cornerRadius: 6) // design-literal: static toolbar metrics, no environment
 }
 
 /// The strip atop a VM tab: a status dot, the state, muted details, and the
@@ -37,31 +37,32 @@ struct VMStatusBar<Actions: View>: View {
         self.actions = actions()
     }
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
+        HStack(spacing: scale.space[2]) {
+            HStack(spacing: scale.space[2]) {
                 Circle()
                     .fill(theme.color(tone.colorToken))
-                    .frame(width: 7, height: 7)
+                    .frame(width: 7, height: 7) // design-literal: status dot size
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(scale.emphasisFont)
                     .foregroundColor(theme.color("fg"))
             }
             .fixedSize()
             if !details.isEmpty {
                 Text(details.map { "· \($0)" }.joined(separator: " "))
-                    .font(.system(size: 12))
+                    .font(scale.metaFont)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: scale.space[2])
             actions
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
-        .frame(height: 34)
+        .padding(.leading, scale.space[3])
+        .padding(.trailing, scale.space[2])
+        .frame(height: 34) // design-literal: status bar height
         .background(theme.color("section-head-bg"))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)
@@ -80,6 +81,7 @@ struct VMEmptyStateCard<Accessory: View, Actions: View>: View {
     private let accessory: Accessory
     private let actions: Actions
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     init(
         icon: String,
@@ -98,37 +100,37 @@ struct VMEmptyStateCard<Accessory: View, Actions: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 12)
+        VStack(spacing: scale.space[3]) {
+            RoundedRectangle(cornerRadius: 12) // design-literal: badge tile radius
                 .fill(theme.color("accent-soft"))
-                .frame(width: 44, height: 44)
+                .frame(width: 44, height: 44) // design-literal: badge tile size
                 .overlay {
                     if busy {
-                        Spinner(color: theme.color("accent")).frame(width: 20, height: 20)
+                        Spinner(color: theme.color("accent")).frame(width: 20, height: 20) // design-literal: badge spinner size
                     } else {
-                        Icon(name: icon, size: 20, color: theme.color("accent"))
+                        Icon(name: icon, size: 20, color: theme.color("accent")) // design-literal: badge icon size
                     }
                 }
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(scale.titleFont)
                 .foregroundColor(theme.color("fg"))
                 .multilineTextAlignment(.center)
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(scale.bodyFont)
                     .foregroundColor(theme.color("fg-muted"))
                     .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .frame(maxWidth: 280)
+                    .lineSpacing(3) // design-literal: description line spacing
+                    .frame(maxWidth: 280) // design-literal: description measure
                     .fixedSize(horizontal: false, vertical: true)
             }
             accessory
             if Actions.self != EmptyView.self {
-                HStack(spacing: 8) { actions }
-                    .padding(.top, 4)
+                HStack(spacing: scale.space[2]) { actions }
+                    .padding(.top, scale.space[1])
             }
         }
-        .padding(24)
+        .padding(scale.space[5])
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -145,6 +147,7 @@ struct VMCallout<Content: View, Actions: View>: View {
     private let content: Content
     private let actions: Actions
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     init(
         tone: Tone = .warning,
@@ -163,41 +166,41 @@ struct VMCallout<Content: View, Actions: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: scale.space[2]) {
             Icon(name: tone == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill",
-                 size: 12, color: tint)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
+                 size: 12, color: tint) // design-literal: icon size
+                .padding(.top, 1) // design-literal: optical icon alignment
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 if let title {
                     Text(title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(scale.meta.font(weight: .semibold))
                         .foregroundColor(tone == .warning ? tint : theme.color("fg"))
                 }
                 if let message {
                     Text(message)
-                        .font(.system(size: 12))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 content
                 if Actions.self != EmptyView.self {
-                    HStack(spacing: 8) { actions }
-                        .padding(.top, 4)
+                    HStack(spacing: scale.space[2]) { actions }
+                        .padding(.top, scale.space[1])
                 }
             }
             Spacer(minLength: 0)
             if let onDismiss {
                 ToolbarBtn(icon: "xmark", tooltip: "Dismiss", metrics: .vmStatusBar, action: onDismiss)
-                    .padding(.top, -4)
-                    .padding(.trailing, -4)
+                    .padding(.top, -4) // design-literal: pull the dismiss button into the corner
+                    .padding(.trailing, -4) // design-literal: pull the dismiss button into the corner
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(RoundedRectangle(cornerRadius: 6).fill(fill))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.5))
-        .padding(8)
+        .padding(.vertical, scale.space[2])
+        .padding(.horizontal, scale.space[3])
+        .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(fill))
+        .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(border, lineWidth: 0.5))
+        .padding(scale.space[2])
     }
 
     private var tint: Color { theme.color(tone == .warning ? "warn" : "accent") }
@@ -209,11 +212,12 @@ struct VMCallout<Content: View, Actions: View>: View {
 struct VMNumberedSteps: View {
     let steps: [String]
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space[1]) {
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: scale.space[2]) {
                     Text("\(index + 1).")
                         .monospacedDigit()
                         .foregroundColor(theme.color("fg-dim"))
@@ -221,7 +225,7 @@ struct VMNumberedSteps: View {
                         .foregroundColor(theme.color("fg-muted"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(.system(size: 12))
+                .font(scale.metaFont)
             }
         }
     }
@@ -251,6 +255,7 @@ struct VMSetupSteps: View {
     /// How far the current step is, 0…1.
     let fraction: Double
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     /// Where the installer's `phase` is in `titles`; nil outside the setup.
     static func position(of phase: GoldenImageInstaller.Phase) -> (current: Int, fraction: Double)? {
@@ -279,13 +284,13 @@ struct VMSetupSteps: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space[3]) {
+            VStack(alignment: .leading, spacing: scale.space[2]) {
                 ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
-                    HStack(spacing: 8) {
+                    HStack(spacing: scale.space[2]) {
                         marker(index)
                         Text(title)
-                            .font(.system(size: 12, weight: index == current ? .medium : .regular))
+                            .font(scale.meta.font(weight: index == current ? .medium : .regular))
                             .foregroundColor(textColor(index))
                     }
                 }
@@ -297,10 +302,10 @@ struct VMSetupSteps: View {
                         .frame(width: proxy.size.width * overall)
                 }
             }
-            .frame(height: 3)
+            .frame(height: 3) // design-literal: progress bar height
         }
-        .frame(width: 260)
-        .padding(.top, 4)
+        .frame(width: 260) // design-literal: steps column width
+        .padding(.top, scale.space[1])
     }
 
     private var overall: Double {
@@ -311,17 +316,17 @@ struct VMSetupSteps: View {
     private func marker(_ index: Int) -> some View {
         if index < current {
             Circle().fill(theme.color("add"))
-                .frame(width: 14, height: 14)
+                .frame(width: 14, height: 14) // design-literal: step marker size
                 .overlay {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(scale.glyph.font(weight: .bold))
                         .foregroundColor(theme.color("bg-0"))
                 }
         } else if index == current {
-            Spinner(lineWidth: 1.5, color: theme.color("accent")).frame(width: 14, height: 14)
+            Spinner(lineWidth: 1.5, color: theme.color("accent")).frame(width: 14, height: 14) // design-literal: step marker size
         } else {
             Circle().strokeBorder(theme.color("fg-faint"), lineWidth: 1)
-                .frame(width: 14, height: 14)
+                .frame(width: 14, height: 14) // design-literal: step marker size
         }
     }
 
