@@ -357,4 +357,25 @@ struct HostSSHSetupTests {
         await #expect(throws: HostSSHSetup.Failure.self) { try await remote.setup().pair(host: "h") }
         #expect(remote.sleeps.withLock { $0.count } == 30)
     }
+
+    @Test(arguments: [
+        ("/opt/homebrew/Caskroom/alas-host/0.41.0/alas-host/alas-host", "alas-host", "0.41.0"),
+        ("/usr/local/Caskroom/alas-host/0.41.0,7/alas-host/alas-host", "alas-host", "0.41.0,7"),
+        ("/Users/me/.alas/host/alas-host/alas-host", nil, nil),
+        ("/Users/me/dev/Alas.app/Contents/Resources/alas-host/alas-host", nil, nil),
+    ] as [(String, String?, String?)])
+    func aHostKnowsTheCaskAndReleaseItRunsFrom(path: String, cask: String?, version: String?) {
+        #expect(HostSelfUpdate.cask(executablePath: path) == cask)
+        // A copied host, or one in an app without an Info.plist, has none.
+        #expect(HostSelfUpdate.version(executablePath: path) == version)
+    }
+
+    @Test func aHostInsideAnAppRunsTheAppsRelease() throws {
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)/Alas.app")
+        defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try (["CFBundleShortVersionString": "0.41.0"] as NSDictionary).write(to: app.appendingPathComponent("Contents/Info.plist"))
+        #expect(HostSelfUpdate.cask(executablePath: "/Applications/Alas.app/Contents/Resources/alas-host/alas-host") == "alas")
+        #expect(HostSelfUpdate.version(executablePath: app.path + "/Contents/Resources/alas-host/alas-host") == "0.41.0")
+    }
 }

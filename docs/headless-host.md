@@ -53,6 +53,12 @@ A peer set up this way shows **Update host**, which reinstalls and restarts the
 host (ending its running sessions), and **Host log**, which shows the end of its
 log.
 
+Any paired host that runs from the `alas-host` or `alas` cask as its launch
+agent also shows **Update host** while it is online, set up over SSH or not: the
+host runs `brew upgrade --cask` itself and restarts on the new version, ending
+its running sessions. A peer's status names the host's release and says when it
+is older than the Mac's Alas.
+
 ## Run
 
 ```bash

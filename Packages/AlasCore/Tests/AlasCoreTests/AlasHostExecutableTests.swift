@@ -83,7 +83,7 @@ struct AlasHostExecutableTests {
         func send(_ message: RemoteClientMessage) async throws {
             try await socket.send(.string(String(decoding: try JSONEncoder().encode(message), as: UTF8.self)))
         }
-        guard case .hello(let version, let serverId, _, _, _, let capabilities)? = try await receive() else {
+        guard case .hello(let version, let serverId, _, _, _, let capabilities, _)? = try await receive() else {
             Issue.record("expected hello")
             return
         }

@@ -35,7 +35,12 @@ public final class AlasHost {
     /// The `HostProtocolCapability` values this host serves.
     public var servedCapabilities: [String] {
         HostProtocolCapability.served + (core.environment.servesWorktreeGit ? HostProtocolCapability.headlessOnly : [])
+            + (selfUpdate == nil ? [] : [HostProtocolCapability.updateV1])
     }
+
+    /// Upgrades this host and restarts it on the new version; set by a
+    /// headless host that runs from a Homebrew cask as its launch agent.
+    public var selfUpdate: (@MainActor () async throws -> Void)?
 
     /// Lists the projects' worktrees, from the cache and then from git. A
     /// serving host starts with this; see `AlasCoreContext.loadProjectWorktrees()`.

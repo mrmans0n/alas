@@ -69,12 +69,13 @@ struct RemoteProtocolTests {
             == .console(.detached(attachmentId: "a", reason: .unknown)))
     }
 
-    @Test func helloAdvertisesPeerCapabilities() throws {
-        let advertised = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n"))
-        guard case .hello(_, _, _, _, _, let capabilities) = try roundTrip(advertised) else {
+    @Test func helloAdvertisesPeerCapabilitiesAndHostVersion() throws {
+        let advertised = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hostVersion: "0.41.0"))
+        guard case .hello(_, _, _, _, _, let capabilities, let hostVersion) = try roundTrip(advertised) else {
             Issue.record("expected hello")
             return
         }
+        #expect(hostVersion == "0.41.0")
         #expect(capabilities == PeerConsoleCapability.appHost + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1] + HostProtocolCapability.served)
     }
 

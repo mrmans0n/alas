@@ -108,6 +108,9 @@ public final class RemotePeerManager {
     /// Optional features each peer advertised in its latest `hello`, by
     /// `serverId`. In memory only: every connection re-announces them.
     public private(set) var capabilities: [String: Set<String>] = [:]
+    /// The release each online peer that is a headless host said it runs,
+    /// by `serverId`, from its `hello`.
+    public private(set) var hostVersions: [String: String] = [:]
 
     private let store: RemotePeerStore
     private let pairing: RemotePairingService
@@ -1308,10 +1311,11 @@ public final class RemotePeerManager {
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
                 onLinkChanged?(peerId)
             }
-        case .hello(_, let name, let protocolVersion, _, let advertised):
+        case .hello(_, let name, let protocolVersion, _, let advertised, let hostVersion):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             guard !isProvisional(peers[index].serverId) else { return }
             capabilities[peers[index].serverId] = Set(advertised)
+            hostVersions[peers[index].serverId] = hostVersion
             // The identity is deliberately NOT adopted from the frame. It is
             // the key everything else hangs off — the link's expected id, the
             // `/health` check, and the device records `forget` revokes — so

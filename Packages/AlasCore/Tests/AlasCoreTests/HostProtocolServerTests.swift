@@ -386,6 +386,30 @@ struct HostProtocolServerTests {
         ])
     }
 
+    /// A paired Mac or the local user updates a host that can update itself;
+    /// an agent can't, and a host that can't is refused and advertises nothing.
+    @Test(arguments: [
+        (caller: HostCaller.remotePeer(deviceID: "d"), updates: true, canUpdate: true),
+        (caller: .localUser(uid: 501), updates: true, canUpdate: true),
+        (caller: .session(id: "s"), updates: false, canUpdate: true),
+        (caller: .remotePeer(deviceID: "d"), updates: false, canUpdate: false),
+    ])
+    func onlyAPersonUpdatesAHostThatCanUpdateItself(_ c: (caller: HostCaller, updates: Bool, canUpdate: Bool)) async throws {
+        let fixture = try Fixture()
+        var updates = 0
+        if c.canUpdate { fixture.host.selfUpdate = { updates += 1 } }
+        let client = Client()
+        let connection = HostProtocolServer(host: fixture.host).connect(caller: c.caller, send: client.receive)
+        await connection.receive(HostClientMessage(id: 1, request: .updateHost))
+        #expect(updates == (c.updates ? 1 : 0))
+        #expect(fixture.host.servedCapabilities.contains(HostProtocolCapability.updateV1) == c.canUpdate)
+        guard case .response(_, let result)? = client.messages.first else {
+            Issue.record("expected a response")
+            return
+        }
+        #expect((result == .done) == c.updates)
+    }
+
     /// A run asked for over the host protocol is shown as the script says, or
     /// for a restart as its open console is. It becomes the active tab only to
     /// replace the active console, so the host's screen stays where it was.

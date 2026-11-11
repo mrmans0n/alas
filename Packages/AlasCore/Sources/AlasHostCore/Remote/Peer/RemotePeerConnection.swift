@@ -61,7 +61,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
 
     public enum Event: Sendable {
         case stateChanged(State)
-        case hello(serverId: String, name: String, protocolVersion: Int, federationEnabled: Bool, capabilities: [String] = [])
+        case hello(serverId: String, name: String, protocolVersion: Int, federationEnabled: Bool, capabilities: [String] = [], hostVersion: String? = nil)
         case originChanged(String)
         case message(RemoteServerMessage)
     }
@@ -239,7 +239,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
                 candidate.cancel(with: .goingAway, reason: nil)
                 return
             }
-            guard case .hello(let version, let serverId, let name, let federationEnabled, _, let capabilities) = first else {
+            guard case .hello(let version, let serverId, let name, let federationEnabled, _, let capabilities, let hostVersion) = first else {
                 candidate.cancel(with: .protocolError, reason: nil)
                 continue
             }
@@ -316,7 +316,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
                 onEvent(.originChanged(origin))
             }
             onEvent(.hello(serverId: serverId, name: name, protocolVersion: version,
-                           federationEnabled: federationEnabled, capabilities: capabilities))
+                           federationEnabled: federationEnabled, capabilities: capabilities, hostVersion: hostVersion))
             backoff = config.initialBackoff
             setState(.online)
             await pump(candidate)
