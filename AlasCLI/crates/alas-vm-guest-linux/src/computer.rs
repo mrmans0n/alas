@@ -994,10 +994,17 @@ impl<D: Driver> Computer<D> {
                     Some(reference) => {
                         let element = self.element(call, window.id, reference)?;
                         let at = merge(&target, json!({"element_token": element.token}));
+                        // Cua's targeted insert goes in at the caret and leaves a selection
+                        // alone, so a replace writes the whole value in one call instead.
                         if params.mode.as_deref() == Some("replace") {
-                            let select_all = merge(&at, json!({"keys": ["ctrl", "a"]}));
-                            self.input_call(call, "hotkey", select_all, Some(reference))?;
-                            call.check()?;
+                            let timeout = INPUT_TIMEOUT
+                                + Duration::from_millis(text.chars().count() as u64 * 25);
+                            let kind = Kind::Input {
+                                reference: Some(reference),
+                            };
+                            let value = merge(&at, json!({"value": text}));
+                            self.cua(call, "set_value", value, timeout, kind)?;
+                            return Ok("ax");
                         }
                         let kind = Kind::Input {
                             reference: Some(reference),
@@ -2124,36 +2131,32 @@ pub(crate) mod tests {
         );
     }
 
+    /// A targeted insert leaves a selection alone, so a replace sets the whole value instead.
     #[test]
-    fn type_replace_selects_all_first() {
+    fn type_replace_sets_the_whole_value() {
         let fake = Fake::mousepad();
         fake.script("get_window_state", vec![fixture("gws_elements")]);
-        fake.script("hotkey", vec![fixture("hotkey_escape")]);
-        fake.script("type_text", vec![fixture("type_fg")]);
+        fake.script("set_value", vec![fixture("type_fg")]);
         let mut computer = new_computer(&fake);
         inspect(&mut computer, None);
 
-        payload(&computer.perform(
+        let result = payload(&computer.perform(
             SESSION,
             &request(
                 "type",
-                json!({"window_id": WINDOW, "ref": "e7", "text": "hello", "mode": "replace"}),
+                json!({"window_id": WINDOW, "ref": "e7", "text": "héllo", "mode": "replace"}),
             ),
         ));
 
-        let target = json!({"pid": PID, "window_id": WINDOW, "element_token": "s00000002:17"});
-        let mut select_all = target.clone();
-        select_all["keys"] = json!(["ctrl", "a"]);
-        let mut typed = target;
-        typed["text"] = json!("hello");
-        let inputs: Vec<String> = fake
-            .tools()
-            .into_iter()
-            .filter(|tool| tool == "hotkey" || tool == "type_text")
-            .collect();
-        assert_eq!(inputs, ["hotkey", "type_text"]);
-        assert_eq!(fake.calls("hotkey"), vec![select_all]);
-        assert_eq!(fake.calls("type_text"), vec![typed]);
+        assert_eq!(result["delivery"], "ax");
+        assert_eq!(
+            fake.calls("set_value"),
+            vec![
+                json!({"pid": PID, "window_id": WINDOW, "element_token": "s00000002:17", "value": "héllo"})
+            ]
+        );
+        assert!(fake.calls("hotkey").is_empty());
+        assert!(fake.calls("type_text").is_empty());
     }
 
     /// Chromium takes input only at the front: Cua refuses it in the background and says to go
