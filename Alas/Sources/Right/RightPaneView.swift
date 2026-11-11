@@ -313,7 +313,9 @@ struct RightPaneView: View {
             worktree: worktree, selection: rps.devicesSelection
         ).stage else { return nil }
         return AnyView(DevicesActions(
-            device: device, booted: stage == .booted, client: state.simulatorStreams,
+            device: device, booted: stage == .booted, client: state.simulatorStreams, control: state.deviceControl,
+            canChangeSettings: stage == .booted
+                && VMDriver.allowsViewInput(state.deviceControl.driver(udid: device.udid)),
             onShutDown: { Task { await state.devicePane.shutDown(device) } }
         ))
     }

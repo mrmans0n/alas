@@ -21,6 +21,32 @@ Alas installs it, replacing an installed copy, and launches it. The screen
 outlines itself while the drag is one it can take; an app built for a device
 is refused.
 
+The settings button in the toolbar opens the simulator's settings while it is
+booted and no agent is driving it: appearance, text size and Increase
+Contrast, each showing the value the simulator reports back; privacy
+permissions and a test push notification for one of your installed apps; a
+simulated location, with a few preset places; and a URL or deep link to open.
+
+### Running an app from a run script
+
+A run script can name the app it builds with an `# alas-app:` line, relative
+to the worktree root or absolute:
+
+```sh
+#!/bin/zsh
+# alas-name: Run on Simulator
+# alas-app: build/Build/Products/Debug-iphonesimulator/MyApp.app
+xcodebuild -scheme MyApp -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath build build
+```
+
+When the script succeeds, Alas installs and launches the app on the
+simulator the worktree's Devices tab shows. When the tab shows a VM or
+nothing, it uses the first booted simulator, else the first one, which it
+boots. The Devices tab then comes forward, and the install's progress or
+error shows on the screen. If an agent is driving that simulator, take over
+first. This works for worktrees on this Mac only.
+
 The screen keeps the device's real shape: its size and corner radius come
 from Xcode's device type and DeviceKit chrome files.
 
@@ -59,6 +85,11 @@ tools from the built-in `alas` MCP server:
 | `device_button` | Presses Home, Lock, Siri, the side button, or opens the app switcher. |
 | `device_install` | Installs a built `.app` on a booted simulator and returns its bundle ID. |
 | `device_launch` | Launches an installed app, ending a running copy first. |
+| `device_set_appearance` | Sets light or dark appearance, the text size and Increase Contrast, and returns what the simulator reports. |
+| `device_set_permission` | Grants, revokes or resets a privacy permission for an installed app. |
+| `device_set_location` | Sets or clears the simulated location. |
+| `device_push` | Sends a push notification to an installed app. |
+| `device_open_url` | Opens a web page or a deep link. |
 
 While an agent works on a simulator, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An
@@ -70,5 +101,5 @@ every call fails with `device_disabled`. An agent's calls keep the
 simulator's stream running for a minute after its last call, so screenshots
 work with the Devices tab closed.
 
-Not yet: Android, physical devices, rotation, and device settings. The
+Not yet: Android, physical devices, rotation, and the clipboard. The
 follow-up list is in `docs/plans/2026-11-04-device-panel-design.md`.

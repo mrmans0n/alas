@@ -71,16 +71,20 @@ struct DevicesSwitcher: View {
     }
 }
 
-/// The Devices tab's toolbar actions for a simulator: a screenshot to the
-/// Desktop, and Shut Down.
+/// The Devices tab's toolbar actions for a simulator: its settings, a
+/// screenshot to the Desktop, and Shut Down.
 struct DevicesActions: View {
     let device: SimulatorDevice
     let booted: Bool
     let client: SimulatorStreamClient
+    let control: DeviceAgentControl
+    /// Booted, and no agent drives it.
+    let canChangeSettings: Bool
     let onShutDown: () -> Void
     @Environment(\.theme) private var theme
     /// "Saved to Desktop", or why it wasn't, for a moment after a click.
     @State private var notice: String?
+    @State private var showsSettings = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -95,6 +99,11 @@ struct DevicesActions: View {
                         withAnimation { self.notice = nil }
                     }
             }
+            ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Simulator settings") { showsSettings = true }
+                .disabled(!canChangeSettings)
+                .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
+                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings(), control: control)
+                }
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)
                 .disabled(!booted)
             ToolbarMenuButton(iconName: "ellipsis", help: "More") {

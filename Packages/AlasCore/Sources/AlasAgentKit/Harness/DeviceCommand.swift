@@ -1,5 +1,6 @@
 import Foundation
 import AlasACP
+import AlasFeatures
 
 /// A `device_*` request from the MCP bridge. Bounds mirror the Rust side.
 public enum DeviceCommand: Equatable, Sendable {
@@ -39,6 +40,14 @@ public enum DeviceCommand: Equatable, Sendable {
     /// `appPath` is absolute; the MCP server resolves it against the worktree.
     case install(udid: String, appPath: String)
     case launch(udid: String, bundleID: String)
+    /// At least one of the three is set.
+    case setAppearance(udid: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?)
+    case setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction)
+    /// Nil clears the simulated location.
+    case setLocation(udid: String, location: SimulatorLocation?)
+    /// `payload` is the notification's JSON, with sorted keys.
+    case push(udid: String, bundleID: String, payload: String)
+    case openURL(udid: String, url: String)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -53,6 +62,11 @@ public enum DeviceCommand: Equatable, Sendable {
         case .button: "device_button"
         case .install: "device_install"
         case .launch: "device_launch"
+        case .setAppearance: "device_set_appearance"
+        case .setPermission: "device_set_permission"
+        case .setLocation: "device_set_location"
+        case .push: "device_push"
+        case .openURL: "device_open_url"
         }
     }
 
@@ -61,7 +75,8 @@ public enum DeviceCommand: Equatable, Sendable {
         case .list: nil
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
              .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
-             .install(let udid, _), .launch(let udid, _):
+             .install(let udid, _), .launch(let udid, _), .setAppearance(let udid, _, _, _),
+             .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _):
             udid
         }
     }
@@ -84,6 +99,15 @@ public enum DeviceCommand: Equatable, Sendable {
         var include_screenshot: Bool?
         var app_path: String?
         var bundle_id: String?
+        var appearance: String?
+        var text_size: String?
+        var increase_contrast: Bool?
+        var service: String?
+        var action: String?
+        var latitude: Double?
+        var longitude: Double?
+        var clear: Bool?
+        var url: String?
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -97,6 +121,11 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_button": ["udid", "name", "include_screenshot"],
         "device_install": ["udid", "app_path"],
         "device_launch": ["udid", "bundle_id"],
+        "device_set_appearance": ["udid", "appearance", "text_size", "increase_contrast"],
+        "device_set_permission": ["udid", "bundle_id", "service", "action"],
+        "device_set_location": ["udid", "latitude", "longitude", "clear"],
+        "device_push": ["udid", "bundle_id", "payload"],
+        "device_open_url": ["udid", "url"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -112,6 +141,16 @@ public enum DeviceCommand: Equatable, Sendable {
         func udid() throws -> String {
             guard let udid = params.udid, !udid.isEmpty, udid.utf8.count <= 64 else { throw AlasCLIRequestError.malformed }
             return udid
+        }
+        func bundleID() throws -> String {
+            guard let bundleID = params.bundle_id, !bundleID.isEmpty, bundleID.utf8.count <= 255 else {
+                throw AlasCLIRequestError.malformed
+            }
+            return bundleID
+        }
+        func enumValue<E: RawRepresentable>(_: E.Type, _ value: String) throws -> E where E.RawValue == String {
+            guard let parsed = E(rawValue: value) else { throw AlasCLIRequestError.malformed }
+            return parsed
         }
         func coordinate(_ value: Double?) throws -> Double? {
             guard let value else { return nil }
@@ -167,10 +206,41 @@ public enum DeviceCommand: Equatable, Sendable {
             }
             return .install(udid: try udid(), appPath: path)
         case "device_launch":
-            guard let bundleID = params.bundle_id, !bundleID.isEmpty, bundleID.utf8.count <= 255 else {
+            return .launch(udid: try udid(), bundleID: try bundleID())
+        case "device_set_appearance":
+            let appearance = try params.appearance.map { try enumValue(SimulatorAppearance.self, $0) }
+            let textSize = try params.text_size.map { try enumValue(SimulatorTextSize.self, $0) }
+            guard appearance != nil || textSize != nil || params.increase_contrast != nil else {
                 throw AlasCLIRequestError.malformed
             }
-            return .launch(udid: try udid(), bundleID: bundleID)
+            return .setAppearance(
+                udid: try udid(), appearance: appearance, textSize: textSize, increaseContrast: params.increase_contrast
+            )
+        case "device_set_permission":
+            guard let service = params.service.flatMap(SimulatorPrivacyService.init(rawValue:)),
+                  let action = params.action.flatMap(SimulatorPrivacyAction.init(rawValue:))
+            else { throw AlasCLIRequestError.malformed }
+            return .setPermission(udid: try udid(), bundleID: try bundleID(), service: service, action: action)
+        case "device_set_location":
+            switch (params.latitude, params.longitude, params.clear) {
+            case (let latitude?, let longitude?, nil) where (-90...90).contains(latitude) && (-180...180).contains(longitude):
+                return .setLocation(udid: try udid(), location: SimulatorLocation(latitude: latitude, longitude: longitude))
+            case (nil, nil, true?):
+                return .setLocation(udid: try udid(), location: nil)
+            default:
+                throw AlasCLIRequestError.malformed
+            }
+        case "device_push":
+            guard let payload = (raw?["params"] as? [String: Any])?["payload"] as? [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: payload, options: .sortedKeys),
+                  SimulatorPushPayload.problem(data) == nil
+            else { throw AlasCLIRequestError.malformed }
+            return .push(udid: try udid(), bundleID: try bundleID(), payload: String(decoding: data, as: UTF8.self))
+        case "device_open_url":
+            guard let url = params.url, url.utf8.count <= 4096,
+                  let scheme = URLComponents(string: url)?.scheme, !scheme.isEmpty
+            else { throw AlasCLIRequestError.malformed }
+            return .openURL(udid: try udid(), url: url)
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)

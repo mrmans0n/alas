@@ -58,8 +58,31 @@ struct DeviceAgentControlTests {
         var calls: [String] = []
     }
 
+    final class FakeSettings: SimulatorSettingsControl, @unchecked Sendable {
+        var calls: [String] = []
+        var installed: Set<String> = ["com.example.hello"]
+        var read = SimulatorDisplaySettings(appearance: .value(.light), textSize: .value(.large), increaseContrast: .unsupported)
+
+        func display(udid: String) async throws -> SimulatorDisplaySettings { read }
+        func setDisplay(
+            udid: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
+        ) async throws -> SimulatorDisplaySettings {
+            calls.append("display \(appearance?.rawValue ?? "-")")
+            if let appearance { read.appearance = .value(appearance) }
+            return read
+        }
+        func setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {
+            calls.append("privacy \(action.rawValue) \(service.rawValue) \(bundleID)")
+        }
+        func setLocation(udid: String, _ location: SimulatorLocation?) async throws { calls.append("location") }
+        func push(udid: String, bundleID: String, payload: Data) async throws { calls.append("push \(bundleID)") }
+        func openURL(udid: String, url: String) async throws { calls.append("open \(url)") }
+        func userApps(udid: String) async throws -> [SimulatorApp] { [] }
+        func isInstalled(udid: String, bundleID: String) async -> Bool { installed.contains(bundleID) }
+    }
+
     private func control(
-        _ input: FakeInput, installs: Installs = Installs(),
+        _ input: FakeInput, installs: Installs = Installs(), settings: FakeSettings = FakeSettings(),
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
@@ -70,8 +93,33 @@ struct DeviceAgentControlTests {
                 installs.calls.append("launch \(bundleID)")
                 return 4021
             },
+            settings: settings,
             sleep: sleep
         )
+    }
+
+    @Test func settingsAreHeldDuringATakeoverAndReturnWhatSimctlReadBack() async throws {
+        let settings = FakeSettings()
+        let control = control(FakeInput(), settings: settings, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        async let changed = control.perform(
+            .setAppearance(udid: "on", appearance: .dark, textSize: nil, increaseContrast: nil), sessionID: "s"
+        )
+        try await eventually("call is held") { control.waitingSessions(udid: "on") == ["s"] }
+        #expect(settings.calls.isEmpty)
+        control.handBack(udid: "on")
+        #expect(await changed == .text([#"{"appearance":"dark","increase_contrast":"unsupported","text_size":"large"}"#]))
+    }
+
+    @Test(arguments: [
+        DeviceCommand.setPermission(udid: "on", bundleID: "com.example.gone", service: .photos, action: .grant),
+        .push(udid: "on", bundleID: "com.example.gone", payload: #"{"aps":{}}"#),
+    ])
+    func permissionsAndPushNeedTheAppInstalled(command: DeviceCommand) async {
+        let settings = FakeSettings()
+        let response = await control(FakeInput(), settings: settings).perform(command, sessionID: "s")
+        #expect(error(response) == "device_app_not_installed: com.example.gone isn't installed on iPhone.")
+        #expect(settings.calls.isEmpty)
     }
 
     private func appBundle(platform: String) throws -> URL {
@@ -168,7 +216,7 @@ struct DeviceAgentControlTests {
                 for _ in 0..<yields { await Task.yield() }
                 return [Self.booted]
             },
-            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, sleep: Self.untilCancelled
+            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let first = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
@@ -197,7 +245,7 @@ struct DeviceAgentControlTests {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
             input: FakeInput(), devices: { listed }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, sleep: Self.untilCancelled
+            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
@@ -297,7 +345,7 @@ extension DeviceAgentControlTests {
         let window = Duration.seconds(60)
         let control = DeviceAgentControl(
             input: input, devices: { [Self.booted] }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 },
+            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(),
             // The lease window passes at once; each typing pause lets it fire.
             sleep: { duration in
                 guard duration != window else { return }
@@ -357,5 +405,39 @@ extension DeviceAgentControlTests {
         #expect(await (first, second) == (.ok, .ok))
         let downs = input.keys.filter(\.down).map(\.usage)
         #expect(downs == [0x04, 0x05, 0x06, 0x07] || downs == [0x06, 0x07, 0x04, 0x05])
+    }
+
+    /// The user's own install holds the simulator: an agent call started while
+    /// it runs goes after it, never in the middle.
+    @Test func anAgentCallWaitsForTheUsersInstall() async throws {
+        let input = FakeInput()
+        let control = control(input)
+        let (finish, finishInstall) = AsyncStream<Void>.makeStream()
+        let started = Installs()
+        let install = Task {
+            await control.whileUserHoldsInput(udid: "on") {
+                started.calls.append("install")
+                for await _ in finish {}
+            }
+        }
+        try await eventually("install runs") { started.calls == ["install"] }
+        async let typed = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
+        // The call counts as in flight before it waits for its input turn.
+        try await eventually("agent call is waiting") {
+            if case .agent = control.driver(udid: "on") { true } else { false }
+        }
+        #expect(input.keys.isEmpty)
+        finishInstall.finish()
+        #expect(await install.value)
+        #expect(await typed == .ok)
+        #expect(input.keys.filter(\.down).map(\.usage) == [0x04])
+    }
+
+    @Test func theUsersInstallIsRefusedWhileAnAgentDrives() async {
+        let control = control(FakeInput())
+        #expect(await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s") == .ok)
+        var ran = false
+        #expect(await control.whileUserHoldsInput(udid: "on") { ran = true } == false)
+        #expect(!ran)
     }
 }

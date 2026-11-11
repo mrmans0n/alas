@@ -43,7 +43,7 @@ struct DevicesTabView: View {
                 device: device, shape: model.shape(for: device), client: state.simulatorStreams,
                 control: state.deviceControl, agentName: { state.computerUseAgentName($0) }, now: now,
                 appInstall: model.appInstalls[device.udid],
-                onDropApp: { url in Task { await model.installAndLaunch(url, on: device) } },
+                onDropApp: { url in Task { await state.installAppForUser(url, on: device) } },
                 onDismissAppInstall: { model.dismissAppInstall(udid: device.udid) }
             )
             .id(device.udid)

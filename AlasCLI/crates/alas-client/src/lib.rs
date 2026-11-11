@@ -493,6 +493,33 @@ pub enum DeviceCommand {
         udid: String,
         bundle_id: String,
     },
+    /// At least one of the three is set.
+    SetAppearance {
+        udid: String,
+        appearance: Option<String>,
+        text_size: Option<String>,
+        increase_contrast: Option<bool>,
+    },
+    SetPermission {
+        udid: String,
+        bundle_id: String,
+        service: String,
+        action: String,
+    },
+    /// `(latitude, longitude)`; None clears the simulated location.
+    SetLocation {
+        udid: String,
+        location: Option<(f64, f64)>,
+    },
+    Push {
+        udid: String,
+        bundle_id: String,
+        payload: serde_json::Value,
+    },
+    OpenUrl {
+        udid: String,
+        url: String,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -537,7 +564,12 @@ impl DeviceCommand {
             | DeviceCommand::Open { .. }
             | DeviceCommand::Snapshot { .. }
             | DeviceCommand::Install { .. }
-            | DeviceCommand::Launch { .. } => false,
+            | DeviceCommand::Launch { .. }
+            | DeviceCommand::SetAppearance { .. }
+            | DeviceCommand::SetPermission { .. }
+            | DeviceCommand::SetLocation { .. }
+            | DeviceCommand::Push { .. }
+            | DeviceCommand::OpenUrl { .. } => false,
         }
     }
 }
@@ -1215,6 +1247,51 @@ fn device_request(command: &DeviceCommand) -> Request {
         }
         DeviceCommand::Launch { udid, bundle_id } => {
             ("device_launch", json!({ "udid": udid, "bundle_id": bundle_id }))
+        }
+        DeviceCommand::SetAppearance {
+            udid,
+            appearance,
+            text_size,
+            increase_contrast,
+        } => {
+            let mut params = json!({ "udid": udid });
+            if let Some(value) = appearance {
+                params["appearance"] = json!(value);
+            }
+            if let Some(value) = text_size {
+                params["text_size"] = json!(value);
+            }
+            if let Some(value) = increase_contrast {
+                params["increase_contrast"] = json!(value);
+            }
+            ("device_set_appearance", params)
+        }
+        DeviceCommand::SetPermission {
+            udid,
+            bundle_id,
+            service,
+            action,
+        } => (
+            "device_set_permission",
+            json!({ "udid": udid, "bundle_id": bundle_id, "service": service, "action": action }),
+        ),
+        DeviceCommand::SetLocation { udid, location } => match location {
+            Some((latitude, longitude)) => (
+                "device_set_location",
+                json!({ "udid": udid, "latitude": latitude, "longitude": longitude }),
+            ),
+            None => ("device_set_location", json!({ "udid": udid, "clear": true })),
+        },
+        DeviceCommand::Push {
+            udid,
+            bundle_id,
+            payload,
+        } => (
+            "device_push",
+            json!({ "udid": udid, "bundle_id": bundle_id, "payload": payload }),
+        ),
+        DeviceCommand::OpenUrl { udid, url } => {
+            ("device_open_url", json!({ "udid": udid, "url": url }))
         }
     };
     let mut request = Request::new(name);
@@ -2733,6 +2810,24 @@ mod tests {
                 "device_launch".into(),
                 serde_json::json!({ "udid": "U-1", "bundle_id": "com.example.hello" })
             )
+        );
+        assert_eq!(
+            build(DeviceCommand::SetLocation {
+                udid: udid(),
+                location: Some((41.5, 2.0))
+            }),
+            (
+                "device_set_location".into(),
+                serde_json::json!({ "udid": "U-1", "latitude": 41.5, "longitude": 2.0 })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::SetLocation {
+                udid: udid(),
+                location: None
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1", "clear": true })
         );
         assert_eq!(
             read_timeout(&Command::Device(DeviceCommand::Install {
