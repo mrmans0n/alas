@@ -22,12 +22,13 @@ public enum ACPMessageWire: Sendable, Equatable {
     case systemNotice(text: String)
     case failureIncident(ACPFailureIncident)
     case visualAid(ACPVisualAid)
+    case questionAnswer(ACPAnsweredQuestion)
 
     public var isAgentSideProgress: Bool {
         switch self {
         case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             return true
-        case .user, .systemNotice, .failureIncident:
+        case .user, .systemNotice, .failureIncident, .questionAnswer:
             return false
         }
     }
@@ -66,6 +67,7 @@ public enum ACPMessageWire: Sendable, Equatable {
             return .visualAid(try decoder.decode(ACPVisualAid.self, from: payload))
         case "system":
             let p = try decoder.decode(ACPSystemRowPayload.self, from: payload)
+            if let answer = p.questionAnswer { return .questionAnswer(answer) }
             return p.failureIncident.map(ACPMessageWire.failureIncident) ?? .systemNotice(text: p.text)
         default:
             return .systemNotice(text: "(unknown message kind: \(kind))")
@@ -95,6 +97,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return .systemNotice(id: UUID(), text: text)
         case .failureIncident(let incident):
             return .failureIncident(id: UUID(), incident)
+        case .questionAnswer(let answer):
+            return .questionAnswer(answer)
         case .visualAid(let visual):
             return .visualAid(visual)
         }
@@ -158,6 +162,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return text == existingText ? existing : .systemNotice(id: id, text: text)
         case let (.failureIncident(incident), .failureIncident(id, existingIncident)):
             return incident == existingIncident ? existing : .failureIncident(id: id, incident)
+        case let (.questionAnswer(answer), .questionAnswer(existingAnswer)):
+            return answer == existingAnswer ? existing : .questionAnswer(answer)
         case let (.visualAid(visual), .visualAid(existingVisual)):
             return visual == existingVisual ? existing : .visualAid(visual)
         default:

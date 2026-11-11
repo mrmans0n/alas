@@ -50,24 +50,34 @@ public struct ACPFailureIncident: Codable, Equatable, Sendable {
 struct ACPSystemRowPayload: Codable {
     let text: String
     let failureIncident: ACPFailureIncident?
+    let questionAnswer: ACPAnsweredQuestion?
 
     init(text: String) {
         self.text = text
         failureIncident = nil
+        questionAnswer = nil
     }
 
     init(failureIncident: ACPFailureIncident) {
         text = failureIncident.record.title
         self.failureIncident = failureIncident
+        questionAnswer = nil
+    }
+
+    init(questionAnswer: ACPAnsweredQuestion) {
+        text = questionAnswer.displayText
+        failureIncident = nil
+        self.questionAnswer = questionAnswer
     }
 
     private enum CodingKeys: String, CodingKey {
-        case text, failureIncident
+        case text, failureIncident, questionAnswer
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         text = try c.decode(String.self, forKey: .text)
         failureIncident = try? c.decodeIfPresent(ACPFailureIncident.self, forKey: .failureIncident)
+        questionAnswer = try? c.decodeIfPresent(ACPAnsweredQuestion.self, forKey: .questionAnswer)
     }
 }

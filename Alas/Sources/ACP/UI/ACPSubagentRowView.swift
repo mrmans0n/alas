@@ -21,6 +21,7 @@ private extension ACPMessage {
         case .thought(let id, _, _): id
         case .fileEdit(let id, _): id
         case .visualAid(let visual): visual.id
+        case .questionAnswer(let answer): answer.id
         case .plan(let id, _), .planDocument(let id, _): id
         case .systemNotice(let id, _), .failureIncident(let id, _): id
         case .toolCall(let toolCall): toolCall.toolCallId
@@ -315,6 +316,8 @@ private struct ACPSubagentMessageRow: View {
         case .failureIncident(_, let incident):
             // A child's turn is not this surface's to retry.
             ACPFailureIncidentCard(incident: incident, actions: .readOnly)
+        case .questionAnswer(let answer):
+            ACPQuestionAnswerCard(answer: answer)
         case .visualAid(let visual):
             Label(visual.title, systemImage: "rectangle.on.rectangle")
                 .font(.callout)

@@ -849,7 +849,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             of message: ACPMessage, stableId: String, store: ACPTranscriptRowExpansionStore
         ) -> (isExpanded: Bool, setExpanded: (Bool) -> Void)? {
             switch message {
-            case .toolCall, .thought:
+            case .toolCall, .thought, .questionAnswer:
                 (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
             case .user(_, _, _, _, let source, _) where ACPPromptCard.resolved(for: source) != nil:
                 (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })

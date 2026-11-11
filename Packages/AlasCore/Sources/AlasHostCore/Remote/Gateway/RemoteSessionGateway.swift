@@ -1478,6 +1478,8 @@ public final class RemoteSessionGateway {
                 text: document.kind == .file ? document.file.map { "Plan file: \($0.path)" } : document.markdown,
                 json: Self.encodeJSON(remote), index: index,
                 isHidden: document.hidden ? true : nil)
+        case .questionAnswer(let answer):
+            return .init(stableId: sid, kind: "system", text: answer.displayText, json: nil, index: index)
         case .visualAid(let visual):
             // Without json the phone falls back to a plain-text row with the title.
             return .init(

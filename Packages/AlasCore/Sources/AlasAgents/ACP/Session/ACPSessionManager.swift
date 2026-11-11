@@ -7237,6 +7237,17 @@ extension ACPSessionManager {
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
+            onRecordAnswer: { [weak self, weak session] answer in
+                guard let self, let session else { return }
+                if let runner = self.runners[sessionId] {
+                    runner.recordQuestionAnswer(answer)
+                } else {
+                    // Questions can also unblock initialize, before a runner exists.
+                    let before = session.transcript.messages.count
+                    session.appendQuestionAnswer(answer)
+                    self.persistTrailingMessages(session, fromIndex: before)
+                }
+            },
             onPlanAwaiting: { [weak self] session, request in
                 guard !session.readOnlyRestricted else { return }
                 self?.onPlanAwaiting?(session, request)

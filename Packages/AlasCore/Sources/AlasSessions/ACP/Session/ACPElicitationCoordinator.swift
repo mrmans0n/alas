@@ -14,6 +14,7 @@ public final class ACPElicitationCoordinator {
     private let navigateURL: (URL) -> Void
     private let onInputAwaiting: (ACPSession, ACPUserInputRequest) -> Void
     private let onInputResolved: () -> Void
+    private let onRecordAnswer: ((ACPAnsweredQuestion) -> Void)?
     private let onPlanRejected: (String) -> Void
     private let onPlanAwaiting: (ACPSession, ACPCursorPlanRequest) -> Void
     /// Receives an answered optional form's reply in the adapter's replay
@@ -47,6 +48,7 @@ public final class ACPElicitationCoordinator {
         navigateURL: @escaping (URL) -> Void = { URLOpening.shared.open($0) },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
+        onRecordAnswer: ((ACPAnsweredQuestion) -> Void)? = nil,
         onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
         onPlanRejected: @escaping (String) -> Void = { _ in },
         onOptionalAnswerSubmitted: @escaping (String) -> Void = { _ in }
@@ -57,6 +59,7 @@ public final class ACPElicitationCoordinator {
         self.navigateURL = navigateURL
         self.onInputAwaiting = onInputAwaiting
         self.onInputResolved = onInputResolved
+        self.onRecordAnswer = onRecordAnswer
         self.onPlanAwaiting = onPlanAwaiting
         self.onPlanRejected = onPlanRejected
         self.onOptionalAnswerSubmitted = onOptionalAnswerSubmitted
@@ -108,6 +111,7 @@ public final class ACPElicitationCoordinator {
 
     public func respond(to token: UUID, action: ACPUserInputAction) {
         guard let request = removePending(token: token) else { return }
+        recordAnswer(request, action: action)
         switch request.source {
         case .cursor(let id, let params):
             client.respondToQuestion(
@@ -189,6 +193,7 @@ public final class ACPElicitationCoordinator {
 
         guard removePending(token: token) != nil else { return false }
         guard let id = request.jsonRPCID else { return false }
+        recordAnswer(request, action: .submit([:]))
         client.respondToElicitation(id: id, result: .success(.accept()))
         session.transcript.urlElicitationWaits.append(.init(
             id: urlRequest.elicitationId,
@@ -292,6 +297,12 @@ public final class ACPElicitationCoordinator {
         // A background child (Claude) asks under its own session id.
         return requestedSessionId == remoteSessionId
             || session.subagentRun(requestedSessionId) != nil
+    }
+
+    private func recordAnswer(_ request: ACPUserInputRequest, action: ACPUserInputAction) {
+        let answer = ACPAnsweredQuestion(request: request, action: action)
+        if let onRecordAnswer { onRecordAnswer(answer) }
+        else { session.appendQuestionAnswer(answer) }
     }
 
     private func enqueue(_ request: ACPUserInputRequest) {

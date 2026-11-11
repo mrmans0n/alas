@@ -45,6 +45,14 @@ struct ACPElicitationCoordinatorTests {
         #expect(response == .accept(["strategy": .string("safe")]))
         #expect(session.transcript.pendingUserInputs.isEmpty)
         #expect(session.transcript.streamingState == .idle)
+        coordinator.respond(to: request.id, action: .cancel)
+        let answers = session.transcript.messages.compactMap { message -> ACPAnsweredQuestion? in
+            if case .questionAnswer(let answer) = message { return answer }
+            return nil
+        }
+        #expect(answers.count == 1)
+        #expect(answers.first?.items.first?.answer == "Safe")
+        #expect(client.elicitationResponses[.number(40)] == .success(.accept(["strategy": .string("safe")])))
     }
 
     /// Claude scopes a background child's AskUserQuestion to the child's own
@@ -389,6 +397,12 @@ struct ACPElicitationCoordinatorTests {
         }
         #expect(response == .accept())
         #expect(response.content == nil)
+        guard case .questionAnswer(let answer) = session.transcript.messages.last else {
+            Issue.record("expected a browser-opened record")
+            return
+        }
+        #expect(answer.outcome == .opened)
+        #expect(answer.message == "Sign in")
         #expect(session.transcript.urlElicitationWaits.map(\.id) == ["auth-1"])
         client.emitElicitationComplete(elicitationId: "auth-1")
         try await waitUntil { session.transcript.urlElicitationWaits.isEmpty }
