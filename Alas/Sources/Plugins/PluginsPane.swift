@@ -256,7 +256,14 @@ struct PluginsPane: View {
     }
 
     private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
-        SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row, failure: installFailures[entry.id]), selectable: true) {
+        SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row), selectable: true) {
+            if let failure = installFailures[entry.id] {
+                Text("Failed: \(failure)")
+                    .font(scale.metaFont)
+                    .foregroundStyle(theme.color("warn"))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             capabilitiesLine(row)
         } control: {
             if busy.contains(entry.id) {
@@ -343,7 +350,7 @@ struct PluginsPane: View {
         busy.remove(entry.id)
     }
 
-    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow, failure: String?) -> String? {
+    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> String? {
         var lines = [entry.summary].compactMap { $0 }
         switch row {
         case .install, .update: break
@@ -351,7 +358,6 @@ struct PluginsPane: View {
         case .installedLocally: lines.append("Installed locally; the catalog leaves it alone.")
         case .incompatible: lines.append("No version runs on this Alas.")
         }
-        if let failure { lines.append(failure) }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 }
