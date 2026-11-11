@@ -13,6 +13,7 @@ struct ImageDiffSwipeView: View {
     let before: NSImage
     let after: NSImage
     @State private var handleFraction: CGFloat = 0.5
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
 
     static func clampFraction(_ raw: CGFloat) -> CGFloat {
@@ -80,21 +81,21 @@ struct ImageDiffSwipeView: View {
             )
             .overlay(alignment: .topLeading) {
                 Text("Before")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(.black.opacity(0.5))
-                    .cornerRadius(3)
-                    .padding(6)
+                    .cornerRadius(scale.radius.small)
+                    .padding(scale.space[1])
             }
             .overlay(alignment: .topTrailing) {
                 Text("After")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(.black.opacity(0.5))
-                    .cornerRadius(3)
-                    .padding(6)
+                    .cornerRadius(scale.radius.small)
+                    .padding(scale.space[1])
             }
         }
         .clipped()

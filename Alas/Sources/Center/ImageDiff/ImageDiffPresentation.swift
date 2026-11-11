@@ -37,7 +37,7 @@ struct ImageDiffPairPresentationIdentity: Equatable {
 @Observable
 @MainActor
 final class ImageDiffPresentationState {
-    var mode: ImageDiffMode = .sideBySide
+    var mode: ImageDiffMode = DesignCaptureDiff.initialImageMode
     var percentChanged: Double?
     var transform = ImageDiffTransform()
     @ObservationIgnored private var displayedPairIdentity: ImageDiffPairPresentationIdentity?
@@ -73,6 +73,7 @@ struct ImageDiffControls: View {
     let pair: ImageDiffPair
     @Bindable var state: ImageDiffPresentationState
     var allowsModeSwitching = true
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -82,11 +83,11 @@ struct ImageDiffControls: View {
             }
             if pair.beforeFrameCount > 1 || pair.afterFrameCount > 1 {
                 Text("first frame only")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .font(scale.caption.font(weight: .semibold))
+                    .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
                     .background(theme.color("warn").opacity(0.18))
                     .foregroundColor(theme.color("warn"))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
             }
             Spacer()
             if allowsModeSwitching {
@@ -102,11 +103,11 @@ struct ImageDiffControls: View {
         let percent = String(format: "%.1f%%", percent)
         let pink = Color(red: 0.96, green: 0.45, blue: 0.71)
         return Text("\(percent) changed")
-            .font(.system(size: 9.5, weight: .semibold))
-            .padding(.horizontal, 5).padding(.vertical, 1)
+            .font(scale.caption.font(weight: .semibold))
+            .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])
             .background(pink.opacity(0.18))
             .foregroundColor(theme.darkMode ? pink : Color.blend(pink, .black, t: 0.45))
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
     }
 
     private var modeSwitcher: some View {
@@ -115,13 +116,13 @@ struct ImageDiffControls: View {
                 modeButton(mode)
             }
         }
-        .padding(2)
+        .padding(scale.space[0])
         .background(theme.color("seg-container-bg"))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private var resetButton: some View {
@@ -129,8 +130,8 @@ struct ImageDiffControls: View {
             state.transform.reset()
         } label: {
             Image(systemName: "arrow.counterclockwise")
-                .font(.system(size: 11))
-                .padding(.horizontal, 8).padding(.vertical, 5)
+                .font(scale.meta.font)
+                .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
                 .contentShape(Rectangle())
                 .foregroundColor(theme.color("fg-muted"))
         }
@@ -148,16 +149,16 @@ struct ImageDiffControls: View {
             }
         } label: {
             Image(systemName: mode.systemImageName)
-                .font(.system(size: 12))
-                .padding(.horizontal, 9)
+                .font(scale.meta.font)
+                .padding(.horizontal, scale.space[2])
                 .frame(height: 22)
                 .contentShape(Rectangle())
                 .background(
                     ZStack {
                         if isOn {
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: scale.radius.small)
                                 .fill(theme.color("bg-3"))
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: scale.radius.small)
                                 .stroke(Color.white.opacity(0.04), lineWidth: 1)
                                 .blendMode(.plusLighter)
                         }
@@ -168,7 +169,7 @@ struct ImageDiffControls: View {
                         ? (isOn ? theme.color("fg") : theme.color("fg-muted"))
                         : theme.color("fg-faint")
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
                 .shadow(color: isOn ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
         }
         .buttonStyle(.plain)

@@ -13,6 +13,7 @@ struct ImageDiffOverlayView: View {
     let before: NSImage
     let after: NSImage
     @State private var opacity: Double = 0.5
+    @Environment(\.designScale) private var scale
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -61,15 +62,15 @@ struct ImageDiffOverlayView: View {
     private var slider: some View {
         HStack(spacing: 8) {
             Text("Before")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
             Slider(value: $opacity, in: 0...1)
             Text("After")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundColor(theme.color("fg-dim"))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[2])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.4), alignment: .top)
     }

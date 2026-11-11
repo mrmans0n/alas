@@ -327,6 +327,7 @@
 		2B4CBD06D1568EBC1BD327E0 /* SemanticVersionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF2EE8A6AAA7F9B45DACC0C /* SemanticVersionTests.swift */; };
 		2B823A7361BB54D8D93D7C99 /* ACPMentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */; };
 		2B85898841D3090D3C7E3169 /* RunScriptMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93ED8BA7A9EE46B37ED48EC /* RunScriptMetadataTests.swift */; };
+		2BB800C6E72B5D90CF1DE7C9 /* DesignCaptureDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */; };
 		2BC2E35EF1FA9E57037869B2 /* RepositoryImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A7BCA8F63051E6D842055 /* RepositoryImportService.swift */; };
 		2C35CA31DD223EC68FF917E9 /* DiffPaneDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B42075B231828DA553EA92 /* DiffPaneDocumentCache.swift */; };
 		2C4EDD06B2D26DCBB18DC2D1 /* SettingsBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A190D4B29B35C457AA9829F /* SettingsBinding.swift */; };
@@ -1963,10 +1964,10 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
 			files = (
-				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1984,10 +1985,10 @@
 		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
 			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3090,6 +3091,7 @@
 		91DC3C89E04640A7453012E2 /* WorkspaceConfigurationResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceConfigurationResolverTests.swift; sourceTree = "<group>"; };
 		9278ED5964A66871F5299F0C /* ImageDiffDifferenceComputerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceComputerTests.swift; sourceTree = "<group>"; };
 		928B582B3F81A605236CBBED /* ACPBrokerProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBrokerProtocolTests.swift; sourceTree = "<group>"; };
+		92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignCaptureDiff.swift; sourceTree = "<group>"; };
 		92F1C71C2574B1077964E5E1 /* ACPPermissionDecisionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionDecisionLogTests.swift; sourceTree = "<group>"; };
 		93079B18AE14C7AA3516727D /* RemoteZmxInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteZmxInstallerTests.swift; sourceTree = "<group>"; };
 		931365979DC06EABA6635F7A /* RunHistoryPersistenceRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunHistoryPersistenceRetryTests.swift; sourceTree = "<group>"; };
@@ -7049,6 +7051,7 @@
 				5E2962ECDE23ED56E609C0FC /* DesignCaptureAttention.swift */,
 				9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */,
 				8BBC29E1C801289268BA6A1E /* DesignCaptureDemoPeer.swift */,
+				92C05A2CD08FE27CD7FA71BF /* DesignCaptureDiff.swift */,
 				DF236E06277E41DAA6BF281C /* DesignCapturePlugins.swift */,
 				7617B5D1D131EA6B70F63DFD /* DesignCaptureReview.swift */,
 				007C0134A8A588C0534E10C4 /* DesignCaptureUpdates.swift */,
@@ -7859,6 +7862,7 @@
 				F337A6B7FDB895D87FCAD809 /* DesignCaptureAttention.swift in Sources */,
 				48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */,
 				997EBD6A47ACA408CD0FD6C8 /* DesignCaptureDemoPeer.swift in Sources */,
+				2BB800C6E72B5D90CF1DE7C9 /* DesignCaptureDiff.swift in Sources */,
 				DD13142CDD377145EC215892 /* DesignCapturePlugins.swift in Sources */,
 				5050BEB8D17F15D5B2F8E911 /* DesignCaptureReview.swift in Sources */,
 				059B2D1A48576E1629BE31D1 /* DesignCaptureUpdates.swift in Sources */,

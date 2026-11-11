@@ -47,11 +47,18 @@ Set `ALAS_CAPTURE_CLI=review` with `ALAS_CAPTURE_CENTER` set to `review-comments
 `review-states`, `review-thread`, `review-annotation` or `review-image` to capture the Review
 Changes tab over the selected worktree's edits (three small source diffs, a 22,000-line
 generated CSV that the surface defers behind "Show full diff", and a PNG that does not
-decode). `DesignCaptureReview` writes five draft comments (one from an agent, with a reply, one
+decode, docs/legacy-chart.png). `DesignCaptureReview` writes five draft comments (one from an agent, with a reply, one
 whole-file) into the profile's draft store and feeds an in-memory provider thread with three
 replies and an eslint annotation to the surface. Each target scrolls to a different place:
 the draft cards and rail, the deferred placeholder, the thread, the annotation, or the top
 (the image). The comment composer and the context-load error row are not reachable this way.
+
+Set `ALAS_CAPTURE_CENTER` to `diff-file` for the plain diff tab of `src/billing/Invoice.swift`, to
+`image-diff-side`, `image-diff-swipe`, `image-diff-overlay` or `image-diff-difference` for the image
+diff tab of `docs/usage-chart.png` in that mode (480x300 at HEAD, a redrawn 520x300 in the
+worktree), or to `image-diff-added` for `docs/new-chart.png`, which has no committed side
+(`DesignCaptureDiff`). The tabs open through `AppState.openDiffTab`, as the Changes tab does. The
+failed image row of `review-image` now comes from `docs/legacy-chart.png`.
 
 Set `ALAS_CAPTURE_CENTER` to `update-available` (direct download), `update-available-brew`
 (Homebrew) or `update-available-nightly` for the update sheet over a scripted 0.24.0 release

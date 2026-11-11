@@ -841,6 +841,7 @@ enum AppKitDiffReviewRowPlanBuilder {
             onStageReply: { input.state.actionRelay.stageReply(to: $0, body: $1) },
             canAddToReview: input.actionPresence.canAddToReview,
             hunkFusionStates: [fusion],
+            scale: input.scale,
             hunkActions: input.state.actionRelay.hunkActions
         )
     }
