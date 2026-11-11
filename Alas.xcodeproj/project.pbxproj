@@ -291,6 +291,7 @@
 		25B94D8823F2A5A2BA4545B5 /* AppStatePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C11E3449E4A7B4E69E83C1C /* AppStatePersistenceTests.swift */; };
 		25CD620AE7FFA7DE82937F7E /* Spinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E01930F1D95B8D17BCBAC1 /* Spinner.swift */; };
 		25E825CE77CC459FC3A95B4A /* IssueAutocompleteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705E8882FDBB132BBBE72AC1 /* IssueAutocompleteModel.swift */; };
+		25ECD4BB3B4D6A8445C399E7 /* AppState+HostUpdates.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB8CD06FF6361B6302CD0B1 /* AppState+HostUpdates.swift */; };
 		25F220A0FBEE973A1A7D13EB /* LiveLanguageServerVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 027C39A875A3BFD6D2AF3FBA /* LiveLanguageServerVerificationTests.swift */; };
 		26265A75CED42D3C490DF8C2 /* RunScriptTemplateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200C4E9E9FBD356C8B051746 /* RunScriptTemplateTests.swift */; };
 		2658F96EAC71CFF548D4EC7E /* ACPNativeDelegationControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 079D7F346EF9810FD7316096 /* ACPNativeDelegationControlsTests.swift */; };
@@ -1979,10 +1980,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2000,10 +2001,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -3383,6 +3384,7 @@
 		BB5EE7A686D55350599708BE /* ZmxPassiveClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxPassiveClientTests.swift; sourceTree = "<group>"; };
 		BB6A90FAE1D410744D02A454 /* CommitPromptEditorWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPromptEditorWindow.swift; sourceTree = "<group>"; };
 		BBAA6F5DEA20C61ADF36FA1E /* RightPaneRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneRail.swift; sourceTree = "<group>"; };
+		BBB8CD06FF6361B6302CD0B1 /* AppState+HostUpdates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+HostUpdates.swift"; sourceTree = "<group>"; };
 		BC2967A37F842D09F43063F3 /* AppKitDiffScrollerReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScrollerReconciler.swift; sourceTree = "<group>"; };
 		BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabView.swift; sourceTree = "<group>"; };
 		BC4AA85B89424CE83D52524E /* RepoMCPTrustBannerPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoMCPTrustBannerPresentationTests.swift; sourceTree = "<group>"; };
@@ -4987,6 +4989,7 @@
 		374778125EF1BBFE5E94084D /* Remote */ = {
 			isa = PBXGroup;
 			children = (
+				BBB8CD06FF6361B6302CD0B1 /* AppState+HostUpdates.swift */,
 				5D4027757E1EB4F0E4A78C7E /* Native */,
 				21F99FBDBA0B111FB6B8C546 /* Pairing */,
 				36EBAD798ECDCED2A7761133 /* Settings */,
@@ -7769,6 +7772,7 @@
 				1A0D9384EE6F1037C9D410F0 /* AppState+ComputerUse.swift in Sources */,
 				9913150DEB5DF266B13E19F2 /* AppState+Devices.swift in Sources */,
 				31B0AFB9508BEEF0D9FDCBD5 /* AppState+DevicesTab.swift in Sources */,
+				25ECD4BB3B4D6A8445C399E7 /* AppState+HostUpdates.swift in Sources */,
 				1DDDC6B80D519E9EFD5DAAB7 /* AppState+LocalText.swift in Sources */,
 				BEF575D260C79BD830798BDD /* AppState+NextPromptSuggestions.swift in Sources */,
 				C43E42415BA089A482AE45BE /* AppState+PairingApproval.swift in Sources */,
