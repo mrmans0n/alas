@@ -128,6 +128,39 @@ struct LinuxCloudInitTests {
         #expect(meta.contains(#"local-hostname: "a\"b\\c""#))
     }
 
+    /// Runs the real check with its four paths moved into a temporary
+    /// directory. Only status 1 counts as "differs"; a missing installed file
+    /// (status 2) must not prompt.
+    @Test(arguments: [
+        ("same", "same", Int32(0)),
+        ("old helper", "same", 1),
+        ("same", "old driver", 1),
+        ("same", nil, 2),
+    ] as [(String, String?, Int32)])
+    func helperDiffersCommandComparesHelperAndCuaDriver(
+        installedHelper: String, installedDriver: String?, expected: Int32
+    ) throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let paths = [
+            LinuxGuestSetup.helperSource: "same", LinuxGuestSetup.helperPath: installedHelper,
+            LinuxGuestSetup.cuaDriverSource: "same", LinuxGuestSetup.cuaDriverPath: installedDriver,
+        ]
+        var command = LinuxGuestSetup.helperDiffersCommand
+        for (index, (path, contents)) in paths.sorted(by: { $0.key < $1.key }).enumerated() {
+            let local = dir.appendingPathComponent("\(index)").path
+            command = command.replacingOccurrences(of: path, with: local)
+            try contents?.write(toFile: local, atomically: true, encoding: .utf8)
+        }
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", command]
+        try shell.run()
+        shell.waitUntilExit()
+        #expect(shell.terminationStatus == expected)
+    }
+
     /// The first vector is the reference one from the SHA-crypt spec, also
     /// produced by `openssl passwd -6 -salt saltstring 'Hello world!'`.
     @Test(arguments: [
