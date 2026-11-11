@@ -119,6 +119,8 @@ public final class RemoteConnection: @unchecked Sendable {
     /// upgrade succeeds. Queue-confined; the server learns it via the
     /// `onAuthenticated` hop rather than reading this cross-queue.
     private var deviceId: String?
+    /// A ping went out and nothing has come in since. Confined to `queue`.
+    private var awaitingPong = false
 
     public init(conn: NWConnection,
          queue: DispatchQueue,
@@ -220,6 +222,23 @@ public final class RemoteConnection: @unchecked Sendable {
         sendServerMessage(message)
     }
 
+    /// Pings the socket, or closes it if nothing came in since the last
+    /// ping. A peer that went away without closing, such as a Mac that
+    /// slept or lost its network, leaves a socket that looks open for as
+    /// long as nothing is written to it, and the routes on it with it.
+    /// Clients answer pings on their own, so a live one always clears this.
+    public func probe() {
+        onQueue { [weak self] in
+            guard let self, self.framesEnabled, !self.isClosing else { return }
+            if self.awaitingPong {
+                self.teardown()
+                return
+            }
+            self.awaitingPong = true
+            self.send(WebSocketFrame.encode(opcode: .ping, payload: Data())) {}
+        }
+    }
+
     /// Hops a block back onto the connection's serial queue so it can safely
     /// touch the queue-confined state after a `@MainActor` round-trip.
     private func onQueue(_ work: @escaping @Sendable () -> Void) {
@@ -231,6 +250,7 @@ public final class RemoteConnection: @unchecked Sendable {
             guard let self else { return }
             guard !self.isClosing else { return }
             if let data, !data.isEmpty {
+                self.awaitingPong = false
                 self.inbound.append(data)
                 self.drain()
             }
