@@ -46,6 +46,10 @@
 # scrolled to work items and reviews) over a scripted three-repository checkout, and vm-setup, vm-stopped,
 # vm-running and vm-attention show 2x2 galleries of VM tab states built from the tab's chrome
 # (DesignCaptureWorkspace, DesignCaptureVM); no workspace, VM or image is touched.
+# devices, devices-empty and devices-settings show galleries of Devices tab states over scripted devices
+# (DesignCaptureDevices); run-report, web-preview, computer-use-badge and space-pager (ALAS_CAPTURE_CENTER)
+# and run-script-help, new-run-script and repo-hook-approval (ALAS_CAPTURE_DIALOG) show the remaining
+# small views over scripted state (DesignCaptureLeftovers). No simulator, VM, model or hook is touched.
 # ALAS_CAPTURE_SETTINGS (comma-separated sections: general,agents,…) also writes
 # settings-<section>.png with Settings open on each.
 # ALAS_CAPTURE_CLI (an alas CLI command, e.g. "open {wt}/src/billing/Invoice.swift",
@@ -330,6 +334,7 @@ SWIFT
   # The editor, Markdown and Mermaid targets open a file first, then draw over it.
   case "$ALAS_CAPTURE_CENTER" in
     editor-*|markdown|mermaid-viewer) /bin/sleep 6 ;;
+    web-preview|run-report) /bin/sleep 3 ;;
     *) /bin/sleep 1.5 ;;
   esac
 fi

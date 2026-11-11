@@ -84,6 +84,19 @@ the progress sheet, or to `whats-new` for the What's New card with a bundled pic
 the real updater over a `/bin/sh` script that exits with the app, and the What's New "seen"
 version is never written. Sheets are composited like the editor popups.
 
+Set `ALAS_CAPTURE_CENTER` to `devices`, `devices-empty` or `devices-settings` to capture galleries of the Devices
+tab (`DesignCaptureDevices`): a simulator an agent drives, one you drive with an agent waiting and a failed app
+install, a running and a paused VM; the empty states (loading, no Xcode, no simulators, shut down, booting, VM not set
+up); and the simulator settings popover. They run the tab's own views over scripted devices and an in-memory
+`DeviceAgentControl`; a simulator's screen is a painted placeholder and nothing talks to `simctl`, the simulator
+service or a VM. The switcher menu itself cannot be shown open.
+
+Set `ALAS_CAPTURE_CENTER` to `run-report` (a failed run's report tab with a scripted on-device failure brief),
+`web-preview` (the web preview on a demo page served from this Mac's loopback), `computer-use-badge` (the badge in
+the agent toolbar, "Using the VM") or `space-pager` (two demo spaces added, so the pager shows), and
+`ALAS_CAPTURE_DIALOG` to `run-script-help`, `new-run-script` or `repo-hook-approval` (a demo hook; nothing runs) to
+capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not used anywhere, so it has no capture.
+
 ## How it works
 
 - `make-demo-profile.sh` builds `fixture/` (the invented `lantern` repo with 14
