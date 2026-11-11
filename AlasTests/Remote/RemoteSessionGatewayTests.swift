@@ -1713,6 +1713,7 @@ struct RemoteSessionGatewayTests {
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
         #expect(wire.kind == "user")
         #expect(wire.text == "🖼 shot.png")
+        #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
     }
 
     @Test func mentionAttachmentsRenderAsResourcesNotImages() {
@@ -1720,7 +1721,9 @@ struct RemoteSessionGatewayTests {
             .init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil),
             .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png"),
         ])
-        #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        #expect(wire.text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
+        #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
     }
 
     private nonisolated static let peerCheckpoint = UUID()
@@ -1736,6 +1739,7 @@ struct RemoteSessionGatewayTests {
         #expect(wire.text == text)
         #expect(wire.json == nil)
         #expect(wire.checkpointId == checkpoint?.uuidString)
+        #expect(wire.images == nil)
     }
 
     @Test func failureIncidentWire() throws {

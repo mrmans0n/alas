@@ -1424,17 +1424,19 @@ public final class RemoteSessionGateway {
         let sid = "m\(index)"
         switch message {
         case .user(_, _, let text, let attachments, _, _):
-            // The wire carries user text only; surface attachments as a labelled
-            // placeholder so an image-only prompt isn't a blank bubble on the
-            // phone (we don't serve the image bytes to the client in v1).
+            // The text labels each attachment, so an image-only prompt isn't a
+            // blank bubble on a viewer that can't show the image; `images`
+            // lets one that can read the bytes show it instead.
             // The runner sends only `image/` attachments as images; the
             // rest are resource links (mentions).
             let shown = attachments.filter { !$0.isLocalReference }
             let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
-            let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
+            let images = shown.filter(isImage)
+            let rowText = userRowText(text: text, attachmentNames: images.map(\.name),
                                       resourceNames: shown.filter { !isImage($0) }.map(\.name))
             return .init(stableId: sid, kind: "user", text: rowText, json: nil, index: index,
-                         checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString)
+                         checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString,
+                         images: images.isEmpty ? nil : images.map { .init(uri: $0.uri, name: $0.name) })
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):

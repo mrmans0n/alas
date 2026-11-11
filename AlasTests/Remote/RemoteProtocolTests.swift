@@ -424,7 +424,8 @@ struct RemoteProtocolTests {
             kind: content ?? "agent",
             text: content,
             json: content,
-            index: index
+            index: index,
+            images: content.map { [.init(uri: $0, name: $0), .init(uri: $0, name: nil)] }
         )
         let encoded = try JSONEncoder().encode(row)
         #expect(row.transportByteCount >= encoded.count)

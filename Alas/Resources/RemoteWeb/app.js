@@ -3201,7 +3201,9 @@ function renderMessage(m, sid, open) {
   let node;
   if (m.kind === "user" || m.kind === "agent") {
     node = el("div", "msg md m-" + m.kind);
-    node.innerHTML = md(m.text);            // markdown-rendered like the native pane
+    const images = m.kind === "user" ? (m.images || []).filter(image => isLocalTranscriptImage(image.uri)) : [];
+    node.innerHTML = md(images.length ? userTextWithoutImageLabels(m.text, images) : m.text);
+    appendUserImages(node, images);
   } else if (m.kind === "systemNotice" || m.kind === "failureIncident") {
     node = el("div", "msg m-systemNotice", m.text || "");
   } else if (m.kind === "thought") {
@@ -3223,6 +3225,52 @@ function renderMessage(m, sid, open) {
   }
   loadTranscriptImages(node, currentSession);
   return node;
+}
+
+// A user row's text ends with one "🖼 name" paragraph per attached image,
+// before any "📎" mention lines. Drops those labels, last image first, so the
+// bubble can show the images instead.
+function userTextWithoutImageLabels(text, images) {
+  const parts = String(text || "").split("\n\n");
+  let next = parts.length - 1;
+  for (let i = images.length - 1; i >= 0; i--) {
+    const label = "🖼 " + (images[i].name || "Image");
+    while (next >= 0 && parts[next] !== label) next--;
+    if (next < 0) break;
+    parts.splice(next, 1);
+    next--;
+  }
+  return parts.join("\n\n");
+}
+
+function appendUserImages(node, images) {
+  if (!images.length) return;
+  const strip = el("div", "user-images");
+  for (const image of images) {
+    const thumbnail = document.createElement("img");
+    thumbnail.className = "user-image";
+    thumbnail.alt = image.name || "Image";
+    thumbnail.dataset.transcriptImage = image.uri;
+    thumbnail.onclick = () => { if (thumbnail.complete && thumbnail.naturalWidth) showImageViewer(thumbnail); };
+    strip.append(thumbnail);
+  }
+  node.append(strip);
+}
+
+// Full-size view of a loaded transcript image; a tap anywhere closes it. The
+// loader revokes its blob URL once the image has loaded, so the image element
+// itself moves into the viewer and back.
+function showImageViewer(image) {
+  if (image.closest(".image-viewer")) return;
+  const placeholder = document.createComment("image-viewer");
+  const overlay = el("div", "image-viewer");
+  image.replaceWith(placeholder);
+  overlay.append(image);
+  overlay.onclick = () => {
+    overlay.remove();
+    if (placeholder.isConnected) placeholder.replaceWith(image);
+  };
+  document.body.append(overlay);
 }
 
 // ---- Visual aids ---------------------------------------------------------

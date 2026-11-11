@@ -32,6 +32,19 @@ struct RemoteWebAssetTests {
         return try #require(context.objectForKeyedSubscript(name))
     }
 
+    /// The bubble shows attached images instead of their `🖼` labels; mention
+    /// lines and the prompt itself stay, even when it reads like a label.
+    @Test(arguments: [
+        ("see\n\n🖼 a.png\n\n📎 App.swift", [["name": "a.png"]], "see\n\n📎 App.swift"),
+        ("🖼 Image", [[String: String]()], ""),
+        ("🖼 a.png\n\n🖼 a.png\n\n🖼 b.png", [["name": "a.png"], ["name": "b.png"]], "🖼 a.png"),
+        ("hi\n\n🖼 a.png", [["name": "gone.png"]], "hi\n\n🖼 a.png"),
+    ])
+    func browserUserBubbleDropsImageLabels(text: String, images: [[String: String]], expected: String) throws {
+        let strip = try javascriptFunction("userTextWithoutImageLabels")
+        #expect(strip.call(withArguments: [text, images])?.toString() == expected)
+    }
+
     // WebKit image decoding and DOM access require the main thread.
     @MainActor
     @Test func browserRendersHostImageBytesInline() async throws {
