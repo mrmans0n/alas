@@ -8,11 +8,12 @@ import Foundation
 public enum LinuxGuestSetup {
     public static let helperSource = "/mnt/alas/helper/alas-vm-guest-linux"
     public static let helperPath = "/usr/local/bin/alas-vm-guest"
-    /// Exits 1 when the installed helper isn't the one this build shares, so it is out of date
-    /// whatever it answers.
-    public static let helperDiffersCommand = "cmp -s \(helperSource) \(helperPath)"
     public static let cuaDriverSource = "/mnt/alas/helper/cua-driver"
     public static let cuaDriverPath = "/usr/local/bin/cua-driver"
+    /// Exits 1 when the installed helper or Cua Driver isn't the one this build shares, so the
+    /// guest is out of date whatever the helper answers.
+    public static let helperDiffersCommand =
+        "cmp -s \(helperSource) \(helperPath) && cmp -s \(cuaDriverSource) \(cuaDriverPath)"
 
     static let helperDropInDirectory = "/etc/systemd/user/alas-vm-guest.service.d"
     static let xfconfDirectory = "/etc/xdg/xfce4/xfconf/xfce-perchannel-xml"
