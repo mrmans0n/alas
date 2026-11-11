@@ -326,3 +326,4 @@ Alas/Sources/Center/ImageDiff/ImageDiffOverlayView.swift
 Alas/Sources/Center/ImageDiff/ImageDiffPresentation.swift
 Alas/Sources/Center/ImageDiff/ImageDiffSideBySideView.swift
 Alas/Sources/Center/ImageDiff/ImageDiffSwipeView.swift
+Alas/Sources/Sidebar/NativePeerSidebarView.swift
