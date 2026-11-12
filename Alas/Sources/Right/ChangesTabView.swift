@@ -459,8 +459,10 @@ struct ChangesTabView: View {
         remoteEnrichmentPending: Bool
     ) -> ChangesPreparationModel.GGStackStatus {
         switch loadState {
-        case .inactive, .failed:
+        case .inactive:
             return .unavailable
+        case .failed:
+            return .failed
         case .loading:
             return .loading
         case .empty:
@@ -631,6 +633,7 @@ struct ChangesTabView: View {
                     onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) },
                     onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
                     onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) },
+                    onRetryGGStack: { Task { await rps.refreshGGStack(forceRemote: true) } },
                     quietsReview: quietsReview
                 )
             })
