@@ -123,14 +123,42 @@ public enum StackShepherdPromptBuilder {
             \(fence)
             Call pr_status any time to see the stack's current state.
             """
-        let summary = failed ? result : "The stack is published and Alas is watching it."
-        return ShepherdPrompt(
-            text: text,
-            card: ACPPromptCard(
-                origin: .shepherd,
-                title: failed ? "stack_ship did not finish" : "stack_ship finished",
-                sections: [.init(title: nil, items: [.init(bodyMarkdown: summary, status: failed ? .failed : nil)])]
+        return ShepherdPrompt(text: text, card: failed ? failedShipCard(result) : shipCard(result))
+    }
+
+    private static func failedShipCard(_ error: String) -> ACPPromptCard {
+        ACPPromptCard(
+            origin: .shepherd, title: "stack_ship did not finish",
+            sections: [.init(title: nil, items: [.init(bodyMarkdown: error, status: .failed)])]
+        )
+    }
+
+    /// Names what the ship did: a restack after a landing reads as such, not
+    /// as the stack finishing. Falls back to a plain summary for a result it
+    /// can't read.
+    private static func shipCard(_ result: String) -> ACPPromptCard {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let shipped = try? decoder.decode(StackShipResultWire.self, from: Data(result.utf8)) else {
+            return ACPPromptCard(
+                origin: .shepherd, title: "Stack published",
+                sections: [.init(title: nil, items: [.init(bodyMarkdown: "The stack is published and Alas is watching it.")])]
             )
+        }
+        let kind = CodeHostKind(rawValue: shipped.provider)
+        let label = kind == .gitlab ? "merge request" : "pull request"
+        let count = shipped.entries.count
+        let prefix = kind?.reviewRequestNumberPrefix ?? "#"
+        return ACPPromptCard(
+            origin: .shepherd,
+            title: "\(shipped.restacked ? "Restacked" : "Published") gg stack \(shipped.stack)",
+            facts: [
+                .init(kind: .branch, text: "\(shipped.stack) → \(shipped.base)"),
+                .init(kind: .other, text: "\(count) open \(label)\(count == 1 ? "" : "s")"),
+            ],
+            sections: count == 0 ? [] : [.init(title: nil, items: shipped.entries.map {
+                .init(bodyMarkdown: "\(prefix)\($0.number) · \($0.title)", url: URL(string: $0.url))
+            })]
         )
     }
 

@@ -222,6 +222,8 @@ extension AppState {
         guard let resolved = projectAndWorktree(withWorktreeId: record.id.worktreeID) else { return }
         appendShepherdOutcomeCard(
             ShepherdNotification.outcomeCard(for: event), sessionID: record.sessionID, worktreeID: record.id.worktreeID)
+        // Each landing is only a transcript card; the stack's last one notifies.
+        if case .entryLanded = event { return }
         let agent = shepherdAgentKind(sessionID: record.sessionID, worktreeID: record.id.worktreeID)
         harness.notifications.notifyAlas(
             body: message.body,

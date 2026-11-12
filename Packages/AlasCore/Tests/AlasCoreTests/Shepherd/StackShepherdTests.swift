@@ -302,7 +302,29 @@ struct StackShepherdTests {
 
         #expect(decision.record.entries[1].shepherd.phase == .merged)
         #expect(decision.restack.isEmpty && decision.record.landedEntryIDs == nil)
+        #expect(decision.entryEvents.isEmpty)
         #expect(StackShepherdPolicy.landedEntryIDs(of: decision.record, in: Self.stack([41, 42])).isEmpty)
+    }
+
+    /// A ship that finished after Alas replied reports what it did: a restack
+    /// after a landing names the entries left, and never reads as the stack
+    /// being done.
+    @Test(arguments: [(true, "Restacked gg stack auth"), (false, "Published gg stack auth")])
+    func backgroundShipCardSaysWhatTheShipDid(restacked: Bool, title: String) {
+        let result = StackShipResultWire(
+            stack: "auth", base: "main", provider: "gitlab",
+            entries: [.init(position: 1, entryId: "c-42", title: "Fix login", number: 42,
+                            url: "https://gitlab.com/acme/app/-/merge_requests/42", state: "opened", draft: false)],
+            heldBack: [], uncommittedChanges: false, restacked: restacked, shepherd: .init(autoFix: true)
+        )
+
+        let card = StackShepherdPromptBuilder.shipOutcomePrompt(
+            stackName: "auth", result: ReviewCommentWireDTO.jsonLine(result), failed: false
+        ).card
+
+        #expect(card.title == title)
+        #expect(card.facts.map(\.text) == ["auth → main", "1 open merge request"])
+        #expect(card.sections.flatMap(\.items).map(\.bodyMarkdown) == ["!42 · Fix login"])
     }
 
     /// Entry IDs are `g<index>`; positions in `shaOnly` have no GG-ID, so their
@@ -657,6 +679,7 @@ struct StackShepherdTests {
         now: @escaping @MainActor () -> Date = { F.now },
         deliveryOutcome: @escaping @MainActor () -> ReviewShepherd.Delivery = { .delivered },
         deliverPrompt: @escaping @MainActor (String) -> Void = { _ in },
+        notify: @escaping @MainActor (StackShepherd.Event) -> Void = { _ in },
         archive: @escaping @MainActor () -> Void = {}
     ) -> StackShepherd {
         let shepherd = StackShepherd(
@@ -682,7 +705,7 @@ struct StackShepherdTests {
                 return deliveryOutcome()
             },
             rules: { _ in .none },
-            notify: { _ in },
+            notify: notify,
             archiveWorktreeIfAllowed: { _, _, _ in
                 archive()
                 return .declined
@@ -751,6 +774,28 @@ struct StackShepherdTests {
 
         #expect(shepherd.records[record.id]?.isFinished == true)
         #expect(archives == archived)
+    }
+
+    /// Each landing gets its own event while entries remain; the poll that
+    /// lands the last one reports the stack as landed instead.
+    @Test(arguments: [([41], ["landed c-41"]), ([41, 42], ["finished"])])
+    func aLandedEntryIsReportedUnlessItFinishesTheStack(merged: [Int], expected: [String]) async {
+        let stack = Self.stack([41, 42])
+        var events: [String] = []
+        let shepherd = makeShepherd(
+            requests: [41, 42].map { Self.request($0, state: merged.contains($0) ? .merged : .open) }, stack: stack,
+            notify: { event in
+                switch event {
+                case .entryLanded(_, let entry, _): events.append("landed \(entry.entryID)")
+                case .finished(_, .merged): events.append("finished")
+                default: break
+                }
+            })
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+
+        await shepherd.evaluateNow(record.id)
+
+        #expect(events == expected)
     }
 
     @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
