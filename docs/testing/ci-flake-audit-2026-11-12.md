@@ -41,6 +41,13 @@ no test failure to attribute from that run.
 | Optional telemetry uploads fail the build | [43090228648](https://github.com/mrmans0n/alas/actions/runs/43090228648), [43090151304](https://github.com/mrmans0n/alas/actions/runs/43090151304) | Make only build measurements and the compact build summary uploads nonfatal. Test plans, compiled products and coverage reports remain required. The workflow contract failed before the change and passed afterward. |
 | Broker ACK mirror races detach and publishes the wrong terminal status | [42704412114](https://github.com/mrmans0n/alas/actions/runs/42704412114) | Recheck transport and ownership authority before classifying a rejected mirror as failure. The fifth local full run reproduced the original preview-loss timeout. Minimized fixtures exposed `failed("invalidated")` with an already invalid intake. The deterministic regression failed before repair, then passed transport-loss, ownership-loss and genuine-attached-failure variants. The fixed actual-fixture loop passed 2,000 iterations after the old implementation failed twice in 1,000. |
 
+The stdio runtime repair landed independently on main in PR #2457 while this
+audit was being published. The integration retains that implementation and the
+audit's deterministic mid-start regression, consolidating the overlapping
+pre-start test. The publication hook exercises termination after the real child
+launches but before the transport records it, and explicitly requires exit for
+both termination scopes.
+
 Dependency acquisition now has at most three attempts for the observed SwiftPM
 HTTP 400, missing shared-checkout and rustup DNS errors. Missing-cache recovery
 bypasses the shared cache without deleting it. Unknown errors and interruption
@@ -152,6 +159,10 @@ The final writer-authorization checkpoint selection passed 65 tests in four
 suites. Independent review confirmed the actor-held refusal checks and retained
 post-write assertions. The final full core run passed all 1,274 tests in 129
 suites in 19.496 seconds, exit zero.
+After integrating main `606e7730b` for PR #2462 and consolidating the overlapping
+stdio regression, the full Core run passed 1,276 tests in 129 suites in 20.172
+seconds. Independent review confirmed the merged termination ordering and
+retained exit assertions.
 
 The final native run executed 272 tests in seven suites with zero failures or
 skips. It covers the four complete changed suites and the three already-repaired

@@ -85,6 +85,8 @@ public struct StackShepherdFix: Equatable, Sendable {
 public enum StackShepherdEntryEvent: Equatable, Sendable {
     case escalated(StackShepherdEntry, ShepherdEscalation, title: String)
     case closed(StackShepherdEntry, title: String)
+    /// Merged into the stack's base on this poll.
+    case landed(StackShepherdEntry, title: String)
 }
 
 public struct StackShepherdDecision: Equatable, Sendable {
@@ -292,7 +294,12 @@ public enum StackShepherdPolicy {
                 decision.entryEvents.append(.escalated(entry, reason, title: request.title))
             case .finish(.closed):
                 decision.entryEvents.append(.closed(entry, title: request.title))
-            case .finish(.merged), .wait, .notifyReady, .merge:
+            case .finish(.merged):
+                // One merged into the entry below it has not reached the base.
+                if hasLanded(entry, in: record) {
+                    decision.entryEvents.append(.landed(entry, title: request.title))
+                }
+            case .wait, .notifyReady, .merge:
                 // Entries never auto-merge, and readiness is the stack's call.
                 break
             }

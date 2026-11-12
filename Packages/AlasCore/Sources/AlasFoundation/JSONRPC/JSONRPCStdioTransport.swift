@@ -71,8 +71,10 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     private let executable: URL
     private let arguments: [String]
     private let environment: [String: String]
-    /// Set by `start()`.
+    /// Set by `start()`; guarded by `lock`.
     private var process: SpawnedProcess?
+    /// Set by `terminate()`, which may run from the stdout handler before
+    /// `start()` has recorded the child; `start()` then ends it itself.
     private var terminationRequested = false
     var beforeProcessPublicationForTesting: (@Sendable () -> Void)?
     private let stdin: Pipe
@@ -204,11 +206,11 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         let beforePublication = beforeProcessPublicationForTesting
         beforeProcessPublicationForTesting = nil
         beforePublication?()
-        let mustTerminate = lock.withLock {
+        let terminated = lock.withLock {
             self.process = process
             return terminationRequested
         }
-        if mustTerminate {
+        if terminated {
             terminate()
             return
         }
@@ -241,13 +243,13 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     }
 
     public func terminate() {
-        frameWriter.close()
-        descendantTracker?.cancel()
-        cancelDescendantForkObservers()
         let process = lock.withLock {
             terminationRequested = true
             return self.process
         }
+        frameWriter.close()
+        descendantTracker?.cancel()
+        cancelDescendantForkObservers()
         guard let process, process.pid > 0 else { return }
         let pid = process.pid
         refreshLock.lock()
@@ -360,7 +362,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         for pid in descendants.map(\.pid) {
             startDescendantForkObserver(for: pid)
         }
-        let rootPid = lock.withLock { process?.pid ?? 0 }
+        let rootPid = lock.withLock { process?.pid } ?? 0
         var watched = Set(descendants.map(\.pid))
         if rootPid > 0 { watched.insert(rootPid) }
         pruneDescendantForkObservers(keeping: watched)

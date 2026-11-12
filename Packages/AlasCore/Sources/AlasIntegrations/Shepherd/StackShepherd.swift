@@ -77,6 +77,9 @@ public final class StackShepherd {
         case ready(StackShepherdRecord)
         case finished(StackShepherdRecord, ShepherdOutcome)
         case entryClosed(StackShepherdRecord, StackShepherdEntry, title: String)
+        /// An entry merged into the base while others are still open. The
+        /// poll that lands the last one sends `finished` instead.
+        case entryLanded(StackShepherdRecord, StackShepherdEntry, title: String)
         /// One notice per reason, naming every entry it hit.
         case escalated(StackShepherdRecord, [StackShepherdEntry], ShepherdEscalation)
     }
@@ -721,6 +724,8 @@ public final class StackShepherd {
                 escalated[reason, default: []].append(entry)
             case .closed(let entry, let title):
                 effects.notify(.entryClosed(record, entry, title: title))
+            case .landed(let entry, let title):
+                if decision.finished == nil { effects.notify(.entryLanded(record, entry, title: title)) }
             }
         }
         for (reason, entries) in escalated.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
