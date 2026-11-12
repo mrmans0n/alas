@@ -51,27 +51,38 @@ struct ACPSystemRowPayload: Codable {
     let text: String
     let failureIncident: ACPFailureIncident?
     let questionAnswer: ACPAnsweredQuestion?
+    let outcomeCard: ACPOutcomeCard?
 
     init(text: String) {
         self.text = text
         failureIncident = nil
         questionAnswer = nil
+        outcomeCard = nil
     }
 
     init(failureIncident: ACPFailureIncident) {
         text = failureIncident.record.title
         self.failureIncident = failureIncident
         questionAnswer = nil
+        outcomeCard = nil
     }
 
     init(questionAnswer: ACPAnsweredQuestion) {
         text = questionAnswer.displayText
         failureIncident = nil
         self.questionAnswer = questionAnswer
+        outcomeCard = nil
+    }
+
+    init(outcomeCard: ACPOutcomeCard) {
+        text = outcomeCard.text
+        failureIncident = nil
+        questionAnswer = nil
+        self.outcomeCard = outcomeCard
     }
 
     private enum CodingKeys: String, CodingKey {
-        case text, failureIncident, questionAnswer
+        case text, failureIncident, questionAnswer, outcomeCard
     }
 
     init(from decoder: Decoder) throws {
@@ -79,5 +90,6 @@ struct ACPSystemRowPayload: Codable {
         text = try c.decode(String.self, forKey: .text)
         failureIncident = try? c.decodeIfPresent(ACPFailureIncident.self, forKey: .failureIncident)
         questionAnswer = try? c.decodeIfPresent(ACPAnsweredQuestion.self, forKey: .questionAnswer)
+        outcomeCard = try? c.decodeIfPresent(ACPOutcomeCard.self, forKey: .outcomeCard)
     }
 }

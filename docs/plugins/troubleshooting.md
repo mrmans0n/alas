@@ -10,6 +10,17 @@ For the full list of stop reasons, see
 [Why a plugin stops](api-v4.md#5-why-a-plugin-stops). For request errors, see
 [Errors](api-v1.md#6-errors).
 
+## A catalog installation fails
+
+The plugin's row under **Available** shows a separate warning-colored
+`Failed: …` message with the reason. Rejected downloads are never installed
+or granted approval.
+
+An `invalid process` error mentioning an argument length means a
+declared command exceeds Alas's limit. Current builds allow 16 KiB per
+declared argument; older builds allow only 1 KiB. Update Alas if a published
+plugin needs the larger limit.
+
 ## The plugin is not listed, or is under "Not loaded"
 
 Anything under **Not loaded** shows the folder name and the reason.

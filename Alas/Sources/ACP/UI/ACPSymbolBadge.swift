@@ -304,7 +304,7 @@ final class ACPTranscriptSymbolChipHoverController {
             let preview = ACPSymbolSentHoverView(
                 target: mention.target.asSent(snapshot: mention.snapshot), snapshot: mention.snapshot,
                 root: root, typography: typography, theme: theme)
-            let hosting = NSHostingController(rootView: preview.environment(\.theme, theme))
+            let hosting = NSHostingController(rootView: preview.environment(\.theme, theme).environment(\.designScale, HostedDesignScale.current))
             hosting.sizingOptions = [.preferredContentSize]
             let popover = NSPopover()
             popover.behavior = .transient

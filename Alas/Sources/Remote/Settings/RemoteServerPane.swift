@@ -390,25 +390,18 @@ struct RemoteServerPane: View {
         }
     }
 
-    /// Whether `peer` is an online host that updates itself through Homebrew.
     private func updatesOverPeer(_ peer: RemotePeer) -> Bool {
-        state.remotePeers.states[peer.id] == .online
-            && state.remotePeers.peerSupports(HostProtocolCapability.updateV1, serverId: peer.serverId)
+        state.canUpdateHostOverPeer(peerId: peer.id, serverId: peer.serverId)
     }
 
     private func updateHost(_ peer: RemotePeer) {
-        if updatesOverPeer(peer), let channel = state.nativePeerSessions?.hosts?.channel(for: peer.serverId) {
+        if updatesOverPeer(peer) {
             peerError = nil
             hostActivity[peer.id] = "Updating the host with Homebrew…"
             Task { @MainActor in
                 defer { hostActivity[peer.id] = nil }
-                // Homebrew may download a whole release; the SSH update allows it as long.
-                let response = await channel.request(.updateHost, timeout: .seconds(900))
-                // A host the upgrade replaced restarts, dropping the connection
-                // before it answers; it comes back online on the new version.
-                if case .failure(let error) = response,
-                   error != .failed(message: FederatedSessionsProvider.peerUnavailableMessage) {
-                    peerError = "\(peer.name): " + PeerWorktreeRemoval.message(for: error)
+                if let message = await state.updateHostOverPeer(serverId: peer.serverId) {
+                    peerError = "\(peer.name): " + message
                 }
             }
             return

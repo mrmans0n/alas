@@ -403,6 +403,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             ACPFailureIncidentCard(incident: incident, actions: failureIncidentActions)
         case .questionAnswer(let answer):
             ACPQuestionAnswerCard(answer: answer, isExpanded: isExpanded, onExpandedChange: onExpandedChange)
+        case .outcomeCard(let outcome):
+            PromptCardRow(card: outcome.card, text: "", contentMaxWidth: contentMaxWidth, typography: typography)
         case .visualAid(let visual):
             ACPVisualAidCard(
                 visual: visual, form: session.visualAidForm(for: visual),

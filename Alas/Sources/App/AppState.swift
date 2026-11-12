@@ -454,6 +454,10 @@ final class AppState {
     var worktreeCleanupReadyIds: [String: Set<String>] = [:]
     /// Project id → the ready set the user dismissed the reminder for.
     var worktreeCleanupDismissedIds = WorktreeCleanupReminderPolicy.loadDismissals()
+    /// Host server id → the alas-host version its update reminder was dismissed at.
+    var hostUpdateDismissals = HostUpdateReminderPolicy.loadDismissals()
+    /// Hosts asked to update whose answer hasn't come back.
+    var hostUpdatesInFlight: Set<String> = []
     var worktreeCleanupPresentation: WorktreeCleanupPresentation? {
         didSet {
             // Whatever the sheet removed changes the reminder, so rescan on close.

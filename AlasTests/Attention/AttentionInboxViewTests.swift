@@ -6,6 +6,28 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AttentionInboxViewTests {
+    /// An online host that can update and runs an older release is
+    /// reminded about, until dismissed at that release.
+    @Test(arguments: [
+        (version: "0.40.0", canUpdate: true, dismissed: nil, reminds: true),
+        (version: "0.41.0", canUpdate: true, dismissed: nil, reminds: false),
+        (version: "0.42.0", canUpdate: true, dismissed: nil, reminds: false),
+        (version: "0.40.0", canUpdate: false, dismissed: nil, reminds: false),
+        (version: "0.40.0", canUpdate: true, dismissed: "0.40.0", reminds: false),
+        (version: "0.40.0", canUpdate: true, dismissed: "0.39.0", reminds: true),
+        (version: "dev", canUpdate: true, dismissed: nil, reminds: false),
+    ] as [(version: String, canUpdate: Bool, dismissed: String?, reminds: Bool)])
+    func olderHostsThatCanUpdateAreRemindedUntilDismissedAtTheirRelease(
+        _ c: (version: String, canUpdate: Bool, dismissed: String?, reminds: Bool)
+    ) {
+        let reminders = HostUpdateReminderPolicy.reminders(
+            peers: [.init(serverId: "s", name: "mini", hostVersion: c.version, canUpdate: c.canUpdate)],
+            appVersion: SemanticVersion(major: 0, minor: 41, patch: 0),
+            dismissed: c.dismissed.map { ["s": $0] } ?? [:]
+        )
+        #expect(reminders == (c.reminds ? [HostUpdateReminder(serverId: "s", name: "mini", hostVersion: c.version)] : []))
+    }
+
     @Test func livePeerAttentionAddsOnceToBadgeAndInboxWithoutChangingLocalRows() {
         let local = aggregation(items: [makeItem(), makeItem()])
         let peer = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",

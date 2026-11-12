@@ -7,6 +7,7 @@ struct ComputerUseBadge: View {
     let sessionID: String
     let state: AppState
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     struct Label: Equatable {
         let text: String
@@ -48,9 +49,9 @@ struct ComputerUseBadge: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "cursorarrow.rays").font(.system(size: 10))
+                    Image(systemName: "cursorarrow.rays").font(scale.caption.font(weight: .regular))
                     Text(label.text)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(scale.meta.font(weight: .medium))
                 }
                 .foregroundStyle(theme.color(label.accent ? "accent" : "fg-dim"))
             }

@@ -6,6 +6,7 @@ struct RunReportTabView: View {
     let tabState: RunReportTabState
 
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var content = RunReportContent.loading
 
     var body: some View {
@@ -57,25 +58,25 @@ struct RunReportTabView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text(entry.scriptName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(scale.titleFont)
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     outcomePill(entry.outcome)
                 }
                 Text(headerDetail(entry))
-                    .font(.system(size: 11))
+                    .font(scale.meta.font)
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(entry.target.workingDirectory)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(scale.caption.font(weight: .regular, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 if let endpoint = entry.endpoint {
                     Text(endpoint.absoluteString)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(scale.caption.font(weight: .regular, design: .monospaced))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -97,8 +98,8 @@ struct RunReportTabView: View {
                     .controlSize(.small)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, scale.space[4])
+        .padding(.vertical, scale.space[3])
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
@@ -111,10 +112,10 @@ struct RunReportTabView: View {
                 .fill(color)
                 .frame(width: 6, height: 6)
             Text(outcomeText(outcome))
-                .font(.system(size: 10, weight: .semibold))
+                .font(scale.caption.font(weight: .semibold))
         }
         .foregroundStyle(color)
-        .padding(.horizontal, 7)
+        .padding(.horizontal, scale.space[2])
         .frame(height: 18)
         .background(color.opacity(0.12), in: Capsule())
         .overlay(Capsule().strokeBorder(color.opacity(0.22), lineWidth: 0.5))
@@ -142,8 +143,8 @@ struct RunReportTabView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, scale.space[4])
+                        .padding(.vertical, scale.space[2])
                         .background(.quaternary)
                 }
                 ReadonlyTextView(

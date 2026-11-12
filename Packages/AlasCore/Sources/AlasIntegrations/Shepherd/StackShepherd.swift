@@ -88,7 +88,10 @@ public final class StackShepherd {
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
         /// `gg sync` of `plan` through the guarded path the stack drawer's
         /// Sync uses.
-        public var syncStack: @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void
+        /// `onEvent` hears each event the sync streams.
+        public var syncStack: @MainActor (
+            _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+        ) async throws -> Void
         /// `gg rebase` onto the stack's base through the guarded path the
         /// stack drawer's Rebase uses. Drops entries that already landed.
         /// Refuses unless the worktree is still on `expected` when it runs.
@@ -117,7 +120,9 @@ public final class StackShepherd {
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
-            syncStack: @escaping @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void,
+            syncStack: @escaping @MainActor (
+                _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+            ) async throws -> Void,
             rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (

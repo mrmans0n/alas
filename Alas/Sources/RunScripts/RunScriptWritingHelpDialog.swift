@@ -3,20 +3,21 @@ import SwiftUI
 struct RunScriptWritingHelpField: View {
     @Binding var request: String
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         DialogField(label: "What should the script do?") {
             TextEditor(text: $request)
-                .font(.system(size: 12))
+                .font(scale.meta.font)
                 .foregroundStyle(theme.color("fg"))
                 .scrollContentBackground(.hidden)
                 .frame(height: 90)
-                .padding(8)
+                .padding(scale.space[2])
                 .background(theme.color("bg-0"))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .accessibilityLabel("What should the script do?")
             Text("Opens a draft prompt in a new chat with your default agent.")
-                .font(.system(size: 11))
+                .font(scale.meta.font)
                 .foregroundStyle(.secondary)
         }
     }
@@ -26,6 +27,7 @@ struct RunScriptWritingHelpDialog: View {
     let fileName: String
     let onSubmit: (String) throws -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.designScale) private var scale
     @State private var request = ""
     @State private var errorMessage: String?
 
@@ -36,7 +38,7 @@ struct RunScriptWritingHelpDialog: View {
             content: {
                 RunScriptWritingHelpField(request: $request)
                 if let errorMessage {
-                    Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
+                    Text(errorMessage).font(scale.meta.font).foregroundStyle(.red)
                 }
             },
             cancelTitle: "Cancel",

@@ -118,6 +118,18 @@ public final class AlasCoreContext {
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
     /// The PR or stack publish running for each worktree; one waits for another.
     @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
+    /// The agent `stack_ship` still running for each worktree after its
+    /// reply went out, and the failure of one that ended after its reply,
+    /// kept until `pr_status` or a turn reports it.
+    @ObservationIgnored var stackShipJobs: [String: StackShipJob] = [:]
+    @ObservationIgnored var stackShipFailures: [String: StackShipFailure] = [:]
+    /// Each agent `pr_status` read still running, and the last one read.
+    @ObservationIgnored var prStatusReads: [PRStatusReadKey: Task<AlasCLIResponse, Never>] = [:]
+    @ObservationIgnored var prStatusCache: [PRStatusReadKey: CachedPRStatus] = [:]
+    /// The error of a read that ended after its callers got a reply.
+    @ObservationIgnored var prStatusFailures: [PRStatusReadKey: String] = [:]
+    /// Publishes finished per worktree, so a read that overlapped one is not kept.
+    @ObservationIgnored var prStatusPublishes: [String: Int] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
     /// Agents' turns and usage limits, as usage views and plugins read them.

@@ -105,7 +105,7 @@ mod message {
     pub const SCREEN_LOCKED: &str = "The Linux VM's screen is locked.";
     /// A ref click runs the app's handler inside the AT-SPI call, so a modal dialog it opens keeps
     /// the app from answering any read until the dialog closes. Real input still reaches it.
-    pub const APP_UNRESPONSIVE: &str = "This app isn't answering accessibility reads, so its elements are missing. A dialog opened by a ref click does this until it closes: call computer_screenshot and use x/y.";
+    pub const APP_UNRESPONSIVE: &str = "This app isn't answering accessibility reads, so its elements are missing. A dialog opened by a ref click on an off-screen element does this until it closes: call computer_screenshot and use x/y.";
     pub const FOREGROUND_UNAVAILABLE: &str =
         "The window couldn't be brought to the front, so no input was sent.";
 
@@ -969,6 +969,25 @@ impl<D: Driver> Computer<D> {
                 let count = params.count.unwrap_or(1);
                 if let Some(reference) = &params.reference {
                     let element = self.element(call, window.id, reference)?;
+                    // A ref on screen is clicked where it is. GTK runs a modal
+                    // dialog inside the accessibility action that opened it, and
+                    // the app answers no accessibility reads until it closes.
+                    if element.frame.is_some() {
+                        match self.ref_point(call, window, reference, &mut None) {
+                            Ok(point) => {
+                                let mut args = merge(&target, json!({"x": point.x, "y": point.y}));
+                                args["capture_id"] = json!(point.capture_id);
+                                args["button"] = json!(button);
+                                args["count"] = json!(count);
+                                self.input_call(call, "click", foreground(args), Some(reference))?;
+                                return Ok("activation");
+                            }
+                            Err(error) if error != message::out_of_bounds(window.id) => {
+                                return Err(error);
+                            }
+                            Err(_) => {}
+                        }
+                    }
                     let mut args = json!({"element_token": element.token});
                     if button != "left" {
                         args["button"] = json!(button);
@@ -1902,26 +1921,61 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ref_click_uses_the_element_token_of_the_latest_read() {
+    fn ref_click_on_screen_clicks_the_centre_of_the_latest_reads_element() {
+        // A dialog the click opens would otherwise lock the app's accessibility
+        // reads until it closes, so an element with a frame is clicked by position.
         let fake = Fake::mousepad();
         fake.script(
             "get_window_state",
-            vec![fixture("gws_elements"), fixture("gws_elements_query")],
+            vec![
+                fixture("gws_elements"),
+                fixture("gws_elements_query"),
+                fixture("gws_screenshot"),
+            ],
         );
-        fake.script("click", vec![fixture("click_element")]);
+        fake.script("click", vec![fixture("click_xy_fg")]);
         let mut computer = new_computer(&fake);
         inspect(&mut computer, None);
         inspect(&mut computer, Some("Edit"));
 
-        payload(&computer.perform(
+        let result = payload(&computer.perform(
             SESSION,
-            &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+            &request(
+                "click",
+                json!({"window_id": WINDOW, "ref": "e1", "count": 2}),
+            ),
+        ));
+
+        // e1 is Edit now, not File: x 775 + 41/2 and y 780 + 27/2 in a window at 736, 780.
+        assert_eq!(
+            fake.calls("click"),
+            vec![json!({
+                "pid": PID, "window_id": WINDOW, "x": 59.5, "y": 13.5,
+                "capture_id": "capture_313c65c3bd684ff3a36a01314d81d37b_0000000000000000",
+                "button": "left", "count": 2, "delivery_mode": "foreground",
+            })]
+        );
+        assert_eq!(result["delivery"], "activation");
+    }
+
+    #[test]
+    fn ref_click_off_screen_uses_the_element_token() {
+        let fake = Fake::mousepad();
+        fake.script("get_window_state", vec![fixture("gws_elements")]);
+        fake.script("click", vec![fixture("click_element")]);
+        let mut computer = new_computer(&fake);
+        inspect(&mut computer, None);
+
+        let result = payload(&computer.perform(
+            SESSION,
+            &request("click", json!({"window_id": WINDOW, "ref": "e8"})),
         ));
 
         assert_eq!(
             fake.calls("click"),
-            vec![json!({"element_token": "s00000003:1"})]
+            vec![json!({"element_token": "s00000002:6"})]
         );
+        assert_eq!(result["delivery"], "ax");
     }
 
     #[test]
@@ -2216,7 +2270,7 @@ pub(crate) mod tests {
         // After the click that wedged it, and on any read after that.
         let clicked = payload(&computer.perform(
             SESSION,
-            &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+            &request("click", json!({"window_id": WINDOW, "ref": "e8"})),
         ));
         assert_eq!(clicked["warning"], message::APP_UNRESPONSIVE);
         let inspected =
@@ -2237,7 +2291,7 @@ pub(crate) mod tests {
 
         let result = payload(&computer.perform(
             SESSION,
-            &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+            &request("click", json!({"window_id": WINDOW, "ref": "e8"})),
         ));
 
         assert_eq!(result["action"], "click");
@@ -2251,9 +2305,9 @@ pub(crate) mod tests {
         assert!(
             error(&computer.perform(
                 SESSION,
-                &request("click", json!({"window_id": WINDOW, "ref": "e1"})),
+                &request("click", json!({"window_id": WINDOW, "ref": "e8"})),
             ))
-            .contains("e1")
+            .contains("e8")
         );
     }
 
@@ -2499,9 +2553,11 @@ pub(crate) mod tests {
         ] {
             let fake = Fake::mousepad();
             let mut reads = vec![fixture("gws_screenshot"), fixture("gws_elements")];
-            // Pixels go with a capture taken just before the input, one per end of a drag.
+            // Pixels go with a capture taken just before the input, one per end of a drag;
+            // e1 is on screen, so its click goes by position too.
             let captures = match action {
                 "drag" => 2,
+                "click" => 1,
                 _ if params.get("x").is_some() => 1,
                 _ => 0,
             };

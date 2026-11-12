@@ -21,6 +21,8 @@ public enum ACPMessage: Equatable, Sendable {
     case failureIncident(id: UUID, ACPFailureIncident)
     case visualAid(ACPVisualAid)
     case questionAnswer(ACPAnsweredQuestion)
+    /// Persisted under the `"system"` kind, with its text as the notice text.
+    case outcomeCard(ACPOutcomeCard)
 
     public static func user(id: UUID, text: String, attachments: [Attachment]) -> ACPMessage {
         .user(id: id, messageId: nil, text: text, attachments: attachments)
@@ -47,6 +49,7 @@ public enum ACPMessage: Equatable, Sendable {
         case failureIncident(UUID)
         case visualAid(UUID)
         case questionAnswer(UUID)
+        case outcomeCard(UUID)
         case toolCall(String)
     }
 
@@ -68,6 +71,8 @@ public enum ACPMessage: Equatable, Sendable {
             .failureIncident(id)
         case .questionAnswer(let answer):
             .questionAnswer(answer.id)
+        case .outcomeCard(let card):
+            .outcomeCard(card.id)
         case .visualAid(let visual):
             .visualAid(visual.id)
         case .toolCall(let tc):
@@ -89,7 +94,7 @@ public enum ACPMessage: Equatable, Sendable {
         switch self {
         case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             true
-        case .user, .systemNotice, .failureIncident, .questionAnswer:
+        case .user, .systemNotice, .failureIncident, .questionAnswer, .outcomeCard:
             false
         }
     }
@@ -103,7 +108,8 @@ public enum ACPMessage: Equatable, Sendable {
         case .thoughtMessageId(let messageId):
             "acp-thought:\(messageId)"
         case .userUUID(let id), .agentUUID(let id), .thoughtUUID(let id),
-             .fileEdit(let id), .plan(let id), .systemNotice(let id), .failureIncident(let id), .visualAid(let id), .questionAnswer(let id):
+             .fileEdit(let id), .plan(let id), .systemNotice(let id), .failureIncident(let id), .visualAid(let id), .questionAnswer(let id),
+             .outcomeCard(let id):
             id.uuidString
         case .toolCall(let toolCallId):
             "tc-\(toolCallId)"
@@ -125,6 +131,8 @@ public enum ACPMessage: Equatable, Sendable {
             tc.content.utf8.count
         case .questionAnswer(let answer):
             answer.displayText.utf8.count
+        case .outcomeCard(let card):
+            card.text.utf8.count
         case .visualAid(let visual):
             visual.title.utf8.count + visual.html.utf8.count
         case .fileEdit, .plan, .planDocument:
@@ -140,7 +148,7 @@ public enum ACPMessage: Equatable, Sendable {
         case .toolCall: "tool_call"
         case .fileEdit: "file_edit"
         case .plan, .planDocument: "plan"
-        case .systemNotice, .failureIncident, .questionAnswer: "system"
+        case .systemNotice, .failureIncident, .questionAnswer, .outcomeCard: "system"
         case .visualAid: "visual_aid"
         }
     }
@@ -758,6 +766,7 @@ public enum ACPMessageCodec: Sendable {
         case .failureIncident(_, let incident): return try encoder.encode(ACPSystemRowPayload(failureIncident: incident))
         case .visualAid(let visual):        return try encoder.encode(visual)
         case .questionAnswer(let answer):   return try encoder.encode(ACPSystemRowPayload(questionAnswer: answer))
+        case .outcomeCard(let card):        return try encoder.encode(ACPSystemRowPayload(outcomeCard: card))
         }
     }
 
@@ -785,6 +794,7 @@ public enum ACPMessageCodec: Sendable {
         case "system":
             let p = try JSONDecoder().decode(ACPSystemRowPayload.self, from: payload)
             if let answer = p.questionAnswer { return .questionAnswer(answer) }
+            if let card = p.outcomeCard { return .outcomeCard(card) }
             return p.failureIncident.map { .failureIncident(id: UUID(), $0) } ?? .systemNotice(id: UUID(), text: p.text)
         default:
             return .systemNotice(id: UUID(), text: "(unknown message kind: \(kind))")

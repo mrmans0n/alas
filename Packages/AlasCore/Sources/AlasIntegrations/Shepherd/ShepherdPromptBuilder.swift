@@ -34,7 +34,7 @@ public enum ShepherdPromptBuilder {
 
     /// A backtick fence longer than any backtick run in `text` (at least 3),
     /// so untrusted text such as a check log can't close it early.
-    private static func fence(for text: String) -> String {
+    static func fence(for text: String) -> String {
         var longest = 0
         var current = 0
         for character in text {

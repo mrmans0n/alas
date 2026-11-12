@@ -7525,35 +7525,46 @@ struct ACPSessionRunnerTests {
         await second.open()
     }
 
-    @Test("resolved questions follow buffered output and survive hydration")
-    func resolvedQuestionFollowsBufferedOutputAndSurvivesHydration() async throws {
+    enum MidTurnHistoryRow: CaseIterable, Sendable { case questionAnswer, outcomeCard }
+
+    @Test("resolved questions and outcome cards follow buffered output, split the running message and survive hydration",
+          arguments: MidTurnHistoryRow.allCases)
+    func historyRowFollowsBufferedOutputAndSurvivesHydration(row: MidTurnHistoryRow) async throws {
         let (runner, mock) = try makeRunner(incomingUpdateCoalesceNanos: 60_000_000_000)
         defer { runner.stop() }
         runner.start()
         runner.session.transcript.streamingState = .streaming
         runner.session.foregroundTurnActive = { true }
-        mock.emit(.init(sessionId: "s", update: agentChunk("Before the answer", id: "m1")))
+        mock.emit(.init(sessionId: "s", update: agentChunk("Before the row", id: "m1")))
         try await waitUntil { runner.pendingIncomingUpdateCountForTesting == 1 }
-        let request = ACPUserInputRequest.cursor(.init(id: .number(1), params: .stub(title: "Choose")))
-        let answer = ACPAnsweredQuestion(request: request, action: .submit(["q1": .string("o1")]))
-
-        runner.recordQuestionAnswer(answer)
+        let expected: ACPMessage
+        switch row {
+        case .questionAnswer:
+            let request = ACPUserInputRequest.cursor(.init(id: .number(1), params: .stub(title: "Choose")))
+            let answer = ACPAnsweredQuestion(request: request, action: .submit(["q1": .string("o1")]))
+            runner.recordQuestionAnswer(answer)
+            expected = .questionAnswer(answer)
+        case .outcomeCard:
+            let card = ACPOutcomeCard(card: ACPPromptCard(origin: .merged, title: "GitHub #7 · Fix login"), text: "Merged")
+            #expect(runner.appendAndPersistOutcomeCard(card))
+            expected = .outcomeCard(card)
+        }
 
         #expect(runner.session.transcript.messages.map(\.kind) == ["agent", "system"])
-        #expect(runner.session.transcript.messages.last == .questionAnswer(answer))
-        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: agentChunk("After the answer", id: "m1")))
+        #expect(runner.session.transcript.messages.last == expected)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: agentChunk("After the row", id: "m1")))
         #expect(runner.session.transcript.messages.map(\.kind) == ["agent", "system", "agent"])
         await runner.flushPersistence()
         let hydrated = try await runner.persistence.hydrate(sessionId: "s")
         let restored = hydrated.wireMessages.map { $0.toMessage() }
         #expect(restored.map(\.kind) == ["agent", "system", "agent"])
         try #require(restored.count == 3)
-        #expect(restored[1] == .questionAnswer(answer))
+        #expect(restored[1] == expected)
         let text = restored.compactMap { message -> String? in
             if case .agent(_, _, let buffer) = message { return buffer.value }
             return nil
         }
-        #expect(text == ["Before the answer", "After the answer"])
+        #expect(text == ["Before the row", "After the row"])
     }
 
     /// An answered optional question is recorded the way the adapter replays

@@ -15,6 +15,8 @@ struct SidebarHeaderView: View {
     var appUpdate: ReleaseInfo? = nil
     var appUpdateReadyToRelaunch = false
     var cleanupReminders: [WorktreeCleanupReminder] = []
+    var hostUpdates: [HostUpdateReminder] = []
+    var hostUpdatesInFlight: Set<String> = []
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
@@ -25,6 +27,8 @@ struct SidebarHeaderView: View {
     var onOpenAppUpdate: () -> Void = {}
     var onOpenWorktreeCleanup: (String) -> Void = { _ in }
     var onDismissWorktreeCleanup: (String) -> Void = { _ in }
+    var onUpdateHost: (HostUpdateReminder) -> Void = { _ in }
+    var onDismissHostUpdate: (HostUpdateReminder) -> Void = { _ in }
     var attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil
     init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
@@ -40,6 +44,8 @@ struct SidebarHeaderView: View {
          appUpdate: ReleaseInfo? = nil,
          appUpdateReadyToRelaunch: Bool = false,
          cleanupReminders: [WorktreeCleanupReminder] = [],
+         hostUpdates: [HostUpdateReminder] = [],
+         hostUpdatesInFlight: Set<String> = [],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
@@ -50,6 +56,8 @@ struct SidebarHeaderView: View {
          onOpenAppUpdate: @escaping () -> Void = {},
          onOpenWorktreeCleanup: @escaping (String) -> Void = { _ in },
          onDismissWorktreeCleanup: @escaping (String) -> Void = { _ in },
+         onUpdateHost: @escaping (HostUpdateReminder) -> Void = { _ in },
+         onDismissHostUpdate: @escaping (HostUpdateReminder) -> Void = { _ in },
          attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil) {
         self.onSettings = onSettings
         self.onAddProject = onAddProject
@@ -65,6 +73,8 @@ struct SidebarHeaderView: View {
         self.appUpdate = appUpdate
         self.appUpdateReadyToRelaunch = appUpdateReadyToRelaunch
         self.cleanupReminders = cleanupReminders
+        self.hostUpdates = hostUpdates
+        self.hostUpdatesInFlight = hostUpdatesInFlight
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
@@ -75,6 +85,8 @@ struct SidebarHeaderView: View {
         self.onOpenAppUpdate = onOpenAppUpdate
         self.onOpenWorktreeCleanup = onOpenWorktreeCleanup
         self.onDismissWorktreeCleanup = onDismissWorktreeCleanup
+        self.onUpdateHost = onUpdateHost
+        self.onDismissHostUpdate = onDismissHostUpdate
         self.attentionRollUpSummarizer = attentionRollUpSummarizer
     }
     @Environment(\.theme) private var theme
@@ -121,6 +133,8 @@ struct SidebarHeaderView: View {
                 appUpdate: appUpdate,
                 appUpdateReadyToRelaunch: appUpdateReadyToRelaunch,
                 cleanupReminders: cleanupReminders,
+                hostUpdates: hostUpdates,
+                hostUpdatesInFlight: hostUpdatesInFlight,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,
@@ -131,6 +145,8 @@ struct SidebarHeaderView: View {
                 onOpenAppUpdate: onOpenAppUpdate,
                 onOpenWorktreeCleanup: onOpenWorktreeCleanup,
                 onDismissWorktreeCleanup: onDismissWorktreeCleanup,
+                onUpdateHost: onUpdateHost,
+                onDismissHostUpdate: onDismissHostUpdate,
                 rollUpSummarizer: attentionRollUpSummarizer
             )
         }

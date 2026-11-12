@@ -543,25 +543,30 @@ enum HoverFeatureTesting {
         return scrollView
     }
 
+    /// Measures with the popup text view's own geometry (8 pt insets, the
+    /// default 5 pt line fragment padding), so the popup is exactly as wide
+    /// and tall as its text: no clipped long lines, no empty band below.
     static func computePreferredSize(for result: MarkdownRenderResult) -> NSSize {
+        let maxSize = NSSize(width: 520, height: 400)
+        let inset = NSSize(width: 8, height: 8)
+        let fragmentPadding: CGFloat = 5
+        let chromeWidth = inset.width * 2 + fragmentPadding * 2
+
         let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(containerSize: NSSize(width: 500, height: CGFloat.greatestFiniteMagnitude))
-        textContainer.widthTracksTextView = true
-        textContainer.lineFragmentPadding = 0
+        let textContainer = NSTextContainer(
+            containerSize: NSSize(width: maxSize.width - inset.width * 2, height: CGFloat.greatestFiniteMagnitude)
+        )
+        textContainer.lineFragmentPadding = fragmentPadding
         layoutManager.addTextContainer(textContainer)
 
         let textStorage = NSTextStorage(attributedString: result.attributedString)
         textStorage.addLayoutManager(layoutManager)
         layoutManager.glyphRange(for: textContainer)
 
-        var usedRect = layoutManager.usedRect(for: textContainer)
-        usedRect.size.width += 16 + 20
-        usedRect.size.height += 16 + 20
-
-        let maxSize = NSSize(width: 520, height: 400)
+        let usedRect = layoutManager.usedRect(for: textContainer)
         return NSSize(
-            width: min(usedRect.size.width, maxSize.width),
-            height: min(usedRect.size.height, maxSize.height)
+            width: min(ceil(usedRect.width) + chromeWidth, maxSize.width),
+            height: min(ceil(usedRect.height) + inset.height * 2, maxSize.height)
         )
     }
 }

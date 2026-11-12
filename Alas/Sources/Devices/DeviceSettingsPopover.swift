@@ -10,6 +10,7 @@ struct DeviceSettingsPopover: View {
     let settings: any SimulatorSettingsControl
     let control: DeviceAgentControl
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     @State private var display: SimulatorDisplaySettings?
     @State private var displayError: String?
@@ -31,15 +32,15 @@ struct DeviceSettingsPopover: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: scale.space[4]) {
             section("Display") { displayRows }
             Divider()
             section("App") { appRows }
             Divider()
             section("Device") { deviceRows }
         }
-        .font(.system(size: 12))
-        .padding(14)
+        .font(scale.meta.font)
+        .padding(scale.space[4])
         .frame(width: 340)
         .task { await load() }
     }
@@ -47,7 +48,7 @@ struct DeviceSettingsPopover: View {
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(scale.meta.font(weight: .semibold))
                 .foregroundStyle(theme.color("fg-dim"))
             content()
         }
@@ -159,9 +160,9 @@ struct DeviceSettingsPopover: View {
             }
             .controlSize(.small)
             TextEditor(text: $payload)
-                .font(.system(size: 11, design: .monospaced))
+                .font(scale.meta.font(design: .monospaced))
                 .frame(height: 54)
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
             HStack {
                 Spacer()
                 Button("Send Notification", action: sendPush).controlSize(.small)
@@ -274,7 +275,7 @@ struct DeviceSettingsPopover: View {
 
     private func note(_ text: String, tone: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(scale.meta.font)
             .foregroundStyle(theme.color(tone))
             .fixedSize(horizontal: false, vertical: true)
     }

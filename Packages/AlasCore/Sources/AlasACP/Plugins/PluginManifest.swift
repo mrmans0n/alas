@@ -324,6 +324,8 @@ public struct PluginManifest: Equatable, Sendable {
     public static let maxPanelsAPI6 = 4
     public static let maxProcesses = 16
     public static let maxArgBytes = 1024
+    /// Approved command prefixes may embed queries or scripts; runtime-appended args keep `maxArgBytes`.
+    public static let maxCommandArgBytes = 16 * 1024
     public static let maxPrompts = 16
     /// Prompts an instance sets with `prompts/set` (API 9).
     public static let maxRuntimePrompts = 32
@@ -551,8 +553,8 @@ public struct PluginManifest: Equatable, Sendable {
             guard let executable = command.first, !executable.isEmpty else {
                 throw .invalidProcess("process \"\(id)\" needs a command")
             }
-            guard command.allSatisfy({ $0.utf8.count <= maxArgBytes }) else {
-                throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxArgBytes) bytes")
+            guard command.allSatisfy({ $0.utf8.count <= maxCommandArgBytes }) else {
+                throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxCommandArgBytes) bytes")
             }
             processes.append(PluginProcessContribution(
                 id: id, command: command, appendArgs: entry.appendArgs ?? false, longRunning: entry.longRunning ?? false))

@@ -117,6 +117,14 @@ final class DeviceScreenNSView: NSView {
     func attach(udid: String, client: SimulatorStreamClient) {
         detach()
         self.udid = udid
+#if DEBUG
+        // A scripted simulator of a design capture shows a painted screen and never subscribes.
+        if DesignCaptureDevices.isDemoUDID(udid) {
+            layer?.contents = DesignCaptureDevices.demoScreen
+            layer?.contentsGravity = .resizeAspectFill
+            return
+        }
+#endif
         self.client = client
         token = client.subscribe(
             udid: udid,

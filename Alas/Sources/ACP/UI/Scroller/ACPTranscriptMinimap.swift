@@ -26,7 +26,7 @@ struct ACPTranscriptMinimapLayout {
             let role: Role
             switch message {
             case .user: role = .user
-            case .systemNotice, .failureIncident, .questionAnswer: role = .notice
+            case .systemNotice, .failureIncident, .questionAnswer, .outcomeCard: role = .notice
             case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid: role = .assistant
             }
             let globalIndex = offset + index
@@ -67,7 +67,7 @@ struct ACPTranscriptMinimapLayout {
             case 80..<400: return 2
             default: return 3
             }
-        case .systemNotice, .failureIncident, .questionAnswer:
+        case .systemNotice, .failureIncident, .questionAnswer, .outcomeCard:
             return 0
         }
     }
