@@ -35,8 +35,4 @@ struct DeviceTextInputTests {
     func charactersTheKeyboardLacksArePasted(text: String, runs: [String]) {
         #expect(shape(text) == runs)
     }
-
-    @Test func stopsAtTheFirstCharacterItCannotType() {
-        #expect(DeviceTextInput.presses(for: "café") == .failure(DeviceTextInputError(character: "é")))
-    }
 }

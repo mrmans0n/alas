@@ -983,7 +983,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_type",
-            "description": format!("Type ASCII text into the focused field of the simulator, as key presses on a US keyboard; \\n presses Return. Tap the field first. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Type text into the focused field of the simulator. ASCII is typed as key presses on a US keyboard, and \\n presses Return; other characters, such as accents and emoji, are pasted. Tap the field first. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1121,6 +1121,19 @@ fn device_tool_definitions() -> Vec<Value> {
                     "include_apple": { "type": "boolean", "description": "Keep Apple's subsystems (com.apple.*) inside the app. Default: false." },
                     "query": { "type": "string", "maxLength": 256, "description": "Only lines whose message, subsystem or category contain this text." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Default: 200." }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_clipboard",
+            "description": format!("Read the simulator's pasteboard, or set it by passing text. To paste it into a field, tap the field and type with device_type, or use the app's Paste menu. Setting it waits while the user drives. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "text": { "type": "string", "maxLength": 65536, "description": "Omit to read the pasteboard." }
                 },
                 "required": ["udid"]
             }
@@ -2190,6 +2203,18 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 include_apple: optional_bool(args, "include_apple")?.unwrap_or(false),
                 query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 1000)?.unwrap_or(200),
+            }))
+        }
+        "device_clipboard" => {
+            reject_arguments(args, name, &["udid", "text"])?;
+            let text = match args.get("text") {
+                None => None,
+                Some(Value::String(text)) if text.len() <= 65536 => Some(text.clone()),
+                _ => return Err("text must be a string of at most 65536 bytes".into()),
+            };
+            Ok(Command::Device(alas_client::DeviceCommand::Clipboard {
+                udid: required_limited_string(args, "udid", 64)?,
+                text,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4358,6 +4383,7 @@ mod tests {
                 "device_push",
                 "device_open_url",
                 "device_logs",
+                "device_clipboard",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -5245,6 +5271,13 @@ mod tests {
                 limit: 200
             })
         );
+        assert_eq!(
+            map("device_clipboard", json!({ "udid": "U", "text": "é" })).unwrap(),
+            Command::Device(DeviceCommand::Clipboard {
+                udid: "U".into(),
+                text: Some("é".into())
+            })
+        );
         for (name, args, error) in [
             ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
             ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
@@ -5266,6 +5299,7 @@ mod tests {
             ("device_open_url", json!({ "udid": "U", "url": "nothing" }), "url must have a scheme, such as https: or myapp:"),
             ("device_logs", json!({ "udid": "U", "since_seconds": 601 }), "since_seconds must be an integer from 1 to 600"),
             ("device_logs", json!({ "udid": "U", "level": "verbose" }), "level must be one of default, info, debug, error"),
+            ("device_clipboard", json!({ "udid": "U", "text": 1 }), "text must be a string of at most 65536 bytes"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }

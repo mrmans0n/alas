@@ -17,6 +17,8 @@ final class SimulatorLogStream {
 
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private var generation = 0
+    /// Called with each batch of new lines.
+    @ObservationIgnored var onAppend: (([SimulatorLogLine]) -> Void)?
 
     func start(udid: String, query: SimulatorLogQuery) {
         start(udid: udid, predicate: query.predicate, levelArguments: query.streamArguments)
@@ -81,6 +83,7 @@ final class SimulatorLogStream {
             lines.removeFirst(excess)
             dropped += excess
         }
+        onAppend?(new)
     }
 }
 

@@ -1,14 +1,5 @@
-public struct DeviceTextInputError: Error, Equatable, Sendable {
-    /// The first character the US layout cannot type.
-    public let character: Character
-
-    public init(character: Character) {
-        self.character = character
-    }
-}
-
-/// Turns ASCII text into USB HID key presses on a US keyboard layout, with
-/// Shift where the character needs it.
+/// Turns text into USB HID key presses on a US keyboard layout, with Shift
+/// where the character needs it, and marks what the layout lacks for pasting.
 public enum DeviceTextInput {
     public struct Press: Equatable, Sendable {
         public let usage: UInt32
@@ -18,15 +9,6 @@ public enum DeviceTextInput {
             self.usage = usage
             self.shift = shift
         }
-    }
-
-    public static func presses(for text: String) -> Result<[Press], DeviceTextInputError> {
-        var presses: [Press] = []
-        for character in text {
-            guard let press = press(for: character) else { return .failure(DeviceTextInputError(character: character)) }
-            presses.append(press)
-        }
-        return .success(presses)
     }
 
     /// A stretch of text typed as keys, or pasted because the US layout lacks it.

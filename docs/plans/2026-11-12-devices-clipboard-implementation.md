@@ -467,7 +467,7 @@ struct DevicePasteboardTests {
         let paste = try await pasteboard.open(udid: "on", keepText: true)
         let copy = Task { try await pasteboard.copy(udid: "on") }
         for _ in 0..<20 { await Task.yield() }
-        #expect(fake.log == ["read"])
+        #expect(fake.log == ["read", "grant com.example.app"])
         try await pasteboard.paste("é", in: paste)
         await pasteboard.close(paste)
         _ = try await copy.value
