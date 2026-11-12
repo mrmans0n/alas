@@ -1727,6 +1727,19 @@ struct RemoteSessionGatewayTests {
         #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
     }
 
+    /// Matches the browser's `userTextWithoutImageLabels`: mention lines and
+    /// a prompt that reads like a label stay.
+    @Test(arguments: [
+        ("see\n\n🖼 a.png\n\n📎 App.swift", ["a.png"], "see\n\n📎 App.swift"),
+        ("🖼 Image", [nil], ""),
+        ("🖼 a.png\n\n🖼 a.png\n\n🖼 b.png", ["a.png", "b.png"], "🖼 a.png"),
+        ("hi\n\n🖼 a.png", ["gone.png"], "hi\n\n🖼 a.png"),
+        ("see\n\n🖼 a.png\n\n🖼 Image", ["a.png"], "see\n\n🖼 Image"),
+    ] as [(String, [String?], String)])
+    func userRowTextDropsShownImageLabels(text: String, names: [String?], expected: String) {
+        #expect(RemoteSessionGateway.userRowText(text, removingImageNames: names) == expected)
+    }
+
     private nonisolated static let peerCheckpoint = UUID()
 
     @Test(arguments: [

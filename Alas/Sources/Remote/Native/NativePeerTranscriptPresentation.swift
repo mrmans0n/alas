@@ -4,7 +4,9 @@ import Foundation
 /// transcript renders so the peer pane can reuse its cards instead of showing
 /// flattened text.
 enum NativePeerRow: Equatable {
-    case user(String, checkpointID: CheckpointID?)
+    /// `images` replace their `🖼` labels in the text; a viewer shows each
+    /// label again until its bytes load.
+    case user(String, checkpointID: CheckpointID?, images: [RemoteWireMessage.Image] = [])
     case agent(String)
     case thought(String)
     case toolCall(ACPMessage.ToolCall)
@@ -18,7 +20,12 @@ enum NativePeerRow: Equatable {
         let text = message.text ?? ""
         switch message.kind {
         case "user":
-            self = .user(text, checkpointID: message.checkpointId.flatMap(UUID.init(uuidString:)))
+            let images = message.images ?? []
+            self = .user(
+                images.isEmpty ? text : RemoteSessionGateway.userRowText(text, removingImageNames: images.map(\.name)),
+                checkpointID: message.checkpointId.flatMap(UUID.init(uuidString:)),
+                images: images
+            )
         case "agent":
             self = .agent(text)
         case "thought":
@@ -169,7 +176,7 @@ final class NativePeerRowCache {
 
     private func proxy(for row: NativePeerRow, stableId: String) -> ACPMessage {
         switch row {
-        case .user(let text, _):
+        case .user(let text, _, _):
             .user(id: UUID(), messageId: nil, text: text, attachments: [])
         case .agent(let text):
             .agent(id: UUID(), messageId: nil, StreamingText(text))

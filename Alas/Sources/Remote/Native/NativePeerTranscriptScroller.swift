@@ -520,12 +520,24 @@ private struct NativePeerRowView: View {
 
     var body: some View {
         switch row {
-        case .user(let text, let checkpointID):
+        case .user(let text, let checkpointID, let images):
             HStack {
                 Spacer(minLength: 40)
-                ACPMarkdownText(raw: text, typography: typography)
-                    .acpUserBubble()
-                    .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if !images.isEmpty {
+                        HStack(spacing: 6) {
+                            // Same image attached twice shares a uri.
+                            ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                                NativePeerImageThumbnail(image: image)
+                            }
+                        }
+                    }
+                    if !text.isEmpty {
+                        ACPMarkdownText(raw: text, typography: typography)
+                            .acpUserBubble()
+                    }
+                }
+                .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
             }
             .frame(maxWidth: .infinity)
             .contextMenu { messageMenu(text, checkpointID: checkpointID) }
@@ -590,6 +602,43 @@ private struct NativePeerRowView: View {
         }
         if ACPMessageQuote.canQuote(text) {
             Button("Quote") { onQuote(text) }
+        }
+    }
+}
+
+/// A prompt's image, read from the peer that holds the file. Its `🖼` label
+/// stands in until the bytes load, and stays when the peer can't serve them.
+private struct NativePeerImageThumbnail: View {
+    let image: RemoteWireMessage.Image
+    @Environment(\.acpTranscriptImageReader) private var reader
+    @Environment(\.designScale) private var scale
+
+    private var title: String { image.name ?? "Image" }
+
+    var body: some View {
+        let reader = reader
+        let uri = image.uri
+        ACPCachedThumbnail(
+            cacheKey: "\(reader?.id ?? "none"):\(uri)",
+            loadImage: { await reader?.read(uri).flatMap(NSImage.init(data:)) }
+        ) { loaded in
+            Button {
+                ACPImagePreview.shared.show(loaded, title: title)
+            } label: {
+                Image(nsImage: loaded)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 96, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.medium)
+                        .strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .help(title)
+        } placeholder: {
+            Text("🖼 \(title)")
+                .acpUserBubble()
         }
     }
 }
