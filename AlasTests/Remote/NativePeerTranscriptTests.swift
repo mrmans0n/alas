@@ -234,6 +234,17 @@ struct NativePeerTranscriptTests {
         #expect(NativePeerRow(message: malformed) == .systemNotice("Plan details are unavailable."))
     }
 
+    @Test func userRowsShowImagesInsteadOfTheirLabels() {
+        let wire = RemoteSessionGateway.toWire(.user(id: UUID(), text: "see @App.swift", attachments: [
+            .init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil),
+            .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png"),
+            .init(uri: "data:image/png;base64,iVBORw0KGgo=", name: nil, mimeType: "image/png"),
+        ]), index: 0)
+        #expect(NativePeerRow(message: wire) == .user(
+            "see @App.swift\n\n🖼 Image\n\n📎 App.swift", checkpointID: nil,
+            images: [.init(uri: "file:///tmp/shot.png", name: "shot.png")]))
+    }
+
     @Test func failureIncidentRowsShowTheirText() throws {
         let wire = RemoteSessionGateway.toWire(
             .failureIncident(id: UUID(), try .fixture(title: "Failed", details: "Why")), index: 2)

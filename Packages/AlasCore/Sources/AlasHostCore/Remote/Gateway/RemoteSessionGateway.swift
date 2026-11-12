@@ -1416,6 +1416,22 @@ public final class RemoteSessionGateway {
         return parts.joined(separator: "\n\n")
     }
 
+    /// `text` from `userRowText` without the labels of the images a viewer
+    /// shows itself. Labels are matched from the end, so a prompt that reads
+    /// like a label stays.
+    public nonisolated static func userRowText(_ text: String, removingImageNames names: [String?]) -> String {
+        var parts = text.components(separatedBy: "\n\n")
+        var next = parts.count - 1
+        for name in names.reversed() {
+            let label = "🖼 \(name ?? "Image")"
+            while next >= 0 && parts[next] != label { next -= 1 }
+            guard next >= 0 else { break }
+            parts.remove(at: next)
+            next -= 1
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
     public static func toWire(
         _ message: ACPMessage,
         index: Int,
