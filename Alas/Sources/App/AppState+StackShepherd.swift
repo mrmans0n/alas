@@ -150,7 +150,10 @@ extension AppState {
             attachments: [],
             delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: cardID),
             normalUserTurn: false,
-            onAccepted: { accepted = true }
+            onAccepted: { [weak session] in
+                accepted = true
+                Self.showPreparingShip(cardID, in: session)
+            }
         ) { [weak self, weak session] sent in
             Self.endPreparingShip(cardID, in: session)
             guard !sent else { return }

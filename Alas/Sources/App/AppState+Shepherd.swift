@@ -167,7 +167,7 @@ extension AppState {
         let reveal = Task { @MainActor in
             try? await Task.sleep(for: Self.preparingShipRevealDelay)
             guard !Task.isCancelled else { return }
-            session.preparingAppAction = .init(id: cardID, status: "Preparing to ship…")
+            session.preparingAppAction = .init(id: cardID, status: Self.preparingShipStatus)
         }
         let handedOff = await work(cardID)
         reveal.cancel()
@@ -178,6 +178,19 @@ extension AppState {
     }
 
     private static let preparingShipRevealDelay: Duration = .milliseconds(300)
+    private static let preparingShipStatus = "Preparing to ship…"
+
+    /// Shows the card's loading row as soon as the session takes its prompt:
+    /// the runner records the card only after its own async preparation, and
+    /// `preparingShip` stops its delayed reveal at the handoff. Runs before
+    /// anything the runner scheduled, so the card or `endPreparingShip` still
+    /// clears the row; a queued prompt's card shows in the queue instead.
+    static func showPreparingShip(_ cardID: UUID, in session: ACPSession?) {
+        guard let session, session.preparingAppAction == nil else { return }
+        let row = ACPSession.PreparingAppAction(id: cardID, status: preparingShipStatus)
+        guard !session.transcript.messages.contains(where: { $0.stableId == row.stableId }) else { return }
+        session.preparingAppAction = row
+    }
 
     /// Drops the card's loading row when its prompt ended without being
     /// recorded, such as when it was queued or failed to send.
@@ -218,7 +231,10 @@ extension AppState {
             attachments: [],
             delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: cardID),
             normalUserTurn: false,
-            onAccepted: { accepted = true }
+            onAccepted: { [weak session] in
+                accepted = true
+                Self.showPreparingShip(cardID, in: session)
+            }
         ) { [weak self, weak session] sent in
             Self.endPreparingShip(cardID, in: session)
             guard !sent else { return }
