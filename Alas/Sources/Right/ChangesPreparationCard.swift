@@ -90,6 +90,8 @@ struct ChangesPreparationCard: View {
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
     let onDismissSyncFailure: () -> Void
     let onOpenGGLanding: () -> Void
+    /// Reloads the GG stack after it failed to load. Nil hides Retry.
+    var onRetryGGStack: (() -> Void)?
     /// Draws Review in the secondary style, so a question waiting in the chat
     /// leads instead.
     var quietsReview = false
@@ -139,9 +141,13 @@ struct ChangesPreparationCard: View {
                 if let reconciliationAction = model.reconciliationAction {
                     ggReconciliationButton(reconciliationAction)
                 }
-                LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
-                    ForEach(model.ggActions, id: \.kind) { action in
-                        ggDestinationButton(action)
+                if let notice = model.ggBlockedNotice {
+                    ggBlockedNoticeRow(notice)
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
+                        ForEach(model.ggActions, id: \.kind) { action in
+                            ggDestinationButton(action)
+                        }
                     }
                 }
                 if model.reviewAction == nil {
@@ -491,6 +497,25 @@ struct ChangesPreparationCard: View {
             action: { onReviewRequestAction(action.kind) }
         )
         .accessibilityIdentifier("changes-preparation-review-request")
+    }
+
+    private func ggBlockedNoticeRow(_ notice: ChangesPreparationModel.GGBlockedNotice) -> some View {
+        HStack(alignment: .center, spacing: scale.space[2]) {
+            Icon(
+                name: notice.offersRetry ? "exclamationmark.triangle" : "info.circle",
+                size: 11,
+                color: theme.color(notice.offersRetry ? "warn" : "fg-dim")
+            )
+            Text(notice.text)
+                .font(scale.metaFont)
+                .foregroundStyle(theme.color("fg-dim"))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: scale.space[1])
+            if notice.offersRetry, let onRetryGGStack {
+                AlasButton(title: "Retry", style: .normal, action: onRetryGGStack)
+            }
+        }
+        .accessibilityIdentifier("changes-preparation-gg-blocked")
     }
 
     private func ggDestinationButton(_ action: ChangesPreparationModel.GGAction) -> some View {

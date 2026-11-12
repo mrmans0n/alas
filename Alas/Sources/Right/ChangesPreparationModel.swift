@@ -61,13 +61,14 @@ struct ChangesPreparationModel: Equatable {
     }
 
     enum GGStackStatus: Equatable {
-        case unavailable, loading, empty, refreshingRemote, remoteUnavailable
+        case unavailable, failed, loading, empty, refreshingRemote, remoteUnavailable
         case synced(commits: Int)
         case unsynced(commits: Int)
 
         var text: String {
             switch self {
             case .unavailable: "Stack unavailable"
+            case .failed: "Stack didn't load"
             case .loading: "Loading stack…"
             case .empty: "No stack commits"
             case .refreshingRemote: "Refreshing remote status…"
@@ -97,6 +98,24 @@ struct ChangesPreparationModel: Equatable {
         hasLocalChanges || ggActions.contains {
             $0.hasNonEmptyDraft || $0.isInFlight
         }
+    }
+
+    /// One line the card shows in place of the destination tiles when a
+    /// single reason blocks all of them, so the reason is not repeated under
+    /// each tile.
+    struct GGBlockedNotice: Equatable {
+        let text: String
+        let offersRetry: Bool
+    }
+
+    var ggBlockedNotice: GGBlockedNotice? {
+        guard let reason = ggActions.first?.disabledReason,
+              ggActions.allSatisfy({ $0.disabledReason == reason && !$0.isInFlight })
+        else { return nil }
+        if ggStackStatus == .failed {
+            return GGBlockedNotice(text: "The GG stack didn't load.", offersRetry: true)
+        }
+        return GGBlockedNotice(text: reason, offersRetry: false)
     }
 
     /// No actions of its own: the card renders only its Review button.
