@@ -81,6 +81,7 @@ struct DevicesActions: View {
     /// Booted, and no agent drives it.
     let canChangeSettings: Bool
     let onShutDown: () -> Void
+    let onOpenLogs: () -> Void
     @Environment(\.theme) private var theme
     /// "Saved to Desktop", or why it wasn't, for a moment after a click.
     @State private var notice: String?
@@ -99,6 +100,8 @@ struct DevicesActions: View {
                         withAnimation { self.notice = nil }
                     }
             }
+            ToolbarBtn(icon: "doc.text.magnifyingglass", tooltip: "Logs", action: onOpenLogs)
+                .disabled(!booted)
             ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Simulator settings") { showsSettings = true }
                 .disabled(!canChangeSettings)
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {

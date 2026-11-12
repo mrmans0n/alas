@@ -20,6 +20,11 @@ extension AppState {
         return .stopped
     }
 
+    func openSimulatorLogs(worktreeID: String, device: SimulatorDevice) {
+        let tab = tabs.openOrFocusSimulatorLogs(worktreeId: worktreeID, udid: device.udid, deviceName: device.name)
+        activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+    }
+
     func devicesTabState(worktree: Worktree, selection: DevicesTarget?) -> DevicesTabState {
         let guests: [VMGuestOS] = canOpenVirtualMachine(in: worktree) ? [.macOS, .linux] : []
         var vms: [VMGuestOS: VMDeviceStatus] = [:]

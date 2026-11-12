@@ -316,7 +316,8 @@ struct RightPaneView: View {
             device: device, booted: stage == .booted, client: state.simulatorStreams, control: state.deviceControl,
             canChangeSettings: stage == .booted
                 && VMDriver.allowsViewInput(state.deviceControl.driver(udid: device.udid)),
-            onShutDown: { Task { await state.devicePane.shutDown(device) } }
+            onShutDown: { Task { await state.devicePane.shutDown(device) } },
+            onOpenLogs: { state.openSimulatorLogs(worktreeID: worktree.id, device: device) }
         ))
     }
 
