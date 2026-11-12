@@ -407,13 +407,28 @@ struct ACPMentionPickerTests {
         #expect(focused)
     }
 
-    @Test("new results keep the highlighted item when it is still listed")
-    func preservesHighlightedItem() {
+    @Test("new results keep the top result highlighted until the user moves the highlight")
+    func unchosenHighlightStaysOnTop() {
+        let weak = MentionPickerItem.symbol(symbol("contentOffersTest", .method))
+        let exact = MentionPickerItem.symbol(symbol("ContentOffer", .class))
+        var highlight = MentionPickerHighlight()
+        highlight.rebase(from: [], to: [weak])
+        highlight.rebase(from: [weak], to: [exact, weak])
+        #expect(highlight.index == 0)
+    }
+
+    @Test("new results keep a chosen item when it is still listed, else its position")
+    func chosenHighlightFollowsItem() {
         let a = MentionPickerItem.file(URL(fileURLWithPath: "/tmp/a"))
         let b = MentionPickerItem.file(URL(fileURLWithPath: "/tmp/b"))
         let s = MentionPickerItem.symbol(symbol("restore", .method))
-        #expect(MentionPickerNavigation.index(preserving: b, fallback: 1, in: [s, a, b]) == 2)
-        #expect(MentionPickerNavigation.index(preserving: b, fallback: 1, in: [s, a]) == 1)
-        #expect(MentionPickerNavigation.index(preserving: nil, fallback: 5, in: [a]) == 0)
+        var highlight = MentionPickerHighlight()
+        highlight.choose(1)
+        highlight.rebase(from: [a, b], to: [s, a, b])
+        #expect(highlight.index == 2)
+        highlight.rebase(from: [s, a, b], to: [s, a])
+        #expect(highlight.index == 1)
+        highlight.rebase(from: [s, a], to: [s])
+        #expect(highlight.index == 0)
     }
 }

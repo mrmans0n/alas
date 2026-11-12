@@ -40,7 +40,7 @@ struct ACPMentionPickerView: View {
 
     @Environment(\.theme) private var theme
     @State private var query: String = ""
-    @State private var highlight: Int = 0
+    @State private var highlight = MentionPickerHighlight()
     @FocusState private var searchFocused: Bool
     @State private var allFiles: [URL] = []
     @State private var sessions: [ACPSessionMentionCandidate] = []
@@ -107,8 +107,8 @@ struct ACPMentionPickerView: View {
     /// The highlighted symbol and where its row sits, while the row's middle
     /// is inside the list's visible area.
     private var symbolPreviewRequest: MentionSymbolPreviewRequest? {
-        guard symbolPreview != nil, ranked.indices.contains(highlight),
-              case .symbol(let symbol) = ranked[highlight],
+        guard symbolPreview != nil, ranked.indices.contains(highlight.index),
+              case .symbol(let symbol) = ranked[highlight.index],
               let row = highlightedSymbolRow,
               row.midY >= listViewport.minY, row.midY <= listViewport.maxY else { return nil }
         return MentionSymbolPreviewRequest(symbol: symbol, rowMidY: row.midY)
@@ -139,8 +139,8 @@ struct ACPMentionPickerView: View {
                 .focused($searchFocused)
                 .onChange(of: query) { _, _ in
                     scrollOnHighlightChange = false
-                    highlight = 0
-                    rescheduleRank(preserveHighlight: false)
+                    highlight.reset()
+                    rescheduleRank()
                 }
             if !query.isEmpty {
                 Button { query = "" } label: {
@@ -245,7 +245,7 @@ struct ACPMentionPickerView: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
                 listViewport = $0
             }
-            .onChange(of: highlight) { _, new in
+            .onChange(of: highlight.index) { _, new in
                 guard scrollOnHighlightChange else { return }
                 scrollOnHighlightChange = false
                 guard ranked.indices.contains(new) else { return }
@@ -269,7 +269,7 @@ struct ACPMentionPickerView: View {
     }
 
     private func row(idx: Int, symbol: SymbolEntry) -> some View {
-        let isOn = idx == highlight
+        let isOn = idx == highlight.index
         return Button { onPickSymbol(symbol, false) } label: {
             HStack(spacing: scale.space[2]) {
                 Text(symbol.kind.badgeLetter)
@@ -319,13 +319,13 @@ struct ACPMentionPickerView: View {
         .onHover { hovering in
             if hovering {
                 scrollOnHighlightChange = false
-                highlight = idx
+                highlight.choose(idx)
             }
         }
     }
 
     private func row(idx: Int, session: ACPSessionMentionCandidate) -> some View {
-        let isOn = idx == highlight
+        let isOn = idx == highlight.index
         return Button { onPickSession(session) } label: {
             HStack(spacing: scale.space[2]) {
                 Image(systemName: "bubble.left.and.bubble.right")
@@ -352,14 +352,14 @@ struct ACPMentionPickerView: View {
         .onHover { hovering in
             if hovering {
                 scrollOnHighlightChange = false
-                highlight = idx
+                highlight.choose(idx)
             }
         }
     }
 
     @ViewBuilder
     private func row(idx: Int, file: URL) -> some View {
-        let isOn = idx == highlight
+        let isOn = idx == highlight.index
         let name = file.lastPathComponent
         let rel = isAbsoluteQuery ? name : file.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
         let parent = isAbsoluteQuery ? "" : (rel as NSString).deletingLastPathComponent
@@ -391,7 +391,7 @@ struct ACPMentionPickerView: View {
         .onHover { hovering in
             if hovering {
                 scrollOnHighlightChange = false
-                highlight = idx
+                highlight.choose(idx)
             }
         }
     }
@@ -406,8 +406,8 @@ struct ACPMentionPickerView: View {
             moveHighlight(by: 1)
         case .nextScope:
             // Absolute-path browsing keeps ⇥ for entering the highlighted folder.
-            if isAbsoluteQuery, ranked.indices.contains(highlight),
-               case .file(let file) = ranked[highlight], file.hasDirectoryPath {
+            if isAbsoluteQuery, ranked.indices.contains(highlight.index),
+               case .file(let file) = ranked[highlight.index], file.hasDirectoryPath {
                 query = MentionAbsolutePath.query(entering: file)
             } else {
                 select(scope.cycled(by: 1, in: offeredScopes))
@@ -415,8 +415,8 @@ struct ACPMentionPickerView: View {
         case .previousScope:
             select(scope.cycled(by: -1, in: offeredScopes))
         case .insert(let includeCode):
-            guard ranked.indices.contains(highlight) else { return }
-            switch ranked[highlight] {
+            guard ranked.indices.contains(highlight.index) else { return }
+            switch ranked[highlight.index] {
             case .session(let session): onPickSession(session)
             case .symbol(let symbol): onPickSymbol(symbol, includeCode)
             case .file(let file): onPick(file)
@@ -427,15 +427,15 @@ struct ACPMentionPickerView: View {
     private func select(_ next: MentionScope) {
         guard next != scope else { return }
         scope = next
-        highlight = 0
-        rescheduleRank(preserveHighlight: false)
+        highlight.reset()
+        rescheduleRank()
     }
 
     private func moveHighlight(by offset: Int) {
-        let next = MentionPickerNavigation.move(from: highlight, by: offset, count: ranked.count)
-        guard next != highlight else { return }
+        let next = MentionPickerNavigation.move(from: highlight.index, by: offset, count: ranked.count)
+        guard next != highlight.index else { return }
         scrollOnHighlightChange = true
-        highlight = next
+        highlight.choose(next)
     }
 
     /// Sessions load on their own, so they show up while files still index.
@@ -443,7 +443,7 @@ struct ACPMentionPickerView: View {
         guard let sessionsProvider else { return }
         Task { @MainActor in
             sessions = await sessionsProvider()
-            rescheduleRank(preserveHighlight: true)
+            rescheduleRank()
         }
     }
 
@@ -461,7 +461,7 @@ struct ACPMentionPickerView: View {
             }
             allFiles = MentionFuzzy.deduplicated(files: files, relativeTo: worktreeRoot)
             isIndexing = false
-            rescheduleRank(preserveHighlight: true)
+            rescheduleRank()
         }
     }
 
@@ -474,13 +474,13 @@ struct ACPMentionPickerView: View {
                 symbolIndexing = snapshot.isComplete
                     ? nil
                     : .progress(indexed: snapshot.indexedFiles, total: snapshot.totalFiles)
-                rescheduleRank(preserveHighlight: true)
+                rescheduleRank()
             }
             symbolIndexing = nil
         }
     }
 
-    private func rescheduleRank(preserveHighlight: Bool) {
+    private func rescheduleRank() {
         rankTask?.cancel()
         rankTask = nil
         // Sessions and files load in untracked tasks that can finish after
@@ -530,14 +530,11 @@ struct ACPMentionPickerView: View {
             let items = sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
             await MainActor.run {
                 guard rankGeneration == gen else { return }
-                // Read the live highlight here, not before the await: the
-                // user may have moved it while ranking or a drill-down read ran.
-                let current = ranked.indices.contains(highlight) ? ranked[highlight] : nil
-                let currentIndex = highlight
+                // Rebase on the live highlight here, not before the await:
+                // the user may have moved it while ranking or a drill-down read ran.
+                let previous = ranked
                 ranked = items
-                if preserveHighlight {
-                    highlight = MentionPickerNavigation.index(preserving: current, fallback: currentIndex, in: items)
-                }
+                highlight.rebase(from: previous, to: items)
             }
         }
     }
@@ -547,12 +544,34 @@ enum MentionPickerNavigation {
     static func move(from index: Int, by offset: Int, count: Int) -> Int {
         min(max(0, count - 1), max(0, index + offset))
     }
+}
 
-    /// After results change under an unchanged query, keep the user's
-    /// highlighted item if it is still listed; otherwise keep the position.
-    static func index(preserving item: MentionPickerItem?, fallback: Int, in items: [MentionPickerItem]) -> Int {
-        if let item, let index = items.firstIndex(of: item) { return index }
-        return move(from: fallback, by: 0, count: items.count)
+/// The picker's highlighted row. Until the user moves it, it stays on the
+/// top result while results reorder (symbol indexing streams in better
+/// matches). Once moved, it follows the chosen item while that is listed,
+/// otherwise it keeps the position.
+struct MentionPickerHighlight: Equatable {
+    private(set) var index = 0
+    private var isChosen = false
+
+    /// The query or scope changed: back to the top result.
+    mutating func reset() {
+        index = 0
+        isChosen = false
+    }
+
+    mutating func choose(_ index: Int) {
+        self.index = index
+        isChosen = true
+    }
+
+    mutating func rebase(from old: [MentionPickerItem], to new: [MentionPickerItem]) {
+        guard isChosen else { index = 0; return }
+        if old.indices.contains(index), let moved = new.firstIndex(of: old[index]) {
+            index = moved
+        } else {
+            index = MentionPickerNavigation.move(from: index, by: 0, count: new.count)
+        }
     }
 }
 
