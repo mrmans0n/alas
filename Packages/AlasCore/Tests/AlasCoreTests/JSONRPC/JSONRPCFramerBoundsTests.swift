@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @testable import AlasHostCore
+@testable import AlasFoundation
 
 struct JSONRPCFramerBoundsTests {
     @Test func drainsMaximumFrameBeforeCheckingFollowingFrameInSameRead() {
@@ -47,6 +48,25 @@ struct JSONRPCFramerBoundsTests {
 }
 
 struct JSONRPCStdioFramingFailureTests {
+    @Test(.timeLimit(.minutes(1)), arguments: [JSONRPCProcessTerminationScope.processOnly, .processTree])
+    func terminationDuringStartupStillStopsThePublishedChild(scope: JSONRPCProcessTerminationScope) async throws {
+        let transport = JSONRPCStdioTransport(
+            executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "read value"],
+            environment: nil, framing: .contentLength, terminationScope: scope
+        )
+        transport.beforeProcessPublicationForTesting = { transport.terminate() }
+        defer {
+            transport.beforeProcessPublicationForTesting = nil
+            transport.terminate()
+        }
+        try transport.start()
+        var exited = false
+        for await event in transport.incoming {
+            if case .exited = event { exited = true }
+        }
+        #expect(exited)
+    }
+
     // The child never exits, so a stream that waits for it never ends and
     // the time limit fails the test.
     @Test(.timeLimit(.minutes(1)))
@@ -57,19 +77,6 @@ struct JSONRPCStdioFramingFailureTests {
             environment: nil, framing: .contentLength, terminationScope: .processOnly
         )
         defer { transport.terminate() }
-        try transport.start()
-        for await _ in transport.incoming {}
-    }
-
-    // The stdout handler can fail framing and terminate before `start()` has
-    // recorded the child; terminating first stands in for that ordering.
-    @Test(.timeLimit(.minutes(1)), arguments: [JSONRPCProcessTerminationScope.processOnly, .processTree])
-    func aTerminationBeforeTheChildIsRecordedStillEndsIt(scope: JSONRPCProcessTerminationScope) async throws {
-        let transport = JSONRPCStdioTransport(
-            executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["600"],
-            environment: nil, terminationScope: scope
-        )
-        transport.terminate()
         try transport.start()
         for await _ in transport.incoming {}
     }

@@ -186,20 +186,28 @@ struct HoverFeatureBehaviorTests {
         #expect(feature.isShowingPopover == false)
     }
 
-    @Test func mouseMovementInsideShownSymbolDoesNotReRequest() async {
+    @Test func mouseMovementInsideShownSymbolDoesNotReRequest() async throws {
         let textView = makeTextView()
         let recorder = HoverRequestRecorder()
         recorder.queueResponse(.plainText("foo: Int"))
         let feature = makeFeature(textView: textView, recorder: recorder)
+        defer { feature.tearDown() }
 
         feature.simulateMouseMoved(at: point(forCharacterAt: 12, in: textView))
-        try? await Task.sleep(nanoseconds: 900_000_000)
+        let dwell = try #require(Mirror(reflecting: feature).children.first { $0.label == "dwellTimer" }?.value as? Task<Void, Never>)
+        await dwell.value
+        let request = try #require(Mirror(reflecting: feature).children.first { $0.label == "inFlight" }?.value as? Task<Void, Never>)
+        await request.value
         #expect(feature.isShowingPopover == true)
         #expect(await recorder.calls.count == 1)
 
         feature.simulateMouseMoved(at: point(forCharacterAt: 13, in: textView))
         feature.simulateMouseMoved(at: point(forCharacterAt: 14, in: textView))
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // Drain any work these moves scheduled so a duplicate request cannot arrive after the assertion.
+        let pendingDwell = try #require(Mirror(reflecting: feature).children.first { $0.label == "dwellTimer" }?.value as? Task<Void, Never>)
+        await pendingDwell.value
+        let pendingRequest = try #require(Mirror(reflecting: feature).children.first { $0.label == "inFlight" }?.value as? Task<Void, Never>)
+        await pendingRequest.value
 
         #expect(await recorder.calls.count == 1)
         #expect(feature.isShowingPopover == true)

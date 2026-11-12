@@ -351,20 +351,26 @@ final class EchoServer: Sendable {
 /// A loopback TCP client.
 final class TestClient: Sendable {
     private let connection: NWConnection
-    private let state = Mutex((bytes: Data(), ended: false))
+    private let state = Mutex((bytes: Data(), ended: false, finished: false))
 
     private init(_ connection: NWConnection) { self.connection = connection }
 
     deinit { connection.cancel() }
 
     /// Throws unless the connection becomes ready.
-    static func connect(host: String, port: Int) async throws -> TestClient {
+    static func connect(host: String, port: Int, sending initialData: Data? = nil) async throws -> TestClient {
         let connection = NWConnection(host: NWEndpoint.Host(host), port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let pending = Mutex<CheckedContinuation<Void, Error>?>(continuation)
             connection.stateUpdateHandler = { state in
                 switch state {
-                case .ready: pending.withLock { $0.take() }?.resume()
+                case .ready:
+                    guard let ready = pending.withLock({ $0.take() }) else { return }
+                    guard let initialData else { return ready.resume() }
+                    // Send protocol headers on the network queue. A busy test
+                    // executor must not leave an accepted connection idle.
+                    connection.send(content: initialData, completion: .contentProcessed { _ in })
+                    ready.resume()
                 case .waiting(let error), .failed(let error):
                     connection.cancel()
                     pending.withLock { $0.take() }?.resume(throwing: error)
@@ -384,14 +390,15 @@ final class TestClient: Sendable {
         connection.send(content: data, completion: .contentProcessed { _ in })
     }
 
-    /// Bytes read so far, and whether the stream ended with EOF.
-    var received: (bytes: Data, ended: Bool) { state.withLock { $0 } }
+    /// Bytes read so far, EOF, and whether receiving finished with EOF or an error.
+    var received: (bytes: Data, ended: Bool, finished: Bool) { state.withLock { $0 } }
 
     private func readUntilEnd() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
             state.withLock {
                 $0.bytes.append(data ?? Data())
                 $0.ended = isComplete
+                $0.finished = isComplete || error != nil
             }
             if !isComplete, error == nil { readUntilEnd() }
         }

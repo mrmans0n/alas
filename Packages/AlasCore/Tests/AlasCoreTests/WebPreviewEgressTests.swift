@@ -92,10 +92,10 @@ struct WebPreviewEgressTests {
         )
         defer { proxy.stop() }
         let port = try await proxy.start()
-        let client = try await TestClient.connect(host: "127.0.0.1", port: Int(port))
         let target = request.contains("blocked") || request.contains("::1") ? loopback.port : echo.port
         let authorization = credentials ?? Self.authorization(proxy)
-        client.send(Data("\(request.replacingOccurrences(of: "{port}", with: "\(target)"))\r\nHost: x\r\n\(authorization)\r\n".utf8))
+        let client = try await TestClient.connect(host: "127.0.0.1", port: Int(port), sending:
+            Data("\(request.replacingOccurrences(of: "{port}", with: "\(target)"))\r\nHost: x\r\n\(authorization)\r\n".utf8))
         try await eventually { String(decoding: client.received.bytes, as: UTF8.self).contains("\r\n\r\n") }
         #expect(String(decoding: client.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 \(status) "))
         if echoes {
@@ -148,8 +148,7 @@ struct WebPreviewEgressTests {
         let request = Data("CONNECT host.invalid:\(UInt16(bigEndian: address.sin_port)) HTTP/1.1\r\n\(Self.authorization(proxy))\r\nGET / HTTP/1.0\r\n\r\n".utf8)
         var clients: [TestClient] = []
         for _ in 0..<4 {
-            let client = try await TestClient.connect(host: "127.0.0.1", port: proxyPort)
-            client.send(request)
+            let client = try await TestClient.connect(host: "127.0.0.1", port: proxyPort, sending: request)
             clients.append(client)
         }
         let all = clients
@@ -166,8 +165,8 @@ struct WebPreviewEgressTests {
         let first = try #require(WebPreviewEgressPolicy.address("192.0.2.1"))
         proxy.upstreamEndpoint = { address, _ in .hostPort(host: "127.0.0.1", port: .init(integerLiteral: UInt16(address == first ? refusedPort : echo.port))) }
         defer { proxy.stop() }
-        let client = try await TestClient.connect(host: "127.0.0.1", port: Int(proxy.start()))
-        client.send(Data("CONNECT two.invalid:80 HTTP/1.1\r\n\(Self.authorization(proxy))\r\nping".utf8))
+        let client = try await TestClient.connect(host: "127.0.0.1", port: Int(proxy.start()), sending:
+            Data("CONNECT two.invalid:80 HTTP/1.1\r\n\(Self.authorization(proxy))\r\nping".utf8))
         try await eventually { String(decoding: client.received.bytes, as: UTF8.self).hasSuffix("\r\n\r\nping") }
         #expect(String(decoding: client.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 200 "))
         #expect(echo.accepted == 1)
@@ -197,8 +196,8 @@ struct WebPreviewEgressTests {
         let names = WebPreviewEgressProxy.maxResolutions + 2
         var clients: [TestClient] = []
         for index in 0..<names {
-            let client = try await TestClient.connect(host: "127.0.0.1", port: port)
-            client.send(Data("CONNECT name\(index).invalid:443 HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
+            let client = try await TestClient.connect(host: "127.0.0.1", port: port, sending:
+                Data("CONNECT name\(index).invalid:443 HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
             clients.append(client)
         }
         // Each finished lookup lets exactly one waiting name start.
@@ -241,8 +240,8 @@ struct WebPreviewEgressTests {
                                           linger: linger, onBlocked: { _, _, _ in })
         defer { proxy.stop() }
         let port = try await Int(proxy.start())
-        let held = try await TestClient.connect(host: "127.0.0.1", port: port)
-        held.send(Data("CONNECT host.invalid:\(UInt16(bigEndian: address.sin_port)) HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
+        let held = try await TestClient.connect(host: "127.0.0.1", port: port, sending:
+            Data("CONNECT host.invalid:\(UInt16(bigEndian: address.sin_port)) HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
         // The upstream's end reached the client, which keeps its side open.
         try await eventually { held.received.ended }
         #expect(String(decoding: held.received.bytes, as: UTF8.self).hasSuffix("\r\n\r\nbye"))
@@ -250,13 +249,12 @@ struct WebPreviewEgressTests {
         // the linger timer. Tunnel-cap refusals have a separate gated test.
         let probe = Mutex<TestClient?>(nil)
         try await eventually {
-            if let answer = probe.withLock({ $0?.received }), answer.ended {
+            if let answer = probe.withLock({ $0?.received }), answer.finished {
                 if String(decoding: answer.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 407 ") { return true }
                 probe.withLock { $0 = nil }
             }
             guard probe.withLock({ $0 }) == nil else { return false }
-            let next = try? await TestClient.connect(host: "127.0.0.1", port: port)
-            next?.send(Data("GET / HTTP/1.1\r\n\r\n".utf8))
+            let next = try? await TestClient.connect(host: "127.0.0.1", port: port, sending: Data("GET / HTTP/1.1\r\n\r\n".utf8))
             probe.withLock { $0 = next }
             return false
         }
@@ -278,8 +276,7 @@ struct WebPreviewEgressTests {
         let request = Data("CONNECT held.invalid:443 HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8)
         var held: [TestClient] = []
         for _ in 0..<2 {
-            let client = try await TestClient.connect(host: "127.0.0.1", port: port)
-            client.send(request)
+            let client = try await TestClient.connect(host: "127.0.0.1", port: port, sending: request)
             held.append(client)
         }
         // Both tunnels are open, waiting on their lookups.

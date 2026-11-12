@@ -76,6 +76,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     /// Set by `terminate()`, which may run from the stdout handler before
     /// `start()` has recorded the child; `start()` then ends it itself.
     private var terminationRequested = false
+    var beforeProcessPublicationForTesting: (@Sendable () -> Void)?
     private let stdin: Pipe
     private let frameWriter: JSONRPCFrameWriter
     private let stdout = Pipe()
@@ -202,6 +203,9 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
+        let beforePublication = beforeProcessPublicationForTesting
+        beforeProcessPublicationForTesting = nil
+        beforePublication?()
         let terminated = lock.withLock {
             self.process = process
             return terminationRequested

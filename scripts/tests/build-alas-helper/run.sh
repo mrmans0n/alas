@@ -9,6 +9,8 @@ trap 'rm -rf "${sandbox}"' EXIT
 srcroot="${sandbox}/repo"
 mkdir -p "${srcroot}/scripts" "${srcroot}/AlasHelper/src" "${sandbox}/toolchain/bin"
 cp "${repo_root}/scripts/build-alas-helper.sh" "${srcroot}/scripts/build-alas-helper.sh"
+cp "${repo_root}/scripts/retry-ci-acquisition.sh" "${srcroot}/scripts/retry-ci-acquisition.sh"
+chmod +x "${srcroot}/scripts/retry-ci-acquisition.sh"
 cp "${repo_root}/AlasHelper/Cargo.toml" "${srcroot}/AlasHelper/Cargo.toml"
 cp "${repo_root}/AlasHelper/Cargo.lock" "${srcroot}/AlasHelper/Cargo.lock"
 cp "${repo_root}/AlasHelper/manifest.json" "${srcroot}/AlasHelper/manifest.json"

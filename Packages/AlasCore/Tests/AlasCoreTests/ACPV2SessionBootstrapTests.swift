@@ -568,12 +568,17 @@ final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrame
     let bytes = Mutex<[Data]>([])
     let onWrite = Mutex<(@Sendable (Data) -> Void)?>(nil)
     let release = DispatchSemaphore(value: 0)
-    private let writeSettled = DispatchSemaphore(value: 0)
-    func waitForWriteSettlement() -> Bool { writeSettled.wait(timeout: .now() + 10) == .success }
+    private let authorizationChecked = DispatchSemaphore(value: 0)
+    private let checkedAuthorization = Mutex<Bool?>(nil)
+    func waitForAuthorizationCheck() -> Bool? {
+        guard authorizationChecked.wait(timeout: .now() + 10) == .success else { return nil }
+        return checkedAuthorization.withLock { $0 }
+    }
     func resetWriteProbe() {
         attempted.withLock { $0 = false }
         settled.withLock { $0 = false }
-        while writeSettled.wait(timeout: .now()) == .success {}
+        checkedAuthorization.withLock { $0 = nil }
+        while authorizationChecked.wait(timeout: .now()) == .success {}
     }
     private var writer: JSONRPCFrameWriter!
     init() {
@@ -596,9 +601,15 @@ final class BootstrapSerializedTransport: JSONRPCStdioTransporting, JSONRPCFrame
     }
     func writeFrame(_ frame: Data, authorize: @escaping @Sendable () -> Bool) async -> JSONRPCFrameWriteResult {
         if frame != Self.blocker { attempted.withLock { $0 = true } }
-        let result = await writer.writeFrame(frame, authorize: authorize)
-        if frame != Self.blocker { settled.withLock { $0 = true }
-        writeSettled.signal() }
+        let result = await writer.writeFrame(frame, authorize: { [self] in
+            let allowed = authorize()
+            if frame != Self.blocker {
+                checkedAuthorization.withLock { $0 = allowed }
+                authorizationChecked.signal()
+            }
+            return allowed
+        })
+        if frame != Self.blocker { settled.withLock { $0 = true } }
         return result
     }
     func terminate() { writer.close()

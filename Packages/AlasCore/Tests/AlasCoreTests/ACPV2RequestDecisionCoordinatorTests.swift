@@ -106,9 +106,9 @@ struct ACPV2RequestDecisionCoordinatorTests {
         try await eventually { transport.attempted.withLock { $0 } }
         sending.cancel()
         transport.release.signal()
-        // Keep this actor turn until the writer settles. A queued actor-hop
-        // cancellation must not be the only thing preventing physical output.
-        #expect(transport.waitForWriteSettlement())
+        // Keep this actor turn until the serialized writer checks authorization.
+        // A queued actor-hop cancellation must not be the only thing preventing output.
+        #expect(transport.waitForAuthorizationCheck() == false)
         await #expect(throws: (any Error).self) { try await sending.value }
         #expect(await blocker.value == .written)
         #expect(transport.bytes.withLock { $0 } == [BootstrapSerializedTransport.blocker])
