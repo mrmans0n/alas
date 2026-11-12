@@ -433,10 +433,7 @@ public enum ShepherdNotification {
         host: (StackShepherdRecord) -> String?
     ) -> (record: StackShepherdRecord, escalation: ShepherdEscalation?, title: String, body: String) {
         func stack(_ record: StackShepherdRecord) -> String { "gg stack \"\(record.id.stackName)\"" }
-        func requests(_ record: StackShepherdRecord, _ count: Int) -> String {
-            let label = record.remote.kind == .gitlab ? "merge request" : "pull request"
-            return "\(count) \(label)\(count == 1 ? "" : "s")"
-        }
+        func requests(_ record: StackShepherdRecord, _ count: Int) -> String { requestCount(record, count) }
         switch event {
         case .ready(let record):
             return (record, nil, "Stack ready to land",
@@ -447,6 +444,9 @@ public enum ShepherdNotification {
             return (record, nil, "Stack closed", "\(stack(record)) finished with requests closed without merging.")
         case .entryClosed(let record, let entry, let title):
             return (record, nil, "Closed", "\(reference(record, entry)) \"\(title)\" in \(stack(record)) was closed without merging.")
+        case .entryLanded(let record, let entry, let title):
+            return (record, nil, "Merged",
+                    "\(reference(record, entry)) \"\(title)\" in \(stack(record)) was merged into \(record.base); \(requests(record, record.openEntries.count)) left.")
         case .escalated(let record, let entries, let reason):
             let subject = "\(entries.map { reference(record, $0) }.joined(separator: ", ")) in \(stack(record))"
             let cli = record.remote.kind == .github ? "gh" : "glab"
@@ -488,18 +488,39 @@ public enum ShepherdNotification {
         return (card, review(for: event, host: { _ in nil }).body)
     }
 
-    /// The transcript card for a finished stack; nil for every other event.
+    /// The transcript card for a stack entry that landed or a finished
+    /// stack; nil for every other event.
     public static func outcomeCard(for event: StackShepherd.Event) -> (card: ACPPromptCard, text: String)? {
-        guard case .finished(let record, let outcome) = event else { return nil }
-        let card = ACPPromptCard(
-            origin: outcome == .merged ? .merged : .closed,
-            title: "gg stack \(record.id.stackName)",
-            facts: [
-                .init(kind: .branch, text: "\(record.id.stackName) → \(record.base)"),
-                .init(kind: .provider, text: record.remote.kind.displayName),
-            ]
-        )
+        let card: ACPPromptCard
+        switch event {
+        case .entryLanded(let record, let entry, let title):
+            card = ACPPromptCard(
+                origin: .merged,
+                title: "\(reference(record, entry)) · \(title)",
+                facts: [
+                    .init(kind: .branch, text: "gg stack \(record.id.stackName) → \(record.base)"),
+                    .init(kind: .other, text: "\(requestCount(record, record.openEntries.count)) left"),
+                ],
+                action: .url(record.remote.reviewRequestURL(number: entry.requestNumber))
+            )
+        case .finished(let record, let outcome):
+            card = ACPPromptCard(
+                origin: outcome == .merged ? .merged : .closed,
+                title: "gg stack \(record.id.stackName)",
+                facts: [
+                    .init(kind: .branch, text: "\(record.id.stackName) → \(record.base)"),
+                    .init(kind: .provider, text: record.remote.kind.displayName),
+                ]
+            )
+        case .ready, .entryClosed, .escalated:
+            return nil
+        }
         return (card, stack(for: event, host: { _ in nil }).body)
+    }
+
+    private static func requestCount(_ record: StackShepherdRecord, _ count: Int) -> String {
+        let label = record.remote.kind == .gitlab ? "merge request" : "pull request"
+        return "\(count) \(label)\(count == 1 ? "" : "s")"
     }
 
     private static func reference(_ record: ShepherdRecord) -> String {
