@@ -695,7 +695,10 @@ struct MentionPickerHighlight: Equatable {
     }
 
     mutating func rebase(from old: [MentionPickerItem], to new: [MentionPickerItem]) {
-        guard isChosen else { index = 0; return }
+        guard isChosen else {
+            index = 0
+            return
+        }
         if old.indices.contains(index), let moved = new.firstIndex(of: old[index]) {
             index = moved
         } else {
