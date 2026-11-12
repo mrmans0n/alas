@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Chain folders in the composer's `@` picker: ⇥ opens the highlighted folder, a breadcrumb shows the folder you are in, and each `/` segment fuzzy-matches one folder level, so `al/so/ui` finds `Alas/Sources/UI`. A query ending in `/` lists that folder first so it can be attached.
+
 ### 🏗️ Internal
 
 - Update the bundled zmx to the v1.0.1 release, built with Zig 0.17. The wire protocol is unchanged from the frozen v1 IPC Alas already speaks, and zig@0.16 is no longer needed to build.
