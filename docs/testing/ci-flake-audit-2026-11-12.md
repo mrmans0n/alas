@@ -67,6 +67,7 @@ repairs.
 | Adapter payload fixture gets a libc variant's name | Run 42669165378 used a head without the preferred exact-platform name selection now included in `77d8f2619`. The unchanged current five-layout parameterized test passed locally. |
 | Shell session fixture and transcript recovery persistence | `370cc245c` replaces the Xcode Python shim in the session test and awaits persistent warning clearance in the recovery test. |
 | Browser viewport assertion includes classic scrollbars | Run 42013866385 precedes the final `5463b063a` viewport test and layout-width repair. The old and merged assertions were compared directly. |
+| Nightly simulator-shim assembly failure | Run 42021618805 checked out `cf23c83e`, before `7121e4c09` repaired cross-object subtraction relocations in `ThirdParty/serve-sim-native`. The failed temporary `.s` was preprocessed from that vendored source. Its exact old source reproduced all four assembler errors under CI's Xcode 26.6; the existing release harness passed current assembly and C shims for both arm64 and x86_64. This was a deterministic source failure already repaired later on November 5. |
 
 ## Infrastructure and open investigations
 
@@ -80,11 +81,6 @@ repairs.
 - A required test-plan upload failed DNS resolution in run 43011388583. Required
   artifacts must remain gates. A Rust toolchain download likewise failed DNS
   resolution in run 42659807169.
-- Nightly run 42021618805 failed in generated `CoreDeviceTrampolines.s` assembly
-  with undefined-symbol subtraction relocations. The same Xcode build and runner
-  image passed six later nightlies. No restored target/assembly cache or safe
-  source repair was established; the quiet build omitted the failing compiler
-  invocation and the run published no artifacts.
 - Recurring core session/event timeouts and the SIGTERM-ignoring run cancellation
   timeout remain under investigation. The old broker deadline-open test only
   received a 3-to-30-second assertion allowance, and the subscriber helper changed
