@@ -108,8 +108,11 @@ public enum SimulatorControl {
         guard result.exitCode == 0 else { throw SimulatorControlError(result) }
     }
 
+    /// `simctl pbcopy` decodes stdin in the locale's encoding, which is Mac
+    /// Roman in an app launched from Finder; Alas always writes UTF-8.
     public static func pbcopy(udid: String, text: String) async throws {
-        let result = try await Process.run(xcrun, args: ["simctl", "pbcopy", udid], stdin: text)
+        let env = ProcessInfo.processInfo.environment.merging(["LC_ALL": "en_US.UTF-8"]) { _, utf8 in utf8 }
+        let result = try await Process.run(xcrun, args: ["simctl", "pbcopy", udid], env: env, stdin: text)
         guard result.exitCode == 0 else { throw SimulatorControlError(result) }
     }
 

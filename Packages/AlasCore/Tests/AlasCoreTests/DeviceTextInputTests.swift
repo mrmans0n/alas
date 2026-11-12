@@ -26,11 +26,12 @@ struct DeviceTextInputTests {
     }
 
     @Test(arguments: [
-        ("Café au lait\n", ["k:3", "p:é", "k:9"]),
+        ("Café au lait\n", ["p:Café", "k:9"]),
         ("日本 語", ["p:日本 語"]),
         ("é", ["p:é"]),
         ("a ☕️ b", ["k:2", "p:☕️", "k:2"]),
         ("👋\nhi 👋", ["p:👋", "k:4", "p:👋"]),
+        ("say (é)!", ["k:4", "p:(é)!"]),
     ])
     func charactersTheKeyboardLacksArePasted(text: String, runs: [String]) {
         #expect(shape(text) == runs)
