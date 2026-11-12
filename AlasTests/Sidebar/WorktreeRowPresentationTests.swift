@@ -26,6 +26,15 @@ struct WorktreeRowPresentationTests {
         #expect(WorktreeRowPresentation.compactAge(since: now.addingTimeInterval(-elapsed), now: now) == expected)
     }
 
+    /// Rounds down, so a count never reads larger than it is.
+    @Test(arguments: [
+        (840, "840"), (999, "999"), (1_000, "1k"), (1_340, "1.3k"), (9_999, "9.9k"),
+        (22_230, "22k"), (999_999, "999k"), (1_250_000, "1.2M"), (12_000_000, "12M"),
+    ])
+    func compactCountFitsARow(count: Int, expected: String) {
+        #expect(WorktreeRowPresentation.compactCount(count) == expected)
+    }
+
     @Test(arguments: ["cool-slate", "light"], ["add", "del", "mod", "warn", "caution", "accent", "fg-dim"])
     func statusTextReachesContrastOnTheSelectedFill(themeId: String, token: String) throws {
         let theme = try Theme.loadBundled(id: themeId)

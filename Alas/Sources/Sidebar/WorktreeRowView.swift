@@ -298,14 +298,6 @@ struct WorktreeRowView: View {
             && !hasStackStatus
     }
 
-    nonisolated static func diffBarAdditionCount(added: Int, deleted: Int) -> Int? {
-        guard added > 0 || deleted > 0 else { return nil }
-        if added <= 0 { return 0 }
-        if deleted <= 0 { return 5 }
-        let fraction = Double(added) / (Double(added) + Double(deleted))
-        return min(4, max(1, Int((5 * fraction).rounded())))
-    }
-
     private var activeCommitQuery: CommitQuery? {
         guard !isMain,
               operationState == nil,
@@ -552,11 +544,10 @@ struct WorktreeRowView: View {
         showsExplanation: Bool
     ) -> some View {
         // Everything a row knows stays on screen: it is what a scan of the
-        // list reads. Narrow sidebars drop the diff bar, then the time.
+        // list reads. Only a sidebar too narrow for all of it drops the time.
         ViewThatFits(in: .horizontal) {
-            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: true, showsTime: true, showsExplanation: showsExplanation)
-            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: true, showsExplanation: showsExplanation)
-            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsDiffBar: false, showsTime: false, showsExplanation: showsExplanation)
+            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: true, showsExplanation: showsExplanation)
+            subtitleContents(status: status, worktreeStatus: worktreeStatus, showsTime: false, showsExplanation: showsExplanation)
         }
         .font(scale.metaFont)
         .foregroundColor(rowColor("fg-dim"))
@@ -647,7 +638,7 @@ struct WorktreeRowView: View {
                 hasVisibleCommits: visibleBranchCommits != nil,
                 commitQueryResolved: activeCommitQuery == nil
                     || loadedCommitCount?.query.identity == activeCommitQuery?.identity,
-                hasDiff: Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) != nil,
+                hasDiff: diffStats.added > 0 || diffStats.deleted > 0,
                 hasStackStatus: stackSummary != nil || ggMenuModel.showsStatusIndicator
               )
         else { return nil }
@@ -658,7 +649,6 @@ struct WorktreeRowView: View {
     private func subtitleContents(
         status: StatusPresentation?,
         worktreeStatus: WorktreeDirtyState,
-        showsDiffBar: Bool,
         showsTime: Bool,
         showsExplanation: Bool
     ) -> some View {
@@ -681,8 +671,8 @@ struct WorktreeRowView: View {
                 commitCount(commits, label: "\(commits.count) commit\(commits.count == 1 ? "" : "s")")
             }
             ForEach(upstreamItems.filter { !upstreamOnNameLine.contains($0) }, id: \.text) { upstreamView($0) }
-            if Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) != nil {
-                diffCounts(showsDiffBar: showsDiffBar)
+            if diffStats.added > 0 || diffStats.deleted > 0 {
+                diffCounts
             }
             if showsExplanation, let worktreeExplanation {
                 Text(worktreeExplanation)
@@ -708,27 +698,19 @@ struct WorktreeRowView: View {
         .accessibilityLabel(Self.commitsLabel(commits))
     }
 
-    private func diffCounts(showsDiffBar: Bool) -> some View {
+    private var diffCounts: some View {
         HStack(spacing: scale.space[1]) {
-            if showsDiffBar, let additionTicks = Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) {
-                HStack(spacing: 1.5) {
-                    ForEach(0..<5) { tick in
-                        RoundedRectangle(cornerRadius: 1) // design-literal: 2pt-wide diff tick
-                            .fill(theme.color(tick < additionTicks ? "add" : "del"))
-                            .frame(width: 2, height: 7)
-                    }
-                }
-                .accessibilityHidden(true)
-            }
             if diffStats.added > 0 {
-                Text("+\(diffStats.added)").foregroundColor(rowColor("add"))
+                Text("+" + WorktreeRowPresentation.compactCount(diffStats.added)).foregroundColor(rowColor("add"))
             }
             if diffStats.deleted > 0 {
-                Text("−\(diffStats.deleted)").foregroundColor(rowColor("del"))
+                Text("−" + WorktreeRowPresentation.compactCount(diffStats.deleted)).foregroundColor(rowColor("del"))
             }
         }
         .monospacedDigit()
         .fixedSize()
+        // Large counts are shortened, so the exact figures live here.
+        .help("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
     }
