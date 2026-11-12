@@ -520,6 +520,16 @@ pub enum DeviceCommand {
         udid: String,
         url: String,
     },
+    /// `bundle_id` None means the app in front.
+    Logs {
+        udid: String,
+        since_seconds: u64,
+        bundle_id: Option<String>,
+        level: String,
+        include_apple: bool,
+        query: Option<String>,
+        limit: u64,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -569,7 +579,8 @@ impl DeviceCommand {
             | DeviceCommand::SetPermission { .. }
             | DeviceCommand::SetLocation { .. }
             | DeviceCommand::Push { .. }
-            | DeviceCommand::OpenUrl { .. } => false,
+            | DeviceCommand::OpenUrl { .. }
+            | DeviceCommand::Logs { .. } => false,
         }
     }
 }
@@ -1292,6 +1303,30 @@ fn device_request(command: &DeviceCommand) -> Request {
         ),
         DeviceCommand::OpenUrl { udid, url } => {
             ("device_open_url", json!({ "udid": udid, "url": url }))
+        }
+        DeviceCommand::Logs {
+            udid,
+            since_seconds,
+            bundle_id,
+            level,
+            include_apple,
+            query,
+            limit,
+        } => {
+            let mut params = json!({
+                "udid": udid,
+                "since_seconds": since_seconds,
+                "level": level,
+                "include_apple": include_apple,
+                "limit": limit,
+            });
+            if let Some(bundle_id) = bundle_id {
+                params["bundle_id"] = json!(bundle_id);
+            }
+            if let Some(query) = query {
+                params["query"] = json!(query);
+            }
+            ("device_logs", params)
         }
     };
     let mut request = Request::new(name);
@@ -2828,6 +2863,19 @@ mod tests {
             })
             .1,
             serde_json::json!({ "udid": "U-1", "clear": true })
+        );
+        assert_eq!(
+            build(DeviceCommand::Logs {
+                udid: udid(),
+                since_seconds: 60,
+                bundle_id: None,
+                level: "default".into(),
+                include_apple: false,
+                query: None,
+                limit: 200
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1", "since_seconds": 60, "level": "default", "include_apple": false, "limit": 200 })
         );
         assert_eq!(
             read_timeout(&Command::Device(DeviceCommand::Install {

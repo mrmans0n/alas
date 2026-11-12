@@ -58,6 +58,71 @@ struct DeviceAgentControlTests {
         var calls: [String] = []
     }
 
+    final class FakeLogs: SimulatorLogsControl, @unchecked Sendable {
+        var front: String? = "com.example.hello"
+        var lines: [SimulatorLogLine] = []
+        var queries: [SimulatorLogQuery] = []
+        func frontmostApp(udid: String) async -> String? { front }
+        func executables(udid: String) async throws -> [String: String] { ["com.example.hello": "Hello"] }
+        func logShow(udid: String, query: SimulatorLogQuery, seconds: Int) async throws -> [SimulatorLogLine] {
+            queries.append(query)
+            return lines
+        }
+        func crashReports(udid: String, bundleID: String?, since: Date) async -> [SimulatorCrashReport] { [] }
+    }
+
+    static func line(_ message: String) -> SimulatorLogLine {
+        SimulatorLogLine(time: "12:00:00.000", level: "default", process: "Hello", pid: 1, subsystem: nil, category: nil, message: message)
+    }
+
+    private func logsJSON(_ response: AlasCLIResponse) throws -> [String: Any] {
+        guard case .text(let text) = response else {
+            Issue.record("Expected logs, got \(response)")
+            return [:]
+        }
+        return try #require(JSONSerialization.jsonObject(with: Data(text.joined().utf8)) as? [String: Any])
+    }
+
+    @Test func logsFollowTheForegroundAppAndAreNotHeldDuringATakeover() async throws {
+        let logs = FakeLogs()
+        logs.lines = [Self.line("one"), Self.line("Fatal error: two"), Self.line("three")]
+        let control = control(FakeInput(), logs: logs)
+        control.takeOver(udid: "on")
+        let json = try logsJSON(await control.perform(
+            .logs(udid: "on", sinceSeconds: 60, bundleID: nil, level: .default, includeApple: false, query: "FATAL", limit: 200),
+            sessionID: "s"
+        ))
+        #expect(json["app"] as? String == "com.example.hello")
+        #expect((json["lines"] as? [[String: Any]])?.map { $0["message"] as? String } == ["Fatal error: two"])
+        #expect(json["truncated"] as? Bool == false)
+        #expect(logs.queries == [SimulatorLogQuery(executable: "Hello")])
+    }
+
+    @Test func logsKeepTheNewestLinesUpToTheLimit() async throws {
+        let logs = FakeLogs()
+        logs.lines = (1...5).map { Self.line("\($0)") }
+        let json = try logsJSON(await control(FakeInput(), logs: logs).perform(
+            .logs(udid: "on", sinceSeconds: 60, bundleID: nil, level: .default, includeApple: false, query: nil, limit: 2),
+            sessionID: "s"
+        ))
+        #expect((json["lines"] as? [[String: Any]])?.map { $0["message"] as? String } == ["4", "5"])
+        #expect(json["truncated"] as? Bool == true)
+    }
+
+    @Test(arguments: [
+        (nil as String?, nil as String?, "device_no_app: No app is in front on iPhone. Pass bundle_id."),
+        ("com.example.gone", "com.example.hello", "device_app_not_installed: com.example.gone isn't installed on iPhone."),
+    ])
+    func logsNeedAnApp(bundleID: String?, front: String?, message: String) async {
+        let logs = FakeLogs()
+        logs.front = front
+        let response = await control(FakeInput(), logs: logs).perform(
+            .logs(udid: "on", sinceSeconds: 60, bundleID: bundleID, level: .default, includeApple: false, query: nil, limit: 200),
+            sessionID: "s"
+        )
+        #expect(error(response) == message)
+    }
+
     final class FakeSettings: SimulatorSettingsControl, @unchecked Sendable {
         var calls: [String] = []
         var installed: Set<String> = ["com.example.hello"]
@@ -83,6 +148,7 @@ struct DeviceAgentControlTests {
 
     private func control(
         _ input: FakeInput, installs: Installs = Installs(), settings: FakeSettings = FakeSettings(),
+        logs: FakeLogs = FakeLogs(),
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
@@ -94,6 +160,7 @@ struct DeviceAgentControlTests {
                 return 4021
             },
             settings: settings,
+            logs: logs,
             sleep: sleep
         )
     }
@@ -216,7 +283,8 @@ struct DeviceAgentControlTests {
                 for _ in 0..<yields { await Task.yield() }
                 return [Self.booted]
             },
-            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), sleep: Self.untilCancelled
+            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+            sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let first = control.perform(.type(udid: "on", text: "a", includeScreenshot: false), sessionID: "s")
@@ -245,7 +313,7 @@ struct DeviceAgentControlTests {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
             input: FakeInput(), devices: { listed }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), sleep: Self.untilCancelled
+            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
@@ -345,7 +413,7 @@ extension DeviceAgentControlTests {
         let window = Duration.seconds(60)
         let control = DeviceAgentControl(
             input: input, devices: { [Self.booted] }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(),
+            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
             // The lease window passes at once; each typing pause lets it fire.
             sleep: { duration in
                 guard duration != window else { return }

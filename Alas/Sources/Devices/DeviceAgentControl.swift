@@ -46,6 +46,7 @@ final class DeviceAgentControl {
     @ObservationIgnored private let install: (String, URL) async throws -> Void
     @ObservationIgnored private let launch: (String, String) async throws -> Int32
     @ObservationIgnored private let settings: any SimulatorSettingsControl
+    @ObservationIgnored private let logs: any SimulatorLogsControl
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
@@ -84,6 +85,7 @@ final class DeviceAgentControl {
         install: @escaping (String, URL) async throws -> Void,
         launch: @escaping (String, String) async throws -> Int32,
         settings: any SimulatorSettingsControl,
+        logs: any SimulatorLogsControl,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
@@ -95,6 +97,7 @@ final class DeviceAgentControl {
         self.install = install
         self.launch = launch
         self.settings = settings
+        self.logs = logs
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
@@ -170,13 +173,19 @@ final class DeviceAgentControl {
 
     func perform(_ command: DeviceCommand, sessionID: String) async -> AlasCLIResponse {
         guard let udid = command.udid else { return await list() }
+        // A read the user's driving doesn't disturb: neither held nor queued.
+        if case .logs(_, let since, let bundleID, let level, let includeApple, let query, let limit) = command {
+            return await readLogs(
+                udid: udid, since: since, bundleID: bundleID, level: level, includeApple: includeApple, query: query, limit: limit
+            )
+        }
         // Touches and keys from two calls must not interleave on one simulator,
         // so input calls to a device run one at a time, in arrival order;
         // installing and launching take their turn too.
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
              .setAppearance, .setPermission, .setLocation, .push, .openURL: true
-        case .list, .open, .snapshot, .screenshot: false
+        case .list, .open, .snapshot, .screenshot, .logs: false
         }
         var inputTurn: UUID?
         switch await holdWhileTakenOver(udid, sessionID: sessionID, isInput: isInput) {
@@ -357,6 +366,45 @@ final class DeviceAgentControl {
                 try await settings.openURL(udid: udid, url: url)
                 return .text([Self.json(["ok": true])])
             }
+        case .logs:
+            // Answered by readLogs before the hold.
+            return .error("device_logs_failed: The call took the wrong path.")
+        }
+    }
+
+    private func readLogs(
+        udid: String, since: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int
+    ) async -> AlasCLIResponse {
+        let device: SimulatorDevice
+        do {
+            guard let found = try await devices().first(where: { $0.udid == udid }) else {
+                return .error("device_not_found: No iOS simulator \(udid). Call device_list.")
+            }
+            device = found
+        } catch {
+            return .error("device_unavailable: \(error.localizedDescription)")
+        }
+        guard device.state == .booted else {
+            return .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")
+        }
+        var app = bundleID
+        if app == nil { app = await logs.frontmostApp(udid: udid) }
+        guard let app else { return .error("device_no_app: No app is in front on \(device.name). Pass bundle_id.") }
+        do {
+            guard let executable = try await logs.executables(udid: udid)[app] else { return Self.notInstalled(app, on: device) }
+            let all = try await logs.logShow(
+                udid: udid, query: SimulatorLogQuery(executable: executable, level: level, includeApple: includeApple), seconds: since
+            )
+            let matching = query.map { query in all.filter { $0.matches(query) } } ?? all
+            let crashes = await logs.crashReports(udid: udid, bundleID: app, since: now().addingTimeInterval(-Double(since)))
+            return .text([Self.json([
+                "app": app,
+                "lines": matching.suffix(limit).map(\.json),
+                "truncated": matching.count > limit,
+                "crashes": crashes.map(\.json),
+            ])])
+        } catch {
+            return .error("device_logs_failed: \(error.localizedDescription)")
         }
     }
 

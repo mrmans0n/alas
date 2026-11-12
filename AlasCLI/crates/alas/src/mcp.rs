@@ -1107,6 +1107,24 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid", "url"]
             }
         }),
+        json!({
+            "name": "device_logs",
+            "description": "Read an app's recent logs and crash reports on a booted simulator: by default the app in front, its own lines at Default level and above, without Apple's subsystems, from the last 60 seconds. Returns lines oldest first (the newest `limit`; `truncated` says when more matched) and `crashes` with each report's exception and crashing frames. Debug and Info lines are only there if the app's logging keeps them. A crash report appears about 30 seconds after the crash: if the logs end in a fatal error and `crashes` is empty, call again shortly.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "since_seconds": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Default: 60." },
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "Default: the app in front." },
+                    "level": { "type": "string", "enum": ["default", "info", "debug", "error"], "description": "default: Default and above. error: errors and faults only. Default: default." },
+                    "include_apple": { "type": "boolean", "description": "Keep Apple's subsystems (com.apple.*) inside the app. Default: false." },
+                    "query": { "type": "string", "maxLength": 256, "description": "Only lines whose message, subsystem or category contain this text." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Default: 200." }
+                },
+                "required": ["udid"]
+            }
+        }),
     ]
 }
 
@@ -2154,6 +2172,24 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::OpenUrl {
                 udid: required_limited_string(args, "udid", 64)?,
                 url,
+            }))
+        }
+        "device_logs" => {
+            reject_arguments(
+                args,
+                name,
+                &["udid", "since_seconds", "bundle_id", "level", "include_apple", "query", "limit"],
+            )?;
+            Ok(Command::Device(alas_client::DeviceCommand::Logs {
+                udid: required_limited_string(args, "udid", 64)?,
+                since_seconds: optional_bounded_u64(args, "since_seconds", 1, 600)?.unwrap_or(60),
+                bundle_id: optional_limited_string(args, "bundle_id", 255)?,
+                level: optional_enum(args, "level", &["default", "info", "debug", "error"])?
+                    .unwrap_or("default")
+                    .into(),
+                include_apple: optional_bool(args, "include_apple")?.unwrap_or(false),
+                query: optional_limited_string(args, "query", 256)?,
+                limit: optional_bounded_u64(args, "limit", 1, 1000)?.unwrap_or(200),
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4307,6 +4343,7 @@ mod tests {
                 "device_set_location",
                 "device_push",
                 "device_open_url",
+                "device_logs",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -5180,6 +5217,18 @@ mod tests {
                 payload: json!({ "aps": { "alert": "hi" } })
             })
         );
+        assert_eq!(
+            map("device_logs", json!({ "udid": "U" })).unwrap(),
+            Command::Device(DeviceCommand::Logs {
+                udid: "U".into(),
+                since_seconds: 60,
+                bundle_id: None,
+                level: "default".into(),
+                include_apple: false,
+                query: None,
+                limit: 200
+            })
+        );
         for (name, args, error) in [
             ("device_tap", json!({ "udid": "U", "window_id": 1, "x": 1, "y": 1 }), "device_tap does not accept 'window_id'"),
             ("device_tap", json!({ "udid": "U", "ref": "s1e1", "x": 1, "y": 1 }), "pass either 'ref' or 'x' and 'y', not both"),
@@ -5199,6 +5248,8 @@ mod tests {
             ("device_set_location", json!({ "udid": "U" }), "pass latitude and longitude, or clear: true"),
             ("device_push", json!({ "udid": "U", "bundle_id": "b", "payload": { "alert": "hi" } }), "payload must be a JSON object with an 'aps' object, at most 4096 bytes"),
             ("device_open_url", json!({ "udid": "U", "url": "nothing" }), "url must have a scheme, such as https: or myapp:"),
+            ("device_logs", json!({ "udid": "U", "since_seconds": 601 }), "since_seconds must be an integer from 1 to 600"),
+            ("device_logs", json!({ "udid": "U", "level": "verbose" }), "level must be one of default, info, debug, error"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }
@@ -5240,7 +5291,7 @@ mod tests {
             tools.iter().find(|tool| tool["name"] == json!(name)).unwrap()["annotations"][hint]
                 .clone()
         };
-        for name in ["device_list", "device_snapshot", "device_screenshot"] {
+        for name in ["device_list", "device_snapshot", "device_screenshot", "device_logs"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
         for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
