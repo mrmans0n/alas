@@ -22,6 +22,11 @@ Probed with a throwaway UIKit app whose focused text view logs its text, and
   `device_type_unsupported`.
 - `simctl pbcopy` and `simctl pbpaste` read and write the simulator's
   pasteboard. They need a GUI login session, which Alas always has.
+  `pbcopy` decodes its input in the locale's encoding: without a UTF-8
+  `LC_ALL` or `LANG`, as in an app launched from Finder, "é" arrives as
+  "√©". `pbpaste` always writes UTF-8.
+- Pasting a word next to typed letters gets a space from UIKit's smart
+  insert: typing "Caf" and pasting "é" gave "Caf é" (end-to-end run).
 - ⌘V sent as HID keys never pastes on its own: `pasted` logs "Paste requires
   user authorization. Prompting..." and the field stays empty. iOS doesn't
   count the simulator's key events as a user paste. Turning on the
@@ -67,9 +72,12 @@ simulator:
 1. Take the simulator's pasteboard lock. Your pastes and copies and agents'
    pastes all take it, so a restore can't overwrite text that another paste
    is about to use.
-2. Find the app in front (`SimulatorForeground` from item A, the accessibility
-   bridge as the fallback). With no app in front, for example in the home
-   screen's search, paste without a grant.
+2. Find the app in front: one SpringBoard tracker per simulator
+   (`SimulatorForegroundTracker`, using `SimulatorForeground` from item A),
+   shared with the Logs tab and `device_logs`, with the accessibility bridge
+   as the fallback. The first question reads the last 10 minutes of the log
+   archive (1–2.5 s); later ones answer at once. With no app in front, for
+   example in the home screen's search, paste without a grant.
 3. Read the app's pasteboard row in `TCC.db`. If it isn't allowed already,
    `simctl privacy grant pasteboard <bundle>`.
 4. For an agent, read the old text with `pbpaste`.
@@ -91,10 +99,11 @@ pasted.
 
 - `DeviceTextInput.runs(for:)` splits text into `.keys([Press])` and
   `.paste(String)` runs. A character is typed when the US layout has it,
-  as today, including `\n`, `\r\n` and `\t`. Each stretch of consecutive
-  other characters is one paste run; a space between two of them joins the
-  run, so "日本 語" is one paste. For "Café au lait\n" that's keys "Caf",
-  paste "é", keys " au lait" and Return.
+  as today, including `\n`, `\r\n` and `\t`. A word (a stretch between
+  whitespace) with any other character is pasted whole, so smart insert
+  never sees a paste next to typed letters; a space between two pasted
+  words joins them, so "日本 語" is one paste. For "Café au lait\n" that's
+  paste "Café", then keys " au lait" and Return.
 - Key runs work as today, with the takeover and cancel checks between keys.
   The first paste run opens the paste session (steps 1–4), and each later
   run reuses it; the session is restored once when the call ends.
