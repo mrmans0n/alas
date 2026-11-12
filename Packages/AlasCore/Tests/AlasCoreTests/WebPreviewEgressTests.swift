@@ -249,7 +249,7 @@ struct WebPreviewEgressTests {
         // the linger timer. Tunnel-cap refusals have a separate gated test.
         let probe = Mutex<TestClient?>(nil)
         try await eventually {
-            if let answer = probe.withLock({ $0?.received }), answer.ended {
+            if let answer = probe.withLock({ $0?.received }), answer.finished {
                 if String(decoding: answer.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 407 ") { return true }
                 probe.withLock { $0 = nil }
             }

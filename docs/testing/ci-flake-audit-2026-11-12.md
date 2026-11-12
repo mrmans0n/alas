@@ -64,6 +64,26 @@ added and passes with the required product/report/coverage gates preserved.
 No assertion, coverage exclusion or production deadline is relaxed by these
 repairs.
 
+The first hosted PR run exposed one additional admission-probe fixture failure:
+[run 43242733614](https://github.com/mrmans0n/alas/actions/runs/43242733614),
+job 131267233355, checked out synthetic merge `98dc3707b` for branch head
+`2625772b3`. Only the 200-ms half-close variant failed, while observing admission
+after its original upstream EOF and payload assertions had passed. All 18 Core
+selectors listed below as historically unresolved explicitly passed in that run;
+this is one passing observation, not proof of their original causes.
+
+A real TCP reset after the client had been published reported EOF as well as an
+error and did not reproduce this stall. Delaying ready publication until the
+existing connection-state handler had cancelled the reset connection did:
+registering the read afterward produced cancellation error 89 with
+`isComplete == false`. The helper stopped reading but kept `ended == false`, so
+the probe could never be discarded. It now records a separate `finished` flag
+for EOF or error. Only the admission probe uses that flag; the original client's
+graceful EOF and payload assertions remain unchanged. Admission still requires
+HTTP 407, which cannot occur while the sole tunnel slot remains occupied.
+The identical controlled schedule records `finished == true` after repair.
+Independent review confirmed this distinction and the retained slot assertion.
+
 The output-cap launch regression now forces the early-termination window with
 two real children instead of launching 400 writers concurrently. A task-local
 factory controls the launch observation while retaining real pipes, signals and
