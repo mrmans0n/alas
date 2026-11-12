@@ -327,6 +327,21 @@ struct ACPMCPStatusPolicyTests {
         #expect(state?.showsSwitchToHTTPAction == false)
     }
 
+    @Test("a policy block replaces the transport advice only while the server is not registered", arguments: [
+        (MCPServerRegistration.notRegistered, BuiltInMCPWarning.blockedByAgentPolicy(source: "managed requirements")),
+        (.registered, .none),
+        (.unknown, .none),
+    ])
+    func policyBlockWarning(registration: MCPServerRegistration, expected: BuiltInMCPWarning) {
+        let state = ACPMCPStatusState(
+            summary: builtInSummary(transport: .stdio), currentServers: [],
+            builtInRegistration: registration,
+            builtInPolicyBlock: "managed requirements",
+            adapterSupportsHTTP: true)
+        #expect(state?.builtInWarning == expected)
+        #expect(state?.showsSwitchToHTTPAction == false)
+    }
+
     @Test("accessibility summary reflects the built-in warning")
     func accessibilitySummaryReflectsBuiltInWarning() {
         let canSwitch = ACPMCPStatusState(

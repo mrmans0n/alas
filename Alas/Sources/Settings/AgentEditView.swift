@@ -11,6 +11,7 @@ struct AgentEditView: View {
     @State private var nativeSubagentsDisabled: Bool
     @State private var sessionInstructions: String
     @State private var sessionHooks: String
+    @State private var alasMCPServerName: String
     @State private var deleteConfirmShown = false
     /// Pi only: what the installed Pi extensions leave uncovered. Read once
     /// when the sheet opens.
@@ -31,6 +32,9 @@ struct AgentEditView: View {
         } ?? "")
         _sessionHooks = State(initialValue: targetID.flatMap {
             state.config.agents.builtinState[$0]?.sessionHooks
+        } ?? "")
+        _alasMCPServerName = State(initialValue: targetID.flatMap {
+            state.config.agents.builtinState[$0]?.alasMCPServerName
         } ?? "")
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
@@ -204,6 +208,27 @@ struct AgentEditView: View {
                     }
                 }
             }
+            if supportsAlasMCPServerName {
+                SettingsRow(
+                    name: "Alas MCP server name",
+                    desc: "The name this agent sees the built-in Alas MCP server under. Change it when a "
+                        + "managed policy only allows certain server names. Applies when a session reconnects."
+                ) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        AlasField(
+                            text: $alasMCPServerName,
+                            placeholder: BuiltInAlasMCP.serverName,
+                            monospaced: true
+                        )
+                        if let alasMCPServerNameError {
+                            Text(alasMCPServerNameError)
+                                .font(scale.metaFont)
+                                .foregroundColor(theme.color("del"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
 
             HStack(spacing: 8) {
                 if !draft.isBuiltin && !isNew {
@@ -282,6 +307,20 @@ struct AgentEditView: View {
         }
     }
 
+    /// Agents that take MCP servers from Alas over ACP; the rest never see
+    /// the built-in server's name.
+    private var supportsAlasMCPServerName: Bool {
+        draft.isBuiltin && ACPLaunchCatalog.spec(for: draft.id)?.mcpInjection == .sessionNew
+    }
+
+    private var alasMCPServerNameError: String? {
+        guard supportsAlasMCPServerName,
+              !alasMCPServerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              BuiltInAlasMCP.normalizedServerName(alasMCPServerName) == nil
+        else { return nil }
+        return "Use letters, digits, _ and -, up to 64 characters."
+    }
+
     private var isNew: Bool {
         if case .new = target { return true } else { return false }
     }
@@ -292,7 +331,7 @@ struct AgentEditView: View {
     }
 
     private var canSave: Bool {
-        if draft.isBuiltin { return sessionHooksError == nil }
+        if draft.isBuiltin { return sessionHooksError == nil && alasMCPServerNameError == nil }
         return !draft.displayName.trimmingCharacters(in: .whitespaces).isEmpty
             && !draft.binary.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -314,6 +353,10 @@ struct AgentEditView: View {
             }
             if supportsSessionHooks {
                 entry.sessionHooks = try? ACPClaudeSessionHooksPolicy.normalized(sessionHooks)
+            }
+            if supportsAlasMCPServerName {
+                let name = BuiltInAlasMCP.normalizedServerName(alasMCPServerName)
+                entry.alasMCPServerName = name == BuiltInAlasMCP.serverName ? nil : name
             }
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {
