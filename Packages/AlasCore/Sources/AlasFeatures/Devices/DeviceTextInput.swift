@@ -29,6 +29,58 @@ public enum DeviceTextInput {
         return .success(presses)
     }
 
+    /// A stretch of text typed as keys, or pasted because the US layout lacks it.
+    public enum Run: Equatable, Sendable {
+        case keys([Press])
+        case paste(String)
+
+        public var characterCount: Int {
+            switch self {
+            case .keys(let presses): presses.count
+            case .paste(let text): text.count
+            }
+        }
+    }
+
+    /// Splits text into key runs and paste runs. A space joins a paste run
+    /// when the characters on both sides of it are pasted.
+    public static func runs(for text: String) -> [Run] {
+        let characters = Array(text)
+        let typeable = characters.map { press(for: $0) != nil }
+        var runs: [Run] = []
+        var keys: [Press] = []
+        var pasted = ""
+        func flushKeys() {
+            if !keys.isEmpty { runs.append(.keys(keys)) }
+            keys = []
+        }
+        func flushPaste() {
+            if !pasted.isEmpty { runs.append(.paste(pasted)) }
+            pasted = ""
+        }
+        for (index, character) in characters.enumerated() {
+            if character == " ", joinsPaste(at: index, characters, typeable) {
+                pasted.append(character)
+            } else if let press = press(for: character) {
+                flushPaste()
+                keys.append(press)
+            } else {
+                flushKeys()
+                pasted.append(character)
+            }
+        }
+        flushKeys()
+        flushPaste()
+        return runs
+    }
+
+    private static func joinsPaste(at index: Int, _ characters: [Character], _ typeable: [Bool]) -> Bool {
+        guard let before = characters[..<index].lastIndex(where: { $0 != " " }),
+              let after = characters[(index + 1)...].firstIndex(where: { $0 != " " })
+        else { return false }
+        return !typeable[before] && !typeable[after]
+    }
+
     private static func press(for character: Character) -> Press? {
         if let scalar = character.unicodeScalars.first, character.unicodeScalars.count == 1 {
             switch scalar.value {

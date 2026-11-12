@@ -40,6 +40,9 @@ struct DeviceCommandTests {
          .logs(udid: "U", sinceSeconds: 60, bundleID: nil, level: .default, includeApple: false, query: nil, limit: 200)),
         ("device_logs", #"{"udid":"U","since_seconds":600,"bundle_id":"b","level":"error","include_apple":true,"query":"fatal","limit":5}"#,
          .logs(udid: "U", sinceSeconds: 600, bundleID: "b", level: .error, includeApple: true, query: "fatal", limit: 5)),
+        ("device_clipboard", #"{"udid":"U"}"#, .clipboard(udid: "U", text: nil)),
+        ("device_clipboard", #"{"udid":"U","text":""}"#, .clipboard(udid: "U", text: "")),
+        ("device_clipboard", #"{"udid":"U","text":"Café ☕️"}"#, .clipboard(udid: "U", text: "Café ☕️")),
     ] as [(String, String, DeviceCommand)])
     func decodesEachActionWithDefaults(command: String, params: String, expected: DeviceCommand) throws {
         #expect(try decode(command, params) == .device(expected))
@@ -72,6 +75,8 @@ struct DeviceCommandTests {
         ("device_logs", #"{"udid":"U","since_seconds":601}"#),
         ("device_logs", #"{"udid":"U","level":"verbose"}"#),
         ("device_logs", #"{"udid":"U","limit":0}"#),
+        ("device_clipboard", #"{"udid":"U","text":"\#(String(repeating: "a", count: 65537))"}"#),
+        ("device_clipboard", #"{"udid":"U","bundle_id":"b"}"#),
     ])
     func refusesWhatAnActionDoesNotTake(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.malformed) { try decode(command, params) }
