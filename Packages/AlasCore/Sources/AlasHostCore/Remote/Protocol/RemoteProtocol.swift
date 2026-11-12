@@ -1685,6 +1685,8 @@ public enum HostProtocolCapability: Sendable {
     /// Advertised by a headless host that can upgrade itself through
     /// Homebrew: it serves `updateHost`.
     public static let updateV1 = "host.update.v1"
+    /// Hosts that serve `shepherdSession`.
+    public static let shepherdsV1 = "host.shepherds.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,
@@ -1693,7 +1695,8 @@ public enum HostProtocolCapability: Sendable {
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
                                        worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
-                                       worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2, worktreesFileBytesV3]
+                                       worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2, worktreesFileBytesV3,
+                                       shepherdsV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

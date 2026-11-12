@@ -367,36 +367,59 @@ private struct NativePeerFromLabel: View {
     }
 }
 
-/// The host's shepherd pill for the session, read-only: the local pill's
-/// look without its popover. A badge this Mac doesn't know shows nothing.
+/// The host's shepherd pill for the session: the local pill's look, with a
+/// menu of what the host lets this Mac do instead of the local popover.
+/// Without a shepherd it is Ship with agent. A badge this Mac doesn't know shows nothing.
 private struct NativePeerShepherdPill: View {
-    let shepherd: HostSessionShepherd
+    let shepherd: HostSessionShepherd?
+    let actions: [HostShepherdAction]
+    let perform: (HostShepherdAction) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
 
     var body: some View {
-        if let badge = shepherd.badgeState {
-            HStack(spacing: 5) {
-                Image(systemName: badge.symbolName)
-                    .font(scale.meta.font(weight: .semibold))
-                    .foregroundStyle(badge.color(theme: theme))
-                if let number = shepherd.number {
-                    Text(number)
-                        .font(scale.meta.font(weight: .semibold, design: .monospaced))
+        if let badge = shepherd.map(\.badgeState) ?? .noRequest {
+            let tooltip = shepherd?.tooltip ?? "Ship with agent"
+            Menu {
+                ForEach(actions, id: \.self) { action in
+                    Button(Self.title(action)) { perform(action) }
                 }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: badge.symbolName)
+                        .font(scale.meta.font(weight: .semibold))
+                        .foregroundStyle(badge.color(theme: theme))
+                    if let number = shepherd?.number {
+                        Text(number)
+                            .font(scale.meta.font(weight: .semibold, design: .monospaced))
+                    } else if shepherd == nil {
+                        Text("Ship").font(scale.meta.font(weight: .semibold))
+                    }
+                }
+                .foregroundStyle(theme.color("fg-dim"))
+                .lineLimit(1)
+                .padding(.horizontal, scale.space[2])
+                .frame(height: 22)
+                .background(theme.color("bg-3").opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+                .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                .aiBeam(isActive: badge.isActive, cornerRadius: scale.radius.small)
             }
-            .foregroundStyle(theme.color("fg-dim"))
-            .lineLimit(1)
-            .padding(.horizontal, scale.space[2])
-            .frame(height: 22)
-            .background(theme.color("bg-3").opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
-            .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
-            .aiBeam(isActive: badge.isActive, cornerRadius: scale.radius.small)
-            .help(shepherd.tooltip)
-            .accessibilityElement(children: .ignore)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(actions.isEmpty)
+            .help(tooltip)
             .accessibilityLabel("Shepherd")
-            .accessibilityValue(shepherd.tooltip)
+            .accessibilityValue(tooltip)
+        }
+    }
+
+    private static func title(_ action: HostShepherdAction) -> String {
+        switch action {
+        case .ship: "Ship with agent"
+        case .resume: "Resume"
+        case .stop: "Stop shepherding"
         }
     }
 }
@@ -822,7 +845,7 @@ private struct NativePeerComposer: View {
             }
             Spacer(minLength: 0)
             if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
-            if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
+            shepherdPill
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }
@@ -833,11 +856,19 @@ private struct NativePeerComposer: View {
         }
     }
 
+    /// Ship needs the session's driver: the host sends the agent a prompt.
+    @ViewBuilder private var shepherdPill: some View {
+        let actions = client.selectedShepherdActions.filter { $0 != .ship || canDrive }
+        if client.selectedShepherd != nil || !actions.isEmpty {
+            NativePeerShepherdPill(shepherd: client.selectedShepherd, actions: actions, perform: client.shepherdSelected)
+        }
+    }
+
     private var compactToolbar: some View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
             if let name = client.selectedDelegatedFromName { NativePeerFromLabel(name: name) }
-            if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
+            shepherdPill
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }

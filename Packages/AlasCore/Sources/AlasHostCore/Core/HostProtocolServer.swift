@@ -326,6 +326,8 @@ public final class HostProtocolConnection {
             try await sessions.send(id, prompt: prompt, caller: caller)
         case .stopSession(let id):
             try await sessions.stop(id, caller: caller)
+        case .shepherdSession(let id, let action):
+            try await sessions.shepherd(id, action: action, caller: caller)
         case .renameSession(let id, let title):
             try sessions.rename(id, title: title, caller: caller)
         case .archiveSession(let id):
