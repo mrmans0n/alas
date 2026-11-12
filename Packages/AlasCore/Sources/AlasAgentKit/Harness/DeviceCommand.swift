@@ -48,6 +48,8 @@ public enum DeviceCommand: Equatable, Sendable {
     /// `payload` is the notification's JSON, with sorted keys.
     case push(udid: String, bundleID: String, payload: String)
     case openURL(udid: String, url: String)
+    /// `bundleID` nil means the app in front.
+    case logs(udid: String, sinceSeconds: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -67,6 +69,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .setLocation: "device_set_location"
         case .push: "device_push"
         case .openURL: "device_open_url"
+        case .logs: "device_logs"
         }
     }
 
@@ -76,7 +79,8 @@ public enum DeviceCommand: Equatable, Sendable {
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
              .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
              .install(let udid, _), .launch(let udid, _), .setAppearance(let udid, _, _, _),
-             .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _):
+             .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _),
+             .logs(let udid, _, _, _, _, _, _):
             udid
         }
     }
@@ -108,6 +112,9 @@ public enum DeviceCommand: Equatable, Sendable {
         var longitude: Double?
         var clear: Bool?
         var url: String?
+        var since_seconds: Int?
+        var level: String?
+        var include_apple: Bool?
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -126,6 +133,7 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_set_location": ["udid", "latitude", "longitude", "clear"],
         "device_push": ["udid", "bundle_id", "payload"],
         "device_open_url": ["udid", "url"],
+        "device_logs": ["udid", "since_seconds", "bundle_id", "level", "include_apple", "query", "limit"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -241,6 +249,16 @@ public enum DeviceCommand: Equatable, Sendable {
                   let scheme = URLComponents(string: url)?.scheme, !scheme.isEmpty
             else { throw AlasCLIRequestError.malformed }
             return .openURL(udid: try udid(), url: url)
+        case "device_logs":
+            let since = params.since_seconds ?? 60
+            let limit = params.limit ?? 200
+            let level = try params.level.map { try enumValue(SimulatorLogLevel.self, $0) } ?? .default
+            guard (1...600).contains(since), (1...1000).contains(limit), (params.query?.utf8.count ?? 0) <= 256 else {
+                throw AlasCLIRequestError.malformed
+            }
+            let bundle: String? = params.bundle_id == nil ? nil : try bundleID()
+            return .logs(udid: try udid(), sinceSeconds: since, bundleID: bundle, level: level,
+                         includeApple: params.include_apple ?? false, query: params.query, limit: limit)
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)

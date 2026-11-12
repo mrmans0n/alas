@@ -736,6 +736,9 @@ struct CenterPaneView: View {
                     case .runReport(let s):
                         RunReportTabView(state: state, tabState: s)
                             .id(s.id)
+                    case .simulatorLogs(let s):
+                        SimulatorLogsTabView(state: state, tabState: s)
+                            .id(s.id)
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,

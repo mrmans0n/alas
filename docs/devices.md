@@ -27,6 +27,20 @@ Contrast, each showing the value the simulator reports back; privacy
 permissions and a test push notification for one of your installed apps; a
 simulated location, with a few preset places; and a URL or deep link to open.
 
+### Logs
+
+The Logs button in the toolbar opens a booted simulator's logs in a center
+tab. By default it shows the app in front: its own lines at Default level and
+above, without Apple's `com.apple.*` subsystems, and it follows whichever app
+comes forward. Pick one of your apps or all processes instead, choose a level
+(Default, + Info, + Debug, or errors and faults only), show Apple's
+subsystems, or search the lines already captured. Pause holds the view while
+lines keep arriving; the tab keeps the newest 5,000 lines.
+
+When the app crashes, a banner shows the exception and the crashing frames
+from its crash report, with buttons to open the report or dismiss the banner.
+macOS writes the report about 30 seconds after the crash.
+
 ### Running an app from a run script
 
 A run script can name the app it builds with an `# alas-app:` line, relative
@@ -90,6 +104,7 @@ tools from the built-in `alas` MCP server:
 | `device_set_location` | Sets or clears the simulated location. |
 | `device_push` | Sends a push notification to an installed app. |
 | `device_open_url` | Opens a web page or a deep link. |
+| `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
 
 While an agent works on a simulator, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An

@@ -36,6 +36,10 @@ struct DeviceCommandTests {
         ("device_push", #"{"udid":"U","bundle_id":"b","payload":{"aps":{"alert":"hi"}}}"#,
          .push(udid: "U", bundleID: "b", payload: #"{"aps":{"alert":"hi"}}"#)),
         ("device_open_url", #"{"udid":"U","url":"myapp://home"}"#, .openURL(udid: "U", url: "myapp://home")),
+        ("device_logs", #"{"udid":"U"}"#,
+         .logs(udid: "U", sinceSeconds: 60, bundleID: nil, level: .default, includeApple: false, query: nil, limit: 200)),
+        ("device_logs", #"{"udid":"U","since_seconds":600,"bundle_id":"b","level":"error","include_apple":true,"query":"fatal","limit":5}"#,
+         .logs(udid: "U", sinceSeconds: 600, bundleID: "b", level: .error, includeApple: true, query: "fatal", limit: 5)),
     ] as [(String, String, DeviceCommand)])
     func decodesEachActionWithDefaults(command: String, params: String, expected: DeviceCommand) throws {
         #expect(try decode(command, params) == .device(expected))
@@ -65,6 +69,9 @@ struct DeviceCommandTests {
         ("device_set_location", #"{"udid":"U","latitude":1,"longitude":2,"clear":true}"#),
         ("device_push", #"{"udid":"U","bundle_id":"b","payload":{"alert":"hi"}}"#),
         ("device_open_url", #"{"udid":"U","url":"no scheme"}"#),
+        ("device_logs", #"{"udid":"U","since_seconds":601}"#),
+        ("device_logs", #"{"udid":"U","level":"verbose"}"#),
+        ("device_logs", #"{"udid":"U","limit":0}"#),
     ])
     func refusesWhatAnActionDoesNotTake(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.malformed) { try decode(command, params) }

@@ -27,6 +27,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case webPreview(WebPreviewTabState)
     case virtualMachine(VirtualMachineTabState)
     case runReport(RunReportTabState)
+    case simulatorLogs(SimulatorLogsTabState)
     case plugin(PluginTabState)
     case visualAid(VisualAidTabState)
 
@@ -56,6 +57,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview(let s):   return s.id
         case .virtualMachine(let s): return s.id
         case .runReport(let s):    return s.id
+        case .simulatorLogs(let s): return s.id
         case .plugin(let s):       return s.id
         case .visualAid(let s):    return s.id
         }
@@ -87,6 +89,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview(let s):   return s.title
         case .virtualMachine(let s): return s.title
         case .runReport(let s):    return s.title
+        case .simulatorLogs(let s): return s.title
         case .plugin(let s):       return s.title
         case .visualAid(let s):    return s.title
         }
@@ -118,6 +121,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview:   return "globe"
         case .virtualMachine: return "desktopcomputer"
         case .runReport:    return "terminal.fill"
+        case .simulatorLogs: return "doc.text.magnifyingglass"
         case .plugin:       return "puzzlepiece.extension"
         case .visualAid:    return "rectangle.on.rectangle"
         }
@@ -128,6 +132,8 @@ enum Tab: Codable, Equatable, Identifiable {
         if case .ggLanding = self { return false }
         // The visual lives in a session transcript that may not be live after relaunch.
         if case .visualAid = self { return false }
+        // The simulator may be gone after relaunch.
+        if case .simulatorLogs = self { return false }
         return true
     }
 
@@ -304,6 +310,23 @@ struct PluginTabState: Codable, Equatable, Identifiable {
         self.contributionID = contributionID
         self.title = title
         id = "plugin:\(pluginID)/\(contributionID)"
+    }
+}
+
+/// A simulator's logs. One per simulator in each worktree.
+struct SimulatorLogsTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let udid: String
+    let deviceName: String
+
+    var title: String { "Logs · \(deviceName)" }
+
+    init(worktreeId: String, udid: String, deviceName: String) {
+        self.worktreeId = worktreeId
+        self.udid = udid
+        self.deviceName = deviceName
+        id = "simulator-logs:\(udid)"
     }
 }
 

@@ -122,4 +122,11 @@ public final class AlasSimulatorSession: @unchecked Sendable {
         SimFrameworks.load()
         return try AccessibilityBridge.shared.describeUI(udid: udid)
     }
+
+    /// The bundle ID of the app in front on a booted simulator, or nil when
+    /// SpringBoard shows none (the home screen). Doesn't walk the UI.
+    public static func frontmostApp(udid: String) -> String? {
+        SimFrameworks.load()
+        return (try? AccessibilityBridge.shared.frontmostApp(udid: udid))?["bundleId"] as? String
+    }
 }

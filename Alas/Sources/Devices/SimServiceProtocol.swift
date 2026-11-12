@@ -21,6 +21,8 @@ enum SimServiceName {
     func button(udid: String, name: String)
     /// The accessibility tree of `udid` as serve-sim's JSON, or an error message.
     func describe(udid: String, reply: @escaping @Sendable (Data?, String?) -> Void)
+    /// The bundle ID of the app in front, or nil (the home screen).
+    func frontmostApp(udid: String, reply: @escaping @Sendable (String?) -> Void)
 }
 
 /// Calls from AlasSimService back into Alas.

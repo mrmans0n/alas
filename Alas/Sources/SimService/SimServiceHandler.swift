@@ -79,6 +79,13 @@ final class SimServiceHandler: NSObject, SimServiceProtocol, @unchecked Sendable
         }
     }
 
+    func frontmostApp(udid: String, reply: @escaping @Sendable (String?) -> Void) {
+        // Like describe, the bridge may block; keep it off the XPC queue.
+        DispatchQueue.global(qos: .userInitiated).async {
+            reply(AlasSimulatorSession.frontmostApp(udid: udid))
+        }
+    }
+
     func stopAll() {
         let all = lock.withLock { () -> [AlasSimulatorSession] in
             defer { sessions.removeAll() }

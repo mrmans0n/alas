@@ -166,8 +166,8 @@ iOS:
 - [ ] Clipboard both ways (`simctl pbcopy`, `simctl pbpaste`).
 - [ ] Screenshot and screen recording (`simctl io <udid> screenshot|recordVideo`,
   or a PNG from the frames Alas already receives).
-- [ ] Device logs (`simctl spawn <udid> log stream`), filtered to the
-  foreground app.
+- [x] Device logs: a Logs tab following the foreground app, crash report
+  summaries, and `device_logs` for agents.
 - [ ] VoiceOver, reduce motion and an accessibility overlay. serve-sim's
   accessibility settings helper (`Sources/SimAXSettings`, not yet vendored)
   and the vendored `AccessibilityBridge`.

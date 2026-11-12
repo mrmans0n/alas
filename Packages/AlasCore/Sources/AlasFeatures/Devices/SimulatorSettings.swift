@@ -145,6 +145,14 @@ public enum SimulatorAppList {
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
+
+    /// Every app's executable in `simctl listapps` output, by bundle ID.
+    public static func executables(_ plist: Data) -> [String: String] {
+        guard let apps = (try? PropertyListSerialization.propertyList(from: plist, format: nil)) as? [String: [String: Any]] else {
+            return [:]
+        }
+        return apps.compactMapValues { $0["CFBundleExecutable"] as? String }
+    }
 }
 
 public enum SimulatorPushPayload {
