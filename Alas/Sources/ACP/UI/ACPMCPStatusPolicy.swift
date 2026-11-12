@@ -15,6 +15,10 @@ enum BuiltInMCPWarning: Equatable {
     /// Attached over stdio, not registered, and the adapter has no HTTP MCP
     /// support, so offering the switch would loop back to stdio.
     case httpUnsupported
+    /// The agent's managed policy disables the server before it can start,
+    /// so neither a transport switch nor a reconnect alone helps. Carries
+    /// where the policy comes from.
+    case blockedByAgentPolicy(source: String)
 }
 
 /// Presentation-only state for the MCP attachment status control. The
@@ -58,6 +62,7 @@ struct ACPMCPStatusState: Equatable {
         preambleSent: Bool = false,
         externalStatus: ACPMCPExternalStatus? = nil,
         builtInRegistration: MCPServerRegistration = .unknown,
+        builtInPolicyBlock: String? = nil,
         adapterSupportsHTTP: Bool = true
     ) {
         guard let summary,
@@ -71,6 +76,8 @@ struct ACPMCPStatusState: Equatable {
             .first { $0.id == BuiltInAlasMCP.statusId }?.transport
         if builtInRegistration != .notRegistered {
             builtInWarning = .none
+        } else if let builtInPolicyBlock {
+            builtInWarning = .blockedByAgentPolicy(source: builtInPolicyBlock)
         } else if attachedBuiltInTransport == .http {
             // Already on HTTP and still not registered — the switch cannot help.
             builtInWarning = .alreadyHTTP
@@ -184,6 +191,8 @@ struct ACPMCPStatusState: Equatable {
             parts.append("Alas MCP server not started and this agent has no HTTP MCP support")
         case .alreadyHTTP:
             parts.append("Alas MCP server not started over HTTP")
+        case .blockedByAgentPolicy:
+            parts.append("Alas MCP server blocked by the agent's managed policy")
         }
         return parts.joined(separator: ", ")
     }

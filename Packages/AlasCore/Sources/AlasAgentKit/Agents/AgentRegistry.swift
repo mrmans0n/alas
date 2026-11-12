@@ -34,6 +34,12 @@ extension AppConfig.Agents {
             return text
         }
     }
+
+    /// The name the built-in Alas MCP server is attached under for `agentID`.
+    public func alasMCPServerName(for agentID: String) -> String {
+        BuiltInAlasMCP.normalizedServerName(builtinState[agentID]?.alasMCPServerName)
+            ?? BuiltInAlasMCP.serverName
+    }
 }
 
 /// Runtime view over the agent catalog. Built-ins come first (in catalog

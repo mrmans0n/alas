@@ -86,7 +86,8 @@ public struct HeadlessAlasTools {
             sessionId: sessionId,
             parentSessionId: parentSessionId,
             headless: true,
-            cliBuild: cliBuild
+            cliBuild: cliBuild,
+            serverName: config().agents.alasMCPServerName(for: context.agentID)
         ))
     }
 

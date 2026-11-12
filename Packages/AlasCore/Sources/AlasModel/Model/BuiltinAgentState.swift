@@ -18,6 +18,10 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
     /// "Session hooks" (Claude Code hooks JSON) for new ACP sessions of this
     /// agent. Absent (nil) means none. See `ACPClaudeSessionHooksPolicy`.
     public var sessionHooks: String?
+    /// The name the built-in Alas MCP server is attached under for this
+    /// agent. Absent (nil) means the default. See
+    /// `BuiltInAlasMCP.normalizedServerName`.
+    public var alasMCPServerName: String?
 
     public init(
         isEnabled: Bool,
@@ -25,7 +29,8 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
         extraTerminalArgs: [String]? = nil,
         nativeSubagentsDisabled: Bool? = nil,
         sessionInstructions: String? = nil,
-        sessionHooks: String? = nil
+        sessionHooks: String? = nil,
+        alasMCPServerName: String? = nil
     ) {
         self.isEnabled = isEnabled
         self.binaryOverride = binaryOverride
@@ -33,5 +38,6 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
         self.sessionInstructions = sessionInstructions
         self.sessionHooks = sessionHooks
+        self.alasMCPServerName = alasMCPServerName
     }
 }

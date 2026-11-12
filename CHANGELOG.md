@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let each agent see the built-in Alas MCP server under a chosen name (Settings > Agents > edit an agent), for managed policies that only allow certain MCP server names.
+
+### 🐛 Fixes
+
+- Say when Codex's managed requirements block the built-in Alas MCP server, and name their source, instead of reporting a server that never started.
+
 ## [0.23.6] - 2026-11-12
 
 ### ✨ Features

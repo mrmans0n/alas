@@ -29,6 +29,7 @@ struct ACPMCPStatusControl: View {
             preambleSent: session.mcpPreambleSent,
             externalStatus: session.mcpExternalStatus,
             builtInRegistration: session.builtInMCPRegistration,
+            builtInPolicyBlock: session.builtInMCPPolicyBlock,
             adapterSupportsHTTP: session.adapterSupportsHTTPMCP
         )
     }
@@ -254,6 +255,10 @@ private struct ACPMCPStatusPopover: View {
             return "Already using HTTP; check whether your agent policy allows http://localhost MCP servers."
         case .httpUnsupported:
             return "This agent does not advertise HTTP MCP support."
+        case .blockedByAgentPolicy(let source):
+            return "The agent's managed policy blocks this server (\(source)). "
+                + "Such policies allow MCP servers by name and by URL or command. "
+                + "Set an allowed server name for this agent in Settings > Agents, then reconnect."
         }
     }
 
