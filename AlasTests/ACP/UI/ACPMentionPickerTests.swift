@@ -68,6 +68,41 @@ struct ACPMentionPickerTests {
         #expect(matches.first == expected)
     }
 
+    private static let pathQueryRoot = URL(fileURLWithPath: "/tmp/project")
+    private static let pathQueryFiles = [
+        "Alas/", "Alas/Sources/", "Alas/Sources/Plugins/", "Alas/Sources/UI/", "Alas/Sources/UI/Composer.swift",
+        "AlasTests/", "AlasTests/UI/",
+        "Packages/", "Packages/AlasCore/", "Packages/AlasCore/Sources/", "Packages/AlasCore/Sources/UI/",
+    ].map { pathQueryRoot.appendingPathComponent($0, isDirectory: $0.hasSuffix("/")) }
+
+    @Test("a / query matches one folder level per segment; root chains first, then deeper ones", arguments: [
+        // Segments match by prefix or subsequence; the folders before the last `/` resolve to one.
+        ("al/so/ui", ["Alas/Sources/UI", "Alas/Sources/Plugins", "Packages/AlasCore/Sources/UI"], ["Alas", "Sources"]),
+        // A trailing `/` lists the folder itself, then its children.
+        ("Alas/Sources/", ["Alas/Sources", "Alas/Sources/Plugins", "Alas/Sources/UI",
+                           "Packages/AlasCore/Sources", "Packages/AlasCore/Sources/UI"], ["Alas", "Sources"]),
+        // Several equally good folders: no single folder to show.
+        ("al/", ["Alas", "AlasTests", "Alas/Sources", "AlasTests/UI",
+                 "Packages/AlasCore", "Packages/AlasCore/Sources"], nil),
+    ] as [(String, [String], [String]?)])
+    func pathQueryMatchesFolderLevels(query: String, expected: [String], folder: [String]?) throws {
+        let result = try #require(MentionPathQuery.match(
+            files: Self.pathQueryFiles, query: query, limit: 80, relativeTo: Self.pathQueryRoot))
+        #expect(result.matches.map(\.relativePath) == expected)
+        #expect(result.folder == folder)
+    }
+
+    @Test("a / query highlights each level's matched letters and leaves unmatched queries to fuzzy ranking")
+    func pathQueryOffsetsAndFallback() throws {
+        let match = try #require(MentionPathQuery.match(
+            files: Self.pathQueryFiles, query: "al/so/ui", limit: 80, relativeTo: Self.pathQueryRoot)?.matches.first)
+        #expect(match.matchedOffsets == [0, 1, 5, 6, 13, 14])
+        for query in ["al/zz", "/ui", "ui"] {
+            #expect(MentionPathQuery.match(
+                files: Self.pathQueryFiles, query: query, limit: 80, relativeTo: Self.pathQueryRoot) == nil)
+        }
+    }
+
     @Test("deduplicates candidates by relative path and preserves directory URLs")
     func deduplicatesCandidates() {
         let root = URL(fileURLWithPath: "/tmp/project")
@@ -198,7 +233,7 @@ struct ACPMentionPickerTests {
         #expect(dirs.allSatisfy { $0.hasDirectoryPath })
     }
 
-    @Test("absolute query lists one directory, folders first, hiding dotfiles until a dot is typed")
+    @Test("absolute query lists one directory, itself then folders first, hiding dotfiles until a dot is typed")
     func absoluteQueryBrowsesOneDirectory() throws {
         let root = try makeTempTree(["zeta/inner.txt", "alpha.txt", "beta.md", ".hidden"])
         defer { try? FileManager.default.removeItem(at: root) }
@@ -207,7 +242,7 @@ struct ACPMentionPickerTests {
         let names = { (query: String) in
             MentionAbsolutePath.entries(forQuery: query, limit: 80).map(\.lastPathComponent)
         }
-        #expect(names(dir) == ["zeta", "alpha.txt", "beta.md"])
+        #expect(names(dir) == [root.lastPathComponent, "zeta", "alpha.txt", "beta.md"])
         #expect(names(dir + "AL") == ["alpha.txt"])
         #expect(names(dir + "eta") == ["zeta", "beta.md"])
         #expect(names(dir + ".") == [".hidden", "alpha.txt", "beta.md"])
@@ -307,6 +342,8 @@ struct ACPMentionPickerTests {
         #expect(plan("", .symbols) == MentionQueryPlan(sessions: false, symbols: .project(query: "", limit: 80), fileQuery: nil))
         #expect(plan("res", .sessions) == MentionQueryPlan(sessions: true, symbols: .none, fileQuery: nil))
         #expect(plan("~/src#x", .all, absolute: true) == MentionQueryPlan(sessions: false, symbols: .none, fileQuery: "~/src#x"))
+        // A `/` names folder levels: All lists files alone.
+        #expect(plan("al/so", .all) == MentionQueryPlan(sessions: false, symbols: .none, fileQuery: "al/so"))
     }
 
     @Test("scopes offered follow the available sources; none when only files are")

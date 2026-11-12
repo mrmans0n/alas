@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Chain folders in the composer's `@` picker: ⇥ opens the highlighted folder, a breadcrumb shows the folder you are in, and each `/` segment fuzzy-matches one folder level, so `al/so/ui` finds `Alas/Sources/UI`. A query ending in `/` lists that folder first so it can be attached.
+
 ## [0.23.6] - 2026-11-12
 
 ### ✨ Features
