@@ -67,6 +67,19 @@ from 401 children to two and removes one test definition. Historical slow mocked
 operations coincided with the burst, but that correlation does not establish
 the cause of the outstanding session or cancellation timeouts.
 
+Two cancellation fixtures also blocked the main actor waiting for an async
+writer's continuation to resume, after its physical authorization decision was
+already available. A controlled post-write resumption gate made copies of both
+actual test bodies block for ten seconds each and fail, despite both writes
+already being refused. The checkpoint now runs directly on the serialized
+writer and returns the authorization result. Both tests require `false` before
+allowing another actor turn, then retain their sending-result, byte and ready
+assertions. The controlled repaired variant with explicit refusal assertions
+passed both tests in 69 ms. Forcing authorization to return `true` fails both
+actor-held assertions even when the later cancellation-result checks pass. This
+repairs a demonstrated fixture dependency; the historical CI log does not prove
+that it experienced the same schedule.
+
 ## Failures already repaired on main
 
 | Failure | Evidence and current repair |
@@ -99,6 +112,22 @@ the cause of the outstanding session or cancellation timeouts.
   comparisons show the cancellation implementation is unchanged. Default local
   Xcode 27.1 and CI's Xcode 26.6 were checked separately.
 
+The unresolved Core selectors are recorded explicitly below. Secondary failures
+after cancellation are retained as evidence, rather than counted as separate
+root causes. The latest cluster includes [job 130978738649](https://github.com/mrmans0n/alas/actions/runs/43156875888/job/130978738649).
+
+| Suite | Selectors still lacking a demonstrated root-cause repair |
+| --- | --- |
+| `HostSessionsTests` | `sessionVerbsDriveAnAgent`, `aRejectedRemotePromptCarriesItsReason`, `settingsLostToATakeoverAreRefused` |
+| `DelegationRecoveryTests` | `recoveryReattachesPeerChild`, `scopedRecoveryReattachesPeerChildAndLeavesLocalRows`, `scopedRecoveryDeliversAPeerChildsOutcomeToItsRootParent`, `blockedChildOfAHeadlessBuiltManagerReachesTheOutbox` |
+| `ACPCodexHooksTests` | `attachmentReplacementRetiresVisibleReview` |
+| `ACPV2AttachmentRuntimeTests` | `everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst` |
+| `ACPV2RequestDecisionCoordinatorTests` | `stdioIDReuseFollowsTransportAuthorityWhileResponsePersistenceIsPending` |
+| `HostProtocolServerTests` | `aPeerChildSkipsTheUnapprovedHookAndSaysSo`, `aPeerPromptReachesItsChild`, `startLowersAutoRunToWhatThePeerIsAllowed`, `subscribersHearTheirResponseThenTheChanges` |
+| `ACPSessionManagerTests` | `npmBinSymlinksOpenTheirQualifiedPackageExecutable` (preview startup deadline), `gateChangesAffectOnlyFuturePreviewCreation` (invalidated attachment in the same failing batch) |
+| `ACPBrokerRawClientTests` | `freshBrokerRunnerRejectsSetupWithoutChangingExistingBinding` (`deadline-open`) |
+| `RunServiceTests` | `cancellationKillsProcessesThatIgnoreSIGTERM` |
+
 ## Validation status
 
 The original full core baseline passed 1,273 tests in 129 suites. A focused event
@@ -117,6 +146,12 @@ in 129 suites in 19.169 seconds with the same CI toolchain. Both cap variants
 also passed ten focused repetitions. Independent review caught and corrected a
 launch-latch ordering gap in the new fixture, then confirmed the post-launch
 guards, task-local scope, exact outcomes and reaping assertions.
+After rebasing onto main `90409eb67`, the same 1,274-test inventory passed again
+in 18.805 seconds.
+The final writer-authorization checkpoint selection passed 65 tests in four
+suites. Independent review confirmed the actor-held refusal checks and retained
+post-write assertions. The final full core run passed all 1,274 tests in 129
+suites in 19.496 seconds, exit zero.
 
 The final native run executed 272 tests in seven suites with zero failures or
 skips. It covers the four complete changed suites and the three already-repaired

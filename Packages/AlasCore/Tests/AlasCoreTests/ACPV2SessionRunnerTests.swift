@@ -49,7 +49,8 @@ struct ACPV2SessionRunnerTests {
         try await eventually { transport.attempted.withLock { $0 } }
         sending.cancel()
         transport.release.signal()
-        #expect(transport.waitForWriteSettlement())
+        // Hold the actor until physical authorization has observed cancellation.
+        #expect(transport.waitForAuthorizationCheck() == false)
         await #expect(throws: (any Error).self) { try await sending.value }
         #expect(await blocker.value == .written)
         #expect(transport.bytes.withLock { $0.count == 3 && $0.last == BootstrapSerializedTransport.blocker })
