@@ -483,6 +483,8 @@ struct WorktreeRowView: View {
                 .lineLimit(1)
                 // Sibling branches differ at the end, so that is what survives.
                 .truncationMode(.middle)
+                // The full name, for when the middle is cut.
+                .help(worktree.title)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if isBranchNamePending, !isNamingBranch {
                 Image(systemName: "sparkles")

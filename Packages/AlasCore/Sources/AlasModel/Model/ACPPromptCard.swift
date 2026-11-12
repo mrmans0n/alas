@@ -27,6 +27,10 @@ public struct ACPPromptCard: Codable, Equatable, Sendable {
         public static let review = Origin(rawValue: "review")
         public static let ship = Origin(rawValue: "ship")
         public static let shepherd = Origin(rawValue: "shepherd")
+        /// Outcome cards: what became of a shepherded request or stack.
+        public static let merged = Origin(rawValue: "merged")
+        public static let closed = Origin(rawValue: "closed")
+        public static let queued = Origin(rawValue: "queued")
     }
 
     public struct Fact: Codable, Equatable, Sendable {

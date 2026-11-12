@@ -330,7 +330,7 @@ final class ACPSlashPickerPanel: NSPanel {
 
         let host = NSHostingView(rootView: ACPSlashPickerView(model: model) { [weak self] s in
             self?.onPick(s)
-        }.environment(\.theme, theme))
+        }.environment(\.theme, theme).environment(\.designScale, HostedDesignScale.current))
         host.frame = blur.bounds.insetBy(dx: 4, dy: 4)
         host.autoresizingMask = [.width, .height]
         blur.addSubview(host)

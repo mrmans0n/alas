@@ -21,6 +21,7 @@ struct NewRunScriptDialog: View {
     @State private var wantsWritingHelp = false
     @State private var writingHelpRequest = ""
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     init(state: AppState, presentation: RunScriptCreationPresentation) {
         _state = Bindable(wrappedValue: state)
@@ -88,7 +89,7 @@ struct NewRunScriptDialog: View {
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundColor(.red)
                 }
             },
@@ -199,15 +200,15 @@ struct NewRunScriptDialog: View {
         )) {
             HStack(spacing: 8) {
                 Text(action.displayName)
-                    .font(.system(size: 12))
+                    .font(scale.meta.font)
                 Text(Self.commandPreview(for: action))
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if action.onExit == .keep {
                     Text("keeps pane")
-                        .font(.system(size: 10))
+                        .font(scale.caption.font(weight: .regular))
                         .foregroundColor(theme.color("fg-dim"))
                 }
             }

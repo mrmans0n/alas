@@ -99,6 +99,69 @@ public enum StackShepherdPromptBuilder {
         return ShepherdPrompt(text: sections.joined(separator: "\n\n"), card: card(record, sections: cardSections))
     }
 
+    /// Reports a `stack_ship` that ended after Alas had already replied that
+    /// it was still running: `result` is its JSON on success, else the error.
+    public static func shipOutcomePrompt(stackName: String?, result: String, failed: Bool) -> ShepherdPrompt {
+        let stack = stackName.map { " · gg stack \"\($0)\"" } ?? ""
+        let fence = ShepherdPromptBuilder.fence(for: result)
+        let text = failed
+            ? """
+            \(header)\(stack)
+
+            The stack_ship you called earlier did not finish:
+            \(fence)
+            \(result)
+            \(fence)
+            Fix what it says, then call stack_ship again.
+            """
+            : """
+            \(header)\(stack)
+
+            The stack_ship you called earlier finished: the stack is published and Alas is watching it. Result:
+            \(fence)json
+            \(result)
+            \(fence)
+            Call pr_status any time to see the stack's current state.
+            """
+        return ShepherdPrompt(text: text, card: failed ? failedShipCard(result) : shipCard(result))
+    }
+
+    private static func failedShipCard(_ error: String) -> ACPPromptCard {
+        ACPPromptCard(
+            origin: .shepherd, title: "stack_ship did not finish",
+            sections: [.init(title: nil, items: [.init(bodyMarkdown: error, status: .failed)])]
+        )
+    }
+
+    /// Names what the ship did: a restack after a landing reads as such, not
+    /// as the stack finishing. Falls back to a plain summary for a result it
+    /// can't read.
+    private static func shipCard(_ result: String) -> ACPPromptCard {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let shipped = try? decoder.decode(StackShipResultWire.self, from: Data(result.utf8)) else {
+            return ACPPromptCard(
+                origin: .shepherd, title: "Stack published",
+                sections: [.init(title: nil, items: [.init(bodyMarkdown: "The stack is published and Alas is watching it.")])]
+            )
+        }
+        let kind = CodeHostKind(rawValue: shipped.provider)
+        let label = kind == .gitlab ? "merge request" : "pull request"
+        let count = shipped.entries.count
+        let prefix = kind?.reviewRequestNumberPrefix ?? "#"
+        return ACPPromptCard(
+            origin: .shepherd,
+            title: "\(shipped.restacked ? "Restacked" : "Published") gg stack \(shipped.stack)",
+            facts: [
+                .init(kind: .branch, text: "\(shipped.stack) → \(shipped.base)"),
+                .init(kind: .other, text: "\(count) open \(label)\(count == 1 ? "" : "s")"),
+            ],
+            sections: count == 0 ? [] : [.init(title: nil, items: shipped.entries.map {
+                .init(bodyMarkdown: "\(prefix)\($0.number) · \($0.title)", url: URL(string: $0.url))
+            })]
+        )
+    }
+
     // MARK: - Sections
 
     private static func identity(_ record: StackShepherdRecord) -> String {

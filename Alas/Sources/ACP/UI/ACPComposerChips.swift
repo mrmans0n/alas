@@ -131,14 +131,17 @@ struct ACPComposerChips {
     // MARK: - Chip builders driven by ACPChipState
 
     func modeChip(_ spec: ChipSpec) -> some View {
+        // Icon and value, like the effort chip; the mode's own symbol (or a
+        // generic one for modes without a kind) says what the chip is.
         return chip(spec: spec,
-             label: chipLabel(prefix: "Mode", spec: spec),
+             label: selectedName(spec: spec, fallback: "Mode"),
              placeholder: "Mode",
              // `fullAccess` (bypassPermissions / agent-full-access) bypasses
              // per-action approval, so the chip switches to the warning
              // tint as a passive heads-up. Every other kind — including no
              // kind at all — keeps the standard accent.
-             accent: modeAccent(spec))
+             accent: modeAccent(spec),
+             fallbackIcon: .system("slider.horizontal.3"))
     }
 
     func modeAccent(_ spec: ChipSpec) -> Color {
@@ -271,7 +274,8 @@ struct ACPComposerChips {
                       accent: Color,
                       searchDescriptions: Bool = true,
                       searchIdentifiers: Bool = true,
-                      fillsWidth: Bool = false) -> some View {
+                      fillsWidth: Bool = false,
+                      fallbackIcon: ACPSelectChip.Icon? = nil) -> some View {
         ACPSelectChip(
             label: label,
             placeholder: placeholder,
@@ -286,11 +290,12 @@ struct ACPComposerChips {
             searchDescriptions: searchDescriptions,
             searchIdentifiers: searchIdentifiers,
             fillsWidth: fillsWidth,
+            fallbackIcon: fallbackIcon,
             onSelect: { item in onSelect(spec, item.id) }
         )
     }
 
-    /// "Mode: Plan" when a value is selected, "Mode" while pending.
+    /// "Fast: On" when a value is selected, the bare prefix while pending.
     private func chipLabel(prefix: String, spec: ChipSpec) -> String {
         if let id = spec.currentId,
            let item = spec.options.first(where: { $0.id == id }) {

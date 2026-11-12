@@ -5,20 +5,22 @@ struct WorkspaceCheckoutDetailView: View {
     var perform: (WorkspaceCheckoutActionKind, UUID?) -> Void = { _, _ in }
     var openReview: (WorkspaceReviewAction) -> Void = { _ in }
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                Icon(name: "square.stack.3d.up", size: 18, color: theme.color("fg-muted"))
-                    .padding(.top, 2)
-                VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: scale.space[3]) {
+                Icon(name: "square.stack.3d.up", size: 18, // design-literal: header icon size
+                      color: theme.color("fg-muted"))
+                    .padding(.top, scale.space[0])
+                VStack(alignment: .leading, spacing: scale.space[1]) {
                     Text(model.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(2)
                     Label(model.checkout.branch, systemImage: "arrow.triangle.branch")
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                         .lineLimit(2)
                         .textSelection(.enabled)
@@ -26,17 +28,17 @@ struct WorkspaceCheckoutDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 DialogHeaderIconButton(icon: "x", tooltip: "Close checkout details") { dismiss() }
             }
-            .padding(22)
+            .padding(scale.space[5])
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: scale.space[4]) {
                     HStack {
                         Text(statusText)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(scale.caption.font(weight: .semibold))
                             .foregroundColor(theme.color("fg-muted"))
                         Spacer()
                         ForEach(model.headerBadges.map(\.label), id: \.self) { badge in
-                            Text(badge).font(.system(size: 10.5))
+                            Text(badge).font(scale.captionFont)
                                 .foregroundColor(theme.color("fg-dim"))
                         }
                     }
@@ -44,11 +46,11 @@ struct WorkspaceCheckoutDetailView: View {
                         WorkspaceNotice(message: stopMessage)
                     }
                     ForEach(model.diagnostics) { diagnostic in
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: scale.space[1]) {
                             WorkspaceNotice(message: diagnostic.message, isError: diagnostic.severity == .error)
                             if let detail = diagnostic.detail, !detail.isEmpty {
                                 Text(detail)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(scale.meta.font(design: .monospaced))
                                     .foregroundStyle(theme.color("fg-muted"))
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -61,15 +63,15 @@ struct WorkspaceCheckoutDetailView: View {
                     } else if model.checkout.operation != .idle {
                         ProgressView().controlSize(.small)
                     }
-                    DialogField(label: "Checkout folder") {
+                    WorkspaceDetailSection(label: "Checkout folder") {
                         Text(model.checkout.rootPath)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(scale.meta.font(design: .monospaced))
                             .foregroundColor(theme.color("fg-muted"))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Divider()
-                    DialogField(label: "Repositories") {
+                    WorkspaceDetailSection(label: "Repositories") {
                         VStack(spacing: 0) {
                             ForEach(model.memberRows) { row in
                                 WorkspaceCheckoutMemberRow(row: row) { action in perform(action, row.id) }
@@ -78,8 +80,8 @@ struct WorkspaceCheckoutDetailView: View {
                         }
                     }
                     if !model.checkout.workItems.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Work items").font(.system(size: 11.5, weight: .medium)).foregroundColor(theme.color("fg-muted"))
+                        VStack(alignment: .leading, spacing: scale.space[2]) {
+                            Text("Work items").font(scale.caption.font(weight: .semibold)).foregroundColor(theme.color("fg-muted"))
                             SwiftUI.ForEach(0..<model.checkout.workItems.count, id: \.self) { index in
                                 let item = model.checkout.workItems[index]
                                 WorkspaceWorkItemDetailRow(item: item)
@@ -87,8 +89,8 @@ struct WorkspaceCheckoutDetailView: View {
                         }
                     }
                     if let rollup = model.reviewRollup, !rollup.members.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Reviews").font(.system(size: 11.5, weight: .medium)).foregroundColor(theme.color("fg-muted"))
+                        VStack(alignment: .leading, spacing: scale.space[2]) {
+                            Text("Reviews").font(scale.caption.font(weight: .semibold)).foregroundColor(theme.color("fg-muted"))
                             SwiftUI.ForEach(0..<rollup.members.count, id: \.self) { index in
                                 let row = rollup.members[index]
                                 WorkspaceReviewRollupDetailRow(row: row, openReview: openReview)
@@ -97,9 +99,9 @@ struct WorkspaceCheckoutDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(22)
+                .padding(scale.space[5])
             }
-            .frame(height: 380)
+            .frame(height: 380) // design-literal: sheet scroll area height
             HStack {
                 Menu {
                     ForEach(model.primaryActions) { action in
@@ -108,9 +110,9 @@ struct WorkspaceCheckoutDetailView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Icon(name: "menu", size: 13)
-                        Text("Checkout actions").font(.system(size: 12))
+                    HStack(spacing: scale.space[2]) {
+                        Icon(name: "menu", size: 13) // design-literal: icon size
+                        Text("Checkout actions").font(scale.metaFont)
                     }
                     .foregroundColor(theme.color("fg-muted"))
                 }
@@ -120,11 +122,11 @@ struct WorkspaceCheckoutDetailView: View {
                 Spacer()
                 AlasButton(title: "Done", style: .normal) { dismiss() }
             }
-            .padding(.horizontal, 18).padding(.vertical, 12)
+            .padding(.horizontal, scale.space[4]).padding(.vertical, scale.space[3])
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .top)
         }
-        .frame(width: 560)
+        .frame(width: 560) // design-literal: sheet width
         .background(theme.color("bg-1"))
         .onExitCommand { dismiss() }
     }
@@ -147,15 +149,17 @@ struct WorkspaceCheckoutMemberRow: View {
     let row: WorkspaceCheckoutMemberRowModel
     var perform: (WorkspaceCheckoutActionKind) -> Void = { _ in }
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Icon(name: row.status == .ready ? "checkmark.circle" : "folder", size: 14,
+        HStack(alignment: .top, spacing: scale.space[3]) {
+            Icon(name: row.status == .ready ? "checkmark.circle" : "folder", size: 14, // design-literal: icon size
+
                  color: theme.color(row.status == .ready ? "add" : "fg-muted"))
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(row.title).font(.system(size: 12, weight: .medium)).foregroundColor(theme.color("fg"))
-                Text(row.detail).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                .padding(.top, scale.space[0])
+            VStack(alignment: .leading, spacing: scale.space[1]) {
+                Text(row.title).font(scale.emphasisFont).foregroundColor(theme.color("fg"))
+                Text(row.detail).font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if let action = row.actions.first(where: { !$0.isDestructive }) {
@@ -164,13 +168,13 @@ struct WorkspaceCheckoutMemberRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(row.status.label).font(.system(size: 10.5)).foregroundColor(theme.color("fg-muted"))
+            Text(row.status.label).font(scale.captionFont).foregroundColor(theme.color("fg-muted"))
             Menu {
                 ForEach(row.actions) { action in
                     Button(action.title, role: action.isDestructive ? .destructive : nil) { perform(action.kind) }
                 }
             } label: {
-                Icon(name: "menu", size: 13).frame(width: 22, height: 20)
+                Icon(name: "menu", size: 13).frame(width: 22, height: 20) // design-literal: icon size and menu hit frame
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -179,24 +183,25 @@ struct WorkspaceCheckoutMemberRow: View {
             .help("Actions for \(row.title)")
             .accessibilityLabel("Actions for \(row.title)")
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, scale.space[3])
     }
 }
 
 private struct WorkspaceWorkItemDetailRow: View {
     let item: WorkItemSnapshot
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text(item.snapshot.title).font(.system(size: 12)).foregroundColor(theme.color("fg"))
+            Text(item.snapshot.title).font(scale.metaFont).foregroundColor(theme.color("fg"))
             if let refreshError = item.snapshot.refreshError {
                 Text(refreshError)
-                    .font(.caption)
+                    .font(scale.captionFont)
                     .foregroundStyle(.red)
             } else {
                 Text(item.snapshot.displayReference ?? item.snapshot.providerLabel)
-                    .font(.caption)
+                    .font(scale.captionFont)
                     .foregroundColor(theme.color("fg-dim"))
             }
         }
@@ -207,14 +212,15 @@ private struct WorkspaceReviewRollupDetailRow: View {
     let row: WorkspaceMemberReviewRollup.Member
     var openReview: (WorkspaceReviewAction) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text(row.title).font(.system(size: 12)).foregroundColor(theme.color("fg"))
+            Text(row.title).font(scale.metaFont).foregroundColor(theme.color("fg"))
             Text("\(row.reviews.count) reviews · \(row.ggStack?.entries.count ?? 0) GG commits · \(row.unpublishedStackEntries.count) unpublished")
-                .font(.caption)
+                .font(scale.captionFont)
                 .foregroundColor(theme.color("fg-dim"))
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space[1]) {
                 SwiftUI.ForEach(0..<row.reviewActions.count, id: \.self) { index in
                     let action = row.reviewActions[index]
                     AlasButton(title: "Open review", icon: "arrow.up.right", style: .subtle) { openReview(action) }
@@ -229,6 +235,7 @@ struct WorkspaceRepairPlanSheet: View {
     var choose: (WorkspaceRepairCandidate) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         DialogContainer(
@@ -236,26 +243,26 @@ struct WorkspaceRepairPlanSheet: View {
             content: {
                 if model.verifiedCandidates.isEmpty {
                     Text("No matching worktrees found.")
-                        .font(.system(size: 12)).foregroundColor(theme.color("fg-muted"))
+                        .font(scale.metaFont).foregroundColor(theme.color("fg-muted"))
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: scale.space[2]) {
                             ForEach(model.verifiedCandidates) { candidate in
                                 Button { choose(candidate) } label: {
-                                    HStack(spacing: 8) {
-                                        Icon(name: "folder", size: 13)
-                                        Text(candidate.path).font(.system(size: 11.5, design: .monospaced))
+                                    HStack(spacing: scale.space[2]) {
+                                        Icon(name: "folder", size: 13) // design-literal: icon size
+                                        Text(candidate.path).font(scale.meta.font(design: .monospaced))
                                             .foregroundColor(theme.color("fg"))
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                        Icon(name: "arrow.right", size: 12)
+                                        Icon(name: "arrow.right", size: 12) // design-literal: icon size
                                     }
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, scale.space[2])
                                     .contentShape(Rectangle())
                                 }.buttonStyle(.plain)
                             }
                         }
                     }
-                    .frame(height: 180)
+                    .frame(height: 180) // design-literal: candidate list height
                 }
             },
             cancelTitle: "Cancel", confirmTitle: "Done", confirmStyle: .normal,
@@ -270,17 +277,18 @@ struct WorkspaceDeletionConfirmationSheet: View {
     let approvalQueue: RepoHookApprovalQueue
     var confirm: (WorkspaceLifecycleAction) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         DialogContainer(
             title: model.title, subtitle: nil,
             content: {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: scale.space[3]) {
                         ForEach(model.risks, id: \.self) { WorkspaceNotice(message: $0, isError: true) }
                     }
                 }
-                .frame(height: min(CGFloat(max(model.risks.count, 1)) * 44, 220))
+                .frame(height: min(CGFloat(max(model.risks.count, 1)) * 44, 220)) // design-literal: risk list height
             },
             cancelTitle: "Cancel", confirmTitle: confirmTitle, confirmStyle: .normal,
             onCancel: { dismiss() }, onConfirm: { confirm(model.confirmAction) }, confirmEnabled: true
@@ -319,6 +327,23 @@ private extension WorkspaceCheckoutMemberPresentationStatus {
         case .needsAttention: "Needs Attention"
         case .explicitlyDeleted: "Explicitly Deleted"
         case .pending: "Pending"
+        }
+    }
+}
+
+/// A labelled block in the checkout sheet, with the caption-style header the
+/// rest of the sheet's sections use.
+private struct WorkspaceDetailSection<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: () -> Content
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            Text(label).font(scale.caption.font(weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+            content()
         }
     }
 }

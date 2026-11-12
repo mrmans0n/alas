@@ -736,6 +736,21 @@ extension ACPMessageTests {
         #expect(text == "x")
         #expect(try ACPMessageCodec.encode(.systemNotice(id: UUID(), text: "x")) == payload)
     }
+
+    @Test func outcomeCardKeepsItsIdentityThroughTheStoreAndReadsAsTextOnOlderBuilds() throws {
+        let card = ACPOutcomeCard(
+            card: ACPPromptCard(origin: .merged, title: "GitHub #7 · Fix login",
+                                facts: [.init(kind: .branch, text: "fix-login → main")],
+                                action: .url(URL(string: "https://github.com/acme/app/pull/7")!)),
+            text: "GitHub #7 \"Fix login\" was merged.")
+        let message = ACPMessage.outcomeCard(card)
+        let payload = try ACPMessageCodec.encode(message)
+
+        #expect(try ACPMessageCodec.decode(kind: message.kind, payload: payload) == message)
+        #expect(try ACPMessageWire.decode(kind: message.kind, payload: payload).toMessage() == message)
+        struct OlderBuildPayload: Decodable { let text: String }
+        #expect(try JSONDecoder().decode(OlderBuildPayload.self, from: payload).text == card.text)
+    }
 }
 
 extension ACPSessionFailureRecord {

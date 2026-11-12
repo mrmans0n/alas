@@ -77,10 +77,12 @@ struct AttentionInboxPresentation {
     let appUpdate: ReleaseInfo?
     let appUpdateReadyToRelaunch: Bool
     let cleanupReminders: [WorktreeCleanupReminder]
+    let hostUpdates: [HostUpdateReminder]
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
     var totalCount: Int {
         activeRows.count + peerRows.count + pluginUpdates.count + (appUpdate == nil ? 0 : 1) + cleanupReminders.count
+            + hostUpdates.count
     }
     var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
     var acknowledgeLabel: String? {
@@ -97,13 +99,15 @@ struct AttentionInboxPresentation {
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
          peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [],
          appUpdate: ReleaseInfo? = nil, appUpdateReadyToRelaunch: Bool = false,
-         cleanupReminders: [WorktreeCleanupReminder] = [], now: Date = Date()) {
+         cleanupReminders: [WorktreeCleanupReminder] = [], hostUpdates: [HostUpdateReminder] = [],
+         now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         self.peerRows = peerRows
         self.pluginUpdates = pluginUpdates
         self.appUpdate = appUpdate
         self.appUpdateReadyToRelaunch = appUpdateReadyToRelaunch
         self.cleanupReminders = cleanupReminders
+        self.hostUpdates = hostUpdates
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
             loadError.map { PersistenceError(title: "History could not be loaded", message: $0) },
@@ -119,6 +123,8 @@ struct AttentionInboxView: View {
     var appUpdate: ReleaseInfo? = nil
     var appUpdateReadyToRelaunch = false
     var cleanupReminders: [WorktreeCleanupReminder] = []
+    var hostUpdates: [HostUpdateReminder] = []
+    var hostUpdatesInFlight: Set<String> = []
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
@@ -129,6 +135,8 @@ struct AttentionInboxView: View {
     var onOpenAppUpdate: () -> Void = {}
     var onOpenWorktreeCleanup: (String) -> Void = { _ in }
     var onDismissWorktreeCleanup: (String) -> Void = { _ in }
+    var onUpdateHost: (HostUpdateReminder) -> Void = { _ in }
+    var onDismissHostUpdate: (HostUpdateReminder) -> Void = { _ in }
     /// Nil hides the roll-up entirely, leaving the ordinary inbox.
     var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
@@ -147,7 +155,8 @@ struct AttentionInboxView: View {
             let presentation = AttentionInboxPresentation(
                 aggregation: aggregation, loadError: loadError, writeError: writeError,
                 peerRows: peerRows, pluginUpdates: pluginUpdates, appUpdate: appUpdate,
-                appUpdateReadyToRelaunch: appUpdateReadyToRelaunch, cleanupReminders: cleanupReminders, now: context.date
+                appUpdateReadyToRelaunch: appUpdateReadyToRelaunch, cleanupReminders: cleanupReminders,
+                hostUpdates: hostUpdates, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
@@ -199,7 +208,9 @@ struct AttentionInboxView: View {
                                            onOpenPluginSettings: onOpenPluginSettings,
                                            onOpenAppUpdate: onOpenAppUpdate,
                                            onOpenWorktreeCleanup: onOpenWorktreeCleanup,
-                                           onDismissWorktreeCleanup: onDismissWorktreeCleanup)
+                                           onDismissWorktreeCleanup: onDismissWorktreeCleanup,
+                                           hostUpdatesInFlight: hostUpdatesInFlight, onUpdateHost: onUpdateHost,
+                                           onDismissHostUpdate: onDismissHostUpdate)
                     }
                     .padding(scale.space[4])
                 }
@@ -252,8 +263,12 @@ struct AttentionInboxList: View {
     var onOpenAppUpdate: () -> Void = {}
     var onOpenWorktreeCleanup: (String) -> Void = { _ in }
     var onDismissWorktreeCleanup: (String) -> Void = { _ in }
+    var hostUpdatesInFlight: Set<String> = []
+    var onUpdateHost: (HostUpdateReminder) -> Void = { _ in }
+    var onDismissHostUpdate: (HostUpdateReminder) -> Void = { _ in }
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
+    @State private var confirmingHostUpdate: HostUpdateReminder?
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 10) {
@@ -326,6 +341,36 @@ struct AttentionInboxList: View {
                 .padding(scale.space[3])
                 .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
             }
+            if !presentation.hostUpdates.isEmpty {
+                Text("Host updates")
+                    .font(scale.caption.font(weight: .semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.top, scale.space[3])
+                ForEach(presentation.hostUpdates) { update in
+                    let updating = hostUpdatesInFlight.contains(update.serverId)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "server.rack")
+                            .foregroundStyle(theme.color("accent"))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(update.name).font(scale.emphasis.font)
+                            Text("Runs alas-host \(update.hostVersion), older than this Mac's Alas")
+                                .font(scale.meta.font)
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                        Spacer()
+                        Button("Dismiss") { onDismissHostUpdate(update) }
+                            .controlSize(.small)
+                            .disabled(updating)
+                            .help("Hide until this host runs another version")
+                        Button(updating ? "Updating…" : "Update") { confirmingHostUpdate = update }
+                            .controlSize(.small)
+                            .disabled(updating)
+                            .help("Upgrade the host with Homebrew; this ends its running sessions")
+                    }
+                    .padding(scale.space[3])
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                }
+            }
             if !presentation.cleanupReminders.isEmpty {
                 Text("Worktree cleanup")
                     .font(scale.caption.font(weight: .semibold))
@@ -385,6 +430,16 @@ struct AttentionInboxList: View {
                     }
                 }
             }
+        }
+        .alert(
+            "Update this host?",
+            isPresented: Binding(get: { confirmingHostUpdate != nil }, set: { if !$0 { confirmingHostUpdate = nil } }),
+            presenting: confirmingHostUpdate
+        ) { update in
+            Button("Update") { onUpdateHost(update) }
+            Button("Cancel", role: .cancel) {}
+        } message: { update in
+            Text("Updating restarts \(update.name) and ends its running sessions.")
         }
     }
 }

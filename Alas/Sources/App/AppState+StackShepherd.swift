@@ -18,9 +18,9 @@ extension AppState {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 return try await GGService().currentStack(worktreePath: path.path, refreshRemote: !localOnly)
             },
-            syncStack: { [weak self] worktreeID, plan in
+            syncStack: { [weak self] worktreeID, plan, onEvent in
                 guard let self else { throw GGMutationError.staleConfirmation }
-                try await self.syncStackForShip(worktreeID: worktreeID, plan: plan)
+                try await self.syncStackForShip(worktreeID: worktreeID, plan: plan, onEvent: onEvent)
             },
             rebaseStack: { [weak self] worktreeID, expected in
                 guard let self else { throw GGMutationError.staleConfirmation }
@@ -82,8 +82,13 @@ extension AppState {
     /// `gg sync` through the worktree's Changes pane state, the path the
     /// stack drawer's Sync and Commit & sync use: the same preflight, paused
     /// operation guard, progress and refresh.
-    private func syncStackForShip(worktreeID: String, plan: StackShipPlan) async throws {
+    private func syncStackForShip(
+        worktreeID: String, plan: StackShipPlan, onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+    ) async throws {
         let pane = try ggPane(worktreeID: worktreeID)
+        // The pane runs one gg mutation at a time, so this sees only this sync.
+        pane.ggActionState.syncEventObserver = onEvent
+        defer { pane.ggActionState.syncEventObserver = nil }
         guard plan != .wholeStack else {
             try await pane.syncGGForCommitPublish(.sync)
             return
@@ -215,6 +220,10 @@ extension AppState {
         }
         let record = message.record
         guard let resolved = projectAndWorktree(withWorktreeId: record.id.worktreeID) else { return }
+        appendShepherdOutcomeCard(
+            ShepherdNotification.outcomeCard(for: event), sessionID: record.sessionID, worktreeID: record.id.worktreeID)
+        // Each landing is only a transcript card; the stack's last one notifies.
+        if case .entryLanded = event { return }
         let agent = shepherdAgentKind(sessionID: record.sessionID, worktreeID: record.id.worktreeID)
         harness.notifications.notifyAlas(
             body: message.body,

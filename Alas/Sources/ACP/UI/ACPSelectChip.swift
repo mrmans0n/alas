@@ -31,6 +31,8 @@ struct ACPSelectChip: View {
     let searchDescriptions: Bool
     let searchIdentifiers: Bool
     let fillsWidth: Bool
+    /// Drawn on the chip when the selected item carries no icon of its own.
+    var fallbackIcon: Icon? = nil
     let onSelect: (Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -46,7 +48,7 @@ struct ACPSelectChip: View {
             // outline at low opacity, accent-tinted (not white) text.
             // Outline-on-fill, not a solid bright pill.
             HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
-                if let icon = items.first(where: { $0.id == selectedId })?.icon {
+                if let icon = items.first(where: { $0.id == selectedId })?.icon ?? fallbackIcon {
                     Self.iconView(icon, symbolFont: scale.glyphFont, accent: accent)
                 }
                 Text(label.isEmpty ? placeholder : label)

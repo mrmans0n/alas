@@ -58,6 +58,42 @@ struct BuiltInAlasMCPTests {
         #expect(make(configuredServers: [.stdio(name: "other", command: "npx")]) != nil)
     }
 
+    @Test("a chosen server name names the wire entry and its status row", arguments: [false, true])
+    func chosenServerNameReachesTheAgent(http: Bool) throws {
+        let injection = try #require(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [], binaryPath: "/bin/alas", socketPath: "/tmp/s.sock",
+            worktreePath: "/wt", sessionId: "s",
+            httpEndpoint: http ? .init(url: "http://localhost:5599/mcp", token: "TOK") : nil,
+            serverName: "localhost_with_path"))
+        #expect(injection.server.name == "localhost_with_path")
+        #expect(injection.status.name == "localhost_with_path")
+        #expect(injection.status.id == BuiltInAlasMCP.statusId)
+    }
+
+    @Test("a project server named alas or like the chosen name suppresses the built-in",
+          arguments: ["alas", "localhost_with_path"])
+    func chosenServerNameCollision(configuredName: String) {
+        #expect(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [.stdio(name: configuredName, command: "/dev/alas")],
+            binaryPath: "/bin/alas", socketPath: "/tmp/s.sock", worktreePath: "/wt", sessionId: "s",
+            serverName: "localhost_with_path") == nil)
+    }
+
+    @Test("a server name is kept only when every agent accepts it", arguments: [
+        (" localhost_with_path ", "localhost_with_path"),
+        ("my-server1", "my-server1"),
+        ("", nil),
+        ("has space", nil),
+        ("dotted.name", nil),
+        (String(repeating: "a", count: 65), nil),
+        // Taken by the git-gud server Alas attaches in gg worktrees.
+        ("git-gud", nil),
+        (nil, nil),
+    ] as [(String?, String?)])
+    func normalizedServerName(raw: String?, expected: String?) {
+        #expect(BuiltInAlasMCP.normalizedServerName(raw) == expected)
+    }
+
     @Test("an SSH session requests the relayed visual tool unless disabled, overridden, or unreachable through its adapter",
           arguments: [
               (true, [], ACPMCPInjectionSupport.sessionNew, true),
@@ -193,15 +229,17 @@ struct BuiltInAlasMCPTests {
 
     @Test("an HTTP agent fingerprint changes with the address or token the agent was given")
     func httpAgentFingerprintFollowsAddress() {
-        func fingerprint(_ url: String, _ token: String) -> String {
+        func fingerprint(_ url: String, _ token: String, name: String = "alas") -> String {
             BuiltInAlasMCP.agentFingerprint(of: .http(
-                name: "alas", url: url, headers: [.init(name: "Authorization", value: "Bearer \(token)")]
+                name: name, url: url, headers: [.init(name: "Authorization", value: "Bearer \(token)")]
             ))
         }
         let original = fingerprint("http://localhost:5100/mcp", "a")
         #expect(fingerprint("http://localhost:5100/mcp", "a") == original)
         #expect(fingerprint("http://localhost:5101/mcp", "a") != original)
         #expect(fingerprint("http://localhost:5100/mcp", "b") != original)
+        // The agent only starts a server under the name it was given.
+        #expect(fingerprint("http://localhost:5100/mcp", "a", name: "localhost_with_path") != original)
     }
 
     @Test("a stdio agent fingerprint ignores scoping env but not the app socket")

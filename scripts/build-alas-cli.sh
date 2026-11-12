@@ -50,11 +50,11 @@ if [ "${outputs_present}" = "1" ] \
     exit 0
 fi
 
-"${rustup_bin}" toolchain install "${rust_toolchain}" --profile minimal
+"${script_dir}/retry-ci-acquisition.sh" "${rustup_bin}" toolchain install "${rust_toolchain}" --profile minimal
 installed_targets="$(${rustup_bin} target list --installed --toolchain "${rust_toolchain}")"
 for target in "${targets[@]}"; do
     if ! printf '%s\n' "${installed_targets}" | grep -qx "${target}"; then
-        "${rustup_bin}" target add --toolchain "${rust_toolchain}" "${target}"
+        "${script_dir}/retry-ci-acquisition.sh" "${rustup_bin}" target add --toolchain "${rust_toolchain}" "${target}"
     fi
 done
 

@@ -31,6 +31,12 @@ struct GGActionEventsTests {
     @Test func parsesEachSyncEventVariant() {
         #expect(GGSyncEvent.parse(line: #"{"version":1,"command":"sync","event":"start","total_entries":2}"#)
             == .start(totalEntries: 2))
+        #expect(GGSyncEvent.parse(line: #"{"event":"lint_started","total_entries":2,"commands":["swiftlint"]}"#)
+            == .lintStarted(totalEntries: 2))
+        #expect(GGSyncEvent.parse(line: #"{"event":"lint_entry_started","position":1,"sha":"abc","title":"Add feature"}"#)
+            == .lintEntryStarted(position: 1, title: "Add feature"))
+        #expect(GGSyncEvent.parse(line: #"{"event":"lint_entry_done","position":1,"sha":"def","passed":true,"amended":true}"#)
+            == .lintEntryDone(position: 1, passed: true))
         #expect(GGSyncEvent.parse(line: #"{"command":"sync","event":"entry_started","position":1,"title":"Add feature"}"#)
             == .entryStarted(position: 1, title: "Add feature"))
         #expect(GGSyncEvent.parse(line: #"{"event":"push_started","position":1}"#)

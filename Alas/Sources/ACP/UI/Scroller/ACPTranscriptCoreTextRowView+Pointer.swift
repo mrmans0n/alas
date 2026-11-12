@@ -172,7 +172,7 @@ extension ACPTranscriptCoreTextRowView {
         else { return }
         let hosting = NSHostingController(rootView: ACPReportedChangesPopover(
             presentation: control.presentation, actions: control.actions
-        ).environment(\.theme, theme))
+        ).environment(\.theme, theme).environment(\.designScale, HostedDesignScale.current))
         hosting.sizingOptions = [.preferredContentSize]
         let popover = NSPopover()
         popover.behavior = .transient

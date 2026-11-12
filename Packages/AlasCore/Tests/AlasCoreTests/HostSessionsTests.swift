@@ -935,6 +935,42 @@ struct HostSessionsTests {
         }
     }
 
+    /// A paired Mac stops a session's shepherd; a session that shepherds
+    /// nothing has nothing to stop, and one that does can't ship again.
+    @Test func aPeerStopsTheSessionsShepherdOnce() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        await fixture.core.reviewShepherd.bind(
+            sessionID: id, worktreeID: fixture.worktree.id, request: ShepherdFixtures.request(), baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+        let peer = HostCaller.remotePeer(deviceID: "d")
+
+        await #expect(throws: HostError.failed(message: "This session already shepherds a pull request.")) {
+            try await sessions.shepherd(id, action: .ship, caller: peer)
+        }
+        try await sessions.shepherd(id, action: .stop, caller: peer)
+        #expect(fixture.core.reviewShepherd.record(forSession: id) == nil)
+        await #expect(throws: HostError.failed(message: "This session isn't shepherding anything.")) {
+            try await sessions.shepherd(id, action: .stop, caller: peer)
+        }
+    }
+
+    /// An attention badge with auto-fix off is not escalated: Resume would do nothing.
+    @Test(arguments: [
+        (badge: nil as ShepherdBadgeState?, resumable: false, offered: [HostShepherdAction.ship]),
+        (badge: .waiting, resumable: false, offered: [.stop]),
+        (badge: .attention, resumable: false, offered: [.stop]),
+        (badge: .attention, resumable: true, offered: [.resume, .stop]),
+        (badge: .merged, resumable: false, offered: []),
+    ])
+    func aPeerIsOfferedWhatTheShepherdCanDo(_ c: (badge: ShepherdBadgeState?, resumable: Bool, offered: [HostShepherdAction])) {
+        let shepherd = c.badge.map { HostSessionShepherd(badge: $0.rawValue, number: "#7", tooltip: "", resumable: c.resumable) }
+        #expect(HostShepherdAction.offered(for: shepherd) == c.offered)
+    }
+
     /// A headless host shows no banner of its own: it relays the notice to
     /// its subscribers, and reports the session waiting until the user's next
     /// prompt, not when the turn that sent it ends.

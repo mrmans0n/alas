@@ -605,6 +605,14 @@ enum DesignCaptureBridge {
                 MainActor.assumeIsolated { DesignCaptureCode.snapshotWindows(to: directory) }
             } else if DesignCaptureSidebar.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureSidebar.open(target, state: state) } }
+            } else if DesignCaptureWorkspace.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureWorkspace.open(target, state: state) } }
+            } else if DesignCaptureVM.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureVM.open(target, state: state) } }
+            } else if DesignCaptureDevices.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureDevices.open(target, state: state) } }
+            } else if DesignCaptureLeftovers.targets.contains(target) {
+                MainActor.assumeIsolated { if let state { DesignCaptureLeftovers.open(target, state: state) } }
             } else if DesignCaptureAttention.targets.contains(target) {
                 MainActor.assumeIsolated { if let state { DesignCaptureAttention.shared.open(target, state: state) } }
             } else if DesignCaptureReview.targets.contains(target) {

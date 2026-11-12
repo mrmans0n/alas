@@ -83,7 +83,6 @@ struct PluginManifestTests {
         (manifest(api: 6, #","processes":[{"id":"a","command":["ls"]}]"#), .invalidProcess(#""processes" needs capability "process.exec""#)),
         (manifest(api: 6, #","capabilities":["process.exec"]"#), .invalidProcess(#"capability "process.exec" needs at least one process"#)),
         (manifest(api: 6, processes(#"{"id":"a","command":[]}"#)), .invalidProcess(#"process "a" needs a command"#)),
-        (manifest(api: 6, processes(#"{"id":"a","command":["ls","\#(String(repeating: "x", count: 1025))"]}"#)), .invalidProcess(#"process "a" has an argument longer than 1024 bytes"#)),
         (manifest(api: 6, processes(#"{"id":"a","command":["ls"]},{"id":"a","command":["pwd"]}"#)), .invalidProcess(#"duplicate process id "a""#)),
         (manifest(api: 6, processes(#"{"id":"A!","command":["ls"]}"#)), .invalidProcess(#"invalid process id "A!""#)),
         (manifest(api: 6, processes((0...16).map { #"{"id":"p\#($0)","command":["ls"]}"# }.joined(separator: ","))), .invalidProcess("at most 16 processes")),
@@ -256,6 +255,21 @@ struct PluginManifestTests {
             PluginProcessContribution(id: "install", command: ["pnpm", "install"]),
             PluginProcessContribution(id: "dev", command: ["pnpm", "dev"], appendArgs: true, longRunning: true),
         ])
+    }
+
+    @Test(arguments: [String(repeating: "x", count: 1089), String(repeating: "é", count: 8192)])
+    func declaredProcessArgumentsCanCarryLongQueries(argument: String) throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 6, processes(
+            #"{"id":"query","command":["glab","api","graphql","\#(argument)"]}"#)).utf8))
+        #expect(parsed.processes.first?.command == ["glab", "api", "graphql", argument])
+    }
+
+    @Test(arguments: [String(repeating: "x", count: 16385), String(repeating: "é", count: 8193)])
+    func declaredProcessArgumentsAreBoundedByUTF8Bytes(argument: String) {
+        #expect(throws: PluginManifestError.invalidProcess(#"process "query" has an argument longer than 16384 bytes"#)) {
+            try PluginManifest.parse(Data(manifest(api: 6, processes(
+                #"{"id":"query","command":["glab","api","graphql","\#(argument)"]}"#)).utf8))
+        }
     }
 
     @Test func promptsKeepTheirNameAndOptionalDescription() throws {

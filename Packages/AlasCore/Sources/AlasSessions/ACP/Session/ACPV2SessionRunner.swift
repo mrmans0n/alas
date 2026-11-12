@@ -86,6 +86,7 @@ public final class ACPV2SessionRunner {
     private var projection: ACPV2SessionProjection?
     private let onProjectionChange: (@MainActor (ACPV2SessionProjection.Notification) -> Void)?
     private var decisions: ACPV2RequestDecisionCoordinator?
+    var beforeBrokerMirrorFailureForTesting: (@MainActor (ACPV2OrderedIntake?) -> Void)?
 
     public convenience init(session: ACPSession, client: ACPStdioClient,
         persistence: ACPSessionPersistence, fence: ACPSessionLeaseFence,
@@ -278,7 +279,14 @@ public final class ACPV2SessionRunner {
                 guard try await self.persistence.updateACPBrokerAcknowledgedCursor(sessionId: self.session.id, state: state, fence: self.fence,
                     authorize: { !authority.isCancelled && intake?.isValid == true }) else { throw Failure.invalidated }
                 try self.requireCurrent()
-            } catch { self.terminate(.failed(message: String(describing: error))) }
+            } catch {
+                self.beforeBrokerMirrorFailureForTesting?(self.brokerIntake)
+                // A withdrawn transport can refuse an in-flight mirror before
+                // its queued observation-loss notification reaches this actor.
+                guard self.current() else { self.terminate(.ownershipLost)
+                return }
+                self.terminate(.failed(message: String(describing: error)))
+            }
         }
         brokerMirrorTask = worker
         brokerMirrorWorkers[id] = worker

@@ -458,6 +458,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// adapter without HTTP MCP falls back to stdio, so offering the switch
     /// would loop back to a `.notRegistered` stdio server.
     @Tracked public var adapterSupportsHTTPMCP: Bool = false
+    /// Where the policy that disables the built-in server in the attached
+    /// agent comes from (a managed MCP allowlist), or nil. Learned on each
+    /// attach; with `.notRegistered` it replaces the generic warning.
+    @Tracked public var builtInMCPPolicyBlock: String?
     /// Runtime-only auth method selected by the user in the sign-in banner.
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.
@@ -3299,6 +3303,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         didAppendTranscriptMessage()
     }
 
+    public func appendOutcomeCard(_ card: ACPOutcomeCard) {
+        flushPendingReplayCandidates()
+        transcript.appendMessage(.outcomeCard(card))
+        didAppendTranscriptMessage()
+    }
+
     public func appendVisualAid(_ visual: ACPVisualAid) {
         clearRestoredContextRecoveryStatus()
         // Like a file edit, a visual closes the current output run.
@@ -4676,6 +4686,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if case .fileEdit = transcript.messages[i] { return nil }
             if case .visualAid = transcript.messages[i] { return nil }
             if case .questionAnswer = transcript.messages[i] { return nil }
+            if case .outcomeCard = transcript.messages[i] { return nil }
         }
         return nil
     }
@@ -4693,6 +4704,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if case .fileEdit = transcript.messages[i] { return nil }
             if case .visualAid = transcript.messages[i] { return nil }
             if case .questionAnswer = transcript.messages[i] { return nil }
+            if case .outcomeCard = transcript.messages[i] { return nil }
         }
         return nil
     }

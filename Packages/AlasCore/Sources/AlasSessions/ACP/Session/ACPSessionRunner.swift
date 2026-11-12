@@ -367,12 +367,13 @@ public final class ACPSessionRunner {
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
     private var steeringRowPersistencePending = false
-    private enum DeferredInputAnswer {
+    private enum DeferredHistoryRow {
         case question(ACPAnsweredQuestion)
         case optionalReply(String)
+        case outcomeCard(ACPOutcomeCard)
     }
-    /// Input history waits until a steering row can no longer roll back.
-    private var deferredInputAnswers: [DeferredInputAnswer] = []
+    /// History rows wait until a steering row can no longer roll back.
+    private var deferredHistoryRows: [DeferredHistoryRow] = []
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -5897,10 +5898,37 @@ extension ACPSessionRunner {
         persistFromIndex(before)
     }
 
+    /// Append an outcome card and persist it. False on a read-only mirror,
+    /// which leaves the transcript alone.
+    public func appendAndPersistOutcomeCard(_ card: ACPOutcomeCard) -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        recordOutcomeCard(card)
+        return true
+    }
+
+    /// Like an answered question: mid-turn, the card splits the running
+    /// output, explicit message ids included, so later chunks land below it.
+    private func recordOutcomeCard(_ card: ACPOutcomeCard) {
+        guard !steeringRowPersistencePending else {
+            deferredHistoryRows.append(.outcomeCard(card))
+            return
+        }
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        flushStreamingPersist()
+        let before = session.transcript.messages.count
+        session.appendOutcomeCard(card)
+        let index = session.transcript.messages.count - 1
+        var dirty: Set<Int> = []
+        if session.foregroundTurnActive() || session.transcript.streamingState == .sending {
+            dirty = beginOutputBoundary(beforeUserMessageAt: index, followingUserCount: 0).dirty
+        }
+        persistIndices(dirty.union(before...index))
+    }
+
     /// Drain pre-answer output before adding the permanent question record.
     public func recordQuestionAnswer(_ answer: ACPAnsweredQuestion) {
         guard !steeringRowPersistencePending else {
-            deferredInputAnswers.append(.question(answer))
+            deferredHistoryRows.append(.question(answer))
             return
         }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -5927,7 +5955,7 @@ extension ACPSessionRunner {
     /// reopen the late-replay guard and tag the finished turn's rows.
     public func recordOptionalAnswer(_ text: String) {
         guard !steeringRowPersistencePending else {
-            deferredInputAnswers.append(.optionalReply(text))
+            deferredHistoryRows.append(.optionalReply(text))
             return
         }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -5945,16 +5973,17 @@ extension ACPSessionRunner {
     }
 
     /// Settle a steering row write: apply the updates it held back, then
-    /// record any optional answer submitted meanwhile.
+    /// record any history row that arrived meanwhile.
     private func endSteeringRowPersistence() {
         steeringRowPersistencePending = false
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: stopped)
-        let answers = deferredInputAnswers
-        deferredInputAnswers.removeAll()
-        for answer in answers {
-            switch answer {
+        let rows = deferredHistoryRows
+        deferredHistoryRows.removeAll()
+        for row in rows {
+            switch row {
             case .question(let question): recordQuestionAnswer(question)
             case .optionalReply(let text): recordOptionalAnswer(text)
+            case .outcomeCard(let card): recordOutcomeCard(card)
             }
         }
     }

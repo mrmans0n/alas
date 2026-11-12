@@ -98,7 +98,7 @@ enum ACPTranscriptNativeRows {
                 timestamp: createdAt.map { ACPMessageTimestampFormatter.string(for: $0) },
                 failed: call.status == "failed"
             )
-        case .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer:
+        case .fileEdit, .plan, .planDocument, .systemNotice, .failureIncident, .visualAid, .questionAnswer, .outcomeCard:
             return nil
         }
     }

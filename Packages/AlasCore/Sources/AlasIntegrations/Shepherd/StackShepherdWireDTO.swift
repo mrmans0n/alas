@@ -4,9 +4,10 @@ import AlasModel
 import AlasPlatform
 
 /// Agent-facing JSON of the `stack_ship` MCP tool. Snake_cased on the wire by
-/// `ReviewCommentWireDTO.jsonLine`'s key strategy.
-public struct StackShipResultWire: Encodable, Equatable, Sendable {
-    public struct Entry: Encodable, Equatable, Sendable {
+/// `ReviewCommentWireDTO.jsonLine`'s key strategy; decoded back for the card
+/// of a ship that finished after Alas had replied.
+public struct StackShipResultWire: Codable, Equatable, Sendable {
+    public struct Entry: Codable, Equatable, Sendable {
         public var position: Int
         public var entryId: String
         public var title: String
@@ -27,7 +28,7 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
     }
 
     /// An entry the user chose not to publish yet.
-    public struct HeldBackEntry: Encodable, Equatable, Sendable {
+    public struct HeldBackEntry: Codable, Equatable, Sendable {
         public var position: Int
         public var entryId: String
         public var title: String
@@ -39,7 +40,7 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
         }
     }
 
-    public struct Shepherd: Encodable, Equatable, Sendable {
+    public struct Shepherd: Codable, Equatable, Sendable {
         public var autoFix: Bool
 
         public init(autoFix: Bool) {
@@ -97,6 +98,80 @@ extension StackShipResultWire {
             restacked: restacked,
             shepherd: Shepherd(autoFix: record.autoFix)
         )
+    }
+}
+
+/// What a `stack_ship` is doing while it runs.
+public enum StackShipPhase: String, Encodable, Sendable {
+    /// Listing the stack and checking origin for entries that already landed.
+    case checking
+    /// `gg rebase` dropping landed entries.
+    case rebasing
+    /// `gg sync` started, before it reports linting or pushing.
+    case syncing
+    /// gg's configured lint, run on every entry before the sync pushes.
+    case linting
+    /// Pushing entries and opening or updating their requests.
+    case pushing
+    /// Reading the published pull/merge requests and binding the shepherd.
+    case reading
+}
+
+/// A running `stack_ship`'s phase, and inside gg sync the entry it is on.
+public struct StackShipProgress: Equatable, Sendable {
+    public var phase: StackShipPhase
+    /// The entry being linted or pushed.
+    public var position: Int?
+    /// How many entries the sync lints or pushes.
+    public var totalEntries: Int?
+
+    public init(phase: StackShipPhase, position: Int? = nil, totalEntries: Int? = nil) {
+        self.phase = phase
+        self.position = position
+        self.totalEntries = totalEntries
+    }
+
+    /// Follows one `gg sync --jsonl` event.
+    public mutating func apply(_ event: GGSyncEvent) {
+        switch event {
+        case .start(let total):
+            totalEntries = total
+        case .lintStarted(let total):
+            self = .init(phase: .linting, totalEntries: total)
+        case .lintEntryStarted(let position, _):
+            self.phase = .linting
+            self.position = position
+        case .entryStarted(let position, _), .pushStarted(let position):
+            self.phase = .pushing
+            self.position = position
+        case .lintEntryDone, .pushDone, .prCreated, .prUpdated, .prSkippedClosed, .summary, .error:
+            break
+        }
+    }
+
+    /// "linting 3/6", "pushing 2/6", or the bare phase.
+    public var label: String {
+        guard let position, phase == .linting || phase == .pushing else { return phase.rawValue }
+        return totalEntries.map { "\(phase.rawValue) \(position)/\($0)" } ?? "\(phase.rawValue) entry \(position)"
+    }
+}
+
+/// `stack_ship`'s reply, and `pr_status`'s, while a ship still runs after
+/// Alas replied: the call returns before a slow gg sync (lint can take
+/// minutes) outlasts the agent's tool timeout.
+public struct StackShipProgressWire: Encodable, Equatable, Sendable {
+    public var status = "in_progress"
+    public var phase: StackShipPhase
+    /// e.g. "linting 3/6".
+    public var progress: String
+    public var elapsedSeconds: Int
+    public var message: String
+
+    public init(progress: StackShipProgress, elapsedSeconds: Int, message: String) {
+        self.phase = progress.phase
+        self.progress = progress.label
+        self.elapsedSeconds = elapsedSeconds
+        self.message = message
     }
 }
 

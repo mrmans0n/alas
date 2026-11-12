@@ -630,7 +630,7 @@ final class ACPCommandChipHoverController {
                     ?? textView.upstreamReferenceAnchorRect(for: range) else { return }
             let card = ACPCommandHoverCard(
                 suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion), opensSkill: opensSkill)
-            let hosting = NSHostingController(rootView: card.environment(\.theme, theme ?? EnvironmentValues().theme))
+            let hosting = NSHostingController(rootView: card.environment(\.theme, theme ?? EnvironmentValues().theme).environment(\.designScale, HostedDesignScale.current))
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = false

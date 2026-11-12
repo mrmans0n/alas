@@ -5,6 +5,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 /// Which built-in tools an attachment exposes. SSH sessions get a subset,
 /// relayed back to this Mac by the remote helper.
@@ -36,6 +37,8 @@ public struct BuiltInMCPAttachmentContext: Sendable {
 
     public let worktreePath: String
     public let sessionId: String
+    /// The session's agent, which picks the name the server is attached under.
+    public let agentID: String
     public let injectionSupport: ACPMCPInjectionSupport
     public let location: Location
     /// Whether the attach that requested the server still owns the session
@@ -48,6 +51,7 @@ public struct BuiltInMCPAttachmentContext: Sendable {
     public init(
         worktreePath: String,
         sessionId: String,
+        agentID: String,
         injectionSupport: ACPMCPInjectionSupport,
         location: Location,
         isCurrent: @escaping @MainActor @Sendable () -> Bool = { true },
@@ -55,6 +59,7 @@ public struct BuiltInMCPAttachmentContext: Sendable {
     ) {
         self.worktreePath = worktreePath
         self.sessionId = sessionId
+        self.agentID = agentID
         self.injectionSupport = injectionSupport
         self.location = location
         self.isCurrent = isCurrent
@@ -103,8 +108,32 @@ public final class PreparedBuiltInMCPAttachment {
 /// configuration and the built-in entry never affects the configuration
 /// fingerprint.
 public enum BuiltInAlasMCP: Sendable {
+    /// The default name the server is attached under.
     public static let serverName = "alas"
     public static let statusId = "builtin-alas"
+
+    /// A user-chosen server name, or nil when `raw` is blank, not a name
+    /// every agent accepts (letters, digits, `_` and `-`, at most 64), or the
+    /// name of another server Alas attaches on its own (`git-gud`), which
+    /// would put two servers under one name. Agents under a managed MCP
+    /// allowlist only start servers whose name is on it, so the name has to
+    /// be settable.
+    public static func normalizedServerName(_ raw: String?) -> String? {
+        guard let name = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              (1...64).contains(name.utf8.count),
+              name != GGMCPInjection.serverName,
+              name.utf8.allSatisfy({ byte in
+                  switch byte {
+                  case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                       UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "_"), UInt8(ascii: "-"):
+                      true
+                  default:
+                      false
+                  }
+              })
+        else { return nil }
+        return name
+    }
 
     public struct Injection: Equatable, Sendable {
         public let server: ACPMCPServer
@@ -131,8 +160,9 @@ public enum BuiltInAlasMCP: Sendable {
 
     /// Identifies how an agent reaches the built-in server, so an attach that
     /// adopts a surviving agent can tell whether it still reaches the server
-    /// this attach configures. HTTP: the URL and headers the agent connects
-    /// with, which carry its credentials and the CLI build serving it.
+    /// this attach configures. The name the agent knows the server by, then
+    /// HTTP: the URL and headers the agent connects with, which carry its
+    /// credentials and the CLI build serving it.
     /// stdio: the agent runs the server itself, so only the command, the app
     /// socket it reports to and the CLI build it runs matter; the scoping env
     /// (worktree, workspace members) cannot strand it. Either way the build
@@ -141,11 +171,11 @@ public enum BuiltInAlasMCP: Sendable {
     public static func agentFingerprint(of server: ACPMCPServer) -> String {
         let identity: [String]
         switch server {
-        case let .http(_, url, headers), let .sse(_, url, headers):
+        case let .http(name, url, headers), let .sse(name, url, headers):
             let kind = if case .http = server { "http" } else { "sse" }
-            identity = [kind, url] + headers.flatMap { [$0.name, $0.value] }
-        case let .stdio(_, command, args, env):
-            identity = ["stdio", command] + args
+            identity = [name, kind, url] + headers.flatMap { [$0.name, $0.value] }
+        case let .stdio(name, command, args, env):
+            identity = [name, "stdio", command] + args
                 + env.filter { agentIdentityEnv.contains($0.name) }.map(\.value)
         }
         return SHA256.hash(data: Data(identity.joined(separator: "\u{0}").utf8))
@@ -154,7 +184,9 @@ public enum BuiltInAlasMCP: Sendable {
 
     /// The status row for a built-in server that was requested but cannot be
     /// served, e.g. an SSH host whose helper cannot relay it.
-    public static func unavailableStatus(_ reason: String) -> MCPAttachmentServerStatus {
+    public static func unavailableStatus(
+        _ reason: String, serverName: String = BuiltInAlasMCP.serverName
+    ) -> MCPAttachmentServerStatus {
         .init(id: statusId, name: serverName, transport: .stdio,
               disposition: .skipped(.remoteRelayUnavailable(reason)))
     }
@@ -165,7 +197,8 @@ public enum BuiltInAlasMCP: Sendable {
     /// helper binary, its state directory, and the stable remote record.
     public static func remoteVisualInjection(
         descriptor: RemoteMCPRouteDescriptor,
-        toolScope: BuiltInMCPToolScope
+        toolScope: BuiltInMCPToolScope,
+        serverName: String = BuiltInAlasMCP.serverName
     ) -> Injection {
         Injection(
             server: .stdio(name: serverName, command: descriptor.proxyCommand, args: descriptor.proxyArgs, env: []),
@@ -217,31 +250,36 @@ public enum BuiltInAlasMCP: Sendable {
     /// transport. Mirrors the guards in `injection`; used by the HTTP path to
     /// avoid spawning a supervised process for a server that will be suppressed.
     public static func shouldInject(enabled: Bool, configuredServers: [ProjectMCPServer],
-                             binaryPath: String?, socketPath: String?) -> Bool {
+                             binaryPath: String?, socketPath: String?,
+                             serverName: String = BuiltInAlasMCP.serverName) -> Bool {
         guard enabled, binaryPath != nil, socketPath != nil else { return false }
-        return !isOverridden(by: configuredServers)
+        return !isOverridden(by: configuredServers, serverName: serverName)
     }
 
     /// Whether an SSH session should request the relayed visual tool. An
     /// `.external` adapter (Pi) ignores ACP MCP config, so the relay would
     /// never be reached; its own status reports that limitation.
     public static func injectsRemoteVisual(enabled: Bool, configuredServers: [ProjectMCPServer],
-                                           injectionSupport: ACPMCPInjectionSupport) -> Bool {
+                                           injectionSupport: ACPMCPInjectionSupport,
+                                           serverName: String = BuiltInAlasMCP.serverName) -> Bool {
         guard enabled, injectionSupport == .sessionNew else { return false }
-        return !isOverridden(by: configuredServers)
+        return !isOverridden(by: configuredServers, serverName: serverName)
     }
 
-    /// A configured server named "alas" is an intentional user override.
-    private static func isOverridden(by configuredServers: [ProjectMCPServer]) -> Bool {
+    /// A configured server named "alas" is an intentional user override, and
+    /// one named like the server's chosen name would collide with it.
+    private static func isOverridden(by configuredServers: [ProjectMCPServer], serverName: String) -> Bool {
         configuredServers.contains {
-            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
+            let name = $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name == BuiltInAlasMCP.serverName || name == serverName
         }
     }
 
     /// The wire entry + status row for the built-in server, or nil when it
     /// must not be injected: globally disabled, the managed binary or app
     /// socket is unavailable, or the project already configures a server
-    /// named "alas" (an intentional user override, e.g. a dev binary).
+    /// named "alas" or `serverName` (an intentional user override, e.g. a
+    /// dev binary).
     public static func injection(
         enabled: Bool,
         configuredServers: [ProjectMCPServer],
@@ -253,13 +291,15 @@ public enum BuiltInAlasMCP: Sendable {
         httpEndpoint: HTTPEndpoint? = nil,
         workspaceContext: WorkspaceContext? = nil,
         headless: Bool = false,
-        cliBuild: String? = nil
+        cliBuild: String? = nil,
+        serverName: String = BuiltInAlasMCP.serverName
     ) -> Injection? {
         guard shouldInject(
             enabled: enabled,
             configuredServers: configuredServers,
             binaryPath: binaryPath,
-            socketPath: socketPath
+            socketPath: socketPath,
+            serverName: serverName
         ), let binaryPath, let socketPath else { return nil }
 
         let server: ACPMCPServer

@@ -178,7 +178,7 @@ final class ACPFileMentionHoverController {
                 name: name,
                 location: location,
                 systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
-            )
+            ).environment(\.designScale, HostedDesignScale.current)
         )
         hosting.sizingOptions = [.preferredContentSize]
         return hosting
@@ -196,7 +196,7 @@ final class ACPFileMentionHoverController {
         let model = ACPSymbolHoverModel(target: symbol, typography: coordinator?.typography ?? .default)
         let screenHeight = (textView.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? Self.maxSymbolCodeHeight * 2
         let hosting = NSHostingController(
-            rootView: ACPSymbolHoverCard(model: model, maxCodeHeight: min(Self.maxSymbolCodeHeight, screenHeight / 2))
+            rootView: ACPSymbolHoverCard(model: model, maxCodeHeight: min(Self.maxSymbolCodeHeight, screenHeight / 2)).environment(\.designScale, HostedDesignScale.current)
         )
         hosting.sizingOptions = [.preferredContentSize]
         guard let coordinator else {

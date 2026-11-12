@@ -18,6 +18,29 @@ struct TranscriptImageFileTests {
         #expect(TranscriptImageFile.resolve(source, root: URL(fileURLWithPath: "/.alas-remote/test-host/repo")) == nil)
     }
 
+    /// A prompt's attached images are staged on the Mac, so an SSH session
+    /// reads them locally; anything else still resolves on the session's host.
+    @Test(arguments: [
+        ("file:///Support/acp-attachments/w1/shot%201.png", true),
+        ("/Support/acp-attachments/w1/shot.png", true),
+        ("file:///Support/acp-attachments/w1/../w2/shot.png", false),
+        ("/Support/acp-attachments/w1", false),
+        ("/tmp/shot.png", false),
+        ("images/shot.png", false),
+    ])
+    func stagedAttachmentsReadOnThisMac(_ source: String, staged: Bool) {
+        let attachments = URL(fileURLWithPath: "/Support/acp-attachments/w1")
+        let sshRoot = URL(fileURLWithPath: "/.alas-remote/test-host/repo")
+        let root = TranscriptImageFile.readRoot(for: source, worktreeRoot: sshRoot, attachments: attachments)
+        #expect(root == (staged ? attachments : sshRoot))
+        if staged {
+            guard case .local? = TranscriptImageFile.resolve(source, root: root) else {
+                Issue.record("\(source) should resolve on this Mac")
+                return
+            }
+        }
+    }
+
     @Test func localReadsAreBounded() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("image-\(UUID()).png")
         defer { try? FileManager.default.removeItem(at: file) }

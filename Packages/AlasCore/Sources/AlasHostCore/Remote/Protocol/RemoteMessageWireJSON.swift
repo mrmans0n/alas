@@ -20,6 +20,19 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public var isHidden: Bool? = nil
     /// A user row's automatic checkpoint; the key is left out when nil.
     public var checkpointId: String? = nil
+    /// A user row's attached images, in the order of its `🖼` lines. Viewers
+    /// read their bytes with `readTranscriptImage`; the key is left out when nil.
+    public var images: [Image]? = nil
+
+    public struct Image: Codable, Equatable, Sendable {
+        public let uri: String
+        public let name: String?
+
+        public init(uri: String, name: String?) {
+            self.uri = uri
+            self.name = name
+        }
+    }
 
     /// A conservative bound for compact JSONEncoder output, without serializing
     /// or copying the bodies. The fixed overhead covers keys, punctuation,
@@ -36,6 +49,13 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         }
         if isHidden != nil { count += 17 }
         if let checkpointId { count += 18 + Self.escapedTransportByteCount(checkpointId) }
+        if let images {
+            count += 12
+            for image in images {
+                count += 24 + Self.escapedTransportByteCount(image.uri)
+                if let name = image.name { count += Self.escapedTransportByteCount(name) }
+            }
+        }
         return count
     }
 
@@ -82,7 +102,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
 
     public init(
         stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
-        checkpointId: String? = nil
+        checkpointId: String? = nil, images: [Image]? = nil
     ) {
         self.stableId = stableId
         self.kind = kind
@@ -91,6 +111,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         self.index = index
         self.isHidden = isHidden
         self.checkpointId = checkpointId
+        self.images = images
     }
 }
 

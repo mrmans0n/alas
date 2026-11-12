@@ -124,6 +124,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
         userServerNames: [String],
+        builtInServerName: String = BuiltInAlasMCP.serverName,
         mode: ACPMCPPreambleMode = .mcp,
         ggStack: GGPreambleStackContext? = nil,
         issue: IssuePreambleContext? = nil,
@@ -147,6 +148,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 builtInTools: builtInTools,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
+                builtInServerName: builtInServerName,
                 ggStack: ggStack,
                 issue: issue,
                 delegation: delegation,
@@ -227,6 +229,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
         userServerNames: [String],
+        builtInServerName: String,
         ggStack: GGPreambleStackContext?,
         issue: IssuePreambleContext?,
         delegation: String?,
@@ -247,14 +250,14 @@ public enum ACPMCPPromptPreamble: Sendable {
             lines.append("This session runs inside Alas, the user's macOS workspace app.")
         }
         if builtInTools == .visualOnly {
-            lines.append("The MCP server \"alas\" (built-in) provides only visual_show: it shows "
+            lines.append("The MCP server \"\(builtInServerName)\" (built-in) provides only visual_show: it shows "
                 + "an HTML visual (a fragment or a full document, such as a diagram, comparison, "
                 + "or chart) in this session's transcript as part of your reply, optionally with a question. "
                 + "The user's answer arrives as their next prompt. No other Alas tools are "
                 + "available in this session.")
             lines.append(visualPolicy)
         } else if builtInTools == .remote {
-            lines.append("The MCP server \"alas\" (built-in) provides visual_show (show an HTML visual, "
+            lines.append("The MCP server \"\(builtInServerName)\" (built-in) provides visual_show (show an HTML visual, "
                 + "such as a diagram, comparison, or chart, in this session's transcript as part of your "
                 + "reply, optionally with a question, before your final reply; the user's answer arrives "
                 + "as their next prompt) and pr_create/pr_status (open a PR/MR for this worktree's branch "
@@ -271,7 +274,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "call agent_list first and pass an available agent id to session_new), "
                     + "session_read (read a child's or this session's fork transcript), session_search (search children), "
                     + "session_wait/session_interrupt (block on or stop children's turns)"
-            var line = "The MCP server \"alas\" (built-in) drives the Alas UI: "
+            var line = "The MCP server \"\(builtInServerName)\" (built-in) drives the Alas UI: "
                 + (isPeerChild
                     ? "notify (macOS notification), worktree_list, "
                     : "open (reveal files to the user), notify (macOS notification), "
@@ -290,7 +293,7 @@ public enum ACPMCPPromptPreamble: Sendable {
             } else if isDelegated {
                 line += " This session was delegated by a parent session: it "
                     + "cannot create descendants. Report results and questions to "
-                    + "the parent only with the session_send tool of the \"alas\" "
+                    + "the parent only with the session_send tool of the \"\(builtInServerName)\" "
                     + "MCP server; do not use SendMessage, ListAgents, or any other "
                     + "messaging or agent tool for that."
             } else {

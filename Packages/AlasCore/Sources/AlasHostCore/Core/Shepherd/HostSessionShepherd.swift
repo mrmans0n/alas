@@ -7,18 +7,26 @@ public struct HostSessionShepherd: Codable, Equatable, Sendable {
     public var badge: String
     public var number: String?
     public var tooltip: String
+    /// Escalated or paused, so Resume acts; an attention badge alone may be a
+    /// failing request with auto-fix off. Nil from hosts before
+    /// `host.shepherds.v1`.
+    public var resumable: Bool?
 
-    public init(badge: String, number: String?, tooltip: String) {
+    public init(badge: String, number: String?, tooltip: String, resumable: Bool? = nil) {
         self.badge = badge
         self.number = number
         self.tooltip = tooltip
+        self.resumable = resumable
     }
 
     /// The pill's badge; nil for one this Mac doesn't know, which shows no pill.
     public var badgeState: ShepherdBadgeState? { ShepherdBadgeState(rawValue: badge) }
 
-    public init(_ presentation: ShepherdPresentation) {
-        self.init(badge: presentation.badge.rawValue, number: presentation.number, tooltip: presentation.tooltip)
+    public init(_ presentation: ShepherdPresentation, resumable: Bool) {
+        self.init(
+            badge: presentation.badge.rawValue, number: presentation.number, tooltip: presentation.tooltip,
+            resumable: resumable
+        )
     }
 
     /// The session's live stack record, else its PR record, else its finished
@@ -27,7 +35,7 @@ public struct HostSessionShepherd: Codable, Equatable, Sendable {
     public static func make(sessionID: String, review: ReviewShepherd, stack: StackShepherd) -> HostSessionShepherd? {
         let stackRecord = stack.record(forSession: sessionID)
         if let stackRecord, !stackRecord.isFinished {
-            return HostSessionShepherd(stackPresentation(stackRecord, stack))
+            return HostSessionShepherd(stackPresentation(stackRecord, stack), resumable: stackRecord.phase.isResumable)
         }
         if let record = review.record(forSession: sessionID) {
             // A snapshot of another request on the worktree's branch doesn't describe this record.
@@ -35,9 +43,9 @@ public struct HostSessionShepherd: Codable, Equatable, Sendable {
                 .flatMap { ShepherdRecordID(worktreeID: record.id.worktreeID, request: $0) == record.id ? $0 : nil }
             return HostSessionShepherd(ShepherdPresentation.make(
                 record: record, request: request, mergeGatePasses: review.gatePasses[record.id] ?? false
-            ))
+            ), resumable: record.phase.isResumable)
         }
-        return stackRecord.map { HostSessionShepherd(stackPresentation($0, stack)) }
+        return stackRecord.map { HostSessionShepherd(stackPresentation($0, stack), resumable: false) }
     }
 
     @MainActor

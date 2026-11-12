@@ -329,6 +329,36 @@ final class NativePeerHosts {
         }
     }
 
+    func canShepherd(serverId: String) -> Bool {
+        channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.shepherdsV1)
+    }
+
+    /// Ships, resumes or stops host session `sessionID`'s shepherd. The
+    /// host's next session list then updates its pill; only a refusal is shown here.
+    func shepherd(_ sessionID: String, action: HostShepherdAction, serverId: String) {
+        guard canShepherd(serverId: serverId), let channel = channels.channel(for: serverId) else { return }
+        let title = switch action {
+        case .ship: "Ship Failed"
+        case .resume: "Resume Failed"
+        case .stop: "Stop Shepherding Failed"
+        }
+        let showError = showError
+        Task {
+            switch await channel.request(.shepherdSession(sessionID: sessionID, action: action)) {
+            case .done:
+                break
+            case .failure(.session(.notWriter)):
+                showError(title, "Another device is driving this session.")
+            case .failure(.session(.notFound)):
+                showError(title, "The host no longer lists this session.")
+            case .failure(let error):
+                showError(title, PeerWorktreeRemoval.message(for: error))
+            default:
+                showError(title, "The host sent an unexpected reply.")
+            }
+        }
+    }
+
     /// Whether `worktree`'s branch can be renamed, on a host that serves it.
     func canRenameBranch(_ worktree: PeerHostWorktree, serverId: String) -> Bool {
         channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)

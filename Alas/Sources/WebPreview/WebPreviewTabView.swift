@@ -43,6 +43,8 @@ struct WebPreviewTabView: View {
         _browser = State(initialValue: browser)
     }
 
+    @Environment(\.designScale) private var scale
+
     var body: some View {
         @Bindable var browser = browser
         VStack(spacing: 0) {
@@ -69,7 +71,7 @@ struct WebPreviewTabView: View {
                 }
                 if let onClose { tool("Close preview", icon: "xmark.circle", action: onClose) }
             }
-            .padding(8)
+            .padding(scale.space[2])
             Divider()
             HStack(spacing: 8) {
                 Picker("Selection", selection: $selectionMode) {
@@ -78,7 +80,7 @@ struct WebPreviewTabView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 130)
+                .fixedSize()
                 .disabled(browser.webView.url == nil || browser.loading || browser.capturing)
                 tool("Capture viewport", icon: "camera", disabled: browser.webView.url == nil || browser.loading || browser.capturing) {
                     selectionMode = .browse
@@ -96,7 +98,7 @@ struct WebPreviewTabView: View {
                             }
                             ScrollView {
                                 Text(browser.consoleErrors.isEmpty ? "No errors recorded for this page." : browser.consoleErrors.joined(separator: "\n\n"))
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(scale.meta.font(design: .monospaced))
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -116,14 +118,14 @@ struct WebPreviewTabView: View {
                 .frame(width: 24)
                 .help("Private preview storage")
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
+            .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
             if let error = browser.error {
                 HStack(alignment: .top) {
                     Image(systemName: "exclamationmark.triangle")
                     Text(error).textSelection(.enabled)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 12)).padding(10)
+                .font(scale.meta.font).padding(scale.space[3])
                 .background(Color.yellow.opacity(0.12))
             }
             Divider()
@@ -208,6 +210,7 @@ private struct WebPreviewViewportControls: View {
     @State private var showsCustom = false
     @State private var customWidth = ""
     @State private var customHeight = ""
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         if let layout = browser.surfaceLayout, layout.zoom < 1 {
@@ -242,7 +245,7 @@ private struct WebPreviewViewportControls: View {
                 Button("Apply", action: applyCustom).disabled(custom == nil).keyboardShortcut(.defaultAction)
             }
             .textFieldStyle(.roundedBorder)
-            .padding(10)
+            .padding(scale.space[3])
             .onSubmit(applyCustom)
         }
         if let viewport = browser.viewport {
@@ -275,6 +278,7 @@ private struct WebPreviewFeedbackSheet: View {
     @State private var sending = false
     @State private var error: String?
     @State private var showsImage = false
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -288,7 +292,7 @@ private struct WebPreviewFeedbackSheet: View {
             }
             ScrollView {
                 Text(capture.prompt(message: "", includeConsole: includeConsole))
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(scale.meta.font(design: .monospaced))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             }.frame(height: 100)
             Text("Message").font(.subheadline)
@@ -325,7 +329,7 @@ private struct WebPreviewFeedbackSheet: View {
                 }
                 .disabled(sending || sessionID.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        }.padding(20).frame(width: 580)
+        }.padding(scale.space[5]).frame(width: 580)
         .interactiveDismissDisabled(sending)
         .sheet(isPresented: $showsImage) {
             WebPreviewCaptureImage(png: capture.png)
@@ -339,6 +343,7 @@ private struct WebPreviewCaptureImage: View {
     let png: Data
     @Environment(\.dismiss) private var dismiss
     @State private var zoom = 1.0
+    @Environment(\.designScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -349,7 +354,7 @@ private struct WebPreviewCaptureImage: View {
                 Text("\(Int(zoom * 100))%").monospacedDigit().frame(width: 45)
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding(12)
+            }.padding(scale.space[3])
             Divider()
             ScrollView([.horizontal, .vertical]) {
                 if let image = NSImage(data: png) {

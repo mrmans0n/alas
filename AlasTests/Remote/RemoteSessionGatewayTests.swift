@@ -1713,14 +1713,31 @@ struct RemoteSessionGatewayTests {
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
         #expect(wire.kind == "user")
         #expect(wire.text == "🖼 shot.png")
+        #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
     }
 
     @Test func mentionAttachmentsRenderAsResourcesNotImages() {
         let msg = ACPMessage.user(id: UUID(), text: "see @App.swift", attachments: [
             .init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil),
             .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png"),
+            .init(uri: "data:image/png;base64,iVBORw0KGgo=", name: nil, mimeType: "image/png"),
         ])
-        #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        #expect(wire.text == "see @App.swift\n\n🖼 shot.png\n\n🖼 Image\n\n📎 App.swift")
+        #expect(wire.images == [.init(uri: "file:///tmp/shot.png", name: "shot.png")])
+    }
+
+    /// Matches the browser's `userTextWithoutImageLabels`: mention lines and
+    /// a prompt that reads like a label stay.
+    @Test(arguments: [
+        ("see\n\n🖼 a.png\n\n📎 App.swift", ["a.png"], "see\n\n📎 App.swift"),
+        ("🖼 Image", [nil], ""),
+        ("🖼 a.png\n\n🖼 a.png\n\n🖼 b.png", ["a.png", "b.png"], "🖼 a.png"),
+        ("hi\n\n🖼 a.png", ["gone.png"], "hi\n\n🖼 a.png"),
+        ("see\n\n🖼 a.png\n\n🖼 Image", ["a.png"], "see\n\n🖼 Image"),
+    ] as [(String, [String?], String)])
+    func userRowTextDropsShownImageLabels(text: String, names: [String?], expected: String) {
+        #expect(RemoteSessionGateway.userRowText(text, removingImageNames: names) == expected)
     }
 
     private nonisolated static let peerCheckpoint = UUID()
@@ -1736,6 +1753,7 @@ struct RemoteSessionGatewayTests {
         #expect(wire.text == text)
         #expect(wire.json == nil)
         #expect(wire.checkpointId == checkpoint?.uuidString)
+        #expect(wire.images == nil)
     }
 
     @Test func failureIncidentWire() throws {

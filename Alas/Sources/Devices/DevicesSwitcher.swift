@@ -7,6 +7,7 @@ struct DevicesSwitcher: View {
     let state: DevicesTabState
     let onSelect: (DevicesTarget) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var hovering = false
 
     var body: some View {
@@ -29,19 +30,19 @@ struct DevicesSwitcher: View {
                     .fill(theme.color(Self.colorToken(selected?.tone ?? .idle)))
                     .frame(width: 8, height: 8)
                 Text(selected?.title ?? "Devices")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                 if let detail = selected?.detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(scale.glyphFont)
                     .foregroundStyle(theme.color("fg-muted"))
             }
             .lineLimit(1)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, scale.space[2])
             .frame(height: 22)
             .background(hovering ? theme.color("bg-3") : .clear, in: Capsule())
             .contentShape(Capsule())
@@ -83,6 +84,7 @@ struct DevicesActions: View {
     let onShutDown: () -> Void
     let onOpenLogs: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     /// "Saved to Desktop", or why it wasn't, for a moment after a click.
     @State private var notice: String?
     @State private var showsSettings = false
@@ -91,7 +93,7 @@ struct DevicesActions: View {
         HStack(spacing: 2) {
             if let notice {
                 Text(notice)
-                    .font(.system(size: 10.5))
+                    .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(theme.color("fg-dim"))
                     .lineLimit(1)
                     .transition(.opacity)

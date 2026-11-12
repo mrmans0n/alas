@@ -188,6 +188,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// The Claude session hooks (normalized JSON) new sessions of an agent
     /// start with, or nil. Captured like `sessionInstructionsProvider`.
     public var sessionHooksProvider: (@MainActor (_ agentId: String) -> String?)?
+    /// Asks the agent's own CLI whether a managed policy disables the
+    /// built-in server entry this attach sends, and returns the policy's
+    /// source. Nil when the agent allows it or cannot be asked.
+    public var builtInMCPPolicyProbe: (@Sendable (_ launchSpec: ACPLaunchSpec, _ server: ACPMCPServer, _ cwd: String) async -> String?)?
     /// Whether a session was delegated by a parent Alas session. Read on
     /// every attach, independent of whether Alas tools are exposed, so a
     /// delegated Claude child never gets the tools that message other Claude
@@ -6563,6 +6567,7 @@ extension ACPSessionManager {
 
     private func builtInMCPAttachmentContext(
         sessionId: ACPSession.ID,
+        agentID: String,
         attempt: AttachmentAttempt,
         injectionSupport: ACPMCPInjectionSupport,
         location: BuiltInMCPAttachmentContext.Location
@@ -6573,6 +6578,7 @@ extension ACPSessionManager {
         return BuiltInMCPAttachmentContext(
             worktreePath: worktreePath,
             sessionId: sessionId,
+            agentID: agentID,
             injectionSupport: injectionSupport,
             location: location,
             isCurrent: { [weak self] in
@@ -7038,6 +7044,7 @@ extension ACPSessionManager {
         // `do` block, so its `extraEnv` is captured here for later use).
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
+        let agentLaunchSpec: ACPLaunchSpec
         let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
         let sessionInstructions = await capturedSessionInstructions(sessionId: sessionId)
         let sessionHooks = await capturedSessionHooks(sessionId: sessionId)
@@ -7084,6 +7091,7 @@ extension ACPSessionManager {
                 return
             }
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
+            agentLaunchSpec = launchSpec
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
             } else if host == nil, brokerServiceFactory != nil {
@@ -7495,6 +7503,7 @@ extension ACPSessionManager {
             if let builtInMCPProvider, let builtInLocation {
                 builtInAttachment = await builtInMCPProvider(builtInMCPAttachmentContext(
                     sessionId: sessionId,
+                    agentID: session.agentId,
                     attempt: attempt,
                     injectionSupport: spec.mcpInjection,
                     location: builtInLocation
@@ -7587,6 +7596,26 @@ extension ACPSessionManager {
             // `.notRegistered` from a prior attach must be cleared so the status
             // control stops warning about a server that is no longer requested.
             session.builtInMCPRegistration = .unknown
+            session.builtInMCPPolicyBlock = nil
+            // Codex drops a server its managed requirements do not allow
+            // without connecting to it or reporting it over ACP, so ask its
+            // CLI instead of waiting for a hello that cannot come.
+            if shouldTrackBuiltInRegistration, remoteHost == nil,
+               let server = builtInMCP?.server, let builtInMCPPolicyProbe {
+                let cwd = worktreePath
+                Task { @MainActor [weak self, weak session] in
+                    guard let source = await builtInMCPPolicyProbe(agentLaunchSpec, server, cwd),
+                          let self, let session,
+                          self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch,
+                          session.builtInMCPRegistration != .registered
+                    else { return }
+                    session.builtInMCPPolicyBlock = source
+                    session.builtInMCPRegistration = .notRegistered
+                    mcpRegistrationLogger.notice(
+                        "blocked by agent policy session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) name=\(server.name, privacy: .public) source=\(source, privacy: .public)"
+                    )
+                }
+            }
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
@@ -8503,7 +8532,7 @@ extension ACPSessionManager {
                     preambleMode = .cli(serverAvailability: serverAvailability)
                 } else {
                     userServerNames = wireMCPServers.map(\.name)
-                        .filter { !(builtInMCP != nil && $0 == BuiltInAlasMCP.serverName) }
+                        .filter { $0 != builtInMCP?.server.name }
                         .filter { !(ggMCP != nil && $0 == GGMCPInjection.serverName) }
                     preambleMode = .mcp
                 }
@@ -8525,6 +8554,7 @@ extension ACPSessionManager {
                         ? (builtInMCP?.isDelegated == true)
                         : (cliParentSessionId != nil),
                     userServerNames: userServerNames,
+                    builtInServerName: builtInMCP?.server.name ?? BuiltInAlasMCP.serverName,
                     mode: preambleMode,
                     ggStack: ggStackContext,
                     issue: issuePreambleProvider?(worktreeId),
@@ -10007,6 +10037,18 @@ extension ACPSessionManager {
         // even that needs `.systemNotice` to carry a delegated source to
         // dedupe against, which is tracked separately.
         return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
+    }
+
+    /// Append an outcome card to a session this instance writes, without
+    /// running a turn. False when the session has no live runner or another
+    /// instance owns it; the card is not kept for later.
+    public func appendOutcomeCard(_ card: ACPOutcomeCard, into sessionId: ACPSession.ID) async -> Bool {
+        guard legacyRuntimeAllowed(sessionId) else { return false }
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard !mergingForks.contains(sessionId), let runner = runners[sessionId], isWriter(for: sessionId)
+        else { return false }
+        return runner.appendAndPersistOutcomeCard(card)
     }
 
     /// Append a visual aid an agent showed. True only once its row is written,

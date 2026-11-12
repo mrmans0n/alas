@@ -36,6 +36,17 @@ public enum TranscriptImageFile {
         return .local(resolved.resolvingSymlinksInPath().standardizedFileURL)
     }
 
+    /// The root to read `source` against for a session whose worktree is at
+    /// `worktreeRoot`. The images a prompt attaches are staged on this Mac in
+    /// `attachments`, even when the worktree is on an SSH host, so a source
+    /// inside that folder reads from local disk. Relative sources stay the worktree's.
+    public static func readRoot(for source: String, worktreeRoot: URL, attachments: URL) -> URL {
+        guard source.hasPrefix("/") || source.lowercased().hasPrefix("file:"),
+              case .local(let url)? = resolve(source, root: attachments) else { return worktreeRoot }
+        let folder = attachments.resolvingSymlinksInPath().standardizedFileURL.path
+        return url.path.hasPrefix(folder + "/") ? attachments : worktreeRoot
+    }
+
     /// Validate on the serving host before sending bytes to a peer. File names
     /// are not reliable image identifiers, especially for generated assets.
     public static func isImage(_ data: Data) -> Bool {

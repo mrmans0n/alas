@@ -57,7 +57,9 @@ Any paired host that runs from the `alas-host` or `alas` cask as its launch
 agent also shows **Update host** while it is online, set up over SSH or not: the
 host runs `brew upgrade --cask` itself and restarts on the new version, ending
 its running sessions. A peer's status names the host's release and says when it
-is older than the Mac's Alas.
+is older than the Mac's Alas. Such a host also shows in the Inbox under
+**Host updates**, with **Update** and **Dismiss**; a dismissed host comes back
+once it runs another version.
 
 ## Run
 
@@ -331,6 +333,12 @@ SSH-project worktrees are left untouched for the app. Shepherd and schedule
 settings are read when the host starts: run `alas-host restart` after changing
 them. Their alerts go to paired Macs, which show them as banners.
 
+A paired Mac's session toolbar shows a host session's shepherd pill. Its menu
+offers **Ship with agent** when the session shepherds nothing: the host sends
+the session the same prompt the app's Ship does, so the agent opens the pull
+request or ships the gg stack and the host shepherds it. It also offers
+**Resume** for a shepherd that needs attention and **Stop shepherding**.
+
 ## Start at login
 
 ```bash
@@ -356,4 +364,3 @@ so the agent runs at standard priority.
 
 - **Linux.** The host is macOS only.
 - **Terminal-agent and SSH-project schedules.** They run only in the app.
-- **Starting or stopping a shepherd from a paired Mac.**

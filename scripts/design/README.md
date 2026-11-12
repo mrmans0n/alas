@@ -35,6 +35,14 @@ worktree with more tabs than its row badges; the local projects collapse so the 
 `peers-hover` hovers the section header to show the "+" pair control, and `peers-rename` opens the
 peer worktree rename sheet.
 
+Set `ALAS_CAPTURE_CENTER` to `workspace-checkout` (or `workspace-checkout-bottom`, scrolled to the
+work items and review roll-ups) to capture the workspace checkout details sheet over a scripted
+three-repository checkout (one ready, one with a failed setup, one with a missing worktree, a stop
+request pending). Set it to `vm-setup`, `vm-stopped`, `vm-running` or `vm-attention` to capture a 2x2
+gallery of VM tab states (no VM and setup, stopped/paused/elsewhere, running/starting/no slot, callouts
+and agent cards). These are drawn in a panel from the tab's own chrome with scripted state; the VM
+display is a placeholder, and no workspace, VM, image or helper is touched.
+
 Set `ALAS_CAPTURE_CENTER` to `plugin-tab` (Release Notes web tab), `plugin-view-tab` (Standup
 view tab), `plugin-panel` (Standup view panel in the right pane) or `plugin-web-panel` (Release
 Notes changelog web panel), or `ALAS_CAPTURE_SETTINGS=plugins`, to capture the plugin screens.
@@ -75,6 +83,19 @@ the progress sheet, or to `whats-new` for the What's New card with a bundled pic
 (`DesignCaptureUpdates`). Nothing is checked, downloaded or installed: the progress sheet runs
 the real updater over a `/bin/sh` script that exits with the app, and the What's New "seen"
 version is never written. Sheets are composited like the editor popups.
+
+Set `ALAS_CAPTURE_CENTER` to `devices`, `devices-empty` or `devices-settings` to capture galleries of the Devices
+tab (`DesignCaptureDevices`): a simulator an agent drives, one you drive with an agent waiting and a failed app
+install, a running and a paused VM; the empty states (loading, no Xcode, no simulators, shut down, booting, VM not set
+up); and the simulator settings popover. They run the tab's own views over scripted devices and an in-memory
+`DeviceAgentControl`; a simulator's screen is a painted placeholder and nothing talks to `simctl`, the simulator
+service or a VM. The switcher menu itself cannot be shown open.
+
+Set `ALAS_CAPTURE_CENTER` to `run-report` (a failed run's report tab with a scripted on-device failure brief),
+`web-preview` (the web preview on a demo page served from this Mac's loopback), `computer-use-badge` (the badge in
+the agent toolbar, "Using the VM") or `space-pager` (two demo spaces added, so the pager shows), and
+`ALAS_CAPTURE_DIALOG` to `run-script-help`, `new-run-script` or `repo-hook-approval` (a demo hook; nothing runs) to
+capture those views (`DesignCaptureLeftovers`). `Sidebar/RepoDot.swift` is not used anywhere, so it has no capture.
 
 ## How it works
 

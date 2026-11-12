@@ -77,6 +77,9 @@ public final class StackShepherd {
         case ready(StackShepherdRecord)
         case finished(StackShepherdRecord, ShepherdOutcome)
         case entryClosed(StackShepherdRecord, StackShepherdEntry, title: String)
+        /// An entry merged into the base while others are still open. The
+        /// poll that lands the last one sends `finished` instead.
+        case entryLanded(StackShepherdRecord, StackShepherdEntry, title: String)
         /// One notice per reason, naming every entry it hit.
         case escalated(StackShepherdRecord, [StackShepherdEntry], ShepherdEscalation)
     }
@@ -88,7 +91,10 @@ public final class StackShepherd {
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
         /// `gg sync` of `plan` through the guarded path the stack drawer's
         /// Sync uses.
-        public var syncStack: @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void
+        /// `onEvent` hears each event the sync streams.
+        public var syncStack: @MainActor (
+            _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+        ) async throws -> Void
         /// `gg rebase` onto the stack's base through the guarded path the
         /// stack drawer's Rebase uses. Drops entries that already landed.
         /// Refuses unless the worktree is still on `expected` when it runs.
@@ -117,7 +123,9 @@ public final class StackShepherd {
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
-            syncStack: @escaping @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void,
+            syncStack: @escaping @MainActor (
+                _ worktreeID: String, _ plan: StackShipPlan, _ onEvent: @escaping @MainActor (GGSyncEvent) -> Void
+            ) async throws -> Void,
             rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (
@@ -716,6 +724,8 @@ public final class StackShepherd {
                 escalated[reason, default: []].append(entry)
             case .closed(let entry, let title):
                 effects.notify(.entryClosed(record, entry, title: title))
+            case .landed(let entry, let title):
+                if decision.finished == nil { effects.notify(.entryLanded(record, entry, title: title)) }
             }
         }
         for (reason, entries) in escalated.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {

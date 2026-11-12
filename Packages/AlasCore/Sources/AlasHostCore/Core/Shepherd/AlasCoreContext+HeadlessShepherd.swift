@@ -69,7 +69,7 @@ extension AlasCoreContext {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 return try await GGService().currentStack(worktreePath: path.path, refreshRemote: !localOnly)
             },
-            syncStack: { [weak self] worktreeID, plan in
+            syncStack: { [weak self] worktreeID, plan, onEvent in
                 guard let self else { throw GGMutationError.staleConfirmation }
                 let request: GGMutationRequest
                 if plan == .wholeStack {
@@ -79,6 +79,7 @@ extension AlasCoreContext {
                     request = .syncUntil(target: plan.shipThroughEntryID, draft: plan.opensDrafts)
                 }
                 let actionState = GGStackActionState()
+                actionState.syncEventObserver = onEvent
                 try await runShepherdGGMutation(request, confirmedAgainst: nil, worktreeID: worktreeID, actionState: actionState)
                 if actionState.syncHasTerminalFailure {
                     throw GGMutationError.syncTerminalFailure(message: actionState.lastError ?? "GG sync failed.")

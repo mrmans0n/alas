@@ -690,6 +690,7 @@ struct ACPComposer: View {
             if showPasteHint { pasteImageHint }
             if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
+            sessionInfo
             HStack(spacing: scale.space[2]) {
                 contextUsageButton
                 if dictation.state != .unavailable { micButton }
@@ -716,9 +717,29 @@ struct ACPComposer: View {
                 contextUsageButton
                 if dictation.state != .unavailable { micButton }
                 attachButton
+                sessionInfo
+                    .padding(.leading, scale.space[1])
                 Spacer(minLength: 0)
                 actionButton
             }
+        }
+    }
+
+    /// Who the turn runs as: the adapter's provider and the signed-in plan.
+    /// Read-only status, so it stays out of the picker cluster and sits as
+    /// muted text beside the tools instead of looking like another control.
+    @ViewBuilder
+    private var sessionInfo: some View {
+        if session.currentProviderDisplayName != nil || visibleAuthStatus != nil {
+            HStack(spacing: scale.space[2]) {
+                if let providerName = session.currentProviderDisplayName {
+                    providerLabel(providerName)
+                }
+                if let status = visibleAuthStatus {
+                    authStatusLabel(status)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -747,7 +768,6 @@ struct ACPComposer: View {
 
     private var hasConfigurationChips: Bool {
         session.chipState.thinking != nil || !chips.parameterChips.isEmpty || !chips.booleanConfigOptions.isEmpty
-            || session.currentProviderDisplayName != nil || visibleAuthStatus != nil
             || session.chipState.mode != nil || session.chipState.models != nil
     }
 
@@ -761,12 +781,6 @@ struct ACPComposer: View {
         }
         ForEach(chips.booleanConfigOptions) { option in
             chips.booleanConfigToggle(option).fixedSize(horizontal: true, vertical: false)
-        }
-        if let providerName = session.currentProviderDisplayName {
-            providerPill(providerName).fixedSize(horizontal: true, vertical: false)
-        }
-        if let status = visibleAuthStatus {
-            authStatusPill(status).fixedSize(horizontal: true, vertical: false)
         }
         if let mode = session.chipState.mode {
             chips.modeChip(mode).fixedSize(horizontal: true, vertical: false)
@@ -825,28 +839,30 @@ struct ACPComposer: View {
             .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
-    private func providerPill(_ name: String) -> some View {
-        Text("Provider: \(name)")
+    private func providerLabel(_ name: String) -> some View {
+        Text(name)
             .font(scale.meta.font(weight: .medium))
             .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, scale.space[2])
+            .lineLimit(1)
             .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Provider, \(name)")
             .help("Provider selected by the adapter")
     }
 
-    private func authStatusPill(_ status: ACPAuthStatus) -> some View {
-        Text(status.label)
-            .font(scale.meta.font(weight: .medium))
-            .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, scale.space[2])
-            .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: scale.radius.medium).fill(theme.color("bg-3").opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
-            .accessibilityLabel("Signed in, \(status.label)")
-            .help(Self.authStatusHoverText(status))
+    private func authStatusLabel(_ status: ACPAuthStatus) -> some View {
+        HStack(spacing: scale.space[1]) {
+            Image(systemName: "person.crop.circle")
+                .font(scale.caption.font(weight: .medium))
+            Text(status.label)
+                .font(scale.meta.font(weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(theme.color("fg-muted"))
+        .frame(height: 24)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Signed in, \(status.label)")
+        .help(Self.authStatusHoverText(status))
     }
 
     static func authStatusHoverText(_ status: ACPAuthStatus) -> String {

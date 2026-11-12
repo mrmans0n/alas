@@ -454,6 +454,10 @@ final class AppState {
     var worktreeCleanupReadyIds: [String: Set<String>] = [:]
     /// Project id → the ready set the user dismissed the reminder for.
     var worktreeCleanupDismissedIds = WorktreeCleanupReminderPolicy.loadDismissals()
+    /// Host server id → the alas-host version its update reminder was dismissed at.
+    var hostUpdateDismissals = HostUpdateReminderPolicy.loadDismissals()
+    /// Hosts asked to update whose answer hasn't come back.
+    var hostUpdatesInFlight: Set<String> = []
     var worktreeCleanupPresentation: WorktreeCleanupPresentation? {
         didSet {
             // Whatever the sheet removed changes the reminder, so rescan on close.
@@ -7320,17 +7324,19 @@ final class AppState {
         configuredServers: [ProjectMCPServer],
         allowsPRTools: Bool = true
     ) async -> BuiltInMCPAttachment {
+        let serverName = config.agents.alasMCPServerName(for: context.agentID)
         guard case .ssh(let host, let fence) = context.location,
               BuiltInAlasMCP.injectsRemoteVisual(
                   enabled: config.harness.exposeAlasMCP,
                   configuredServers: configuredServers,
-                  injectionSupport: context.injectionSupport
+                  injectionSupport: context.injectionSupport,
+                  serverName: serverName
               )
         else { return .omitted }
         guard let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                   .appendingPathComponent(TerminalCLIInjection.executableName).path,
               let socketPath = acpSessionSocketPath(sessionId: context.sessionId)
-        else { return .skipped(BuiltInAlasMCP.unavailableStatus("Alas CLI unavailable")) }
+        else { return .skipped(BuiltInAlasMCP.unavailableStatus("Alas CLI unavailable", serverName: serverName)) }
         let environment = [
             "ALAS_SOCKET_PATH": socketPath,
             "ALAS_SESSION_ID": context.sessionId,
@@ -7341,6 +7347,7 @@ final class AppState {
                 client: RemoteHelperClientPool.shared.client(for: host),
                 fence: fence,
                 allowsPRTools: allowsPRTools,
+                serverName: serverName,
                 makeBackend: { toolScope in
                     JSONRPCStdioTransport(
                         executable: URL(fileURLWithPath: binaryPath),
@@ -7354,7 +7361,7 @@ final class AppState {
             )
             return .prepared(prepared)
         } catch {
-            return .skipped(BuiltInAlasMCP.unavailableStatus(error.localizedDescription))
+            return .skipped(BuiltInAlasMCP.unavailableStatus(error.localizedDescription, serverName: serverName))
         }
     }
 
@@ -12792,6 +12799,7 @@ final class AppState {
                 guard let self else { return .omitted }
                 let worktreePath = context.worktreePath
                 let sessionId = context.sessionId
+                let serverName = self.config.agents.alasMCPServerName(for: context.agentID)
                 guard case .local(let adapterSupportsHTTP) = context.location else {
                     // Remote projects keep app-level servers only (repo config
                     // is a local-only layer in v1).
@@ -12838,7 +12846,8 @@ final class AppState {
                        enabled: self.config.harness.exposeAlasMCP,
                        configuredServers: configuredServers,
                        binaryPath: binaryPath,
-                       socketPath: socketPath
+                       socketPath: socketPath,
+                       serverName: serverName
                    ) {
                     if let endpoint = await self.mcpHTTPSupervisor.endpoint(
                         binaryPath: binaryPath,
@@ -12856,7 +12865,8 @@ final class AppState {
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
                             httpEndpoint: endpoint,
-                            cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
+                            cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
+                            serverName: serverName
                         ))
                     }
                     // Supervisor couldn't get a port — fall through to stdio
@@ -12876,7 +12886,8 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId,
-                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
+                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
+                    serverName: serverName
                 ))
             },
             builtInMCPHello: { [weak self] sessionId in
@@ -12982,6 +12993,9 @@ final class AppState {
         }
         mgr.sessionHooksProvider = { [weak self] agentId in
             self?.config.agents.sessionHooks(for: agentId)
+        }
+        mgr.builtInMCPPolicyProbe = { launchSpec, server, cwd in
+            await CodexMCPRequirementsProbe.blockSource(launchSpec: launchSpec, server: server, cwd: cwd)
         }
         mgr.delegatedChildProvider = { [weak self] sessionId in
             await self?.delegatedParentSessionID(for: sessionId) != nil
@@ -13249,6 +13263,7 @@ final class AppState {
                 guard let self else { return .omitted }
                 let worktreePath = context.worktreePath
                 let sessionId = context.sessionId
+                let serverName = self.config.agents.alasMCPServerName(for: context.agentID)
                 let current = self.currentWorkspaceCheckoutSnapshot(checkout)
                 let configuredServers = self.workspaceFrozenMCPServers(for: current)
                 guard case .local(let adapterSupportsHTTP) = context.location else {
@@ -13270,7 +13285,8 @@ final class AppState {
                        enabled: self.config.harness.exposeAlasMCP,
                        configuredServers: configuredServers,
                        binaryPath: binaryPath,
-                       socketPath: socketPath
+                       socketPath: socketPath,
+                       serverName: serverName
                    ),
                    let endpoint = await self.mcpHTTPSupervisor.endpoint(
                        binaryPath: binaryPath,
@@ -13289,7 +13305,8 @@ final class AppState {
                         sessionId: sessionId,
                         httpEndpoint: endpoint,
                         workspaceContext: workspaceContext,
-                        cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
+                        cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
+                        serverName: serverName
                     ))
                 }
                 self.mcpHTTPSupervisor.end(sessionId: sessionId)
@@ -13301,7 +13318,8 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     workspaceContext: workspaceContext,
-                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
+                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
+                    serverName: serverName
                 ))
             },
             frozenMCPAttachmentProvider: { [weak self] in
@@ -13350,6 +13368,9 @@ final class AppState {
         }
         manager.sessionHooksProvider = { [weak self] agentId in
             self?.config.agents.sessionHooks(for: agentId)
+        }
+        manager.builtInMCPPolicyProbe = { launchSpec, server, cwd in
+            await CodexMCPRequirementsProbe.blockSource(launchSpec: launchSpec, server: server, cwd: cwd)
         }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,

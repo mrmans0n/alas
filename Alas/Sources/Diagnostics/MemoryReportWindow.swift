@@ -52,7 +52,7 @@ struct MemoryReportView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
+        .padding(16) // design-literal: diagnostics window, hosted outside the density environment
         .frame(minWidth: 720, minHeight: 480)
     }
 }

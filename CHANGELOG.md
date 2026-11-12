@@ -6,9 +6,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let each agent see the built-in Alas MCP server under a chosen name (Settings > Agents > edit an agent), for managed policies that only allow certain MCP server names.
+- Chain folders in the composer's `@` picker: ⇥ opens the highlighted folder, a breadcrumb shows the folder you are in, and each `/` segment fuzzy-matches one folder level, so `al/so/ui` finds `Alas/Sources/UI`. A query ending in `/` lists that folder first so it can be attached.
+
+### 🐛 Fixes
+
+- Say when Codex's managed requirements block the built-in Alas MCP server, and name their source, instead of reporting a server that never started.
+
+## [0.23.6] - 2026-11-12
+
+### ✨ Features
+
+- Apply the density-aware `DesignScale` to the diff and image diff views (#2433), peer sidebar (#2440), checkout details and VM tab (#2447), Devices tab (#2452), and run reports, web previews, and run-script dialogs (#2453).
+- Preserve answered agent questions in transcript cards, including custom answers and skipped or cancelled outcomes, while excluding secret values (#2434).
+- Expand the experimental Simulator workflow with appearance, text, privacy, location, push, and URL controls, plus automatic app installation and launch for successful run scripts that declare `# alas-app:`; agent control remains disabled by default (#2436).
+- Update Homebrew-installed paired hosts from Alas and surface version-aware update reminders in the Inbox (#2437, #2449).
+- Add transcript cards when a shepherded pull request or gg stack reaches a terminal outcome (#2444).
+- Show a prompt's attached images as tappable thumbnails in the phone web client (#2450).
+- Suggest editable, low-risk answers when an assistant ends with a preference question, while abstaining from unknown personal facts and consequential consent (#2456).
+
+### 🐛 Fixes
+
+- Lower stale full-access device grants when a host re-pairs for delegation, and close peer sockets that stop answering liveness pings (#2431, #2432).
+- Allow approved plugin command declarations to contain arguments up to 16 KiB so MR Inbox's GraphQL query no longer prevents installation, and show plugin installation, update, and removal failures as separate warnings (#2445).
+- Keep `stack_ship` and `pr_status` within agent tool deadlines by reporting progress while slow gg work continues in the background (#2448).
+- Update Cua Driver to 0.46.1, restore reliable replace typing, prompt when only a Linux guest's driver is stale, and click visible Linux references by position to avoid modal accessibility lockups (#2441, #2443, #2454).
+- Move provider and account status out of the composer control cluster, and make chat hover cards and pickers honor Compact density (#2451, #2455).
+
 ### 🏗️ Internal
 
-- Update the bundled zmx to the v1.0.1 release, built with Zig 0.17. The wire protocol is unchanged from the frozen v1 IPC Alas already speaks, and zig@0.16 is no longer needed to build.
+- Update the bundled zmx to v1.0.1 and Zig 0.17 without changing the frozen v1 wire protocol (#2439).
+- Update `rusqlite` to 0.42 and refresh the bundled SQL and Scala tree-sitter grammars (#2435, #2438, #2446).
 
 ## [0.23.5] - 2026-11-10
 

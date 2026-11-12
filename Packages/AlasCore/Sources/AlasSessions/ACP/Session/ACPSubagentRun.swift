@@ -1292,7 +1292,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return kind == .agent ? index : nil
             case .thought:
                 return kind == .thought ? index : nil
-            case .toolCall, .user, .fileEdit, .visualAid, .questionAnswer:
+            case .toolCall, .user, .fileEdit, .visualAid, .questionAnswer, .outcomeCard:
                 return nil
             case .plan, .planDocument, .systemNotice, .failureIncident:
                 continue

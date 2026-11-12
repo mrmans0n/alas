@@ -33,7 +33,7 @@ struct RemoteAppStateAccessTests {
         state.syncRemoteServer()
         defer { state.config.remote.enabled = false
         state.syncRemoteServer() }
-        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+        _ = try await remoteServerPort(state)
         let remote = RemotePairingApprovalClientTests.Exchange()
         let challenge = try state.remotePairingApprovals.challenge(requester: remote.requester,
             attemptNonce: RemoteIdentityCrypto.randomChallenge())
@@ -305,10 +305,10 @@ struct RemoteAppStateAccessTests {
     }
 
     @Test func appStateRemoteServerPublishesAndRefreshesConfiguredAccessState() async throws {
-        let port = try availableTCPPort()
+        let preferredPort = try availableTCPPort()
         let state = AppState(store: MemoryStore())
         state.config.remote.enabled = true
-        state.config.remote.port = port
+        state.config.remote.port = preferredPort
         state.config.remote.allowedHosts = ["custom-a.example"]
         state.syncRemoteServer()
         defer {
@@ -316,9 +316,7 @@ struct RemoteAppStateAccessTests {
             state.syncRemoteServer()
         }
 
-        for _ in 0..<50 where state.remotePort != port {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        let port = try await remoteServerPort(state)
         #expect(state.remotePort == port)
         #expect(state.remoteAdvertisedAddresses.contains {
             $0.host == "custom-a.example" && $0.port == port
@@ -2293,6 +2291,24 @@ struct RemoteAppStateAccessTests {
         req.setValue(host, forHTTPHeaderField: "Host")
         let (_, resp) = try await URLSession.shared.data(for: req)
         return (resp as? HTTPURLResponse)?.statusCode
+    }
+
+    private func remoteServerPort(_ state: AppState) async throws -> UInt16 {
+        let server = try #require(state.remoteServer)
+        if let port = state.remotePort { return port }
+        // The listener can fall back when the preferred port was taken after the fixture selected it.
+        return try await withCheckedThrowingContinuation { continuation in
+            let previous = server.onPortChange
+            server.onPortChange = { port in
+                previous?(port)
+                server.onPortChange = previous
+                if let port {
+                    continuation.resume(returning: port)
+                } else {
+                    continuation.resume(throwing: POSIXError(.EADDRNOTAVAIL))
+                }
+            }
+        }
     }
 
     private func data(port: UInt16, host: String, path: String) async throws -> Data {

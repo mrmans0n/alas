@@ -40,6 +40,7 @@ struct RepoHookApprovalPresentationHandler: ViewModifier {
 struct RepoHookApprovalSheet: View {
     let request: RepoHookApprovalRequest
     @Bindable private var queue: RepoHookApprovalQueue
+    @Environment(\.designScale) private var scale
 
     init(request: RepoHookApprovalRequest, queue: RepoHookApprovalQueue) {
         self.request = request
@@ -49,7 +50,7 @@ struct RepoHookApprovalSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(request.isReadOnlyReview ? "Approved repository hook" : "Repository startup hook")
-                .font(.headline)
+                .font(.system(size: 15, weight: .semibold)) // design-literal: the one dialog title
             Text("\(request.event.title) hook at \(request.event.relativePath) from \(sourceDescription).")
                 .fixedSize(horizontal: false, vertical: true)
             if let hook = request.hook {
@@ -64,9 +65,9 @@ struct RepoHookApprovalSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .padding(10)
+                .padding(scale.space[3])
                 .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 280, alignment: .topLeading)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: scale.radius.medium))
             } else if let failure = request.failure {
                 Text("This repository hook could not be prepared: \(failure.message)")
                     .font(.callout)
@@ -109,7 +110,7 @@ struct RepoHookApprovalSheet: View {
                 }
             }
         }
-        .padding(20)
+        .padding(scale.space[5])
         .frame(width: 620)
         .interactiveDismissDisabled()
         .accessibilityElement(children: .contain)

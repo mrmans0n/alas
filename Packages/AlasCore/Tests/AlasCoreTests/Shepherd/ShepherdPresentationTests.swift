@@ -190,4 +190,27 @@ private let presentationCases: [ShepherdPresentationCase] = [
     func shipOffer(text: String, expected: Bool) {
         #expect(ShepherdShipOffer.isOffered(in: text) == expected)
     }
+
+    @Test(
+        "only events that end a request's shepherding get a transcript card",
+        arguments: [
+            (ReviewShepherd.Event.merged(F.record(phase: .merged), title: "Fix login"), ACPPromptCard.Origin.merged),
+            (.closed(F.record(phase: .closed), title: "Fix login"), .closed),
+            (.queued(F.record(phase: .queued), title: "Fix login"), .queued),
+            (.ready(F.record(), title: "Fix login"), nil),
+            (.escalated(F.record(phase: .escalated(.noProgress)), .noProgress, title: "Fix login"), nil),
+        ] as [(ReviewShepherd.Event, ACPPromptCard.Origin?)]
+    )
+    func outcomeCard(event: ReviewShepherd.Event, origin: ACPPromptCard.Origin?) throws {
+        guard let origin else {
+            #expect(ShepherdNotification.outcomeCard(for: event) == nil)
+            return
+        }
+        let outcome = try #require(ShepherdNotification.outcomeCard(for: event))
+        #expect(outcome.card.origin == origin)
+        #expect(outcome.card.title == "GitHub #7 · Fix login")
+        #expect(outcome.card.facts.map(\.text) == ["fix-login → main"])
+        #expect(outcome.card.action == .url(URL(string: "https://github.com/acme/app/pull/7")!))
+        #expect(outcome.text == ShepherdNotification.review(for: event, host: { _ in nil }).body)
+    }
 }

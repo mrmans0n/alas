@@ -135,7 +135,7 @@ final class ACPUpstreamReferenceHoverController {
         let work = DispatchWorkItem { [weak self, weak textView, weak store] in
             guard let self, let textView, let store, self.target == range,
                   let anchor = textView.upstreamReferenceAnchorRect(for: range) else { return }
-            let hosting = NSHostingController(rootView: ACPUpstreamReferenceHoverCard(reference: reference, store: store))
+            let hosting = NSHostingController(rootView: ACPUpstreamReferenceHoverCard(reference: reference, store: store).environment(\.designScale, HostedDesignScale.current))
             hosting.sizingOptions = [.preferredContentSize]
             let popover = NSPopover()
             popover.behavior = .transient

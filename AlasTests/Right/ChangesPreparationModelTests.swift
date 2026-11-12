@@ -478,6 +478,36 @@ struct ChangesPreparationModelTests {
         })
     }
 
+    @Test func sharedReasonCollapsesDestinationsIntoOneNotice() {
+        let failed = ChangesPreparationModel.makeGG(
+            staged: .init(files: 1, insertions: 2, deletions: 1),
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            mutationDisabledReason: "Retry loading the GG stack.",
+            newCommitDisabledReason: "Retry loading the GG stack.",
+            stackStatus: .failed
+        )
+        #expect(failed.ggBlockedNotice == .init(text: "The GG stack didn't load.", offersRetry: true))
+
+        let paused = ChangesPreparationModel.makeGG(
+            staged: .init(files: 1, insertions: 2, deletions: 1),
+            hasDraft: true,
+            capabilities: stagedOnlyCapabilities,
+            mutationDisabledReason: "Continue or abort the paused GG operation first."
+        )
+        #expect(paused.ggBlockedNotice == .init(
+            text: "Continue or abort the paused GG operation first.", offersRetry: false
+        ))
+
+        let partlyBlocked = ChangesPreparationModel.makeGG(
+            staged: .init(files: 1, insertions: 2, deletions: 1),
+            hasDraft: true,
+            capabilities: stagedOnlyCapabilities,
+            newCommitDisabledReason: "Checkout the stack head to create a new stack commit."
+        )
+        #expect(partlyBlocked.ggBlockedNotice == nil)
+    }
+
     @Test func nonHeadCheckoutDisablesOnlyNewStackCommit() {
         let model = ChangesPreparationModel.makeGG(
             staged: .init(files: 1, insertions: 2, deletions: 1),

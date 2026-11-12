@@ -738,6 +738,22 @@ final class NativePeerSessions {
         return hosts?.shepherds[id.serverId]?[id.sessionId]
     }
 
+    /// What the selected session's host lets this Mac do with its shepherd.
+    var selectedShepherdActions: [HostShepherdAction] {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId))),
+              hosts?.canShepherd(serverId: id.serverId) == true
+        else { return [] }
+        return HostShepherdAction.offered(for: selectedShepherd)
+    }
+
+    func shepherdSelected(_ action: HostShepherdAction) {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return }
+        hosts?.shepherd(id.sessionId, action: action, serverId: id.serverId)
+    }
+
     /// The paired Mac that delegated the selected session, as its host names it.
     var selectedDelegatedFromName: String? {
         guard let selectedSessionId,

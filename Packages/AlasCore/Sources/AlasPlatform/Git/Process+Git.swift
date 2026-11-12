@@ -55,6 +55,9 @@ extension Process {
     /// starving downstream test steps.
     public static let defaultTimeout: TimeInterval = 30
 
+    // Keep launch-order fixtures local to their task and to the output-capped helpers.
+    @TaskLocal static var outputCappedProcessFactory: @Sendable () -> Process = { Process() }
+
     public static func run(
         _ executable: String,
         args: [String],
@@ -472,7 +475,7 @@ extension Process {
     ) async throws -> ProcessCappedResult {
         try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
-        let process = Process()
+        let process = outputCappedProcessFactory()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
@@ -615,7 +618,7 @@ extension Process {
     ) async throws -> ProcessResultData {
         try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
-        let process = Process()
+        let process = outputCappedProcessFactory()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }

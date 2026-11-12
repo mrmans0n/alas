@@ -425,6 +425,8 @@ extension AppState {
         }
         let record = message.record
         guard let resolved = projectAndWorktree(withWorktreeId: record.id.worktreeID) else { return }
+        appendShepherdOutcomeCard(
+            ShepherdNotification.outcomeCard(for: event), sessionID: record.sessionID, worktreeID: record.id.worktreeID)
         let agent = shepherdAgentKind(sessionID: record.sessionID, worktreeID: record.id.worktreeID)
         harness.notifications.notifyAlas(
             body: message.body,
@@ -459,6 +461,17 @@ extension AppState {
                 body: message.body,
                 requiresUserInput: true
             )
+        }
+    }
+
+    /// Adds a finished request's or stack's card to the owning session's
+    /// transcript. Only a session this instance has live gets it; the
+    /// notification goes out either way.
+    func appendShepherdOutcomeCard(_ outcome: (card: ACPPromptCard, text: String)?, sessionID: String, worktreeID: String) {
+        guard let outcome, let manager = acpManager(forWorktreeId: worktreeID) else { return }
+        let card = ACPOutcomeCard(card: outcome.card, text: outcome.text)
+        Task { @MainActor in
+            _ = await manager.appendOutcomeCard(card, into: sessionID)
         }
     }
 
