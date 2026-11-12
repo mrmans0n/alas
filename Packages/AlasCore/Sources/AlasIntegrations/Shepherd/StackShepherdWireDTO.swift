@@ -4,9 +4,10 @@ import AlasModel
 import AlasPlatform
 
 /// Agent-facing JSON of the `stack_ship` MCP tool. Snake_cased on the wire by
-/// `ReviewCommentWireDTO.jsonLine`'s key strategy.
-public struct StackShipResultWire: Encodable, Equatable, Sendable {
-    public struct Entry: Encodable, Equatable, Sendable {
+/// `ReviewCommentWireDTO.jsonLine`'s key strategy; decoded back for the card
+/// of a ship that finished after Alas had replied.
+public struct StackShipResultWire: Codable, Equatable, Sendable {
+    public struct Entry: Codable, Equatable, Sendable {
         public var position: Int
         public var entryId: String
         public var title: String
@@ -27,7 +28,7 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
     }
 
     /// An entry the user chose not to publish yet.
-    public struct HeldBackEntry: Encodable, Equatable, Sendable {
+    public struct HeldBackEntry: Codable, Equatable, Sendable {
         public var position: Int
         public var entryId: String
         public var title: String
@@ -39,7 +40,7 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
         }
     }
 
-    public struct Shepherd: Encodable, Equatable, Sendable {
+    public struct Shepherd: Codable, Equatable, Sendable {
         public var autoFix: Bool
 
         public init(autoFix: Bool) {

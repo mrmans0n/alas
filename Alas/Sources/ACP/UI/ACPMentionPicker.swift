@@ -57,6 +57,9 @@ struct ACPMentionPickerView: View {
     /// The highlighted row, when it is a symbol row on screen.
     @State private var highlightedSymbolRow: CGRect?
     @State private var listViewport: CGRect = .zero
+    /// Set while a `/` query matched folder levels; see `MentionPathQuery`.
+    @State private var pathResult: MentionPathQuery.Result?
+    @State private var pathMatches: [URL: MentionPathQuery.Match] = [:]
 
     private let maxDisplay = 80
 
@@ -68,6 +71,7 @@ struct ACPMentionPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             search
+            crumbs
             scopeBar
             Divider().background(theme.color("line"))
             list
@@ -188,6 +192,10 @@ struct ACPMentionPickerView: View {
             "Indexing symbols…"
         case .progress(let indexed, let total):
             "Indexing symbols… \(indexed) of \(total) files"
+        case nil where highlightsFolder:
+            offeredScopes.isEmpty
+                ? "⏎ insert · ⇥ open folder"
+                : "⏎ insert · ⇥ open folder · ⇧⇥ previous scope"
         case nil where symbolMentions == nil:
             nil
         case nil where symbolMentions?.index == nil && scope == .symbols:
@@ -205,6 +213,55 @@ struct ACPMentionPickerView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, scale.space[2]).padding(.vertical, scale.space[1])
         }
+    }
+
+    private var highlightsFolder: Bool {
+        guard ranked.indices.contains(highlight.index), case .file(let file) = ranked[highlight.index] else { return false }
+        return file.hasDirectoryPath
+    }
+
+    /// The folder a `/` query resolved to, one crumb per level. A crumb
+    /// lists its folder; the house lists the whole worktree.
+    @ViewBuilder
+    private var crumbs: some View {
+        if let folder = pathResult?.folder {
+            HStack(spacing: scale.space[1]) {
+                crumb(to: "", help: "Worktree root") {
+                    Image(systemName: "house")
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                ForEach(Array(folder.enumerated()), id: \.offset) { index, name in
+                    crumbSeparator
+                    let target = folder[...index].joined(separator: "/") + "/"
+                    crumb(to: target, help: target) {
+                        Text(name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(theme.color("fg"))
+                            .padding(.horizontal, scale.space[1])
+                            .background(theme.color("accent").opacity(0.18))
+                            .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+                    }
+                    // The innermost folder truncates last.
+                    .layoutPriority(index == folder.count - 1 ? 1 : 0)
+                }
+                crumbSeparator
+                Spacer(minLength: 0)
+            }
+            .font(scale.caption.font(weight: .regular, design: .monospaced))
+            .padding(.horizontal, scale.space[2]).padding(.bottom, scale.space[2])
+        }
+    }
+
+    private var crumbSeparator: some View {
+        Text("›").foregroundStyle(theme.color("fg-faint"))
+    }
+
+    private func crumb<Label: View>(to target: String, help: String, @ViewBuilder label: () -> Label) -> some View {
+        Button { query = target } label: { label() }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(help)
     }
 
     private var list: some View {
@@ -360,9 +417,7 @@ struct ACPMentionPickerView: View {
     @ViewBuilder
     private func row(idx: Int, file: URL) -> some View {
         let isOn = idx == highlight.index
-        let name = file.lastPathComponent
-        let rel = isAbsoluteQuery ? name : file.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
-        let parent = isAbsoluteQuery ? "" : (rel as NSString).deletingLastPathComponent
+        let label = fileRowLabel(file)
 
         Button { onPick(file) } label: {
             HStack(spacing: scale.space[2]) {
@@ -370,11 +425,20 @@ struct ACPMentionPickerView: View {
                     .font(scale.caption.font(weight: .regular))
                     .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
                     .frame(width: 14)
-                Text(name)
+                label.name
                     .font(scale.meta.font(weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.color("fg"))
-                if !parent.isEmpty {
-                    Text(parent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if label.isListedFolder {
+                    Text("this folder")
+                        .font(scale.caption.font(weight: .regular))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .padding(.horizontal, scale.space[1])
+                        .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                }
+                if !label.parent.isEmpty {
+                    Text(label.parent)
                         .font(scale.meta.font(design: .monospaced))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
@@ -396,6 +460,55 @@ struct ACPMentionPickerView: View {
         }
     }
 
+    private struct FileRowLabel {
+        var name: Text
+        var parent = ""
+        /// The folder the query lists, shown first so ⏎ can attach it.
+        var isListedFolder = false
+    }
+
+    /// A row inside the folder the crumbs show is named alone; any other
+    /// `/` match shows its whole path. Matched letters are highlighted.
+    private func fileRowLabel(_ file: URL) -> FileRowLabel {
+        if isAbsoluteQuery {
+            return FileRowLabel(
+                name: Text(file.lastPathComponent),
+                isListedFolder: MentionAbsolutePath.isListedDirectory(
+                    file, query: query.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        guard let match = pathMatches[file] else {
+            let rel = file.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
+            return FileRowLabel(name: Text(file.lastPathComponent), parent: (rel as NSString).deletingLastPathComponent)
+        }
+        let path = match.relativePath
+        let name = (path as NSString).lastPathComponent
+        let nameStart = path.count - name.count
+        let offsets = Set(match.matchedOffsets)
+        if let folder = pathResult?.folder.map({ $0.joined(separator: "/") }) {
+            if match.isQueriedFolder, path == folder {
+                return FileRowLabel(name: highlighted(name, offsets: offsets, from: nameStart), isListedFolder: true)
+            }
+            if (path as NSString).deletingLastPathComponent == folder {
+                return FileRowLabel(name: highlighted(name, offsets: offsets, from: nameStart))
+            }
+        }
+        return FileRowLabel(name: highlighted(path, offsets: offsets, from: 0))
+    }
+
+    /// `text` with the characters at `offsets`, counted from `start`, in the accent colour.
+    private func highlighted(_ text: String, offsets: Set<Int>, from start: Int) -> Text {
+        var result = AttributedString()
+        for (index, character) in text.enumerated() {
+            var piece = AttributedString(String(character))
+            if offsets.contains(start + index) {
+                piece.foregroundColor = theme.color("accent")
+                piece.inlinePresentationIntent = .stronglyEmphasized
+            }
+            result += piece
+        }
+        return Text(result)
+    }
+
     private func handleKey(_ key: MentionPickerKey) {
         switch key {
         case .cancel:
@@ -405,10 +518,9 @@ struct ACPMentionPickerView: View {
         case .down:
             moveHighlight(by: 1)
         case .nextScope:
-            // Absolute-path browsing keeps ⇥ for entering the highlighted folder.
-            if isAbsoluteQuery, ranked.indices.contains(highlight.index),
-               case .file(let file) = ranked[highlight.index], file.hasDirectoryPath {
-                query = MentionAbsolutePath.query(entering: file)
+            // ⇥ on a folder opens it; on anything else it moves to the next scope.
+            if ranked.indices.contains(highlight.index), case .file(let file) = ranked[highlight.index], file.hasDirectoryPath {
+                query = isAbsoluteQuery ? MentionAbsolutePath.query(entering: file) : relativeQuery(entering: file)
             } else {
                 select(scope.cycled(by: 1, in: offeredScopes))
             }
@@ -429,6 +541,13 @@ struct ACPMentionPickerView: View {
         scope = next
         highlight.reset()
         rescheduleRank()
+    }
+
+    /// The worktree query that lists `folder`'s children.
+    private func relativeQuery(entering folder: URL) -> String {
+        let path = pathMatches[folder]?.relativePath
+            ?? folder.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
+        return path + "/"
     }
 
     private func moveHighlight(by offset: Int) {
@@ -517,23 +636,33 @@ struct ACPMentionPickerView: View {
                 }
             }
             var fileItems: [URL] = []
+            var pathMatch: MentionPathQuery.Result?
             if let fileQuery = plan.fileQuery {
                 if fileQuery.isEmpty {
                     fileItems = Array(files.prefix(maxDisplay))
+                } else if isAbsolute {
+                    fileItems = MentionAbsolutePath.entries(forQuery: fileQuery, limit: maxDisplay)
+                } else if let match = MentionPathQuery.match(
+                    files: files, query: fileQuery, limit: maxDisplay, relativeTo: root
+                ) {
+                    pathMatch = match
+                    fileItems = match.matches.map(\.url)
                 } else {
-                    fileItems = isAbsolute
-                        ? MentionAbsolutePath.entries(forQuery: fileQuery, limit: maxDisplay)
-                        : MentionFuzzy.rank(files: files, query: fileQuery, limit: maxDisplay, relativeTo: root)
+                    fileItems = MentionFuzzy.rank(files: files, query: fileQuery, limit: maxDisplay, relativeTo: root)
                 }
             }
             if Task.isCancelled { return }
             let items = sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
+            let resolvedPath = pathMatch
             await MainActor.run {
                 guard rankGeneration == gen else { return }
                 // Rebase on the live highlight here, not before the await:
                 // the user may have moved it while ranking or a drill-down read ran.
                 let previous = ranked
                 ranked = items
+                pathResult = resolvedPath
+                pathMatches = Dictionary(
+                    (resolvedPath?.matches ?? []).map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
                 highlight.rebase(from: previous, to: items)
             }
         }
@@ -667,9 +796,10 @@ enum MentionAbsolutePath {
         return (directory.isEmpty ? "/" : directory, String(expanded[expanded.index(after: slash)...]))
     }
 
-    /// Entries of the directory named by `query`, folders first, filtered by
-    /// the fragment after the last `/` (prefix matches before substring
-    /// matches). Dotfiles only show once the fragment starts with `.`.
+    /// The directory named by `query` (listed first while no fragment
+    /// filters it), then its entries, folders first, filtered by the fragment
+    /// after the last `/` (prefix matches before substring matches).
+    /// Dotfiles only show once the fragment starts with `.`.
     static func entries(forQuery query: String, limit: Int) -> [URL] {
         let (directory, filter) = split(query)
         let base = URL(fileURLWithPath: directory, isDirectory: true)
@@ -698,7 +828,15 @@ enum MentionAbsolutePath {
                 return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
             }.map(\.url)
         }
-        return Array((ordered(prefixMatches) + ordered(substringMatches)).prefix(limit))
+        let listed = filter.isEmpty ? [base] : []
+        return Array((listed + ordered(prefixMatches) + ordered(substringMatches)).prefix(limit))
+    }
+
+    /// Whether `url` is the directory `query` lists ahead of its entries.
+    static func isListedDirectory(_ url: URL, query: String) -> Bool {
+        let (directory, filter) = split(query)
+        return filter.isEmpty
+            && url.standardizedFileURL.path == URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
     }
 
     /// Query that descends into `directory`.

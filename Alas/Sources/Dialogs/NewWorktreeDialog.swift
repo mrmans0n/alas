@@ -135,7 +135,9 @@ struct NewWorktreeDialog: View {
                 DialogField(label: createsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
                         text: activeNameBinding,
-                        placeholder: allowsNamingFromFirstPrompt ? "Leave empty to name it from your first chat message" : "",
+                        placeholder: allowsNamingFromFirstPrompt
+                            ? "Leave empty to name it from your first chat message"
+                            : createsGGStack ? "Name the stack, like invoice-export" : "Name the branch, like fix-login-redirect",
                         focusOnAppear: true,
                         onSubmit: submitCreate,
                         disablesAutomaticTextSubstitutions: true,
