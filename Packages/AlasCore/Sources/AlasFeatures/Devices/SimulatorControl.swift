@@ -134,6 +134,46 @@ public enum SimulatorControl {
         return SimulatorAppList.parse(Data(result.stdout.utf8))
     }
 
+    public static func appExecutables(udid: String) async throws -> [String: String] {
+        let result = try await Process.run(xcrun, args: ["simctl", "listapps", udid])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        return SimulatorAppList.executables(Data(result.stdout.utf8))
+    }
+
+    /// The archived log lines of the last `seconds`, oldest first.
+    public static func logShow(udid: String, query: SimulatorLogQuery, seconds: Int) async throws -> [SimulatorLogLine] {
+        var args = ["simctl", "spawn", udid, "log", "show", "--last", "\(seconds)s", "--style", "ndjson"] + query.showArguments
+        if let predicate = query.predicate { args += ["--predicate", predicate] }
+        let result = try await Process.run(xcrun, args: args, timeout: 90)
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        return result.stdout.split(separator: "\n").compactMap { SimulatorLogLine.parse(Data($0.utf8)) }
+    }
+
+    public static let diagnosticReports = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+
+    /// The simulator's app crash reports written since `since`, oldest first.
+    public static func crashReports(
+        udid: String, bundleID: String?, since: Date, directory: URL = diagnosticReports
+    ) -> [SimulatorCrashReport] {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles
+        )) ?? []
+        return files
+            .filter { $0.pathExtension == "ips" }
+            .filter {
+                ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) >= since
+            }
+            .compactMap { url -> SimulatorCrashReport? in
+                guard let data = try? Data(contentsOf: url), var report = SimulatorCrashReport.parse(data, udid: udid),
+                      bundleID == nil || report.bundleID == bundleID
+                else { return nil }
+                report.report = url.path
+                return report
+            }
+            .sorted { $0.capturedAt < $1.capturedAt }
+    }
+
     /// Whether Xcode's simulator tools are installed and selected.
     public static func isAvailable() async -> Bool {
         (try? await Process.run(xcrun, args: ["--find", "simctl"]))?.exitCode == 0
