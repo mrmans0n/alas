@@ -55,6 +55,9 @@ public final class AlasCoreContext {
     /// keeps their project from being removed. The app's terminals don't
     /// block removal, so it leaves this nil.
     @ObservationIgnored @_spi(AppHost) public var hasHostConsoles: (@MainActor (_ worktreeIDs: Set<String>) -> Bool)?
+    /// The shells `alas-host` keeps, where its schedules start terminal
+    /// agents. Nil in the app, whose schedules open terminal tabs.
+    @ObservationIgnored @_spi(AppHost) public weak var hostConsoles: HostConsoles?
     /// Runs between a host file change's checks and the change, so a test can swap a folder in that window.
     @ObservationIgnored var beforeFileChange: (@MainActor () throws -> Void)?
 

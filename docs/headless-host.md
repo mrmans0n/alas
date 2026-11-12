@@ -326,9 +326,13 @@ works only on the standard profile, not on an `ALAS_APP_SUPPORT_DIR` one.
 ## Shepherds and schedules
 
 The host runs PR and stack shepherds and the scheduler. A schedule saved in the
-profile fires on the host, and a script run gets a run console. A schedule for
-a terminal agent, for an SSH project, or one that leaves its prompt for review
-fails each time with the reason; those run only in the app. Shepherd records of
+profile fires on the host, and a script run gets a run console. A terminal
+agent gets a console too, named after the agent, which a paired Mac can open
+from the worktree's terminals. The host types the schedule's prompt there once
+it sees the agent running, as the app does, and leaves it unsent when the
+schedule asks for review. A schedule for an SSH project, or a chat agent's
+schedule that leaves its prompt for review, fails each time with the reason;
+those run only in the app. Shepherd records of
 SSH-project worktrees are left untouched for the app. Shepherd and schedule
 settings are read when the host starts: run `alas-host restart` after changing
 them. Their alerts go to paired Macs, which show them as banners.
@@ -363,4 +367,4 @@ so the agent runs at standard priority.
 ## What it does not do yet
 
 - **Linux.** The host is macOS only.
-- **Terminal-agent and SSH-project schedules.** They run only in the app.
+- **SSH-project schedules.** They run only in the app.

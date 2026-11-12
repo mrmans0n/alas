@@ -162,22 +162,19 @@ public enum RunSchedulePresentation: Sendable {
     }
 
     /// Why a host without the app cannot fire a schedule, or nil when it can.
-    /// Nobody is there to watch a terminal, review a prompt, or reach an SSH
-    /// project's terminals.
+    /// It can't reach an SSH project's terminals, and a chat prompt left for
+    /// review would sit in a composer nobody sees. A terminal agent's prompt
+    /// left for review is typed into its console, where a paired Mac sees it.
     public static func headlessRefusal(
         composition: RunScheduleComposition?,
         projectName: String,
         projectHost: String?,
-        agentName: String?,
         agentSpeaksACP: Bool
     ) -> String? {
         if let projectHost {
             return "\(projectName) is on \(projectHost); schedules there run only in the app."
         }
-        guard let composition else { return nil }
-        if !agentSpeaksACP {
-            return "\(agentName ?? "The agent") runs in a terminal; terminal agents run only in the app."
-        }
+        guard let composition, agentSpeaksACP else { return nil }
         let prompt = composition.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !prompt.isEmpty, !composition.sendsPromptAutomatically {
             return "The schedule leaves its prompt for review; it runs only in the app."

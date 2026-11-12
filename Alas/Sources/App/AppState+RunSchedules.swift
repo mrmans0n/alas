@@ -505,22 +505,9 @@ extension AppState {
 
     // MARK: - Prompt delivery
 
-    /// How long to wait for the agent to appear in its terminal before giving
-    /// up on the prompt. Generous because the startup script runs first and
-    /// a remote host may still be attaching its session.
-    static let scheduledPromptReadinessTimeout: TimeInterval = 120
-    /// Pause between the agent appearing and the first keystroke, so a TUI
-    /// has drawn its input box before text arrives in it.
-    static let scheduledPromptSettleDelay: Duration = .milliseconds(1_500)
-    /// Pause between the prompt and the Enter that submits it, so an input
-    /// that debounces paste-like bursts sees them as two events.
-    static let scheduledPromptSubmitDelay: Duration = .milliseconds(200)
-
-    /// Types the prompt into the agent's terminal, and Enter after it when
-    /// the schedule asks for that. Never types into a terminal whose agent
-    /// has not been seen: the shell would receive the text instead, and with
-    /// auto-send would run it. That failure is reported but does not undo the
-    /// launch, which did happen.
+    /// Types the prompt into the agent's terminal through
+    /// `ScheduledTerminalPrompt`, and says when it could not. That failure
+    /// does not undo the launch, which did happen.
     private func deliverScheduledPrompt(
         _ prompt: String,
         sendsAutomatically: Bool,
@@ -530,8 +517,7 @@ extension AppState {
         host: String?,
         agentID: String
     ) async {
-        let text = RunScheduleComposition.terminalText(for: prompt)
-        guard !text.isEmpty else { return }
+        guard !RunScheduleComposition.terminalText(for: prompt).isEmpty else { return }
         // Said and dropped immediately rather than waiting out the timeout:
         // on a remote project the readiness signal can never arrive, so the
         // wait would burn two minutes per firing to reach the same place.
@@ -546,130 +532,47 @@ extension AppState {
             )
             return
         }
-        guard await waitForScheduledAgent(sessionID: sessionID, expecting: agentID) else {
-            // A cancelled delivery is not a failed one. The schedule was
-            // deleted or torn down, and reporting that its agent never got
-            // ready would be noise about work the user called off.
-            guard !Task.isCancelled else { return }
-            inAppNotifications.post(
-                "\(schedule.name): could not confirm the agent was ready in \(worktree.title), so the prompt was not sent.",
-                severity: .error,
-                worktreeID: worktree.id
-            )
-            return
+        let outcome = await ScheduledTerminalPrompt.deliver(
+            prompt,
+            sendsAutomatically: sendsAutomatically,
+            waitUntilReady: { await waitForScheduledAgent(sessionID: sessionID, expecting: agentID) },
+            ownsTerminal: { await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) },
+            type: { typeIntoTerminal($0, sessionID: sessionID) }
+        )
+        if let message = ScheduledTerminalPrompt.failureMessage(
+            outcome, scheduleName: schedule.name, worktreeTitle: worktree.title
+        ) {
+            inAppNotifications.post(message, severity: .error, worktreeID: worktree.id)
         }
-        // Same race as the one guarded before Enter: the settle sleep can
-        // finish and the schedule be deleted before this resumes on the main
-        // actor, in which case nothing threw and the wait reported ready.
-        guard !Task.isCancelled else { return }
-        guard typeIntoTerminal(text, sessionID: sessionID) else {
-            inAppNotifications.post(
-                "\(schedule.name): the agent's terminal in \(worktree.title) closed before the prompt could be sent.",
-                severity: .error,
-                worktreeID: worktree.id
-            )
-            return
-        }
-        guard sendsAutomatically else { return }
-        // Cancellation here means the schedule was deleted or torn down
-        // between the prompt and its Enter. Submitting anyway would start
-        // the very work that was just called off, so the typed text is left
-        // sitting in the input instead.
-        do {
-            try await Task.sleep(for: Self.scheduledPromptSubmitDelay)
-        } catch {
-            return
-        }
-        // The agent can also die inside that pause, leaving the shell to
-        // reclaim the terminal. Enter would then run whatever of the prompt
-        // the agent had not consumed as a command, so ownership is confirmed
-        // once more before submitting.
-        guard await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) else {
-            inAppNotifications.post(
-                "\(schedule.name): the agent stopped before the prompt could be submitted in \(worktree.title).",
-                severity: .error,
-                worktreeID: worktree.id
-            )
-            return
-        }
-        // Last, so that nothing suspends between these two answers and the
-        // write they guard. Cancellation can otherwise land after the sleep
-        // returned or during the ownership hop, both of which bypass the
-        // catch above and would submit for a schedule already gone.
-        guard !Task.isCancelled else { return }
-        _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
-    /// Ready means the detector currently sees *this schedule's* agent as
-    /// the session's foreground process.
-    ///
-    /// The identity check matters because the user's session-open script
-    /// runs ahead of the agent command in the same shell. A script that
-    /// launches some other recognised harness and stays running would
-    /// otherwise collect the prompt, and with auto-send have it submitted,
-    /// while the scheduled agent had not started yet.
-    ///
-    /// An agent whose harness cannot be named at all is refused rather than
-    /// accepting whatever else the detector happens to see. Nothing is lost:
-    /// the detector recognises a fixed set of binaries, so such an agent
-    /// could never have been confirmed anyway.
-    ///
-    /// `activeHarnessBySession` rather than `harnessBySession`: the latter is
-    /// never cleared when the process exits, so it answers "did an agent ever
-    /// run here", which stays true for the shell that reclaims the terminal
-    /// afterwards.
-    ///
-    /// Cancellation ends the wait instead of being swallowed. A cancelled
-    /// sleep returns immediately, so ignoring it would spin this loop on the
-    /// main actor until the deadline and freeze the app.
+    /// Ready means the detector sees *this schedule's* agent as the
+    /// session's foreground process, not merely some recognised harness:
+    /// the user's session-open script runs ahead of the agent command in the
+    /// same shell, and may start another harness that stays running.
     private func waitForScheduledAgent(sessionID: String, expecting agentID: String) async -> Bool {
         if let scheduledAgentReadiness {
             return await scheduledAgentReadiness(sessionID)
         }
-        guard let expected = expectedHarness(forAgentID: agentID) else { return false }
-        let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
-        while harness.activeHarnessBySession[sessionID] != expected {
-            guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }
-            do {
-                try await Task.sleep(for: .milliseconds(500))
-            } catch {
-                return false
-            }
-        }
-        // The agent can still exit while the TUI is settling, and the
-        // terminal outlives it. Re-ask rather than trusting the earlier
-        // sighting: typing into the shell that took the session back would,
-        // with auto-send, run the prompt as a command. Asked live, because
-        // the poll behind the loop above only refreshes once a second and
-        // the caller writes the moment this returns.
-        do {
-            try await Task.sleep(for: Self.scheduledPromptSettleDelay)
-        } catch {
-            return false
-        }
-        return await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID)
+        guard expectedHarness(forAgentID: agentID) != nil else { return false }
+        let detector = harness.detector
+        return await ScheduledTerminalPrompt.waitUntilOwned(
+            ownsTerminal: { await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) },
+            isOpen: { detector.isRegistered(sessionId: sessionID) }
+        )
     }
 
     /// Whether the schedule's agent is, at this instant, the foreground
-    /// process of that terminal. Asked immediately before each write,
-    /// because the gap around them is long enough for the agent to die and
-    /// the shell to take the session back.
-    ///
-    /// The session's pid is read and classified here rather than reading
-    /// `activeHarnessBySession`. That map is refreshed by a poll that runs
-    /// once a second, so it can be a whole second out of date — several
-    /// times the pause before Enter, and the entire window this check
-    /// exists to cover.
+    /// process of that terminal. Classified live rather than read from
+    /// `activeHarnessBySession`, whose poll can be a second out of date.
+    /// An agent whose harness cannot be named is never confirmed.
     private func scheduledAgentOwnsTerminal(sessionID: String, agentID: String) async -> Bool {
         // The readiness seam replaces the detector wholesale in tests, whose
         // sessions have no process to observe.
         if scheduledAgentReadiness != nil { return true }
         guard let expected = expectedHarness(forAgentID: agentID) else { return false }
         let detector = harness.detector
-        // Both the persistent PTY lookup and executable query belong off
-        // the main thread, just like the detector's regular poll. The hop costs
-        // far less than the second of staleness this replaced, so the answer
-        // is still current by the time the caller writes.
+        // The PTY lookup and executable query belong off the main thread.
         let detected = await Task.detached { () -> HarnessKind? in
             guard let pid = detector.foregroundPid(sessionId: sessionID) else { return nil }
             return HarnessDetector.matchKind(pid: pid)
@@ -678,8 +581,7 @@ extension AppState {
     }
 
     /// Which harness the schedule's agent will appear as in its terminal, or
-    /// nil when nothing about it is recognisable and readiness therefore
-    /// cannot be established.
+    /// nil when nothing about it is recognisable.
     private func expectedHarness(forAgentID agentID: String) -> HarnessKind? {
         guard let agent = agentRegistry.agents.first(where: { $0.id == agentID }) else {
             return HarnessKind.forAgentID(agentID)
