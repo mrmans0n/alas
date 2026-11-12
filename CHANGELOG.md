@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Let each agent see the built-in Alas MCP server under a chosen name (Settings > Agents > edit an agent), for managed policies that only allow certain MCP server names.
+- Chain folders in the composer's `@` picker: ⇥ opens the highlighted folder, a breadcrumb shows the folder you are in, and each `/` segment fuzzy-matches one folder level, so `al/so/ui` finds `Alas/Sources/UI`. A query ending in `/` lists that folder first so it can be attached.
 
 ### 🐛 Fixes
 

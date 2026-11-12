@@ -119,6 +119,11 @@ public struct MentionQueryPlan: Equatable, Sendable {
             }
             return MentionQueryPlan(sessions: wantsSessions, symbols: .none, fileQuery: wantsFiles ? file : nil)
         case .project(let text):
+            // A `/` names folder levels (see `MentionPathQuery`), which only
+            // files have; sessions and symbols would push the folders down.
+            if scope == .all, text.contains("/") {
+                return MentionQueryPlan(sessions: false, symbols: .none, fileQuery: query)
+            }
             let symbols: Symbols = wantsSymbols && (!text.isEmpty || scope == .symbols)
                 ? .project(query: text, limit: scope == .symbols ? displayLimit : MentionSymbolRanking.allScopeLimit)
                 : .none
