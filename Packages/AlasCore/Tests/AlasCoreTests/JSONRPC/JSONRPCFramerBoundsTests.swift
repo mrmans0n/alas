@@ -60,4 +60,17 @@ struct JSONRPCStdioFramingFailureTests {
         try transport.start()
         for await _ in transport.incoming {}
     }
+
+    // The stdout handler can fail framing and terminate before `start()` has
+    // recorded the child; terminating first stands in for that ordering.
+    @Test(.timeLimit(.minutes(1)), arguments: [JSONRPCProcessTerminationScope.processOnly, .processTree])
+    func aTerminationBeforeTheChildIsRecordedStillEndsIt(scope: JSONRPCProcessTerminationScope) async throws {
+        let transport = JSONRPCStdioTransport(
+            executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["600"],
+            environment: nil, terminationScope: scope
+        )
+        transport.terminate()
+        try transport.start()
+        for await _ in transport.incoming {}
+    }
 }
