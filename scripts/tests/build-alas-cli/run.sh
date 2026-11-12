@@ -9,6 +9,8 @@ trap 'rm -rf "${sandbox}"' EXIT
 srcroot="${sandbox}/repo"
 mkdir -p "${srcroot}/scripts" "${srcroot}/AlasCLI/crates/alas/src" "${srcroot}/AlasCLI/crates/alas-client/src" "${sandbox}/toolchain/bin"
 cp "${repo_root}/scripts/build-alas-cli.sh" "${srcroot}/scripts/build-alas-cli.sh"
+cp "${repo_root}/scripts/retry-ci-acquisition.sh" "${srcroot}/scripts/retry-ci-acquisition.sh"
+chmod +x "${srcroot}/scripts/retry-ci-acquisition.sh"
 cp "${repo_root}/AlasCLI/Cargo.toml" "${srcroot}/AlasCLI/Cargo.toml"
 cp "${repo_root}/AlasCLI/Cargo.lock" "${srcroot}/AlasCLI/Cargo.lock"
 cp "${repo_root}/AlasCLI/manifest.json" "${srcroot}/AlasCLI/manifest.json"

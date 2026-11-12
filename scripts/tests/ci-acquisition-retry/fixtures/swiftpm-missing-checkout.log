@@ -1,0 +1,1 @@
+error: Git command 'git -C /Users/runner/Library/Caches/org.swift.swiftpm/repositories/swift-tree-sitter-8abf6026 config --get remote.origin.url' failed: fatal: cannot change to '/Users/runner/Library/Caches/org.swift.swiftpm/repositories/swift-tree-sitter-8abf6026': No such file or directory

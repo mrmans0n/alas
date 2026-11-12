@@ -320,6 +320,58 @@ struct ACPBrokerRawClientTests {
     }
 
     @MainActor
+    @Test(arguments: ["transport", "ownership", "none"])
+    func brokerMirrorFailurePreservesConcurrentAuthorityLoss(loss: String) async throws {
+        let service = RawBrokerFixture()
+        await service.setFreshBootstrapWithoutTraffic()
+        let client = makeClient(service)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("mirror-loss-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Runner", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let session = ACPSession(id: "s", agentId: "fixture", worktreeId: "w", title: "Runner")
+        var current = true
+        let runner = try await ACPV2SessionRunner.makeBroker(session: session, client: client, persistence: persistence,
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), info: .init(name: "alas", version: "test"),
+            isCurrent: { current }, onEvent: { _ in })
+        let statuses = Task { () -> [ACPV2SessionRunner.Status] in
+            var values: [ACPV2SessionRunner.Status] = []
+            for await value in runner.observations { values.append(value) }
+            return values
+        }
+        defer {
+            runner.beforeBrokerMirrorFailureForTesting = nil
+            runner.stop()
+            statuses.cancel()
+            Task { await client.detach() }
+        }
+        _ = try await runner.start(params: .init(cwd: "/w", mcpServers: []), deadline: .now.advanced(by: .seconds(60)))
+        var refused = false
+        runner.beforeBrokerMirrorFailureForTesting = { intake in
+            refused = true
+            if loss == "transport" { intake?.invalidate(message: "Broker observation lost") }
+            if loss == "ownership" { current = false }
+        }
+        // The update commits before its ACK, but the ACK mirror reaches a real
+        // lease fence refusal. Withdraw transport authority in that failure's
+        // actor turn, before its queued invalidation notifications can run.
+        await service.beforeNextAck {
+            _ = try await persistence.seizeLease(sessionId: "s", instanceId: "Other", pid: 2, now: 2, leaseToken: "replacement")
+        }
+        await service.publishPreviewState(#"{"sessionUpdate":"state_update","state":"running"}"#)
+        try await client.replayRawBrokerEvents()
+        try await eventually { await MainActor.run { runner.status != .ready } }
+        #expect(refused)
+        let published = await statuses.value
+        if loss == "none" {
+            guard case .failed = runner.status else { Issue.record("A current attachment lost its mirror failure")
+            return }
+        } else {
+            #expect(runner.status == (loss == "transport" ? .observationLost : .ownershipLost))
+            #expect(!published.contains { if case .failed = $0 { true } else { false } })
+        }
+    }
+
+    @MainActor
     @Test(arguments: ["adopted", "existing-session", "stop-open", "wrong-session", "deadline-open"])
     func freshBrokerRunnerRejectsSetupWithoutChangingExistingBinding(reason: String) async throws {
         let service = RawBrokerFixture(delayOpen: reason == "stop-open" || reason == "deadline-open")

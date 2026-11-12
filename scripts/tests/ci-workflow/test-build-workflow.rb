@@ -72,6 +72,15 @@ raise "workers must queue only after the builder finishes" unless workers["needs
 raise "shard failures must not cancel sibling diagnostics" unless workers.dig("strategy", "fail-fast") == false
 raise "four balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2, 3, 4]
 builder_steps = swift_job.fetch("steps")
+core_resolve = builder_steps.find { |step| step["name"] == "Resolve AlasCore dependencies" }
+raise "AlasCore dependency resolution must use the bounded acquisition retry helper" unless
+  core_resolve&.fetch("run", "") ==
+    "scripts/retry-ci-acquisition.sh swift package resolve --package-path Packages/AlasCore --disable-automatic-resolution --skip-update"
+core_test = builder_steps.find { |step| step["name"] == "Test AlasCore" }
+raise "AlasCore tests must run once without implicit dependency resolution" unless
+  core_test&.fetch("run", "") ==
+    "swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update" &&
+  builder_steps.count { |step| step.fetch("run", "").include?("swift test --package-path Packages/AlasCore") } == 1
 raise "test plan must assign four shards" unless builder_steps.any? do |step|
   step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"
 end
@@ -158,14 +167,50 @@ raise "compiler must use the restored CAS and emit reuse evidence" unless
 raise "retain build evidence even after compiler failure" unless builder_steps.any? do |step|
   step["if"] == "always()" && step.dig("with", "path") == ".build/xcode/build-metrics"
 end
+%w[Upload\ Swift\ build\ measurements Upload\ compact\ Swift\ build\ summary].each do |name|
+  step = builder_steps.find { |candidate| candidate["name"] == name }
+  raise "#{name} must not fail the build when optional telemetry upload fails" unless
+    step && step["continue-on-error"] == true
+end
+%w[Upload\ Swift\ test\ plan Upload\ compiled\ Swift\ test\ products].each do |name|
+  uploads = builder_steps.select { |candidate| candidate["name"] == name }
+  raise "#{name} must remain a required artifact upload" unless
+    !uploads.empty? && uploads.all? { |step| step.dig("with", "if-no-files-found") == "error" }
+end
+plan_uploads = builder_steps.select { |step| step["name"]&.start_with?("Upload Swift test plan") }
+plan_upload = plan_uploads[0]
+plan_fallback = plan_uploads[1]
+raise "the test plan must have one fatal fallback upload after an initial failure" unless
+  plan_uploads.length == 2 &&
+  plan_upload["id"] == "upload-swift-test-plan" && plan_upload["continue-on-error"] == true &&
+  plan_fallback["if"] == "${{ steps.upload-swift-test-plan.outcome == 'failure' }}" &&
+  plan_fallback["continue-on-error"] != true && plan_fallback.dig("with", "overwrite") == true &&
+  plan_upload["uses"] == "actions/upload-artifact@v7" &&
+  plan_fallback["uses"] == plan_upload["uses"] &&
+  plan_fallback.dig("with", "name") == plan_upload.dig("with", "name") &&
+  plan_fallback.dig("with", "path") == plan_upload.dig("with", "path") &&
+  plan_fallback.dig("with", "retention-days") == plan_upload.dig("with", "retention-days") &&
+  plan_fallback.dig("with", "if-no-files-found") == "error" &&
+  builder_steps.index(plan_fallback) > builder_steps.index(plan_upload)
+product_upload = builder_steps.find { |step| step["name"] == "Upload compiled Swift test products" }
+raise "compiled test products must remain a fatal required upload" unless
+  product_upload && product_upload["continue-on-error"] != true &&
+  product_upload.dig("with", "if-no-files-found") == "error"
 audit = jobs.fetch("swift-coverage")
 audit_download = audit.fetch("steps").find { |step| step.dig("with", "pattern") }
 raise "coverage audit must download compact reports, not diagnostic bundles" unless
   audit_download&.dig("with", "pattern") == "swift-test-reports-*"
+raise "coverage report download must remain fatal" if audit_download["continue-on-error"] == true
+audit_reconcile = audit.fetch("steps").find { |step| step["name"] == "Reconcile Swift coverage and publish timings" }
+audit_require = audit.fetch("steps").find { |step| step["name"] == "Require every Swift job to succeed" }
+raise "coverage reconciliation and upstream-result checks must remain fatal" unless
+  audit_reconcile && audit_reconcile["continue-on-error"] != true &&
+  audit_require && audit_require["if"] == "always()" && audit_require["continue-on-error"] != true
 [workers].each do |job|
   reports = job.fetch("steps").find { |step| step.dig("with", "name")&.start_with?("swift-test-reports-") }
   raise "each lane must publish reports even after failure" unless
-    reports && reports["if"] == "always()" && reports.dig("with", "path") == ".build/xcode/results/*.report.json"
+    reports && reports["if"] == "always()" && reports["continue-on-error"] != true &&
+      reports.dig("with", "path") == ".build/xcode/results/*.report.json"
   raise "a re-run shard must replace its earlier report so the audit sees every shard once" unless
     reports.dig("with", "name") == "swift-test-reports-${{ matrix.shard }}" && reports.dig("with", "overwrite") == true
   raise "keep full result bundles for diagnosis" unless job.fetch("steps").any? do |step|
@@ -216,6 +261,7 @@ end
 raise "shell harnesses must share the build runner" if jobs.key?("shell-harness-tests")
 shell_steps = builder_steps.map { |step| step["run"] }
 [
+  "bash scripts/tests/ci-acquisition-retry/run.sh",
   "bash scripts/tests/build-zmx/run.sh",
   "bash scripts/tests/build-fff/run.sh",
   "bash scripts/tests/build-treesitter-pack/run.sh",

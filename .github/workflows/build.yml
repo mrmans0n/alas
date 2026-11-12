@@ -127,10 +127,16 @@ jobs:
       - name: Check formatting
         run: swiftformat Alas AlasTests Packages --lint --reporter github-actions-log
 
+      - name: Resolve AlasCore dependencies
+        # Resolve from Package.resolved before tests; only acquisition failures retry.
+        run: >-
+          scripts/retry-ci-acquisition.sh swift package resolve
+          --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
+
       - name: Test AlasCore
         # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
         # the app build starts.
-        run: swift test --package-path Packages/AlasCore
+        run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
       - name: Test Swift test inventory harness
         run: bash scripts/tests/swift-test-inventory/run.sh
@@ -148,6 +154,9 @@ jobs:
       # behavior, resource signing, and Xcode DerivedData metadata.
       - name: Test build-zmx harness
         run: bash scripts/tests/build-zmx/run.sh
+
+      - name: Test CI acquisition retry harness
+        run: bash scripts/tests/ci-acquisition-retry/run.sh
 
       - name: Test build-fff harness
         if: ${{ !cancelled() }}
@@ -434,6 +443,7 @@ jobs:
 
       - name: Upload Swift build measurements
         if: always()
+        continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@v7
         with:
@@ -444,6 +454,7 @@ jobs:
 
       - name: Upload compact Swift build summary
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: swift-build-summary-${{ github.run_attempt }}
@@ -490,6 +501,8 @@ jobs:
           du -h .build/xcode/swift-test-products.tgz
 
       - name: Upload Swift test plan
+        id: upload-swift-test-plan
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: swift-test-plan-${{ github.run_attempt }}
@@ -498,6 +511,19 @@ jobs:
             .build/xcode/results/enumeration.json
             .build/xcode/results/enumeration.log
           retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload Swift test plan fallback
+        if: ${{ steps.upload-swift-test-plan.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-plan-${{ github.run_attempt }}
+          path: |
+            .build/xcode/results/plan.json
+            .build/xcode/results/enumeration.json
+            .build/xcode/results/enumeration.log
+          retention-days: 1
+          overwrite: true
           if-no-files-found: error
 
       - name: Upload compiled Swift test products

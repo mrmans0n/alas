@@ -4737,8 +4737,12 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.messages.isEmpty)
 
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
-        runner.send(blocks: [.text("next")], intent: .steer)
-        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        // Dispatch waits for persistence, which includes the retained oversized item.
+        let nextAccepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: [.text("next")], intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(nextAccepted)
+        #expect(mock.sent.contains { $0.method == "_session/steering" })
     }
 
     @Test("a refused steer on an agent without native steering leaves the running turn alive", .timeLimit(.minutes(1)))

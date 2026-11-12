@@ -54,7 +54,9 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.nlopez.alas.web-preview-egress-proxy")
     private var listener: NWListener?
     private var stopped = false
-    private var tunnels: [ObjectIdentifier: Tunnel] = [:]
+    // Callbacks can outlive a removed tunnel. Its object address may be
+    // reused, so every admission needs an identity no later tunnel shares.
+    private var tunnels: [UUID: Tunnel] = [:]
     private var resolving = 0
     /// CONNECTs waiting for a resolution slot, in arrival order.
     private var awaitingResolution: [() -> Void] = []
@@ -148,7 +150,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         guard !stopped else { return connection.cancel() }
         let full = tunnels.count >= maxTunnels
         let tunnel = Tunnel(client: connection)
-        let id = ObjectIdentifier(tunnel)
+        let id = UUID()
         tunnels[id] = tunnel
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
@@ -164,7 +166,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         readHead(id)
     }
 
-    private func readHead(_ id: ObjectIdentifier) {
+    private func readHead(_ id: UUID) {
         guard let tunnel = tunnels[id] else { return }
         tunnel.client.receive(minimumIncompleteLength: 1, maximumLength: Self.headLimit) { [weak self] data, _, isComplete, error in
             guard let self, let tunnel = tunnels[id] else { return }
@@ -180,7 +182,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         }
     }
 
-    private func route(_ id: ObjectIdentifier, head: Data, rest: Data) {
+    private func route(_ id: UUID, head: Data, rest: Data) {
         guard Self.presents(head, credentials: Data("\(Self.username):\(password)".utf8)) else {
             return respond(id, "407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Alas web preview\"")
         }
@@ -198,7 +200,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         awaitingResolution.removeFirst()()
     }
 
-    private func resolve(_ id: ObjectIdentifier, target: (host: String, port: Int), rest: Data) {
+    private func resolve(_ id: UUID, target: (host: String, port: Int), rest: Data) {
         // A tunnel that closed while waiting needs no lookup.
         guard tunnels[id] != nil else { return resolveNext() }
         resolving += 1
@@ -214,7 +216,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         }
     }
 
-    private func vet(_ id: ObjectIdentifier, target: (host: String, port: Int), answers: [String]?, rest: Data) {
+    private func vet(_ id: UUID, target: (host: String, port: Int), answers: [String]?, rest: Data) {
         guard tunnels[id] != nil else { return }
         let addresses = answers?.compactMap(WebPreviewEgressPolicy.address) ?? []
         guard !addresses.isEmpty, addresses.count == answers?.count else { return respond(id, "502 Bad Gateway") }
@@ -226,7 +228,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     /// Connects to the first address, falling back to the next on failure.
-    private func connect(_ id: ObjectIdentifier, to addresses: ArraySlice<Data>, port: Int, rest: Data) {
+    private func connect(_ id: UUID, to addresses: ArraySlice<Data>, port: Int, rest: Data) {
         guard let tunnel = tunnels[id] else { return }
         guard let address = addresses.first else { return respond(id, "502 Bad Gateway") }
         guard let endpoint = upstreamEndpoint(address, port) else {
@@ -266,7 +268,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     /// The client ending closes the tunnel, since WebKit never half-closes.
     /// The upstream ending is passed on once what it sent is flushed, and
     /// the tunnel then closes when the client does, or after `linger`.
-    private func pump(_ id: ObjectIdentifier, from source: NWConnection, to destination: NWConnection) {
+    private func pump(_ id: UUID, from source: NWConnection, to destination: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, tunnels[id] != nil else { return }
             let ended = isComplete || error != nil
@@ -289,7 +291,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         }
     }
 
-    private func respond(_ id: ObjectIdentifier, _ status: String) {
+    private func respond(_ id: UUID, _ status: String) {
         guard let tunnel = tunnels[id] else { return }
         let response = Data("HTTP/1.1 \(status)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
         tunnel.client.send(content: response, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
@@ -297,7 +299,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         })
     }
 
-    private func close(_ id: ObjectIdentifier) {
+    private func close(_ id: UUID) {
         guard let tunnel = tunnels.removeValue(forKey: id) else { return }
         tunnel.timeout?.cancel()
         tunnel.client.cancel()

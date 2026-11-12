@@ -329,7 +329,9 @@ struct ACPBrokerClientTests {
 
     @Test func durableConsumptionReportsAdvancedCursorAfterBrokerAck() async throws {
         let service = MockBrokerService()
-        let stateSink = DurableStateSink()
+        // Yield on the callback's call stack to preserve the broker's publication order.
+        let states = AsyncStream<ACPBrokerDurableState>.makeStream()
+        defer { states.continuation.finish() }
         await service.enqueueAttach(events: [
             ACPBrokerEvent(
                 cursor: ACPBrokerEventCursor(rawValue: 5),
@@ -349,23 +351,27 @@ struct ACPBrokerClientTests {
             )
         ])
         let client = makeClient(service: service, onDurableStateChanged: { state in
-            Task { await stateSink.append(state) }
+            states.continuation.yield(state)
         })
         let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
         try await client.start()
 
         let update = try await updateTask.value
-        let snapshotStateCount = await stateSink.recordCount()
-        update.durableConsumptionAcknowledgement?()
+        let acknowledge = try #require(update.durableConsumptionAcknowledgement)
+        var stateIterator = states.stream.makeAsyncIterator()
+        #expect(await stateIterator.next() == ACPBrokerDurableState(
+            brokerId: ACPBrokerID(rawValue: "broker-1"),
+            generation: ACPBrokerGeneration(rawValue: 7),
+            acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0)
+        ))
+        acknowledge()
 
         let expectedState = ACPBrokerDurableState(
             brokerId: ACPBrokerID(rawValue: "broker-1"),
             generation: ACPBrokerGeneration(rawValue: 7),
             acknowledgedCursor: ACPBrokerEventCursor(rawValue: 5)
         )
-        try await waitUntil {
-            await stateSink.hasLastRecord(after: snapshotStateCount, matching: expectedState)
-        }
+        #expect(await stateIterator.next() == expectedState)
     }
 
     // Regression (code review on #1380): dispatchAdapterNotification had no
@@ -2145,22 +2151,6 @@ struct ACPBrokerClientTests {
 }
 
 private struct ACPBrokerClientTestTimeout: Error {}
-
-private actor DurableStateSink {
-    private var records: [ACPBrokerDurableState] = []
-
-    func append(_ state: ACPBrokerDurableState) {
-        records.append(state)
-    }
-
-    func recordCount() -> Int {
-        records.count
-    }
-
-    func hasLastRecord(after count: Int, matching expected: ACPBrokerDurableState) -> Bool {
-        records.count == count + 1 && records.last == expected
-    }
-}
 
 private final class DurableStateRecorder: @unchecked Sendable {
     private let lock = NSLock()

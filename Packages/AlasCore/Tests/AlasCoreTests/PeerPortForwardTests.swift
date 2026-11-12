@@ -358,13 +358,19 @@ final class TestClient: Sendable {
     deinit { connection.cancel() }
 
     /// Throws unless the connection becomes ready.
-    static func connect(host: String, port: Int) async throws -> TestClient {
+    static func connect(host: String, port: Int, sending initialData: Data? = nil) async throws -> TestClient {
         let connection = NWConnection(host: NWEndpoint.Host(host), port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let pending = Mutex<CheckedContinuation<Void, Error>?>(continuation)
             connection.stateUpdateHandler = { state in
                 switch state {
-                case .ready: pending.withLock { $0.take() }?.resume()
+                case .ready:
+                    guard let ready = pending.withLock({ $0.take() }) else { return }
+                    guard let initialData else { return ready.resume() }
+                    // Send protocol headers on the network queue. A busy test
+                    // executor must not leave an accepted connection idle.
+                    connection.send(content: initialData, completion: .contentProcessed { _ in })
+                    ready.resume()
                 case .waiting(let error), .failed(let error):
                     connection.cancel()
                     pending.withLock { $0.take() }?.resume(throwing: error)

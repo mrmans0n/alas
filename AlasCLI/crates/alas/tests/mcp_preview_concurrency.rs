@@ -4,19 +4,24 @@ use std::net::TcpStream;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 enum ServerEvent {
     Wait { release: mpsc::Sender<()> },
-    Cancel,
+    Cancel { request: Value },
+}
+
+struct HelloAfterCancel {
+    cancel_recorded: Barrier,
+    hello_recorded: Barrier,
 }
 
 struct FakeAlas {
     socket: PathBuf,
     events: mpsc::Receiver<ServerEvent>,
-    /// Every request the fake app received, in arrival order.
+    /// Every request recorded by the fake app.
     requests: Arc<Mutex<Vec<Value>>>,
     stop: mpsc::Sender<()>,
     handle: Option<thread::JoinHandle<()>>,
@@ -33,6 +38,13 @@ impl Drop for FakeAlas {
 }
 
 fn start_fake_alas(test_name: &str) -> FakeAlas {
+    start_fake_alas_with_schedule(test_name, None)
+}
+
+fn start_fake_alas_with_schedule(
+    test_name: &str,
+    hello_after_cancel: Option<Arc<HelloAfterCancel>>,
+) -> FakeAlas {
     let socket = PathBuf::from(format!(
         "/tmp/alas-mcp-{test_name}-{}-{}.sock",
         std::process::id(),
@@ -54,7 +66,10 @@ fn start_fake_alas(test_name: &str) -> FakeAlas {
                 Ok((stream, _)) => {
                     let events_tx = events_tx.clone();
                     let requests = Arc::clone(&server_requests);
-                    thread::spawn(move || handle_fake_connection(stream, events_tx, requests));
+                    let hello_after_cancel = hello_after_cancel.clone();
+                    thread::spawn(move || {
+                        handle_fake_connection(stream, events_tx, requests, hello_after_cancel)
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(5));
@@ -76,6 +91,7 @@ fn handle_fake_connection(
     mut stream: UnixStream,
     events_tx: mpsc::Sender<ServerEvent>,
     requests: Arc<Mutex<Vec<Value>>>,
+    hello_after_cancel: Option<Arc<HelloAfterCancel>>,
 ) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
@@ -90,7 +106,23 @@ fn handle_fake_connection(
         }
     }
     let request: Value = serde_json::from_slice(&buf).unwrap();
+    let is_hello = request["kind"] == json!("mcp_hello");
+    if let Some(schedule) = &hello_after_cancel {
+        if is_hello {
+            schedule.cancel_recorded.wait();
+        }
+    }
     requests.lock().unwrap().push(request.clone());
+    if let Some(schedule) = &hello_after_cancel {
+        if is_hello {
+            schedule.hello_recorded.wait();
+        } else if request["command"] == json!("computer_cancel") {
+            // Record the unrelated hello after the cancel, before delivering
+            // the cancel event. A consumer must identify its own request.
+            schedule.cancel_recorded.wait();
+            schedule.hello_recorded.wait();
+        }
+    }
     match request.get("command").and_then(Value::as_str) {
         Some("preview_wait") | Some("computer_screenshot") => {
             let (release_tx, release_rx) = mpsc::channel();
@@ -119,10 +151,10 @@ fn handle_fake_connection(
             // Accepted from a nonblocking listener; block until the client leaves.
             stream.set_nonblocking(false).unwrap();
             while matches!(stream.read(&mut chunk), Ok(read) if read > 0) {}
-            events_tx.send(ServerEvent::Cancel).unwrap();
+            events_tx.send(ServerEvent::Cancel { request }).unwrap();
         }
         Some("preview_cancel") | Some("computer_cancel") => {
-            events_tx.send(ServerEvent::Cancel).unwrap();
+            events_tx.send(ServerEvent::Cancel { request }).unwrap();
             stream
                 .write_all(br#"{"ok":true,"lines":["{\"version\":1,\"event\":\"cancelled\"}"]}"#)
                 .unwrap();
@@ -313,7 +345,7 @@ fn stdio_preview_cancel_tool_runs_while_preview_wait_socket_response_is_pending(
     );
     let wait_release = match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
         ServerEvent::Wait { release } => release,
-        ServerEvent::Cancel => panic!("cancel arrived before wait started"),
+        ServerEvent::Cancel { .. } => panic!("cancel arrived before wait started"),
     };
 
     send_line(
@@ -330,7 +362,7 @@ fn stdio_preview_cancel_tool_runs_while_preview_wait_socket_response_is_pending(
     );
 
     match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
-        ServerEvent::Cancel => {}
+        ServerEvent::Cancel { .. } => {}
         ServerEvent::Wait { .. } => panic!("unexpected second wait"),
     }
     wait_release.send(()).unwrap();
@@ -367,7 +399,7 @@ fn stdio_cancelled_notification_sends_preview_cancel_before_wait_completes() {
     );
     let wait_release = match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
         ServerEvent::Wait { release } => release,
-        ServerEvent::Cancel => panic!("cancel arrived before wait started"),
+        ServerEvent::Cancel { .. } => panic!("cancel arrived before wait started"),
     };
 
     send_line(
@@ -380,7 +412,7 @@ fn stdio_cancelled_notification_sends_preview_cancel_before_wait_completes() {
     );
 
     match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
-        ServerEvent::Cancel => {}
+        ServerEvent::Cancel { .. } => {}
         ServerEvent::Wait { .. } => panic!("unexpected second wait"),
     }
     wait_release.send(()).unwrap();
@@ -418,7 +450,7 @@ fn http_cancelled_notification_sends_preview_cancel_before_wait_completes() {
 
     let wait_release = match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
         ServerEvent::Wait { release } => release,
-        ServerEvent::Cancel => panic!("cancel arrived before wait started"),
+        ServerEvent::Cancel { .. } => panic!("cancel arrived before wait started"),
     };
 
     let cancel_response = http_post(
@@ -433,7 +465,7 @@ fn http_cancelled_notification_sends_preview_cancel_before_wait_completes() {
     assert!(cancel_response.starts_with("HTTP/1.1 202 Accepted"));
 
     match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
-        ServerEvent::Cancel => {}
+        ServerEvent::Cancel { .. } => {}
         ServerEvent::Wait { .. } => panic!("unexpected second wait"),
     }
     wait_release.send(()).unwrap();
@@ -462,11 +494,10 @@ fn cancelled_notification(id: &str) -> Value {
 }
 
 fn expect_cancel_then_release(fake: &FakeAlas, wait_release: mpsc::Sender<()>) {
-    match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
-        ServerEvent::Cancel => {}
+    let cancel = match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+        ServerEvent::Cancel { request } => request,
         ServerEvent::Wait { .. } => panic!("unexpected second call"),
-    }
-    let cancel = fake.requests.lock().unwrap().last().cloned().unwrap();
+    };
     assert_eq!(cancel["command"], json!("computer_cancel"));
     assert!(
         cancel["params"]["call_id"]
@@ -479,13 +510,19 @@ fn expect_cancel_then_release(fake: &FakeAlas, wait_release: mpsc::Sender<()>) {
 fn wait_started(fake: &FakeAlas) -> mpsc::Sender<()> {
     match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
         ServerEvent::Wait { release } => release,
-        ServerEvent::Cancel => panic!("cancel arrived before the call started"),
+        ServerEvent::Cancel { .. } => panic!("cancel arrived before the call started"),
     }
 }
 
 #[test]
 fn stdio_cancelled_computer_call_gets_no_late_response() {
-    let fake = start_fake_alas("computer-cancel-stdio");
+    let fake = start_fake_alas_with_schedule(
+        "computer-cancel-stdio",
+        Some(Arc::new(HelloAfterCancel {
+            cancel_recorded: Barrier::new(2),
+            hello_recorded: Barrier::new(2),
+        })),
+    );
     // Spawned directly: closing stdin lets the server finish its workers and
     // exit, so stdout then holds every reply it will ever send.
     let mut child = Command::new(env!("CARGO_BIN_EXE_alas"))
@@ -563,7 +600,7 @@ fn http_cancelled_vm_run_closes_its_app_connection() {
     // The connection closes, so the app stops the guest command; no
     // separate cancel request goes out.
     match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
-        ServerEvent::Cancel => {}
+        ServerEvent::Cancel { .. } => {}
         ServerEvent::Wait { .. } => panic!("unexpected second call"),
     }
     let commands: Vec<Value> = fake
@@ -664,7 +701,9 @@ fn stdio_visual_only_forwards_html_bytes_and_returns_the_visual_id_without_hello
     );
     let requests = fake.requests.lock().unwrap().clone();
     assert!(
-        requests.iter().all(|request| request["kind"] != json!("mcp_hello")),
+        requests
+            .iter()
+            .all(|request| request["kind"] != json!("mcp_hello")),
         "{requests:?}"
     );
     let [request] = requests.as_slice() else {
@@ -700,7 +739,10 @@ fn http_requested_port_bind_failure_exits_without_port_line() {
         .unwrap();
 
     assert!(!output.status.success(), "{output:?}");
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("PORT"), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("PORT"),
+        "{output:?}"
+    );
     assert!(!output.stderr.is_empty(), "{output:?}");
 }
 
@@ -732,7 +774,8 @@ fn http_hello_fires_on_first_authenticated_request_and_every_initialize() {
 
     // A reconnecting harness re-initializes against the reused process and
     // must announce again: the app clears its registration per attach.
-    let initialize = json!({ "jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {} });
+    let initialize =
+        json!({ "jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {} });
     let response = http_post(mcp.port, token, initialize);
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert_eq!(wait_for_hellos(&fake, 2), 2);

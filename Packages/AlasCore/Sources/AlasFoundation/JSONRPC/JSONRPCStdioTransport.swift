@@ -73,6 +73,8 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     private let environment: [String: String]
     /// Set by `start()`.
     private var process: SpawnedProcess?
+    private var terminationRequested = false
+    var beforeProcessPublicationForTesting: (@Sendable () -> Void)?
     private let stdin: Pipe
     private let frameWriter: JSONRPCFrameWriter
     private let stdout = Pipe()
@@ -199,7 +201,17 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
-        self.process = process
+        let beforePublication = beforeProcessPublicationForTesting
+        beforeProcessPublicationForTesting = nil
+        beforePublication?()
+        let mustTerminate = lock.withLock {
+            self.process = process
+            return terminationRequested
+        }
+        if mustTerminate {
+            terminate()
+            return
+        }
         guard terminationScope == .processTree else { return }
         startDescendantForkObserver(for: process.pid)
         refreshLock.lock()
@@ -232,6 +244,10 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         frameWriter.close()
         descendantTracker?.cancel()
         cancelDescendantForkObservers()
+        let process = lock.withLock {
+            terminationRequested = true
+            return self.process
+        }
         guard let process, process.pid > 0 else { return }
         let pid = process.pid
         refreshLock.lock()
@@ -344,7 +360,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         for pid in descendants.map(\.pid) {
             startDescendantForkObserver(for: pid)
         }
-        let rootPid = process?.pid ?? 0
+        let rootPid = lock.withLock { process?.pid ?? 0 }
         var watched = Set(descendants.map(\.pid))
         if rootPid > 0 { watched.insert(rootPid) }
         pruneDescendantForkObservers(keeping: watched)
@@ -368,6 +384,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         defer { refreshLock.unlock() }
         lock.lock()
         let shouldStop = rootHasExited
+        let process = self.process
         lock.unlock()
         guard !shouldStop, let process, process.isRunning else { return }
 
