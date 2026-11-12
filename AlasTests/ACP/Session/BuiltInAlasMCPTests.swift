@@ -86,6 +86,8 @@ struct BuiltInAlasMCPTests {
         ("has space", nil),
         ("dotted.name", nil),
         (String(repeating: "a", count: 65), nil),
+        // Taken by the git-gud server Alas attaches in gg worktrees.
+        ("git-gud", nil),
         (nil, nil),
     ] as [(String?, String?)])
     func normalizedServerName(raw: String?, expected: String?) {

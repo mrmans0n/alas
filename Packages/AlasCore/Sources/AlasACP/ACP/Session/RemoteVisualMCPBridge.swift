@@ -95,6 +95,7 @@ public actor RemoteVisualMCPBridge {
         client: RemoteHelperClient,
         fence: RemoteSessionFence,
         allowsPRTools: Bool,
+        serverName: String,
         makeBackend: @escaping @Sendable (BuiltInMCPToolScope) -> JSONRPCStdioTransporting,
         authorize: @escaping Authorization,
         onRegistration: @escaping RegistrationEvidence
@@ -111,7 +112,8 @@ public actor RemoteVisualMCPBridge {
         )
         await bridge.start()
         return PreparedBuiltInMCPAttachment(
-            injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: opened.descriptor, toolScope: toolScope),
+            injection: BuiltInAlasMCP.remoteVisualInjection(
+                descriptor: opened.descriptor, toolScope: toolScope, serverName: serverName),
             cleanup: { await bridge.invalidate() }
         )
     }

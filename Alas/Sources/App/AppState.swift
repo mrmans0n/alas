@@ -7323,17 +7323,19 @@ final class AppState {
         configuredServers: [ProjectMCPServer],
         allowsPRTools: Bool = true
     ) async -> BuiltInMCPAttachment {
+        let serverName = config.agents.alasMCPServerName(for: context.agentID)
         guard case .ssh(let host, let fence) = context.location,
               BuiltInAlasMCP.injectsRemoteVisual(
                   enabled: config.harness.exposeAlasMCP,
                   configuredServers: configuredServers,
-                  injectionSupport: context.injectionSupport
+                  injectionSupport: context.injectionSupport,
+                  serverName: serverName
               )
         else { return .omitted }
         guard let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                   .appendingPathComponent(TerminalCLIInjection.executableName).path,
               let socketPath = acpSessionSocketPath(sessionId: context.sessionId)
-        else { return .skipped(BuiltInAlasMCP.unavailableStatus("Alas CLI unavailable")) }
+        else { return .skipped(BuiltInAlasMCP.unavailableStatus("Alas CLI unavailable", serverName: serverName)) }
         let environment = [
             "ALAS_SOCKET_PATH": socketPath,
             "ALAS_SESSION_ID": context.sessionId,
@@ -7344,6 +7346,7 @@ final class AppState {
                 client: RemoteHelperClientPool.shared.client(for: host),
                 fence: fence,
                 allowsPRTools: allowsPRTools,
+                serverName: serverName,
                 makeBackend: { toolScope in
                     JSONRPCStdioTransport(
                         executable: URL(fileURLWithPath: binaryPath),
@@ -7357,7 +7360,7 @@ final class AppState {
             )
             return .prepared(prepared)
         } catch {
-            return .skipped(BuiltInAlasMCP.unavailableStatus(error.localizedDescription))
+            return .skipped(BuiltInAlasMCP.unavailableStatus(error.localizedDescription, serverName: serverName))
         }
     }
 

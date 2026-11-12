@@ -5,6 +5,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 /// Which built-in tools an attachment exposes. SSH sessions get a subset,
 /// relayed back to this Mac by the remote helper.
@@ -111,13 +112,16 @@ public enum BuiltInAlasMCP: Sendable {
     public static let serverName = "alas"
     public static let statusId = "builtin-alas"
 
-    /// A user-chosen server name, or nil when `raw` is blank or not a name
-    /// every agent accepts (letters, digits, `_` and `-`, at most 64). Agents
-    /// under a managed MCP allowlist only start servers whose name is on it,
-    /// so the name has to be settable.
+    /// A user-chosen server name, or nil when `raw` is blank, not a name
+    /// every agent accepts (letters, digits, `_` and `-`, at most 64), or the
+    /// name of another server Alas attaches on its own (`git-gud`), which
+    /// would put two servers under one name. Agents under a managed MCP
+    /// allowlist only start servers whose name is on it, so the name has to
+    /// be settable.
     public static func normalizedServerName(_ raw: String?) -> String? {
         guard let name = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               (1...64).contains(name.utf8.count),
+              name != GGMCPInjection.serverName,
               name.utf8.allSatisfy({ byte in
                   switch byte {
                   case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
@@ -180,7 +184,9 @@ public enum BuiltInAlasMCP: Sendable {
 
     /// The status row for a built-in server that was requested but cannot be
     /// served, e.g. an SSH host whose helper cannot relay it.
-    public static func unavailableStatus(_ reason: String) -> MCPAttachmentServerStatus {
+    public static func unavailableStatus(
+        _ reason: String, serverName: String = BuiltInAlasMCP.serverName
+    ) -> MCPAttachmentServerStatus {
         .init(id: statusId, name: serverName, transport: .stdio,
               disposition: .skipped(.remoteRelayUnavailable(reason)))
     }
@@ -191,7 +197,8 @@ public enum BuiltInAlasMCP: Sendable {
     /// helper binary, its state directory, and the stable remote record.
     public static func remoteVisualInjection(
         descriptor: RemoteMCPRouteDescriptor,
-        toolScope: BuiltInMCPToolScope
+        toolScope: BuiltInMCPToolScope,
+        serverName: String = BuiltInAlasMCP.serverName
     ) -> Injection {
         Injection(
             server: .stdio(name: serverName, command: descriptor.proxyCommand, args: descriptor.proxyArgs, env: []),
@@ -253,7 +260,8 @@ public enum BuiltInAlasMCP: Sendable {
     /// `.external` adapter (Pi) ignores ACP MCP config, so the relay would
     /// never be reached; its own status reports that limitation.
     public static func injectsRemoteVisual(enabled: Bool, configuredServers: [ProjectMCPServer],
-                                           injectionSupport: ACPMCPInjectionSupport) -> Bool {
+                                           injectionSupport: ACPMCPInjectionSupport,
+                                           serverName: String = BuiltInAlasMCP.serverName) -> Bool {
         guard enabled, injectionSupport == .sessionNew else { return false }
         return !isOverridden(by: configuredServers, serverName: serverName)
     }
