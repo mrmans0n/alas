@@ -80,6 +80,21 @@ final class SimulatorStreamClient {
         }
     }
 
+    /// The bundle ID of the app in front, or nil when none is or the service can't tell.
+    func frontmostApp(udid: String) async -> String? {
+        let connection = self.connection ?? connect()
+        let found: String?? = try? await withCheckedThrowingContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            let proxy = Self.proxy(connection) { error in once.resume(throwing: error) }
+            guard let proxy else {
+                once.resume(returning: nil)
+                return
+            }
+            proxy.frontmostApp(udid: udid) { once.resume(returning: $0) }
+        }
+        return found ?? nil
+    }
+
     // Handlers are copied before they run: an onStop may unsubscribe, which changes `screens`.
     fileprivate func deliver(udid: String, surface: IOSurface) {
         lastFrames[udid] = surface
