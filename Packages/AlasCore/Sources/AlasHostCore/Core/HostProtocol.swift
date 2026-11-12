@@ -131,6 +131,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// new version (`host.update.v1`). The connection usually drops before
     /// the answer, when the upgrade replaces the running executable.
     case updateHost
+    /// Ships, resumes or stops session `sessionID`'s shepherd
+    /// (`host.shepherds.v1`).
+    case shepherdSession(sessionID: String, action: HostShepherdAction)
     /// Reads a listed worktree's code as a session in it would
     /// (`host.worktrees.read.v1`).
     case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
