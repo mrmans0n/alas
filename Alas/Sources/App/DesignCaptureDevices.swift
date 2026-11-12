@@ -101,10 +101,17 @@ enum DesignCaptureDevices {
         func isInstalled(udid: String, bundleID: String) async -> Bool { true }
     }
 
+    private struct FakeLogs: SimulatorLogsControl {
+        func frontmostApp(udid: String) async -> String? { nil }
+        func executables(udid: String) async throws -> [String: String] { [:] }
+        func logShow(udid: String, query: SimulatorLogQuery, seconds: Int) async throws -> [SimulatorLogLine] { [] }
+        func crashReports(udid: String, bundleID: String?, since: Date) async -> [SimulatorCrashReport] { [] }
+    }
+
     private static func makeControl() -> DeviceAgentControl {
         DeviceAgentControl(
             input: FakeInput(), devices: { [phone, air, pad] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings())
+            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs())
     }
 
     // MARK: - Gallery
@@ -179,7 +186,7 @@ enum DesignCaptureDevices {
                 if let device {
                     DevicesActions(
                         device: device, booted: booted, client: SimulatorStreamClient(), control: control,
-                        canChangeSettings: booted, onShutDown: {})
+                        canChangeSettings: booted, onShutDown: {}, onOpenLogs: {})
                 }
             }
             .padding(.horizontal, 8)
@@ -210,7 +217,7 @@ enum DesignCaptureDevices {
             udid: demoUDIDPrefix + "USER", name: "iPhone 17", runtimeName: "iOS 26.5", state: .booted, deviceTypeIdentifier: "demo.phone")
         let userControl = DeviceAgentControl(
             input: FakeInput(), devices: { [userDevice] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings())
+            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs())
         userControl.takeOver(udid: userDevice.udid)
         Task { _ = await userControl.perform(.button(udid: userDevice.udid, name: .home, includeScreenshot: false), sessionID: "demo-agent") }
         try? await Task.sleep(for: .milliseconds(300))
