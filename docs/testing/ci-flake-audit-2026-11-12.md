@@ -57,6 +57,16 @@ added and passes with the required product/report/coverage gates preserved.
 No assertion, coverage exclusion or production deadline is relaxed by these
 repairs.
 
+The output-cap launch regression now forces the early-termination window with
+two real children instead of launching 400 writers concurrently. A task-local
+factory controls the launch observation while retaining real pipes, signals and
+reaping. Removing only the existing post-launch checks makes both variants hit
+the original 15-second watchdog; restoring them produces the expected capped
+output. The overlapping single-writer test was removed. This reduces the suite
+from 401 children to two and removes one test definition. Historical slow mocked
+operations coincided with the burst, but that correlation does not establish
+the cause of the outstanding session or cancellation timeouts.
+
 ## Failures already repaired on main
 
 | Failure | Evidence and current repair |
@@ -102,6 +112,12 @@ ordinary and constrained cooperative scheduling, for 12,750 passing definition
 executions. Repetition stops at the first failure and retains its evidence.
 These results do not establish the other historical event timeouts fixed.
 
+After replacing the process burst, the final core inventory passed 1,274 tests
+in 129 suites in 19.169 seconds with the same CI toolchain. Both cap variants
+also passed ten focused repetitions. Independent review caught and corrected a
+launch-latch ordering gap in the new fixture, then confirmed the post-launch
+guards, task-local scope, exact outcomes and reaping assertions.
+
 The final native run executed 272 tests in seven suites with zero failures or
 skips. It covers the four complete changed suites and the three already-repaired
 historical selectors. All eight audited native selectors executed and passed.
@@ -110,8 +126,12 @@ held, then the restored final test passed. The native test repairs also received
 an independent review with no findings.
 
 The startup/framing and shared proxy-fixture selection passed 21 tests in three
-suites. The real SIGTERM-ignoring cancellation stress check completed 128 owned
-process trees successfully; it does not establish the old CI hang's cause.
+suites. The real SIGTERM-ignoring cancellation stress checks completed 256 owned
+process trees successfully, half under the strict-pool environment, including
+reaping checks for captured descendants. They do not establish the old CI
+hang's cause. The exact V1 session fixture also passed 5,600 complete executions,
+including 2,000 inside Swift Testing; its historical first-permission timeout
+remains unreproduced.
 Independent runtime review found no introduced runtime defect and caught a
 configuration-dependent test-hook declaration, which was corrected. CI helper
 review found an interruption-retry bug, which failed a new regression before
