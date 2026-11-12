@@ -14,13 +14,12 @@ public enum HostShepherdAction: String, Codable, Sendable {
     case stop
 
     /// What a Mac offers for a session whose host pill is `shepherd`: Ship
-    /// without one, Resume while it needs attention, Stop until it finished.
+    /// without one, Resume while it is escalated or paused, Stop until it finished.
     public static func offered(for shepherd: HostSessionShepherd?) -> [HostShepherdAction] {
         guard let shepherd else { return [.ship] }
         switch shepherd.badgeState {
-        case .attention: return [.resume, .stop]
         case .merged, .closed, nil: return []
-        default: return [.stop]
+        default: return shepherd.resumable == true ? [.resume, .stop] : [.stop]
         }
     }
 }
@@ -51,10 +50,16 @@ extension SessionsAPI {
             guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
                 throw HostError.failed(message: "This worktree has no GitHub or GitLab remote.")
             }
-            let shipsStack = core.stackShepherd.effects?.worktreeContext(worktreeID)?.stackName != nil
-            let prompt = shipsStack
-                ? StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack)
-                : ShepherdPromptBuilder.createPrompt(kind: kind)
+            let prompt: String
+            if let stackName = core.stackShepherd.effects?.worktreeContext(worktreeID)?.stackName {
+                // As the app's Ship does, so an earlier partial choice never carries over.
+                core.stackShepherd.setPendingShipPlan(
+                    .wholeStack, sessionID: sessionID, id: StackShepherdRecordID(worktreeID: worktreeID, stackName: stackName)
+                )
+                prompt = StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack)
+            } else {
+                prompt = ShepherdPromptBuilder.createPrompt(kind: kind)
+            }
             // Answers once the session took the prompt, not when its turn ends.
             _ = try await submit(sessionID, prompt: prompt, caller: caller)
         }

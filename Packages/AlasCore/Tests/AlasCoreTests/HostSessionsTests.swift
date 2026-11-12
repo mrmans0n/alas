@@ -958,14 +958,16 @@ struct HostSessionsTests {
         }
     }
 
+    /// An attention badge with auto-fix off is not escalated: Resume would do nothing.
     @Test(arguments: [
-        (badge: nil as ShepherdBadgeState?, offered: [HostShepherdAction.ship]),
-        (badge: .waiting, offered: [.stop]),
-        (badge: .attention, offered: [.resume, .stop]),
-        (badge: .merged, offered: []),
+        (badge: nil as ShepherdBadgeState?, resumable: false, offered: [HostShepherdAction.ship]),
+        (badge: .waiting, resumable: false, offered: [.stop]),
+        (badge: .attention, resumable: false, offered: [.stop]),
+        (badge: .attention, resumable: true, offered: [.resume, .stop]),
+        (badge: .merged, resumable: false, offered: []),
     ])
-    func aPeerIsOfferedWhatTheShepherdCanDo(_ c: (badge: ShepherdBadgeState?, offered: [HostShepherdAction])) {
-        let shepherd = c.badge.map { HostSessionShepherd(badge: $0.rawValue, number: "#7", tooltip: "") }
+    func aPeerIsOfferedWhatTheShepherdCanDo(_ c: (badge: ShepherdBadgeState?, resumable: Bool, offered: [HostShepherdAction])) {
+        let shepherd = c.badge.map { HostSessionShepherd(badge: $0.rawValue, number: "#7", tooltip: "", resumable: c.resumable) }
         #expect(HostShepherdAction.offered(for: shepherd) == c.offered)
     }
 
