@@ -142,11 +142,28 @@ public enum SimulatorControl {
 
     /// The archived log lines of the last `seconds`, oldest first.
     public static func logShow(udid: String, query: SimulatorLogQuery, seconds: Int) async throws -> [SimulatorLogLine] {
-        var args = ["simctl", "spawn", udid, "log", "show", "--last", "\(seconds)s", "--style", "ndjson"] + query.showArguments
-        if let predicate = query.predicate { args += ["--predicate", predicate] }
+        try await logShow(udid: udid, predicate: query.predicate, levelArguments: query.showArguments, seconds: seconds)
+    }
+
+    public static func logShow(
+        udid: String, predicate: String?, levelArguments: [String] = [], seconds: Int
+    ) async throws -> [SimulatorLogLine] {
+        var args = ["simctl", "spawn", udid, "log", "show", "--last", "\(seconds)s", "--style", "ndjson"] + levelArguments
+        if let predicate { args += ["--predicate", predicate] }
         let result = try await Process.run(xcrun, args: args, timeout: 90)
         guard result.exitCode == 0 else { throw SimulatorControlError(result) }
         return result.stdout.split(separator: "\n").compactMap { SimulatorLogLine.parse(Data($0.utf8)) }
+    }
+
+    /// SpringBoard's log of the last 10 minutes folded into who is in front;
+    /// nil when SpringBoard logged nothing in that time or the log can't be read.
+    public static func foregroundFromLog(udid: String) async -> SimulatorForeground? {
+        guard let lines = try? await logShow(udid: udid, predicate: SimulatorForeground.predicate, seconds: 600),
+              !lines.isEmpty
+        else { return nil }
+        var foreground = SimulatorForeground()
+        for line in lines { foreground.apply(message: line.message) }
+        return foreground
     }
 
     public static let diagnosticReports = FileManager.default.homeDirectoryForCurrentUser

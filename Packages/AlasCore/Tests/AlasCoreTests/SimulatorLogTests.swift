@@ -77,3 +77,47 @@ struct SimulatorLogTests {
         #expect(SimulatorAppList.executables(data) == ["com.apple.Preferences": "Preferences", "com.example.hello": "Hello"])
     }
 }
+
+struct SimulatorForegroundTests {
+    private func foreground(_ messages: [String]) -> String? {
+        var state = SimulatorForeground()
+        for message in messages { state.apply(message: message) }
+        return state.bundleID
+    }
+
+    @Test func theAppLastBroughtForwardIsInFront() {
+        #expect(foreground([
+            "[app<com.example.hello>:49932] Setting process visibility to: Foreground",
+            "[app<com.apple.Preferences>:50810] Setting process visibility to: Unknown",
+            "[app<com.apple.Preferences>:50852] Setting process visibility to: Foreground",
+            "[app<com.example.hello>:49932] Setting process visibility to: Background",
+        ]) == "com.apple.Preferences")
+    }
+
+    @Test func goingToTheBackgroundLeavesNoAppInFront() {
+        #expect(foreground([
+            "[app<com.example.hello>:49932] Setting process visibility to: Foreground",
+            "[app<com.example.hello>:49932] Setting process visibility to: Background",
+        ]) == nil)
+    }
+
+    @Test func aColdLaunchCountsOnceItsProcessStarts() {
+        #expect(foreground(["[app<com.example.hello>:-1] Setting process visibility to: Foreground"]) == nil)
+        #expect(foreground([
+            "[app<com.example.hello>:-1] Setting process visibility to: Foreground",
+            "[app<com.example.hello>:4021] Bootstrap success!",
+        ]) == "com.example.hello")
+    }
+
+    @Test(arguments: ["com.apple.WidgetRenderer", "com.example.app.extension", "com.apple.springboard.InCallService"])
+    func helpersAreNotApps(bundleID: String) {
+        #expect(foreground([
+            "[app<com.example.hello>:1] Setting process visibility to: Foreground",
+            "[app<\(bundleID)>:2] Setting process visibility to: Foreground",
+        ]) == "com.example.hello")
+    }
+
+    @Test func anAppWhoseNameContainsServiceIsStillAnApp() {
+        #expect(SimulatorForeground.isUserFacing("com.example.CustomerService"))
+    }
+}

@@ -26,9 +26,12 @@ D settle-and-diff, E held calls for VMs).
   with `procPath` (contains `CoreSimulator/Devices/<udid>/`), `exception`
   (`type`, `signal`), `captureTime`, `faultingThread`, `threads[].frames[]`
   (`imageIndex`, `symbol`) and `usedImages[].name`.
-- serve-sim's `AccessibilityBridge.frontmostApp(udid:)` (vendored) returns the
-  frontmost app's bundle ID and pid without walking the UI; it throws when
-  no app is in front. It isn't exposed through `AlasSimService` yet.
+- SpringBoard logs `[app<bundle>:pid] Setting process visibility to:
+  Foreground|Background|Unknown` as apps come and go, and `[app<bundle>:pid]
+  Bootstrap success!` once a cold-launched app's process exists. serve-sim's
+  `foreground-tracker.ts` follows these lines. Its accessibility
+  `frontmostApp` is only a fallback: in the end-to-end run it returned nothing
+  with an app in front and `com.apple.springboard` on the home screen.
 - `simctl listapps` gives each app's `CFBundleExecutable`.
 
 ## Decisions
@@ -47,9 +50,11 @@ D settle-and-diff, E held calls for VMs).
   after relaunch.
 - **App picker**: Foreground app (default), one of the user's apps (from
   `listapps`), or All processes.
-  - Foreground app polls `frontmostApp` every 2 s; logs are filtered by the
-    app's executable name, so a relaunch keeps following it. With no app in
-    front, the tab says "No app in front" and waits.
+  - Foreground app: SpringBoard's log of the last 10 minutes says who is in
+    front, then a `log stream` of SpringBoard's visibility lines follows
+    changes. Logs are filtered by the app's executable name, so a relaunch
+    keeps following it. With no app in front, the tab says "No app in front"
+    and waits.
 - **Filters**: a level menu (Default and above; + Info; + Debug; Errors and
   faults), an "Apple subsystems" toggle (off), and a search field. Level,
   subsystems and app restart the stream; search filters captured lines.
@@ -122,10 +127,13 @@ D settle-and-diff, E held calls for VMs).
     `crashReports(udid:bundleID:since:)`.
   - `DeviceCommand.logs(...)`, decoded in `AlasCLIRequest`.
 - `ThirdParty/serve-sim-native/.../AlasSimulatorSession.swift` (Alas's file):
-  a static `frontmostApp(udid:)` calling the vendored `frontmostApp`. No
-  upstream file changes.
+  a static `frontmostApp(udid:)` calling the vendored `frontmostApp`, the
+  fallback when SpringBoard logged nothing in 10 minutes. No upstream file
+  changes.
 - `AlasSimService` and `SimServiceProtocol`: `frontmostApp(udid:reply:)`;
-  `SimulatorStreamClient.frontmostApp(udid:) async throws -> String?`.
+  `SimulatorStreamClient.frontmostApp(udid:) async -> String?`.
+- AlasCore `SimulatorForeground`: folds SpringBoard's lines into the app in
+  front, ported from `foreground-tracker.ts`.
 - App:
   - `Tab.simulatorLogs(SimulatorLogsTabState)` and
     `TabsManager.openOrFocusSimulatorLogs`.
@@ -133,7 +141,7 @@ D settle-and-diff, E held calls for VMs).
   - `SimulatorLogsTabView`; the Logs button in `DevicesActions`.
   - `DeviceAgentControl` runs `.logs` as a read through an injected
     `SimulatorLogsControl` protocol (live: `SimulatorControl` plus the
-    stream client's `frontmostApp`).
+    stream client's `frontmostApp` as the fallback).
 - Rust: the `device_logs` definition, parsing, request, and the tool lists.
 
 ## Testing
@@ -149,7 +157,7 @@ D settle-and-diff, E held calls for VMs).
 - Rust: parsing, refusals, tool lists.
 - Not tested: the tab view and the process plumbing. A throwaway end-to-end
   run on a booted simulator (a crashing app, `log show`, the crash summary,
-  `frontmostApp` through the real `AlasSimService`), then the user's manual
+  the foreground app from SpringBoard's log), then the user's manual
   pass.
 
 ## Docs

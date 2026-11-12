@@ -19,12 +19,16 @@ final class SimulatorLogStream {
     @ObservationIgnored private var generation = 0
 
     func start(udid: String, query: SimulatorLogQuery) {
+        start(udid: udid, predicate: query.predicate, levelArguments: query.streamArguments)
+    }
+
+    func start(udid: String, predicate: String?, levelArguments: [String]) {
         stop()
         generation += 1
         let current = generation
         stopReason = nil
-        var args = ["simctl", "spawn", udid, "log", "stream", "--style", "ndjson"] + query.streamArguments
-        if let predicate = query.predicate { args += ["--predicate", predicate] }
+        var args = ["simctl", "spawn", udid, "log", "stream", "--style", "ndjson"] + levelArguments
+        if let predicate { args += ["--predicate", predicate] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = args

@@ -199,12 +199,23 @@ public protocol SimulatorLogsControl: Sendable {
 public struct LiveSimulatorLogs: SimulatorLogsControl {
     private let frontmost: @Sendable (String) async -> String?
 
-    /// `frontmostApp` asks AlasSimService, which the app owns.
+    /// `frontmostApp` asks AlasSimService's accessibility bridge, the fallback
+    /// when SpringBoard logged nothing recently.
     public init(frontmostApp: @escaping @Sendable (String) async -> String?) {
         frontmost = frontmostApp
     }
 
-    public func frontmostApp(udid: String) async -> String? { await frontmost(udid) }
+    public func frontmostApp(udid: String) async -> String? {
+        if let fromLog = await SimulatorControl.foregroundFromLog(udid: udid) { return fromLog.bundleID }
+        return await reportedFrontmostApp(udid: udid)
+    }
+
+    /// The accessibility bridge's answer, for when SpringBoard's log is silent.
+    public func reportedFrontmostApp(udid: String) async -> String? {
+        let reported = await frontmost(udid)
+        // The bridge names SpringBoard when the home screen is in front.
+        return reported == "com.apple.springboard" ? nil : reported
+    }
 
     public func executables(udid: String) async throws -> [String: String] {
         try await SimulatorControl.appExecutables(udid: udid)
@@ -217,4 +228,68 @@ public struct LiveSimulatorLogs: SimulatorLogsControl {
     public func crashReports(udid: String, bundleID: String?, since: Date) async -> [SimulatorCrashReport] {
         SimulatorControl.crashReports(udid: udid, bundleID: bundleID, since: since)
     }
+}
+
+/// Which app is in front on a simulator, from SpringBoard's log: it logs
+/// `[app<bundle>:pid] Setting process visibility to: Foreground` as apps come
+/// and go. Ported from serve-sim's `foreground-tracker.ts` (Apache-2.0,
+/// ThirdParty/serve-sim-native/LICENSE).
+public struct SimulatorForeground: Equatable, Sendable {
+    /// The `log --predicate` for the lines `apply` reads.
+    public static let predicate =
+        #"process == "SpringBoard" AND (eventMessage CONTAINS "Setting process visibility to:" OR eventMessage CONTAINS "Bootstrap success!")"#
+
+    public private(set) var bundleID: String?
+    private var pid: Int?
+    /// An app shown before its process existed (pid -1), until SpringBoard logs its pid.
+    private var pending: String?
+
+    public init() {}
+
+    /// Applies one SpringBoard log message; anything else is ignored.
+    public mutating func apply(message: String) {
+        if let started = message.firstMatch(of: /\[app<([^>]+)>:(\d+)\] Bootstrap success!/) {
+            if String(started.1) == pending {
+                bundleID = pending
+                pid = Int(started.2)
+                pending = nil
+            }
+            return
+        }
+        guard let change = message.firstMatch(of: /\[app<([^>]+)>:(-1|\d+)\] Setting process visibility to: (Foreground|Background|Unknown)/),
+              Self.isUserFacing(String(change.1))
+        else { return }
+        let app = String(change.1)
+        let changePID = Int(change.2) ?? -1
+        let foreground = change.3 == "Foreground"
+        if changePID == -1 {
+            if foreground {
+                bundleID = nil
+                pid = nil
+                pending = app
+            } else if app == pending {
+                pending = nil
+            }
+            return
+        }
+        if foreground {
+            bundleID = app
+            pid = changePID
+            pending = nil
+        } else if bundleID == app, pid == changePID {
+            // SpringBoard may background an old process after its replacement is in front.
+            bundleID = nil
+            pid = nil
+        }
+    }
+
+    /// False for widgets, extensions and background services, which SpringBoard
+    /// also brings to the foreground.
+    public static func isUserFacing(_ bundleID: String) -> Bool {
+        bundleID.firstMatch(of: nonUI) == nil
+    }
+
+    nonisolated(unsafe) private static let nonUI =
+        /(^|\.)(WidgetRenderer|ExtensionHost|Service|PlaceholderApp|InCallService|CallUI|InCallUI)(\.|$)|\.extension(\.|$)|com\.apple\.(?:[^.]*ViewService$|Preferences\.Cellular|purplebuddy|chrono|shuttle|usernotificationsui)/
+            .ignoresCase()
 }
