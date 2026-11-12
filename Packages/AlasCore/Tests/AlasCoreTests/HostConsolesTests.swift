@@ -670,6 +670,33 @@ struct HostConsolesTests {
         #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.sessionID == nil)
     }
 
+    /// A shell that drops the startup script would open, but never run the
+    /// command it was opened for.
+    @Test func aCommandIsRefusedByAShellThatWouldDropIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles(shell: "/opt/homebrew/bin/fish")
+
+        await #expect(throws: PeerConsoleOpenError.shellCantRunCommands) {
+            try await consoles.open(worktreeId: fixture.worktree.id, command: "claude")
+        }
+        #expect(fixture.launches.isEmpty)
+    }
+
+    /// Work called off while a console was being prepared starts nothing.
+    @Test func aCancelledOpenStartsNothing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let worktreeID = fixture.worktree.id
+        let open = Task { @MainActor in try await consoles.open(worktreeId: worktreeID, command: "claude") }
+        open.cancel()
+
+        await #expect(throws: CancellationError.self) { try await open.value }
+        #expect(fixture.launches.isEmpty)
+        #expect(consoles.summaries().isEmpty)
+    }
+
     private static func git(_ arguments: [String], in directory: URL) async throws {
         let status = try await BlockingWork.run {
             let git = Process()

@@ -155,8 +155,8 @@ extension AlasCoreContext {
                 guard let agent, agent.isEnabled, agent.supportsTerminal else {
                     return (agentID, "\(agent?.displayName ?? agentID) isn't turned on in this host's profile.")
                 }
-                guard hostConsoles?.isAvailable == true else {
-                    return (agentID, "\(agent.displayName) runs in a terminal, and this host has no zmx to run one in.")
+                guard hostConsoles?.runsCommands == true else {
+                    return (agentID, "\(agent.displayName) runs in a terminal, which this host can't start: it needs zmx and a bash or zsh login shell.")
                 }
             }
             return (agentID, RunSchedulePresentation.headlessRefusal(

@@ -151,6 +151,10 @@ public final class HostConsoles {
 
     public var isAvailable: Bool { zmx.isAvailable }
 
+    /// Whether a console can run a command after its session-open script,
+    /// which needs a shell the startup script can be injected into.
+    public var runsCommands: Bool { isAvailable && StartupScriptInstaller.supportsStartupScriptInjection(shell: shell) }
+
     /// Drops saved shells whose zmx session is gone: one that exited while
     /// the host was down.
     public func restore() async {
@@ -213,6 +217,8 @@ public final class HostConsoles {
         worktreeId: String, repoHook: RepoHookConsent? = nil, command: String? = nil, title: String? = nil
     ) async throws -> String {
         guard isAvailable else { throw PeerConsoleOpenError.zmxMissing }
+        // Unsupported shells drop the startup script, and with it the command.
+        if command != nil, !runsCommands { throw PeerConsoleOpenError.shellCantRunCommands }
         let worktree = try admittedWorktree(worktreeId)
         guard let (project, _) = core.projectAndWorktree(withWorktreeId: worktreeId) else { throw PeerConsoleOpenError.worktreeUnavailable }
         let gate: RepoHookGate
@@ -253,6 +259,8 @@ public final class HostConsoles {
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
         await ShellEnvResolver.shared.waitUntilResolved()
+        // Neither wait above throws: work called off meanwhile never starts.
+        try Task.checkCancellation()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
         var registered = false

@@ -45,6 +45,7 @@ public struct PeerConsoleOpenError: Error, Equatable, Sendable {
     public static let worktreeUnavailable = Self("This worktree is no longer available on the host.")
     public static let worktreeBusy = Self("Wait for the current worktree operation to finish before opening a terminal.")
     public static let sshProject = Self("Terminals in SSH projects can't be opened from a peer.")
+    public static let shellCantRunCommands = Self("The host's login shell can't run a startup command; use bash or zsh.")
     public static let zmxMissing = Self(
         "zmx was not found next to alas-host or in /Applications/Alas.app, so this host can't open terminals."
     )
