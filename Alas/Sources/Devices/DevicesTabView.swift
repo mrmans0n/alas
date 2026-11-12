@@ -44,7 +44,13 @@ struct DevicesTabView: View {
                 control: state.deviceControl, agentName: { state.computerUseAgentName($0) }, now: now,
                 appInstall: model.appInstalls[device.udid],
                 onDropApp: { url in Task { await state.installAppForUser(url, on: device) } },
-                onDismissAppInstall: { model.dismissAppInstall(udid: device.udid) }
+                onDismissAppInstall: { model.dismissAppInstall(udid: device.udid) },
+                notice: model.notices[device.udid],
+                onPaste: {
+                    let text = NSPasteboard.general.string(forType: .string)
+                    Task { await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard) }
+                },
+                onCopy: { Task { await model.copy(udid: device.udid, pasteboard: state.devicePasteboard) } }
             )
             .id(device.udid)
         case .simulator(let device, .booting):

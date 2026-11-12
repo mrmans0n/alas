@@ -15,6 +15,10 @@ struct DeviceStage: View {
     let appInstall: DevicePaneModel.AppInstall?
     let onDropApp: (URL) -> Void
     let onDismissAppInstall: () -> Void
+    /// A short message after a copy or paste.
+    let notice: String?
+    let onPaste: () -> Void
+    let onCopy: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -71,7 +75,8 @@ struct DeviceStage: View {
             DeviceScreenView(
                 udid: device.udid, client: client, onStopped: { streamError = $0 },
                 allowsInput: allowsInput, onBlockedClick: pulsePill,
-                onDropApp: onDropApp, onDropTargeted: { dropTargeted = $0 }
+                onDropApp: onDropApp, onDropTargeted: { dropTargeted = $0 },
+                onPaste: onPaste, onCopy: onCopy
             )
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
@@ -93,12 +98,15 @@ struct DeviceStage: View {
             if let appInstall {
                 appInstallPill(appInstall)
                     .padding(.bottom, scale.space[3])
+            } else if let notice {
+                pill { Text(notice).foregroundStyle(theme.color("fg")) }
+                    .padding(.bottom, scale.space[3])
             }
         }
     }
 
     private func appInstallPill(_ install: DevicePaneModel.AppInstall) -> some View {
-        HStack(spacing: 6) {
+        pill {
             switch install {
             case .installing(let name):
                 ProgressView().controlSize(.mini)
@@ -118,14 +126,18 @@ struct DeviceStage: View {
                     .foregroundStyle(theme.color("accent"))
             }
         }
-        .font(scale.caption.font)
-        .lineLimit(2)
-        .padding(.horizontal, scale.space[3])
-        .padding(.vertical, scale.space[1])
-        .background(.ultraThinMaterial, in: Capsule())
-        .background(theme.color("bg-2").opacity(0.6), in: Capsule())
-        .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .padding(.horizontal, scale.space[3])
+    }
+
+    private func pill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 6, content: content)
+            .font(scale.caption.font)
+            .lineLimit(2)
+            .padding(.horizontal, scale.space[3])
+            .padding(.vertical, scale.space[1])
+            .background(.ultraThinMaterial, in: Capsule())
+            .background(theme.color("bg-2").opacity(0.6), in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .padding(.horizontal, scale.space[3])
     }
 
     private func driverPill(_ driver: VMDriver) -> some View {

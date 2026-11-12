@@ -1,4 +1,5 @@
 import AlasCore
+import AppKit
 import Foundation
 import Observation
 
@@ -60,6 +61,50 @@ final class DevicePaneModel {
     /// Shows why an app couldn't be installed, in the simulator's app pill.
     func failAppInstall(udid: String, message: String) {
         appInstalls[udid] = .failed(message)
+    }
+
+    /// A short message on each simulator's screen, after a copy or paste.
+    private(set) var notices: [String: String] = [:]
+    @ObservationIgnored private var noticeTasks: [String: Task<Void, Never>] = [:]
+
+    /// Pastes the Mac clipboard's text into the simulator's focused field.
+    func paste(_ text: String?, udid: String, pasteboard: DevicePasteboard) async {
+        guard let text, !text.isEmpty else { return show("The clipboard has no text to paste.", udid: udid) }
+        guard text.utf8.count <= 1_000_000 else { return show("That text is too long to paste.", udid: udid) }
+        do {
+            let paste = try await pasteboard.open(udid: udid, keepText: false)
+            do { try await pasteboard.paste(text, in: paste) } catch {
+                await pasteboard.close(paste)
+                return show("Couldn't paste: \(error.localizedDescription)", udid: udid)
+            }
+            await pasteboard.close(paste)
+        } catch {
+            show("Couldn't paste: \(error.localizedDescription)", udid: udid)
+        }
+    }
+
+    /// Copies the simulator's selection to the Mac clipboard.
+    func copy(udid: String, pasteboard: DevicePasteboard) async {
+        do {
+            guard let text = try await pasteboard.copy(udid: udid) else {
+                return show("Nothing was copied. Select some text first.", udid: udid)
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            show("Copied", udid: udid)
+        } catch {
+            show("Couldn't copy: \(error.localizedDescription)", udid: udid)
+        }
+    }
+
+    private func show(_ notice: String, udid: String) {
+        notices[udid] = notice
+        noticeTasks[udid]?.cancel()
+        noticeTasks[udid] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.notices[udid] = nil
+        }
     }
 
     func refresh() async {

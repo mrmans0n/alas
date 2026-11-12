@@ -238,7 +238,7 @@ enum DesignCaptureDevices {
         func stage(_ device: SimulatorDevice, control: DeviceAgentControl, install: DevicePaneModel.AppInstall?) -> some View {
             DeviceStage(
                 device: device, shape: shape, client: client, control: control, agentName: { _ in "Claude" }, now: now,
-                appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {})
+                appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {}, notice: nil, onPaste: {}, onCopy: {})
         }
         let agentVMDriver = VMDriverStatus.make(
             driver: .agent(sessionID: "demo-agent", tool: "computer_click", at: now.addingTimeInterval(-4)), agentName: "Claude", now: now)
