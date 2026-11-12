@@ -125,9 +125,11 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
                 AlasButton(title: cancelTitle, style: .subtle, action: onCancel)
                     .disabled(!cancelEnabled)
                     .opacity(cancelEnabled ? 1 : 0.5)
-                AlasButton(title: confirmTitle, style: confirmStyle, action: onConfirm)
+                // A dimmed accent fill swallows its own dark label, so a
+                // disabled confirm drops to the neutral style instead.
+                AlasButton(title: confirmTitle, style: confirmEnabled ? confirmStyle : .normal, action: onConfirm)
                     .disabled(!confirmEnabled)
-                    .opacity(confirmEnabled ? 1 : 0.5)
+                    .opacity(confirmEnabled ? 1 : 0.6)
             }
             .padding(.horizontal, scale.space[5]).padding(.vertical, scale.space[3])
             .background(theme.color("bg-2"))
