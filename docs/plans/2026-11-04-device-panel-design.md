@@ -147,9 +147,8 @@ they land. The `simctl` subcommands were checked against Xcode 26.6's
 
 iOS:
 
-- [ ] Rotate, lock, Siri, side button and app switcher buttons.
-  `HIDInjector.sendOrientation` and `sendButton` are already vendored; this
-  is toolbar work plus `AlasSimulatorSession` methods.
+- [x] Rotate, lock, Siri, side button and app switcher buttons. Rotation
+  also for agents (`device_rotate`).
 - [ ] Foldable hinge and pose. Needs `HingePoseControl` wiring and possibly
   more vendored files (add them to `vendored-files.txt`).
 - [x] Settings drawer: appearance, text size, increase contrast
@@ -165,8 +164,8 @@ iOS:
   `device_launch`), drag and drop, and run scripts with `# alas-app:`.
 - [x] Clipboard both ways: ⌘C/⌘V on the screen, `device_clipboard`, and
   `device_type` pasting words beyond ASCII.
-- [ ] Screenshot and screen recording (`simctl io <udid> screenshot|recordVideo`,
-  or a PNG from the frames Alas already receives).
+- [x] Screenshot and screen recording: the toolbar's screenshot and record
+  buttons, and `device_record` for agents (`simctl io <udid> recordVideo`).
 - [x] Device logs: a Logs tab following the foreground app, crash report
   summaries, and `device_logs` for agents.
 - [ ] VoiceOver, reduce motion and an accessibility overlay. serve-sim's

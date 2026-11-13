@@ -149,7 +149,9 @@ records, the button shows the recording, is disabled, and its tooltip says
 - `stop` returns `{"path": "<file>", "seconds": <duration>}`, also for a
   recording that already ended on its own.
 - Files go to `~/Library/Caches/Alas/Recordings/<udid>-<timestamp>.mov`.
-  Alas deletes ones older than 7 days at launch.
+  Alas deletes ones older than 7 days when the recorder is first used.
+- The video keeps the panel's portrait frame (1206×2622 on an iPhone 17),
+  whatever the orientation: `recordVideo` records the framebuffer.
 - Errors: `device_not_booted`; `device_recording_busy: <who> is recording
   <device>.`; `device_not_recording`; `device_record_failed: <reason>`.
 
