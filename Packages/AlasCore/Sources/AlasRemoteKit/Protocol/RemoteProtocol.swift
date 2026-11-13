@@ -291,7 +291,7 @@ public struct RemoteBooleanOption: Codable, Equatable, Sendable {
 }
 
 /// Client → server. `type` discriminates.
-public enum RemoteClientMessageOf<HostRequest: Codable & Equatable & Sendable, HostReply: Codable & Equatable & Sendable>: Equatable, Sendable {
+public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, ServerHost: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// Sent by Alas peer connections after the server's `hello`. Browsers
     /// never send it and servers never wait for it.
     ///
@@ -386,10 +386,10 @@ public enum RemoteClientMessageOf<HostRequest: Codable & Equatable & Sendable, H
     /// Forwarded run endpoint traffic; see `PeerPortForwardRequest`.
     case portForward(PeerPortForwardRequest)
     /// A host protocol message; see `HostClientMessage`.
-    case host(HostRequest)
+    case host(ClientHost)
     /// The answer to a `RemoteServerMessage.peerHost` request, or an event of
     /// a subscription it opened: see `HostProtocolCapability.delegationReverseV1`.
-    case peerHost(HostReply)
+    case peerHost(ServerHost)
 }
 
 extension RemoteClientMessageOf: Codable {
@@ -575,9 +575,9 @@ extension RemoteClientMessageOf: Codable {
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardRequest.self, forKey: .portForward))
         case "host":
-            self = .host(try c.decode(HostRequest.self, forKey: .host))
+            self = .host(try c.decode(ClientHost.self, forKey: .host))
         case "peerHost":
-            self = .peerHost(try c.decode(HostReply.self, forKey: .peerHost))
+            self = .peerHost(try c.decode(ServerHost.self, forKey: .peerHost))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -858,7 +858,7 @@ extension RemoteClientMessageOf {
 }
 
 /// Server → client. `type` discriminates.
-public enum RemoteServerMessageOf<HostReply: Codable & Equatable & Sendable, HostRequest: Codable & Equatable & Sendable>: Equatable, Sendable {
+public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, ClientHost: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
     /// `capabilities` lists optional features this Mac serves, such as
     /// `PeerConsoleCapability.v1`; absent on older Macs.
@@ -966,12 +966,12 @@ public enum RemoteServerMessageOf<HostReply: Codable & Equatable & Sendable, Hos
     /// Forwarded run endpoint traffic; see `PeerPortForwardEvent`.
     case portForward(PeerPortForwardEvent)
     /// A host protocol message; see `HostServerMessage`.
-    case host(HostReply)
+    case host(ServerHost)
     /// A host protocol request from this server to the client, sent only on a
     /// socket whose `helloAck` acknowledged
     /// `HostProtocolCapability.delegationReverseV1`. A client that does not
     /// know the case skips it.
-    case peerHost(HostRequest)
+    case peerHost(ClientHost)
 }
 
 extension RemoteServerMessageOf: Codable {
@@ -1011,9 +1011,9 @@ extension RemoteServerMessageOf: Codable {
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardEvent.self, forKey: .portForward))
         case "host":
-            self = .host(try c.decode(HostReply.self, forKey: .host))
+            self = .host(try c.decode(ServerHost.self, forKey: .host))
         case "peerHost":
-            self = .peerHost(try c.decode(HostRequest.self, forKey: .peerHost))
+            self = .peerHost(try c.decode(ClientHost.self, forKey: .peerHost))
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),

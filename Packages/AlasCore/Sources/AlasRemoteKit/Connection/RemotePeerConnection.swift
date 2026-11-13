@@ -1,25 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
-import AlasAgents
-
-@MainActor
-public protocol RemotePeerConnecting: AnyObject {
-    var state: RemotePeerConnection.State { get }
-    func connect()
-    func disconnect()
-    func send(_ message: RemoteClientMessage)
-    /// What this link serves the peer back, when the peer's `hello` offers
-    /// it; set before `connect()`.
-    func acknowledge(_ capabilities: [String])
-}
-
-extension RemotePeerConnecting {
-    public func acknowledge(_ capabilities: [String]) {}
-}
 
 /// One outbound WebSocket to a paired Mac. Mirrors `hub-links.js`: try the
 /// last good origin then the rest with a handshake timeout, expect `hello`
@@ -36,7 +15,7 @@ extension RemotePeerConnecting {
 /// to close the socket. Releasing an owner without disconnecting leaks the
 /// object, its task, and an open socket to the peer.
 @MainActor
-public final class RemotePeerConnection: RemotePeerConnecting {
+public final class RemotePeerConnectionOf<ClientHost: Codable & Equatable & Sendable, ServerHost: Codable & Equatable & Sendable> {
     public enum State: Equatable, Sendable {
         case idle
         case connecting
@@ -63,7 +42,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
         case stateChanged(State)
         case hello(serverId: String, name: String, protocolVersion: Int, federationEnabled: Bool, capabilities: [String] = [], hostVersion: String? = nil)
         case originChanged(String)
-        case message(RemoteServerMessage)
+        case message(RemoteServerMessageOf<ServerHost, ClientHost>)
     }
 
     public struct Config: Sendable {
@@ -147,7 +126,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
         setState(.idle)
     }
 
-    public func send(_ message: RemoteClientMessage) {
+    public func send(_ message: RemoteClientMessageOf<ClientHost, ServerHost>) {
         guard state == .online, let socket, let data = try? JSONEncoder().encode(message) else { return }
         socket.send(.data(data)) { _ in }
     }
@@ -179,9 +158,9 @@ public final class RemotePeerConnection: RemotePeerConnecting {
             let candidate = session.webSocketTask(with: url, protocols: [token])
             // Older peers send entire transcripts in one frame. Match our
             // server's frame cap rather than URLSession's default 1 MiB.
-            candidate.maximumMessageSize = WebSocketFrame.maxPayloadLength
+            candidate.maximumMessageSize = RemoteWireLimits.maxFrameBytes
             candidate.resume()
-            let first: RemoteServerMessage
+            let first: RemoteServerMessageOf<ServerHost, ClientHost>
             switch await receive(from: candidate, timeout: config.handshakeTimeout) {
             case .message(let message):
                 first = message
@@ -345,14 +324,14 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     private func proveIdentity(on socket: URLSessionWebSocketTask, serverId: String, acknowledging capabilities: [String]) async -> Bool {
         guard let expectedPublicKey else {
             if let ack = try? JSONEncoder().encode(
-                RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, capabilities: capabilities)) {
+                RemoteClientMessageOf<ClientHost, ServerHost>.helloAck(protocolVersion: config.localProtocolVersion, capabilities: capabilities)) {
                 socket.send(.data(ack)) { _ in }
             }
             return true
         }
         let challenge = RemoteIdentityCrypto.randomChallenge()
         guard let ack = try? JSONEncoder().encode(
-            RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, challenge: challenge,
+            RemoteClientMessageOf<ClientHost, ServerHost>.helloAck(protocolVersion: config.localProtocolVersion, challenge: challenge,
                                          capabilities: capabilities))
         else { return false }
         socket.send(.data(ack)) { _ in }
@@ -361,7 +340,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
         // any moment. Skip past a few of those rather than reading one
         // frame and declaring failure; nothing is lost by discarding them,
         // since this link has subscribed to nothing yet.
-        for _ in 0..<Self.maxFramesBeforeProof {
+        for _ in 0..<maxFramesBeforeProof {
             if Task.isCancelled { return false }
             guard case .message(let message) = await receive(from: socket, timeout: config.handshakeTimeout) else {
                 return false
@@ -377,7 +356,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     /// How many non-proof frames a peer may send before its proof. Bounded so
     /// a peer that answers a challenge with an endless stream of other frames
     /// cannot hold the handshake open indefinitely.
-    private static let maxFramesBeforeProof = 4
+    private var maxFramesBeforeProof: Int { 4 }
 
     private func pump(_ socket: URLSessionWebSocketTask) async {
         while !Task.isCancelled {
@@ -390,7 +369,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
             }
             // Messages this build does not know are skipped, so a newer peer
             // never kills the link.
-            guard let message = try? JSONDecoder().decode(RemoteServerMessage.self, from: payload) else { continue }
+            guard let message = try? JSONDecoder().decode(RemoteServerMessageOf<ServerHost, ClientHost>.self, from: payload) else { continue }
             onEvent(.message(message))
         }
     }
@@ -401,7 +380,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     /// accepted, so probing `/health` on those would report a slow peer — or
     /// one a protocol revision ahead — as having revoked our pairing.
     private enum Handshake {
-        case message(RemoteServerMessage)
+        case message(RemoteServerMessageOf<ServerHost, ClientHost>)
         case failed
         case noUsableFrame
     }
@@ -416,7 +395,7 @@ public final class RemotePeerConnection: RemotePeerConnecting {
                 case .string(let s): payload = Data(s.utf8)
                 @unknown default: return .noUsableFrame
                 }
-                guard let message = try? JSONDecoder().decode(RemoteServerMessage.self, from: payload) else {
+                guard let message = try? JSONDecoder().decode(RemoteServerMessageOf<ServerHost, ClientHost>.self, from: payload) else {
                     return .noUsableFrame
                 }
                 return .message(message)
@@ -454,8 +433,6 @@ public final class RemotePeerConnection: RemotePeerConnecting {
     /// server is never mistaken for one that toggled the flag.
     /// Returns `nil` when the probe fails or answers as someone else.
     private func healthCheck(_ origin: String) async -> Bool? {
-        struct Health: Decodable { let serverId: String?
-        let federationEnabled: Bool? }
         guard let normalized = RemotePairingLink.normalizeOrigin(origin),
               let url = URL(string: normalized + "/health") else { return nil }
         var request = URLRequest(url: url)
@@ -515,4 +492,11 @@ public final class RemotePeerConnection: RemotePeerConnecting {
         components.path = "/ws"
         return components.url
     }
+}
+
+/// The `/health` fields the connection reads. Outside the class because a
+/// generic function cannot nest a type.
+private struct Health: Decodable {
+    let serverId: String?
+    let federationEnabled: Bool?
 }

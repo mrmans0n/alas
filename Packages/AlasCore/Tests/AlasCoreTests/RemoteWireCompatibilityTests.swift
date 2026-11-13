@@ -73,6 +73,6 @@ enum RemoteWireSamples {
         ]),
         .queueMove(sessionId: "s1", itemId: "q1", targetItemId: "q2"),
         .setConfigOption(sessionId: "s1", configId: "thinking", value: .string("high")),
-        .subscribe(sessionId: "s1"),
+        .host(HostClientMessage(id: 5, request: .listSessions)),
     ]
 }
