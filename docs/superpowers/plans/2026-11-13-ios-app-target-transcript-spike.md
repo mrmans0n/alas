@@ -178,6 +178,8 @@ A `CADisplayLink` meter reports hitch time and frame rate on screen. Nothing in 
 
 ### Task 4: Measure on a phone and decide
 
+> Superseded 2026-11-14: the owner chose candidate A without a device benchmark (see the spec's "Left to the builder"). Keep the runbook below for when real rows exist.
+
 **Files:**
 - Create: `docs/superpowers/specs/2026-11-13-ios-transcript-spike-results.md` (`git add -f`)
 - Modify: `docs/superpowers/specs/2026-11-11-native-ios-app-design.md` ("Left to the builder", the rendering line, which now records the choice)
