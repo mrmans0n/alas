@@ -25,6 +25,12 @@ C small controls, D settle-and-diff, E held calls for VMs).
 - `computer_*` actions read the window back after a fixed 300 ms and return
   the elements; there is no diffing to reuse.
 
+- End-to-end on an iPhone 17: a tap that navigates in Settings returned the
+  new screen in about 2 s (settling plus a 1 s snapshot); typing into a
+  text view with the software keyboard up returned the whole screen,
+  because the keyboard's keys relabel (Q → q, suggestions) and fewer than
+  half of the elements match.
+
 ## Decisions
 
 - Settle-and-diff runs by default after input actions; `diff: false` skips
