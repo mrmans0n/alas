@@ -52,6 +52,9 @@ public enum DeviceCommand: Equatable, Sendable {
     case logs(udid: String, sinceSeconds: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int)
     /// `text` nil reads the pasteboard; otherwise it sets it.
     case clipboard(udid: String, text: String?)
+    case rotate(udid: String, orientation: DeviceScreenOrientation)
+    /// `start` false stops the recording.
+    case record(udid: String, start: Bool)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -73,6 +76,8 @@ public enum DeviceCommand: Equatable, Sendable {
         case .openURL: "device_open_url"
         case .logs: "device_logs"
         case .clipboard: "device_clipboard"
+        case .rotate: "device_rotate"
+        case .record: "device_record"
         }
     }
 
@@ -83,7 +88,7 @@ public enum DeviceCommand: Equatable, Sendable {
              .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
              .install(let udid, _), .launch(let udid, _), .setAppearance(let udid, _, _, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _),
-             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _):
+             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _), .record(let udid, _):
             udid
         }
     }
@@ -118,6 +123,7 @@ public enum DeviceCommand: Equatable, Sendable {
         var since_seconds: Int?
         var level: String?
         var include_apple: Bool?
+        var orientation: String?
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -138,6 +144,8 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_open_url": ["udid", "url"],
         "device_logs": ["udid", "since_seconds", "bundle_id", "level", "include_apple", "query", "limit"],
         "device_clipboard": ["udid", "text"],
+        "device_rotate": ["udid", "orientation"],
+        "device_record": ["udid", "action"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -266,6 +274,12 @@ public enum DeviceCommand: Equatable, Sendable {
         case "device_clipboard":
             if let text = params.text, text.utf8.count > 65536 { throw AlasCLIRequestError.malformed }
             return .clipboard(udid: try udid(), text: params.text)
+        case "device_rotate":
+            guard let orientation = params.orientation else { throw AlasCLIRequestError.malformed }
+            return .rotate(udid: try udid(), orientation: try enumValue(DeviceScreenOrientation.self, orientation))
+        case "device_record":
+            guard let action = params.action, ["start", "stop"].contains(action) else { throw AlasCLIRequestError.malformed }
+            return .record(udid: try udid(), start: action == "start")
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)
