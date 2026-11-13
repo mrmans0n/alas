@@ -419,7 +419,9 @@ final class DeviceAgentControl {
                 return .text([Self.json(["recording": true])])
             }
             let finished = try await recorder.stop(udid: udid, owner: owner)
-            return .text([Self.json(["path": finished.file.path, "seconds": (finished.seconds * 10).rounded() / 10])])
+            // A decimal, so the JSON says 3.3 and not 3.2999999999999998.
+            let seconds = NSDecimalNumber(string: String(format: "%.1f", finished.seconds))
+            return .text([Self.json(["path": finished.file.path, "seconds": seconds])])
         } catch {
             switch error {
             case .busy(let other):
