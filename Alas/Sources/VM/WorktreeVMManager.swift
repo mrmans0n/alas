@@ -497,19 +497,21 @@ final class WorktreeVMManager {
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }
-            let template = fromTemplate ? matchingTemplate(
-                worktreeID: worktreeID, guest: .macOS, goldenBuild: golden.url.lastPathComponent,
-                goldenSealedMarker: golden.sealedMarker) : nil
-            let fromTemplate = template.flatMap { template in
-                cloneFromTemplate(worktreeID, template: template, to: destination) {
-                    try VMBundle.cloneForWorktree(
-                        golden: golden, to: destination,
-                        newMachineIdentifier: Self.newMachineIdentifier(),
-                        newMACAddress: VZMACAddress.randomLocallyAdministered().string,
-                        diskFrom: template.slot.appendingPathComponent("disk.img"),
-                        auxiliaryStorageFrom: template.slot.appendingPathComponent("aux.img"))
+            let fromTemplate = !fromTemplate ? nil : (try? Self.withTemplatesLocked(root: root) {
+                matchingTemplate(
+                    worktreeID: worktreeID, guest: .macOS, goldenBuild: golden.url.lastPathComponent,
+                    goldenSealedMarker: golden.sealedMarker
+                ).flatMap { template in
+                    cloneFromTemplate(worktreeID, template: template, to: destination) {
+                        try VMBundle.cloneForWorktree(
+                            golden: golden, to: destination,
+                            newMachineIdentifier: Self.newMachineIdentifier(),
+                            newMACAddress: VZMACAddress.randomLocallyAdministered().string,
+                            diskFrom: template.slot.appendingPathComponent("disk.img"),
+                            auxiliaryStorageFrom: template.slot.appendingPathComponent("aux.img"))
+                    }
                 }
-            }
+            }) ?? nil
             let bundle: VMBundle
             if let fromTemplate {
                 bundle = fromTemplate
@@ -556,15 +558,17 @@ final class WorktreeVMManager {
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }
-            let template = fromTemplate ? matchingTemplate(
-                worktreeID: worktreeID, guest: .linux, goldenBuild: golden.url.lastPathComponent,
-                goldenSealedMarker: golden.sealedMarker) : nil
-            let fromTemplate = template.flatMap { template in
-                cloneFromTemplate(id, template: template, to: destination) {
-                    VMBundle(url: try LinuxVMBundle.cloneForWorktree(
-                        golden: golden, to: destination, diskFrom: template.slot.appendingPathComponent("disk.img")).url)
+            let fromTemplate = !fromTemplate ? nil : (try? Self.withTemplatesLocked(root: root) {
+                matchingTemplate(
+                    worktreeID: worktreeID, guest: .linux, goldenBuild: golden.url.lastPathComponent,
+                    goldenSealedMarker: golden.sealedMarker
+                ).flatMap { template in
+                    cloneFromTemplate(id, template: template, to: destination) {
+                        VMBundle(url: try LinuxVMBundle.cloneForWorktree(
+                            golden: golden, to: destination, diskFrom: template.slot.appendingPathComponent("disk.img")).url)
+                    }
                 }
-            }
+            }) ?? nil
             let bundle: LinuxVMBundle
             if let fromTemplate {
                 bundle = LinuxVMBundle(url: fromTemplate.url)
@@ -1199,11 +1203,26 @@ final class WorktreeVMManager {
         return (golden.url.lastPathComponent, sealedAt)
     }
 
+    /// Runs `body` holding `<root>/templates.lock`, so no Alas process publishes, clones or prunes
+    /// a template meanwhile: a clone never mixes one publish's `template.json` with another's disk.
+    nonisolated static func withTemplatesLocked<T>(root: URL, _ body: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fd = open(root.appendingPathComponent("templates.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        while flock(fd, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        return try body()
+    }
+
     /// Removes the templates nothing can clone again: those of projects not in `liveProjectIDs`,
     /// those made from another golden than the current one, and unreadable or partial slots.
-    // ponytail: a slot another Alas process is publishing right now (`.partial`) is removed too;
-    // that publish then fails and the next first boot publishes again.
     nonisolated static func pruneTemplates(liveProjectIDs: Set<String>, root: URL) {
+        try? withTemplatesLocked(root: root) { pruneTemplatesLocked(liveProjectIDs: liveProjectIDs, root: root) }
+    }
+
+    nonisolated private static func pruneTemplatesLocked(liveProjectIDs: Set<String>, root: URL) {
         let fm = FileManager.default
         let slots = (try? fm.contentsOfDirectory(at: templatesDirectory(root: root), includingPropertiesForKeys: nil)) ?? []
         for slot in slots {
@@ -1270,26 +1289,34 @@ final class WorktreeVMManager {
     /// replacing the project's earlier one. Never throws: a VM without a template only loses a
     /// shortcut. Called with the disk claimed.
     private func publish(_ template: VMTemplate, from id: String, bundle: VMBundle) {
-        let fm = FileManager.default
-        let slot = Self.templateSlot(projectID: template.projectID, guest: template.guest, root: root)
-        let partial = slot.appendingPathExtension("partial")
         do {
-            try? fm.removeItem(at: partial)
+            try Self.withTemplatesLocked(root: root) { try Self.stage(template, from: bundle, root: root) }
+            logger.notice("Published VM \(id, privacy: .public)'s clean point as its project's template")
+        } catch {
+            logger.error("Publishing VM \(id, privacy: .public)'s template failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Builds `template` in its slot's `.partial` and swaps it in. Called with the templates locked.
+    nonisolated private static func stage(_ template: VMTemplate, from bundle: VMBundle, root: URL) throws {
+        let fm = FileManager.default
+        let slot = templateSlot(projectID: template.projectID, guest: template.guest, root: root)
+        let partial = slot.appendingPathExtension("partial")
+        try? fm.removeItem(at: partial)
+        do {
             try fm.createDirectory(at: partial, withIntermediateDirectories: true)
             try VMBundle.cloneFile(
-                Self.cleanDirectory(of: bundle).appendingPathComponent("disk.img"),
-                to: partial.appendingPathComponent("disk.img"))
+                cleanDirectory(of: bundle).appendingPathComponent("disk.img"), to: partial.appendingPathComponent("disk.img"))
             if template.guest == .macOS {
                 try VMBundle.cloneFile(bundle.auxiliaryStorage, to: partial.appendingPathComponent("aux.img"))
             }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(template).write(to: Self.templateFile(in: partial))
-            try Self.moveDirectory(partial, into: slot)
-            logger.notice("Published VM \(id, privacy: .public)'s clean point as its project's template")
+            try encoder.encode(template).write(to: templateFile(in: partial))
+            try moveDirectory(partial, into: slot)
         } catch {
             try? fm.removeItem(at: partial)
-            logger.error("Publishing VM \(id, privacy: .public)'s template failed: \(String(describing: error), privacy: .public)")
+            throw error
         }
     }
 
