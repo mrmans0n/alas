@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */; };
+		9DEA36562A5134739052EBC3 /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8250C9560021C379E369398E /* MarkdownBlocks.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
+		D3DB8E846E8D84254E305E74 /* SpikeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36A12D26A237EF3A236956B /* SpikeRowView.swift */; };
 		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
 		FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A0D3457CA4F83043146752 /* SpikeTranscript.swift */; };
 /* End PBXBuildFile section */
@@ -18,7 +20,9 @@
 		23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
+		8250C9560021C379E369398E /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
+		D36A12D26A237EF3A236956B /* SpikeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRowView.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -57,6 +61,8 @@
 		30FFFD63A2837F752463B155 /* Spike */ = {
 			isa = PBXGroup;
 			children = (
+				8250C9560021C379E369398E /* MarkdownBlocks.swift */,
+				D36A12D26A237EF3A236956B /* SpikeRowView.swift */,
 				27A0D3457CA4F83043146752 /* SpikeTranscript.swift */,
 			);
 			path = Spike;
@@ -172,6 +178,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
+				9DEA36562A5134739052EBC3 /* MarkdownBlocks.swift in Sources */,
+				D3DB8E846E8D84254E305E74 /* SpikeRowView.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
