@@ -165,7 +165,9 @@ final class DeviceRecorder {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return agentRecordings.appendingPathComponent("\(udid)-\(formatter.string(from: now)).mov")
+        // The suffix keeps two recordings started in the same second apart: simctl overwrites (--force).
+        let suffix = UUID().uuidString.prefix(8)
+        return agentRecordings.appendingPathComponent("\(udid)-\(formatter.string(from: now))-\(suffix).mov")
     }
 
     /// Deletes recordings older than a week.

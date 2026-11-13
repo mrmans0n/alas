@@ -148,6 +148,11 @@ struct DeviceRecorderTests {
         #expect(released == nil)
     }
 
+    @Test func agentRecordingsStartedTogetherGetTheirOwnFiles() {
+        let now = Date()
+        #expect(DeviceRecorder.agentFile(udid: "on", now: now) != DeviceRecorder.agentFile(udid: "on", now: now))
+    }
+
     @Test func recordingsOlderThanAWeekAreDeleted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
