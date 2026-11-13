@@ -5,16 +5,26 @@ import Testing
 
 @MainActor
 struct DevicePasteboardTests {
-    /// Records each call, and the keys sent so far, in one ordered log.
+    /// Records each call, and the keys sent so far, in one ordered log. Like
+    /// `Process.run`, writes and permission changes fail in a cancelled task.
     final class FakePasteboard: SimulatorPasteboardControl, @unchecked Sendable {
         var text = "old"
         var accessBefore = SimulatorPasteAccess.notSet
         var log: [String] = []
         var onRead: () -> Void = {}
-        func read(udid: String) async throws -> String { onRead(); log.append("read"); return text }
-        func write(udid: String, text: String) async throws { log.append("write \(text)"); self.text = text }
+        func read(udid: String) async throws -> String {
+            onRead()
+            log.append("read")
+            return text
+        }
+        func write(udid: String, text: String) async throws {
+            try Task.checkCancellation()
+            log.append("write \(text)")
+            self.text = text
+        }
         func access(udid: String, bundleID: String) async -> SimulatorPasteAccess { accessBefore }
         func setAccess(udid: String, bundleID: String, _ action: SimulatorPrivacyAction) async throws {
+            try Task.checkCancellation()
             log.append("\(action.rawValue) \(bundleID)")
         }
     }
@@ -24,6 +34,18 @@ struct DevicePasteboardTests {
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DevicePasteboard {
         DevicePasteboard(input: input, pasteboard: fake, frontmostApp: { _ in front }, sleep: sleep)
+    }
+
+    @Test func aCancelledCallStillPutsThePasteboardBack() async throws {
+        let fake = FakePasteboard()
+        let pasteboard = pasteboard(fake)
+        let call = Task {
+            let paste = try await pasteboard.open(udid: "on", keepText: true)
+            withUnsafeCurrentTask { $0?.cancel() }
+            await pasteboard.close(paste)
+        }
+        try await call.value
+        #expect(fake.log == ["read", "grant com.example.app", "write old", "reset com.example.app"])
     }
 
     @Test(arguments: [
@@ -60,7 +82,8 @@ struct DevicePasteboardTests {
         let pasteboard = pasteboard(fake)
         #expect(try await pasteboard.copy(udid: "on") == nil)
         var reads = 0
-        fake.onRead = { reads += 1; if reads == 3 { fake.text = "selected" } }
+        fake.onRead = { reads += 1
+        if reads == 3 { fake.text = "selected" } }
         #expect(try await pasteboard.copy(udid: "on") == "selected")
     }
 

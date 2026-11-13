@@ -59,18 +59,23 @@ final class DevicePasteboard {
     }
 
     /// Restores what `open` changed, then gives the pasteboard back. A failed
-    /// restore is logged: the text did get pasted.
+    /// restore is logged: the text did get pasted. The restore runs in its own
+    /// task: a cancelled call must still put things back, and `Process.run`
+    /// ends its process when the calling task is cancelled.
     func close(_ paste: Paste) async {
-        if let oldText = paste.oldText {
-            do { try await pasteboard.write(udid: paste.udid, text: oldText) } catch {
-                Self.log.error("Couldn't restore the pasteboard: \(error.localizedDescription, privacy: .public)")
+        let pasteboard = pasteboard
+        await Task {
+            if let oldText = paste.oldText {
+                do { try await pasteboard.write(udid: paste.udid, text: oldText) } catch {
+                    Self.log.error("Couldn't restore the pasteboard: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        }
-        if let app = paste.app, let restore = app.before.restore {
-            do { try await pasteboard.setAccess(udid: paste.udid, bundleID: app.bundleID, restore) } catch {
-                Self.log.error("Couldn't restore \(app.bundleID, privacy: .public)'s paste permission: \(error.localizedDescription, privacy: .public)")
+            if let app = paste.app, let restore = app.before.restore {
+                do { try await pasteboard.setAccess(udid: paste.udid, bundleID: app.bundleID, restore) } catch {
+                    Self.log.error("Couldn't restore \(app.bundleID, privacy: .public)'s paste permission: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        }
+        }.value
         unlock(paste.udid)
     }
 
