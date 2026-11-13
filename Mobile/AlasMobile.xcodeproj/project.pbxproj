@@ -1,0 +1,395 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */; };
+		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
+		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
+		FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A0D3457CA4F83043146752 /* SpikeTranscript.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
+		23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
+		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
+		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
+		8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
+		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4FB8E1D7D0E5989F88C8FBDF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */,
+				E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1EF7156F26646EE30F2A2229 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */,
+				8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		2F6547DE76BCE39108D4C1DB /* nacho-mobile-app */ = {
+			isa = PBXGroup;
+			children = (
+				1EF7156F26646EE30F2A2229 /* Config */,
+			);
+			name = "nacho-mobile-app";
+			path = ..;
+			sourceTree = "<group>";
+		};
+		30FFFD63A2837F752463B155 /* Spike */ = {
+			isa = PBXGroup;
+			children = (
+				27A0D3457CA4F83043146752 /* SpikeTranscript.swift */,
+			);
+			path = Spike;
+			sourceTree = "<group>";
+		};
+		5DCBB4F5E953BC7D6DCB2D6C /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				1010E3A2D0C79ABD0D0199CC /* AlasCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		86D2285A87658206EB81FAF0 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		C7AF09C68FC5773484E44408 = {
+			isa = PBXGroup;
+			children = (
+				2F6547DE76BCE39108D4C1DB /* nacho-mobile-app */,
+				5DCBB4F5E953BC7D6DCB2D6C /* Packages */,
+				F615C7A44BB3004E95410496 /* Sources */,
+				D95E4E9B0E600B48EF875905 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D95E4E9B0E600B48EF875905 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F555B239BFDC686B6F661BF3 /* AlasMobile.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F615C7A44BB3004E95410496 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				E8A21515D98FB4756AD79B19 /* Info.plist */,
+				86D2285A87658206EB81FAF0 /* App */,
+				30FFFD63A2837F752463B155 /* Spike */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8D8AB32DF61A9CB4A9556AC1 /* AlasMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F452CEC9DEF1A90F68F71159 /* Build configuration list for PBXNativeTarget "AlasMobile" */;
+			buildPhases = (
+				F2004AFA10DDE701AC8ABDA7 /* Sources */,
+				4FB8E1D7D0E5989F88C8FBDF /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AlasMobile;
+			packageProductDependencies = (
+				E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */,
+				98208F3704BAEEBFCA4EE7FB /* Markdown */,
+			);
+			productName = AlasMobile;
+			productReference = F555B239BFDC686B6F661BF3 /* AlasMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7C4E7820118D488C29DC402A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					8D8AB32DF61A9CB4A9556AC1 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 5BC5210B39A29993289F4BB4 /* Build configuration list for PBXProject "AlasMobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C7AF09C68FC5773484E44408;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */,
+				486008F89972136FF8B733D3 /* XCLocalSwiftPackageReference "../Packages/AlasCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = D95E4E9B0E600B48EF875905 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8D8AB32DF61A9CB4A9556AC1 /* AlasMobile */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F2004AFA10DDE701AC8ABDA7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
+				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		11D861DB91FD9C253C62AC5B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_NAME = Alas;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		360844A9A9B55664F0F266E2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_NAME = Alas;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		839F3CDA2D8B9497ACE0D19A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		B336D0C661FC650A46C69EDE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5BC5210B39A29993289F4BB4 /* Build configuration list for PBXProject "AlasMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B336D0C661FC650A46C69EDE /* Debug */,
+				839F3CDA2D8B9497ACE0D19A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F452CEC9DEF1A90F68F71159 /* Build configuration list for PBXNativeTarget "AlasMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				11D861DB91FD9C253C62AC5B /* Debug */,
+				360844A9A9B55664F0F266E2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		486008F89972136FF8B733D3 /* XCLocalSwiftPackageReference "../Packages/AlasCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/AlasCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		98208F3704BAEEBFCA4EE7FB /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
+		E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AlasRemoteKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 7C4E7820118D488C29DC402A /* Project object */;
+}

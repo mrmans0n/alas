@@ -1,0 +1,5 @@
+PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas
+ALAS_DISPLAY_NAME = Alas
+CODE_SIGN_STYLE = Automatic
+// Optional, gitignored: a development team for device builds.
+#include? "AlasMobile-Local.xcconfig"

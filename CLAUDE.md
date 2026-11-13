@@ -11,6 +11,7 @@
 - Use Conventional Commits for commit titles: `type(scope): summary`, or `type: summary` when a scope adds little. For example, `feat(remote): add branch picker` or `docs: clarify setup steps`.
 - Tests use the Swift Testing framework (`import Testing`), not XCTest.
 - After editing `project.yml`, regenerate the Xcode project with `xcodegen` and commit both files.
+- The iOS app is its own xcodegen project, `Mobile/project.yml`; regenerate it with `cd Mobile && xcodegen`.
 - `Info.plist` keys are pinned in `project.yml` under `info: properties:` — edit there, not the plist.
 - Do not introduce large architectural changes without an explicit plan.
 - UI-free core code lives in the `Packages/AlasCore` SwiftPM package. It must not import SwiftUI, AppKit, WebKit, or anything the app builds outside SwiftPM: GhosttyKit, MLX, the Rust tree-sitter grammar pack (`TreeSitterPack`), or fff (`FffC`). Plain SwiftPM dependencies that build from source, such as the `SwiftTreeSitter` runtime, are fine; `swift test --package-path Packages/AlasCore` must keep working without the app build. When core code needs one of the excluded pieces, add a small seam in the package and install the implementation from `PlatformServices.install()` in the app. Anything the app or tests use from the package must be `public`.
