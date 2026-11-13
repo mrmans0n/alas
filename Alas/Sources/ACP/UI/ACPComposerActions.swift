@@ -13,6 +13,11 @@ enum ACPMessageQuote {
     }
 }
 
+enum ACPAttachmentPickerContent: Equatable {
+    case images
+    case allFiles
+}
+
 /// Bridge object SwiftUI surfaces use to invoke commands on the AppKit
 /// text view. The coordinator publishes closures on `makeNSView`; transcript
 /// and composer controls call them without owning editor state.
@@ -22,9 +27,9 @@ final class ACPComposerActions: ObservableObject {
     var selectionSnapshot: (() -> (text: String, range: NSRange)?)?
     var insertMention: ((_ name: String, _ uri: String, _ tokenStart: Int) -> Bool)?
     var insertQuote: ((String) -> Void)?
-    /// Published by the coordinator; opens an image picker and inserts the
-    /// chosen files as chips.
-    var presentImagePicker: (() -> Void)?
+    /// Published by the coordinator; opens a file picker and inserts images,
+    /// supported PDFs, or file-reference chips.
+    var presentAttachmentPicker: ((ACPAttachmentPickerContent) -> Void)?
     /// Published by the coordinator; focuses the composer and pastes the
     /// clipboard into it, as ⌘V would.
     var pasteFromClipboard: (() -> Void)?

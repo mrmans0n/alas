@@ -115,9 +115,9 @@ struct ACPInputField: NSViewRepresentable {
             guard let coord, let tv = coord.textView else { return }
             coord.submit(tv, intent: intent)
         }
-        actions.presentImagePicker = { [weak coord] in
+        actions.presentAttachmentPicker = { [weak coord] content in
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
-            tv.presentImagePicker()
+            tv.presentAttachmentPicker(content: content)
         }
         actions.pasteFromClipboard = { [weak coord] in
             guard let coord, let tv = coord.textView as? ACPNSTextView, tv.isEditable else { return }
@@ -1122,7 +1122,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var onDictationShortcut: (ACPDictationShortcutEvent) -> Void = { _ in }
     private var nextPromptInvalidationGeneration: UInt64 = 0
     private var insertingAcceptedNextPrompt = false
-    private var imagePickerPresented = false
+    private var attachmentPickerPresented = false
     private var dropPending = false
 
     var nextPromptInputState: NextPromptEligibilitySnapshot.Environment {
@@ -1133,7 +1133,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             && (selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0))
         state.hasMarkedText = hasMarkedText()
         state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
-        state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
+        state.isPickerPresented = slashPanel != nil || mentionPanel != nil || attachmentPickerPresented
         state.hasPendingInput = dropPending || coordinator?.hasPendingNextPromptInput == true
         state.isInputBlocked = nextPromptInputBlocked() || coordinator?.hasInFlightSubmit == true
         return state
@@ -2355,29 +2355,27 @@ final class ACPNSTextView: PairedDelimiterTextView {
         if let notice = ACPAttachmentClassifier.notice(for: refused) { onAttachmentNotice(notice) }
     }
 
-    private var offersPDFsInPicker: Bool {
-        pdfAttachments.map { $0.eligible != false } ?? false
-    }
-
-    func presentImagePicker() {
-        guard acceptsImages else { return }
+    func presentAttachmentPicker(content: ACPAttachmentPickerContent) {
         guard isEditable else { return }
         invalidateNextPromptSuggestion()
-        imagePickerPresented = true
+        attachmentPickerPresented = true
         onNextPromptStateChange(nextPromptInputState)
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP] + (offersPDFsInPicker ? [.pdf] : [])
+        if content == .images {
+            panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
+        }
         panel.begin { [weak self] response in
             guard let self else { return }
-            self.imagePickerPresented = false
+            self.attachmentPickerPresented = false
             self.onNextPromptStateChange(self.nextPromptInputState)
             guard response == .OK else { return }
             self.insertAttachmentFiles(
                 panel.urls,
                 worktreeId: self.worktreeIdForStaging,
-                insertionRange: self.selectedRange()
+                insertionRange: self.selectedRange(),
+                referenceOtherFiles: content == .allFiles
             )
         }
     }
@@ -2473,7 +2471,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     /// Attaches `urls` in order. Everything that reads a file's bytes runs off the
     /// main thread, and a whole drop's refusals go out together at the end.
-    private func insertAttachmentFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
+    private func insertAttachmentFiles(
+        _ urls: [URL],
+        worktreeId: String,
+        insertionRange: NSRange,
+        referenceOtherFiles: Bool = false
+    ) {
         guard isEditable else { return }
         let coordinator = coordinator
         let generation = coordinator?.beginPendingImageFileInsertion()
@@ -2487,7 +2490,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             let files = await Task.detached(priority: .userInitiated) {
                 urls.map { ACPAttachmentClassifier.probe($0) }
             }.value
-            guard let plan = self?.attachmentPlan(for: files) else { return }
+            guard let plan = self?.attachmentPlan(for: files, referenceOtherFiles: referenceOtherFiles) else { return }
             var refused = plan.refused
             var nextLocation = insertionRange.location
             var isFirstInsertion = true
@@ -2545,6 +2548,23 @@ final class ACPNSTextView: PairedDelimiterTextView {
                         let reason = (error as? ACPAttachmentStaging.StagingError).map(ACPAttachmentClassifier.Reason.init) ?? .saveFailed
                         refused.append(.init(name: name, reason: reason))
                     }
+                case .reference:
+                    guard let self, self.isEditable else { return }
+                    if let generation,
+                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+                    let beforeLength = self.textStorage?.length ?? 0
+                    let replacementRange = self.asyncImageReplacementRange(
+                        capturedRange: insertionRange,
+                        nextLocation: nextLocation,
+                        isFirstImage: isFirstInsertion
+                    )
+                    let chip = NSMutableAttributedString(attachment: ACPMentionChipAttachment(
+                        displayName: name, uri: item.url.absoluteString
+                    ))
+                    chip.addAttributes([.attachmentURI: item.url.absoluteString], range: NSRange(location: 0, length: chip.length))
+                    self.insertAttachmentChip(chip, replacementRange: replacementRange)
+                    nextLocation = self.nextInsertionLocation(after: replacementRange, beforeLength: beforeLength)
+                    isFirstInsertion = false
                 }
             }
             if let generation,
@@ -2553,12 +2573,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
     }
 
-    private func attachmentPlan(for files: [ACPAttachmentClassifier.File]) -> ACPAttachmentClassifier.Plan? {
+    private func attachmentPlan(
+        for files: [ACPAttachmentClassifier.File],
+        referenceOtherFiles: Bool = false
+    ) -> ACPAttachmentClassifier.Plan? {
         guard isEditable else { return nil }
         let pdfs = pdfAttachments.map {
             ACPAttachmentClassifier.PDFContext(eligible: $0.eligible, usage: stagedPDFUsage(in: $0.directory))
         }
-        return ACPAttachmentClassifier.classify(files, pdfs: pdfs)
+        return ACPAttachmentClassifier.classify(files, pdfs: pdfs, referenceOtherFiles: referenceOtherFiles)
     }
 
     private func nextInsertionLocation(after replacementRange: NSRange, beforeLength: Int) -> Int {
@@ -2568,8 +2591,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     #if DEBUG
-    func insertPickedImageFilesForTesting(_ urls: [URL]) {
-        insertAttachmentFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+    func insertPickedFilesForTesting(_ urls: [URL]) {
+        insertAttachmentFiles(
+            urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange(),
+            referenceOtherFiles: true
+        )
     }
     #endif
 

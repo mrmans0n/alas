@@ -805,7 +805,7 @@ private struct NativePeerComposer: View {
     }
 
     private var attachButton: some View {
-        Button { actions.presentImagePicker?() } label: {
+        Button { actions.presentAttachmentPicker?(.images) } label: {
             Image(systemName: "photo")
                 .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
