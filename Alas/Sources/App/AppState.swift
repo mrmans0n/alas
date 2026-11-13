@@ -752,8 +752,11 @@ final class AppState {
             _ = try? DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
         }
         DeviceRecorder.pruneOldRecordings()
+        madeDeviceRecorder = recorder
         return recorder
     }()
+    /// The recorder once something used it, so quitting doesn't make one.
+    @ObservationIgnored private var madeDeviceRecorder: DeviceRecorder?
     /// Pastes and copies on simulators, for agents and for the user.
     @ObservationIgnored lazy var devicePasteboard = DevicePasteboard(
         input: simulatorStreams, pasteboard: LiveSimulatorPasteboard(),
@@ -2036,6 +2039,8 @@ final class AppState {
             // Clears this process from the VM registry so its slots free up; macOS VMs pause.
             self?.vmIdleSweeper.stop()
             await self?.vmManager.stopAll()
+            // simctl would record on after Alas quits; this also saves your recordings.
+            await self?.madeDeviceRecorder?.stopAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()

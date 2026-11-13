@@ -114,6 +114,16 @@ final class DeviceRecorder {
         await stopByItself(udid: udid, recording: current.recording)
     }
 
+    /// Alas is quitting: every recording ends and its video is written; yours
+    /// are handed on to be saved. Without this, simctl would record on.
+    func stopAll() async {
+        for (udid, current) in running {
+            await stopByItself(udid: udid, recording: current.recording)
+            // An agent's video finishes in the background; quitting waits for it.
+            if let finishing = ended[udid]?[current.owner] { _ = await finishing.value }
+        }
+    }
+
     private func stopByItself(udid: String, recording: any ScreenRecording) async {
         guard let current = running[udid], current.recording === recording else { return }
         running[udid] = nil

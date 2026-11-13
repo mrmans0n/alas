@@ -153,6 +153,20 @@ struct DeviceRecorderTests {
         #expect(DeviceRecorder.agentFile(udid: "on", now: now) != DeviceRecorder.agentFile(udid: "on", now: now))
     }
 
+    @Test func quittingFinishesEveryRecording() async throws {
+        let recordings = Recordings()
+        let recorder = Self.recorder(recordings)
+        var handed: [String] = []
+        recorder.onUserRecordingEnded = { udid, _ in handed.append(udid) }
+        let agent = DeviceRecorder.Owner.agent(sessionID: "s")
+        try recorder.start(udid: "a", owner: .user, file: Self.file)
+        try recorder.start(udid: "b", owner: agent, file: Self.file)
+        await recorder.stopAll()
+        #expect(recordings.made.allSatisfy { $0.stopped })
+        #expect(handed == ["a"])
+        #expect(recorder.owner(udid: "b") == nil)
+    }
+
     @Test func recordingsOlderThanAWeekAreDeleted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
