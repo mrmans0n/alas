@@ -5,30 +5,6 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 
-public enum ACPConfigValue: Codable, Equatable, Hashable, Sendable {
-    case string(String)
-    case boolean(Bool)
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if let b = try? c.decode(Bool.self) {
-            self = .boolean(b)
-            return
-        }
-        self = .string(try c.decode(String.self))
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        switch self {
-        case .string(let value):
-            try c.encode(value)
-        case .boolean(let value):
-            try c.encode(value)
-        }
-    }
-}
-
 /// Per-session configurable option advertised by the agent in
 /// `session/new`. Wire format follows
 /// https://agentclientprotocol.com/protocol/session-config-options —

@@ -587,11 +587,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         ///   local `<base>`); stable across rebases.
         /// - `branchUpstream`: compare against the branch's own `@{u}`.
         /// - `manual`: compare against the per-worktree selected base branch.
-        public enum ChangesComparisonMode: String, Codable, Sendable {
-            case auto
-            case branchUpstream
-            case manual
-        }
+        public typealias ChangesComparisonMode = AlasRemoteKit.ChangesComparisonMode
         public var comparisonMode: ChangesComparisonMode
         public var diffLayoutMode: DiffLayoutMode
         public var diffShowWhitespace: Bool

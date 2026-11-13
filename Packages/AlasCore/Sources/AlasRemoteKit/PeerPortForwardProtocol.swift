@@ -76,7 +76,7 @@ public enum PeerPortForwardEndpoint: Sendable {
     }
 
     /// The host as `NWEndpoint.Host` takes it: lowercased, without IPv6 brackets.
-    static func dialHost(_ host: String) -> String {
+    public static func dialHost(_ host: String) -> String {
         host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 }

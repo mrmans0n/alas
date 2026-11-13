@@ -138,6 +138,13 @@ jobs:
         # the app build starts.
         run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
+      - name: Build AlasRemoteKit for iOS
+        # The module the iOS app shares with the Mac: an iOS-breaking
+        # change here fails fast.
+        run: |
+          cd Packages/AlasCore
+          xcodebuild -scheme AlasRemoteKit -destination 'generic/platform=iOS Simulator' -quiet build
+
       - name: Test Swift test inventory harness
         run: bash scripts/tests/swift-test-inventory/run.sh
 

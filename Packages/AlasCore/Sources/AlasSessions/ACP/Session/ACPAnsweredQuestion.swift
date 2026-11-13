@@ -1,5 +1,6 @@
 import Foundation
 import AlasACP
+import AlasRemoteKit
 
 /// Display-only history of a resolved input. Raw schemas, defaults, request
 /// metadata and secret values never enter this snapshot.

@@ -27,7 +27,7 @@ public struct WebSocketFrame: Equatable, Sendable {
     /// frames are rejected rather than buffered, bounding memory and closing
     /// off a trivial "declare a huge length" denial-of-service.
     /// ~16 MB: fits a ~10 MB image base64-encoded (~13.3 MB) plus JSON overhead.
-    public static let maxPayloadLength = 16_000_000
+    public static var maxPayloadLength: Int { RemoteWireLimits.maxFrameBytes }
 
     /// Server→client frames are never masked (RFC 6455 §5.1).
     public static func encode(opcode: Opcode, payload: Data, compressionEnabled: Bool = false) -> Data {
