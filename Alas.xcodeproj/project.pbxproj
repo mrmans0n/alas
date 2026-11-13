@@ -93,6 +93,7 @@
 		0D37A802776CF90B0CB2D556 /* AppConfigCodeTextRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA74519F0A93299751407753 /* AppConfigCodeTextRenderingTests.swift */; };
 		0D65F2B699E6B0CF0915D25D /* ImageDiffMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */; };
 		0D8046E333B0DA2B45EE78D4 /* RelativeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = EECB91379591DA21D216A894 /* RelativeTime.swift */; };
+		0D8817B0AA170F6218E35493 /* DeviceFrameFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1DEAAB259F42D58F63D906F /* DeviceFrameFingerprint.swift */; };
 		0DA68649E5F3C0018C4309DA /* UpdateThrottleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 708AB670AB611EFB9D216D7C /* UpdateThrottleTests.swift */; };
 		0DB6C3F4DA06AF24182225E6 /* AppState+PromptCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AC28A28C8E0990208E09C8 /* AppState+PromptCards.swift */; };
 		0DD60B05B5698D2301D23168 /* IssueAutocompleteModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3CE61111A4FCFAC4746CE7D /* IssueAutocompleteModelTests.swift */; };
@@ -320,6 +321,7 @@
 		292E443F13B06303EAF8E24B /* CreatingWorktreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3AC3A1F7C5649E75015293 /* CreatingWorktreeView.swift */; };
 		29418562DE5554B282C83D75 /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD9289893FA7DC9DB8565353 /* MarkdownParser.swift */; };
 		295EF629FAAA46FCD6802F4E /* ScrollEventCapturingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22E44126BAFC8F3B515BAC0 /* ScrollEventCapturingView.swift */; };
+		299AA8790F7FAED2FB84979C /* DeviceFrameFingerprintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190659F6C9991F6D67200A4B /* DeviceFrameFingerprintTests.swift */; };
 		29B03005C017F3F40B4034B0 /* RepositoryImportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB12D651DACE6AED9923BAC3 /* RepositoryImportServiceTests.swift */; };
 		2A0E3B915DF645A8545D9B0B /* SpacesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B868809675C4110044C92E /* SpacesManager.swift */; };
 		2A18F8265F467BF33AD69159 /* ProjectGitWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3A9C194105E52A72293855 /* ProjectGitWatcherTests.swift */; };
@@ -2223,6 +2225,7 @@
 		18B5372BF572EBA3A84113E4 /* AgentLifecycleEventMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLifecycleEventMapperTests.swift; sourceTree = "<group>"; };
 		18CA47D5E0D1BF962CF45ABE /* AgentHookInstallNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookInstallNudgeBanner.swift; sourceTree = "<group>"; };
 		18CCEBB9570EAC8EFDDF5BB9 /* WorktreeStateSnapshotterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeStateSnapshotterTests.swift; sourceTree = "<group>"; };
+		190659F6C9991F6D67200A4B /* DeviceFrameFingerprintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceFrameFingerprintTests.swift; sourceTree = "<group>"; };
 		190AAF6F403717ADFDD5CC4C /* AppState+SessionRecap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+SessionRecap.swift"; sourceTree = "<group>"; };
 		191A5B642D485DFC385C73B1 /* WorktreeVMsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeVMsSection.swift; sourceTree = "<group>"; };
 		1936C815E64C7DB204340469 /* ACPMCPStatusControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPStatusControl.swift; sourceTree = "<group>"; };
@@ -3567,6 +3570,7 @@
 		D153832D43BF352B94E34430 /* DiffReviewRenderableContentEqualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRenderableContentEqualityTests.swift; sourceTree = "<group>"; };
 		D1B15CAE2163ED7C1A670F46 /* ACPComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerDraftTests.swift; sourceTree = "<group>"; };
 		D1CD33324CA36118FCEA2BE2 /* AdvancedSettingsVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsVisibilityTests.swift; sourceTree = "<group>"; };
+		D1DEAAB259F42D58F63D906F /* DeviceFrameFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceFrameFingerprint.swift; sourceTree = "<group>"; };
 		D1EEF06CBA4C4EED4F49ADCC /* RunActivityPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunActivityPresentationTests.swift; sourceTree = "<group>"; };
 		D21EB351ED41C599F3094A75 /* SessionSummaryActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummaryActivityTests.swift; sourceTree = "<group>"; };
 		D236AE13489004F65637392A /* ACPImageThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPImageThumbnailTests.swift; sourceTree = "<group>"; };
@@ -4306,6 +4310,7 @@
 				C5ADF2AC196D39DF59097D4A /* CopyFeedbackStateTests.swift */,
 				BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */,
 				F842CE67C55EFE458F9F8F89 /* DeviceAgentControlTests.swift */,
+				190659F6C9991F6D67200A4B /* DeviceFrameFingerprintTests.swift */,
 				5B356F6195BC1AEAFF880808 /* DevicePasteboardTests.swift */,
 				D2EDD53EE98A94F84CB05128 /* DeviceRecorderTests.swift */,
 				40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */,
@@ -5398,6 +5403,7 @@
 				B6FD31B45CA7B329F1564331 /* AppState+DevicesTab.swift */,
 				95F3901910BD8C4542F2C3AD /* AppState+RunScriptApp.swift */,
 				05F3AC03D9863B4F3DF9FF9E /* DeviceAgentControl.swift */,
+				D1DEAAB259F42D58F63D906F /* DeviceFrameFingerprint.swift */,
 				550EA1E92F6E6F8BB3D5DF9A /* DevicePaneModel.swift */,
 				42879DD8654B8A0E40AD6998 /* DevicePasteboard.swift */,
 				39201FFDC67904EC918C7862 /* DeviceRecorder.swift */,
@@ -7923,6 +7929,7 @@
 				6DECB09CDD0C5675A57E6ED7 /* DesignCaptureWorkspace.swift in Sources */,
 				E0260EEB182BE92BB7447832 /* DesignScale.swift in Sources */,
 				C3E21103CE07E4DF23EF7B45 /* DeviceAgentControl.swift in Sources */,
+				0D8817B0AA170F6218E35493 /* DeviceFrameFingerprint.swift in Sources */,
 				6B80542CE6343425CF9D4D72 /* DevicePaneModel.swift in Sources */,
 				682C6C781B7B399F337166C7 /* DevicePasteboard.swift in Sources */,
 				BCB9CCA21E66F24644A36459 /* DeviceRecorder.swift in Sources */,
@@ -8831,6 +8838,7 @@
 				7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */,
 				55055DBF30B97C30A1F67C20 /* DelegatedPromptRowTests.swift in Sources */,
 				1F03C2FCED1744FDFE70C6DF /* DeviceAgentControlTests.swift in Sources */,
+				299AA8790F7FAED2FB84979C /* DeviceFrameFingerprintTests.swift in Sources */,
 				C70D23174B387FF2A0494B70 /* DevicePasteboardTests.swift in Sources */,
 				CAC29A0A45F3E9EC6543670E /* DeviceRecorderTests.swift in Sources */,
 				345BA9A61C85E3B5CC6E3C12 /* DiagnosticDetailsTests.swift in Sources */,
