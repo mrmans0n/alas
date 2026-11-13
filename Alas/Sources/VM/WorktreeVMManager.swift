@@ -525,6 +525,7 @@ final class WorktreeVMManager {
                     throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
                 }
                 try Self.markFirstBootPending(bundle)
+                Self.writeGoldenStamp(of: golden.sealedMarker, into: bundle)
             }
             let now = Date()
             records.append(WorktreeVMRecord(
@@ -576,6 +577,7 @@ final class WorktreeVMManager {
                     throw VMError(message: "The Ubuntu image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
                 }
                 try Self.markFirstBootPending(VMBundle(url: bundle.url))
+                Self.writeGoldenStamp(of: golden.sealedMarker, into: VMBundle(url: bundle.url))
             }
             let now = Date()
             records.append(WorktreeVMRecord(
@@ -967,24 +969,22 @@ final class WorktreeVMManager {
     /// paused VM's point is its disk and saved state. Refused for a stopped VM, whose disk may not
     /// be the state the user means to keep.
     /// `setupScriptHash` is the project's guest setup script the point was taken after.
-    /// With `publishTemplate`, the guest shuts down instead of pausing, and the point also becomes
-    /// its project's template for that script.
+    /// With `publishTemplate`, a first boot's point also becomes its project's template for that
+    /// script (see `templateToPublish`): the guest then shuts down instead of pausing.
     func takeCleanPoint(
         worktreeID: String, guest: VMGuestOS = .macOS, setupScriptHash: String? = nil, publishTemplate: Bool = false
     ) async throws {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         try await withDiskOperation(id) {
-            let wasRunning = try await shutDownForCleanPoint(id, allowPause: !publishTemplate)
             let bundle = bundle(forID: id)
+            let template = publishTemplate ? templateToPublish(id, bundle: bundle, setupScriptHash: setupScriptHash) : nil
+            let wasRunning = try await shutDownForCleanPoint(id, forTemplate: template != nil)
             guard wasRunning || Self.isPaused(bundle) else {
                 throw VMError(message: "Start the VM to save its clean point")
             }
             try withDiskClaimed(id) {
                 try writeCleanPoint(id, bundle: bundle, setupScriptHash: setupScriptHash)
-                // A paused VM's disk is consistent only with its saved memory: no template from it.
-                if publishTemplate, let setupScriptHash, !Self.isPaused(bundle) {
-                    self.publishTemplate(id, bundle: bundle, setupScriptHash: setupScriptHash)
-                }
+                if let template { self.publish(template, from: id, bundle: bundle) }
             }
             logger.notice("Saved the clean point of VM \(id, privacy: .public)")
             if wasRunning { try await startAgain(id, done: "The clean point was saved") }
@@ -1047,10 +1047,20 @@ final class WorktreeVMManager {
     /// Stops VM `id` for a clean point: pauses it where it can save its state, else shuts its
     /// guest down cleanly. A forced power-off would leave a disk unfit for a clean point. Returns
     /// whether it was running here.
-    private func shutDownForCleanPoint(_ id: String, allowPause: Bool = true) async throws -> Bool {
+    /// `forTemplate` always shuts the guest down, from inside where the helper is connected, and
+    /// generalizes a Linux guest on the way: a template's disk must be consistent without memory.
+    private func shutDownForCleanPoint(_ id: String, forTemplate: Bool = false) async throws -> Bool {
         if let pause = pauses[id] { _ = await pause.value }
         guard let vm = runningVMs[id] else { return false }
-        if allowPause, canSaveState(id) {
+        if forTemplate {
+            guard await vm.stopGracefully(requestingShutdown: templateShutdown(id), timeout: GoldenProvisioner.shutdownTimeout)
+            else {
+                throw VMError(message: "The VM didn't shut down, so no clean point was saved. Try again.")
+            }
+            didStop(id)
+            return true
+        }
+        if canSaveState(id) {
             // A failed save still shut the guest down: the point is then the disk alone. Not when
             // that shutdown had to force it off.
             let outcome = await pauseVM(recordID: id)
@@ -1122,9 +1132,7 @@ final class WorktreeVMManager {
     private func matchingTemplate(
         worktreeID: String, guest: VMGuestOS, goldenBuild: String, goldenSealedMarker: URL
     ) -> (slot: URL, setupScriptHash: String)? {
-        guard let owner = templateOwner(worktreeID),
-              let sealedAt = (try? FileManager.default.attributesOfItem(atPath: goldenSealedMarker.path))?[.modificationDate] as? Date
-        else { return nil }
+        guard let owner = templateOwner(worktreeID), let sealedAt = Self.sealedAt(goldenSealedMarker) else { return nil }
         let slot = Self.templateSlot(projectID: owner.projectID, guest: guest, root: root)
         guard let template = Self.readTemplate(at: slot), template.projectID == owner.projectID,
               template.matches(goldenBuild: goldenBuild, goldenSealedAt: sealedAt, setupScriptHash: owner.setupScriptHash)
@@ -1182,9 +1190,7 @@ final class WorktreeVMManager {
         case .macOS: GoldenImageInstaller.availableGolden(root: root).map { ($0.url, $0.sealedMarker) }
         case .linux: LinuxGoldenInstaller.availableGolden(root: root).map { ($0.url, $0.sealedMarker) }
         }
-        guard let golden,
-              let sealedAt = (try? FileManager.default.attributesOfItem(atPath: golden.marker.path))?[.modificationDate] as? Date
-        else { return nil }
+        guard let golden, let sealedAt = sealedAt(golden.marker) else { return nil }
         return (golden.url.lastPathComponent, sealedAt)
     }
 
@@ -1205,21 +1211,62 @@ final class WorktreeVMManager {
         }
     }
 
-    /// Publishes VM `id`'s clean point, just taken after a clean shutdown, as its project's
-    /// template, replacing the project's earlier one. Skipped without a project, or for a VM
-    /// cloned from an older golden than the current one. Never throws: a VM without a template
-    /// only loses a shortcut. Called with the disk claimed.
-    private func publishTemplate(_ id: String, bundle: VMBundle, setupScriptHash: String) {
+    /// When a golden was sealed: its `.sealed` marker's modification date.
+    nonisolated private static func sealedAt(_ marker: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: marker.path))?[.modificationDate] as? Date
+    }
+
+    /// `<bundle>/golden-sealed-at`: when the golden a VM was cloned from was sealed. A golden
+    /// customized since keeps its build, so only this tells its clones apart.
+    nonisolated private static func goldenStampFile(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("golden-sealed-at")
+    }
+
+    nonisolated private static func writeGoldenStamp(of marker: URL, into bundle: VMBundle) {
+        guard let sealedAt = sealedAt(marker) else { return }
+        try? Data(String(sealedAt.timeIntervalSince1970).utf8).write(to: goldenStampFile(of: bundle))
+    }
+
+    /// The template VM `id`'s clean point becomes, or nil when it must not: only a first boot's
+    /// point (a rerun's disk is a used one), of a running VM in a project with this script, cloned
+    /// from the golden that is current now, as it is sealed now.
+    private func templateToPublish(_ id: String, bundle: VMBundle, setupScriptHash: String?) -> VMTemplate? {
         let vm = VMIdentity.parse(recordID: id)
-        guard let owner = templateOwner(vm.worktree),
+        let fm = FileManager.default
+        guard let setupScriptHash, runningVMs[id] != nil, !Self.isPaused(bundle),
+              fm.fileExists(atPath: Self.firstBootMarker(of: bundle).path),
+              let owner = templateOwner(vm.worktree),
               let golden = Self.currentGolden(vm.guest, root: root),
-              let record = (try? registry.snapshot())?.first(where: { $0.id == id })
-        else { return }
+              let record = (try? registry.snapshot())?.first(where: { $0.id == id }),
+              let stamp = (try? String(contentsOf: Self.goldenStampFile(of: bundle), encoding: .utf8)).flatMap(Double.init)
+        else { return nil }
         let recordGolden = vm.guest == .linux
             ? String(record.goldenBuild.dropFirst(VMIdentity.linuxGoldenPrefix.count)) : record.goldenBuild
-        guard recordGolden == golden.build else { return }
+        let template = VMTemplate(
+            projectID: owner.projectID, guest: vm.guest, goldenBuild: golden.build, goldenSealedAt: golden.sealedAt,
+            setupScriptHash: setupScriptHash, createdAt: Date())
+        guard template.matches(
+            goldenBuild: recordGolden, goldenSealedAt: Date(timeIntervalSince1970: stamp), setupScriptHash: setupScriptHash)
+        else { return nil }
+        return template
+    }
+
+    /// Asks VM `id`'s guest to shut down for a template: macOS through `shutdown`, which a logged-in
+    /// guest obeys where the power button only asks; Linux generalized like its golden. Nil without
+    /// a connected helper, which presses the power button.
+    private func templateShutdown(_ id: String) -> (@MainActor () async -> Bool)? {
+        guard let client = existingGuestClient(for: id) else { return nil }
+        let command = VMIdentity.parse(recordID: id).guest == .linux
+            ? VMGuestClient.generalizingPoweroffCommand : GoldenProvisioner.shutdownCommand(account: .alas)
+        return { await client.request(command) }
+    }
+
+    /// Publishes VM `id`'s clean point, just taken after a clean shutdown, as `template`,
+    /// replacing the project's earlier one. Never throws: a VM without a template only loses a
+    /// shortcut. Called with the disk claimed.
+    private func publish(_ template: VMTemplate, from id: String, bundle: VMBundle) {
         let fm = FileManager.default
-        let slot = Self.templateSlot(projectID: owner.projectID, guest: vm.guest, root: root)
+        let slot = Self.templateSlot(projectID: template.projectID, guest: template.guest, root: root)
         let partial = slot.appendingPathExtension("partial")
         do {
             try? fm.removeItem(at: partial)
@@ -1227,15 +1274,12 @@ final class WorktreeVMManager {
             try VMBundle.cloneFile(
                 Self.cleanDirectory(of: bundle).appendingPathComponent("disk.img"),
                 to: partial.appendingPathComponent("disk.img"))
-            if vm.guest == .macOS {
+            if template.guest == .macOS {
                 try VMBundle.cloneFile(bundle.auxiliaryStorage, to: partial.appendingPathComponent("aux.img"))
             }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(VMTemplate(
-                projectID: owner.projectID, guest: vm.guest, goldenBuild: golden.build,
-                goldenSealedAt: golden.sealedAt, setupScriptHash: setupScriptHash, createdAt: Date()))
-                .write(to: Self.templateFile(in: partial))
+            try encoder.encode(template).write(to: Self.templateFile(in: partial))
             try Self.moveDirectory(partial, into: slot)
             logger.notice("Published VM \(id, privacy: .public)'s clean point as its project's template")
         } catch {

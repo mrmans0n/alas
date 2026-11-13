@@ -1242,15 +1242,23 @@ final class WorktreeVMManagerTests {
         #expect(!FileManager.default.fileExists(atPath: slot.path + ".partial"))
     }
 
-    @Test func noTemplateFromAVMOfAnOlderGolden() async throws {
-        let bundle = try addRecord("/repo/a")
-        try Data().write(to: WorktreeVMManager.firstBootMarker(of: VMBundle(url: bundle)))
-        try Data("aux".utf8).write(to: VMBundle(url: bundle).auxiliaryStorage)
+    enum GoldenChange: CaseIterable { case newBuild, resealed }
+
+    /// A VM cloned before the golden changed carries the old golden's disk: it publishes nothing.
+    @Test(arguments: GoldenChange.allCases)
+    func noTemplateFromAVMOfAnOlderGolden(_ change: GoldenChange) async throws {
         try makeSealedGoldens()
-        try FileManager.default.moveItem(
-            at: root.appendingPathComponent("golden/25A1"), to: root.appendingPathComponent("golden/25B1"))
         let manager = makeManager()
         manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        try manager.createVM(worktreeID: "/repo/a")
+        let golden = root.appendingPathComponent("golden/25A1")
+        switch change {
+        case .newBuild:
+            try FileManager.default.moveItem(at: golden, to: root.appendingPathComponent("golden/25B1"))
+        case .resealed:
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: VMBundle(url: golden).sealedMarker.path)
+        }
         _ = try await manager.startVM(worktreeID: "/repo/a")
 
         let outcome = await makeFirstBootSetup(manager, runs: SetupScriptRuns())
@@ -1258,6 +1266,23 @@ final class WorktreeVMManagerTests {
 
         #expect(outcome == .cleanPointTaken)
         #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
+    }
+
+    /// "Run the new setup script" runs on a used disk: only a first boot publishes, and a rerun
+    /// pauses for its clean point as before.
+    @Test func rerunningTheSetupScriptPublishesNothing() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try await publishTemplate(manager)
+        try FileManager.default.removeItem(at: templateSlot())
+        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash("brew install fd")!) }
+
+        let outcome = await makeFirstBootSetup(manager, runs: SetupScriptRuns())
+            .run(recordID: "/repo/a", script: "brew install fd")
+
+        #expect(outcome == .cleanPointTaken)
+        #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
+        #expect(hypervisor.restoredFrom.map { $0?.lastPathComponent } == [nil, nil, "state.vzvmsave"])
     }
 
     @Test(arguments: [VMGuestOS.macOS, .linux])
