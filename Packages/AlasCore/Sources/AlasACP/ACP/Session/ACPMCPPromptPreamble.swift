@@ -347,6 +347,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                             + ". Call device_list, then device_open (it boots the simulator if needed). "
                             + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
                             + "x/y are pixels in the latest device_screenshot. "
+                            + "Device actions return what changed on the screen, and refs you hold stay valid while their element is on screen; call device_snapshot only when you need the whole screen. "
                             + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
                             + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
                             + "To test dark mode, Dynamic Type, permissions, location, notifications or deep links, use "
