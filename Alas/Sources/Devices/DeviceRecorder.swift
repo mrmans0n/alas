@@ -79,7 +79,11 @@ final class DeviceRecorder {
             throw .failed(error.localizedDescription)
         }
         let startedAt = now()
-        recording.onExit = { [weak self] written in self?.endedByItself(udid: udid, recording: recording, written: written) }
+        // Weak: the recording holds this closure, so a strong capture would keep it, and its process, alive.
+        recording.onExit = { [weak self, weak recording] written in
+            guard let recording else { return }
+            self?.endedByItself(udid: udid, recording: recording, written: written)
+        }
         // An agent may forget to stop; its recording ends after the limit.
         let limit: Task<Void, Never>? = owner == .user ? nil : Task { [weak self, sleep, agentLimit] in
             await sleep(agentLimit)

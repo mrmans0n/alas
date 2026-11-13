@@ -135,6 +135,19 @@ struct DeviceRecorderTests {
         await shutdown.value
     }
 
+    @Test func aStoppedRecordingIsReleased() async throws {
+        weak var released: FakeRecording?
+        do {
+            let recordings = Recordings()
+            let recorder = Self.recorder(recordings)
+            try recorder.start(udid: "on", owner: .user, file: Self.file)
+            released = recordings.made.first
+            _ = try await recorder.stop(udid: "on", owner: .user)
+            recordings.made.removeAll()
+        }
+        #expect(released == nil)
+    }
+
     @Test func recordingsOlderThanAWeekAreDeleted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
