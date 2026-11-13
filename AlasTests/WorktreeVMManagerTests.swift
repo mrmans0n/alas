@@ -1138,9 +1138,9 @@ final class WorktreeVMManagerTests {
         try makeSealedGoldens()
         let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
         let manager = makeManager()
-        try manager.createVM(worktreeID: "/repo/a", guest: guest)
-        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
-        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: guest)
+        // A matching template is there: a reset ignores it.
+        try await publishTemplate(manager, guest: guest)
+        try Data("setup".utf8).write(to: templateSlot("p1", guest).appendingPathComponent("disk.img"))
         let disk = VMBundle(url: URL(fileURLWithPath: try record(id).bundlePath)).diskImage
         try Data("dirty".utf8).write(to: disk)
 
@@ -1258,6 +1258,57 @@ final class WorktreeVMManagerTests {
 
         #expect(outcome == .cleanPointTaken)
         #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
+    }
+
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func aNewVMClonesTheProjectTemplate(guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try await publishTemplate(manager, guest: guest)
+        try Data("setup".utf8).write(to: templateSlot("p1", guest).appendingPathComponent("disk.img"))
+
+        try manager.createVM(worktreeID: "/repo/b", guest: guest)
+
+        let id = VMIdentity.recordID(worktree: "/repo/b", guest: guest)
+        let a = URL(fileURLWithPath: try record(VMIdentity.recordID(worktree: "/repo/a", guest: guest)).bundlePath)
+        let b = URL(fileURLWithPath: try record(id).bundlePath)
+        #expect(try contents(b.appendingPathComponent("disk.img")) == "setup")
+        #expect(manager.cleanPoint(recordID: id)?.setupScriptHash == VMCleanPoint.scriptHash(Self.setupScript))
+        #expect(!manager.isFirstBootPending(recordID: id))
+        for file in ["machine-id.bin", "mac.txt"] {
+            #expect(try Data(contentsOf: a.appendingPathComponent(file)) != Data(contentsOf: b.appendingPathComponent(file)))
+        }
+    }
+
+    enum StaleTemplate: CaseIterable { case scriptChanged, goldenResealed, otherProject, diskMissing }
+
+    /// A template that no longer matches, or can't be cloned, leaves the VM to the golden and its
+    /// first boot.
+    @Test(arguments: StaleTemplate.allCases)
+    func aStaleTemplateIsIgnored(_ stale: StaleTemplate) async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try await publishTemplate(manager)
+        let slot = templateSlot()
+        try Data("setup".utf8).write(to: slot.appendingPathComponent("disk.img"))
+        switch stale {
+        case .scriptChanged:
+            manager.templateOwner = { _ in ("p1", "other") }
+        case .goldenResealed:
+            let marker = VMBundle(url: root.appendingPathComponent("golden/25A1")).sealedMarker
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: marker.path)
+        case .otherProject:
+            manager.templateOwner = { _ in ("p2", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        case .diskMissing:
+            try FileManager.default.removeItem(at: slot.appendingPathComponent("disk.img"))
+        }
+
+        try manager.createVM(worktreeID: "/repo/b")
+
+        #expect(try contents(VMBundle(url: URL(fileURLWithPath: record("/repo/b").bundlePath)).diskImage) == "x")
+        #expect(manager.cleanPoint(recordID: "/repo/b") == nil)
+        #expect(manager.isFirstBootPending(recordID: "/repo/b"))
     }
 
     @Test func aStopMidScriptIsNotAFailure() async throws {

@@ -37,8 +37,9 @@ struct LinuxVMBundle: Sendable {
     /// Clones a sealed golden bundle into `to`: the disk with `clonefile(2)`
     /// (APFS copy-on-write) and a fresh identity, so the clone boots as a new
     /// machine with its own DHCP lease. The work happens in `<to>.partial`
-    /// and is renamed into place on success.
-    static func cloneForWorktree(golden: LinuxVMBundle, to: URL) throws -> LinuxVMBundle {
+    /// and is renamed into place on success. `diskFrom` replaces the golden's
+    /// disk, for a clone of a project template.
+    static func cloneForWorktree(golden: LinuxVMBundle, to: URL, diskFrom: URL? = nil) throws -> LinuxVMBundle {
         guard golden.isSealed else {
             throw BundleError(message: "Golden Linux VM bundle at \(golden.url.path) is not sealed")
         }
@@ -49,7 +50,7 @@ struct LinuxVMBundle: Sendable {
         do {
             try fm.createDirectory(at: partial, withIntermediateDirectories: false)
             let staged = LinuxVMBundle(url: partial)
-            try VMBundle.cloneFile(golden.diskImage, to: staged.diskImage)
+            try VMBundle.cloneFile(diskFrom ?? golden.diskImage, to: staged.diskImage)
             try staged.writeIdentity()
             try fm.moveItem(at: partial, to: to)
         } catch {
