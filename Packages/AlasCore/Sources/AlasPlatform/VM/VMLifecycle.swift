@@ -75,3 +75,52 @@ public struct VMCleanPoint: Codable, Equatable, Sendable {
         return SHA256.hash(data: Data(script.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
+
+/// A project's VM template: a worktree VM's disk right after the project's guest setup script
+/// succeeded, which later VMs of the project clone instead of the golden, skipping the script.
+/// Each project has one slot per guest.
+public struct VMTemplate: Codable, Equatable, Sendable {
+    public var projectID: String
+    public var guest: VMGuestOS
+    /// The golden bundle's directory name.
+    public var goldenBuild: String
+    /// When the golden's `.sealed` marker was written: a re-customized golden keeps its build.
+    public var goldenSealedAt: Date
+    public var setupScriptHash: String
+    public var createdAt: Date
+
+    public init(
+        projectID: String, guest: VMGuestOS, goldenBuild: String, goldenSealedAt: Date,
+        setupScriptHash: String, createdAt: Date
+    ) {
+        self.projectID = projectID
+        self.guest = guest
+        self.goldenBuild = goldenBuild
+        self.goldenSealedAt = goldenSealedAt
+        self.setupScriptHash = setupScriptHash
+        self.createdAt = createdAt
+    }
+
+    /// Directory name of the project's template slot for `guest`. Project ids may contain "/".
+    public static func slotName(projectID: String, guest: VMGuestOS) -> String {
+        SHA256.hash(data: Data("\(projectID)\n\(guest.rawValue)".utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// True when a VM of this golden and script may be cloned from this template.
+    public func matches(goldenBuild: String, goldenSealedAt: Date, setupScriptHash: String?) -> Bool {
+        goldenBuild == self.goldenBuild && Self.sameSecond(goldenSealedAt, self.goldenSealedAt)
+            && setupScriptHash == self.setupScriptHash
+    }
+
+    /// True when nothing can match it again: its project is gone, or its guest's current golden
+    /// (nil when none is installed) differs in build or seal stamp.
+    public func isStale(liveProjectIDs: Set<String>, currentGolden: (build: String, sealedAt: Date)?) -> Bool {
+        guard liveProjectIDs.contains(projectID), let currentGolden else { return true }
+        return currentGolden.build != goldenBuild || !Self.sameSecond(currentGolden.sealedAt, goldenSealedAt)
+    }
+
+    /// File-system stamps and their JSON round trip differ below a second.
+    private static func sameSecond(_ a: Date, _ b: Date) -> Bool {
+        abs(a.timeIntervalSince(b)) < 1
+    }
+}

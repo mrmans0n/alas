@@ -136,9 +136,11 @@ final class RunningVM {
         try await forceStop()
     }
 
-    /// Requests a guest shutdown and waits up to `gracefulStopTimeout`. True
-    /// when the VM is stopped afterwards; false leaves it running.
-    func stopGracefully(requestingShutdown: (@MainActor () async -> Bool)? = nil) async -> Bool {
+    /// Requests a guest shutdown and waits up to `timeout`. True when the VM is
+    /// stopped afterwards; false leaves it running.
+    func stopGracefully(
+        requestingShutdown: (@MainActor () async -> Bool)? = nil, timeout: Duration = gracefulStopTimeout
+    ) async -> Bool {
         guard machine.state != .stopped, machine.state != .error else { return true }
         if let requestingShutdown, await requestingShutdown() {
             // Asked; the wait below bounds it like a power button press.
@@ -150,7 +152,7 @@ final class RunningVM {
                 return false
             }
         }
-        await waitForGuestStop(timeout: Self.gracefulStopTimeout)
+        await waitForGuestStop(timeout: timeout)
         return machine.state == .stopped || machine.state == .error
     }
 

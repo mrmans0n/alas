@@ -54,7 +54,8 @@ struct VMFirstBootSetup {
             guard exitCode == 0 else { return .scriptFailed(exitCode: exitCode) }
         }
         do {
-            try await manager.takeCleanPoint(worktreeID: vm.worktree, guest: vm.guest, setupScriptHash: hash)
+            try await manager.takeCleanPoint(
+                worktreeID: vm.worktree, guest: vm.guest, setupScriptHash: hash, publishTemplate: hash != nil)
         } catch let error as WorktreeVMManager.RestartFailed {
             return .notRestarted(error.message)
         } catch {
