@@ -4,7 +4,7 @@ options:
   deploymentTarget:
     iOS: "26.0"
   developmentLanguage: en
-  createIntermediateGroups: true
+  createIntermediateGroups: false
 
 settings:
   base:
@@ -56,3 +56,8 @@ schemes:
         AlasMobile: all
     run:
       config: Debug
+      # Scenario drivers for the transcript spike; enable per scenario in the scheme editor.
+      # Profile inherits these.
+      commandLineArguments:
+        "-spikePreloadPages 23": false
+        "-spikeWindowSize 20": false

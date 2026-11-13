@@ -17,6 +17,7 @@ struct LazyStackTranscriptView: View {
 
     private struct Metrics: Equatable {
         var top: CGFloat
+        var bottom: CGFloat
         var contentHeight: CGFloat
     }
 
@@ -31,6 +32,7 @@ struct LazyStackTranscriptView: View {
             }
             .scrollTargetLayout()
         }
+        .background(Color(.systemBackground))
         .defaultScrollAnchor(.bottom)
         // Tail-follow is the scroll view's own: while the reader is at the bottom, growth keeps
         // the bottom edge in place. No manual scrollTo competes with it.
@@ -38,9 +40,11 @@ struct LazyStackTranscriptView: View {
         .scrollPosition($position, anchor: .top)
         .onScrollPhaseChange { _, new in phase = new }
         .onScrollGeometryChange(for: Metrics.self) { geo in
-            Metrics(top: geo.visibleRect.minY, contentHeight: geo.contentSize.height)
+            Metrics(top: geo.visibleRect.minY, bottom: geo.visibleRect.maxY, contentHeight: geo.contentSize.height)
         } action: { _, new in
-            if !laidOut, new.contentHeight > 0 {
+            // Like A, "laid out" means the bottom of the transcript is on screen, not merely that
+            // some content has a height.
+            if !laidOut, new.contentHeight > 0, new.bottom >= new.contentHeight - 1 {
                 laidOut = true
                 onFirstLayout()
             }

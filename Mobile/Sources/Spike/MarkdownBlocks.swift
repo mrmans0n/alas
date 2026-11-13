@@ -91,4 +91,10 @@ final class MarkdownBlockCache {
         entries[id] = (revision, blocks)
         return blocks
     }
+
+    /// Ids repeat across rebuilt models (streamed rows restart at `s1a`), and a warm cache would
+    /// make every open after the first look cheaper than a real cold open.
+    func removeAll() {
+        entries.removeAll()
+    }
 }

@@ -6,6 +6,34 @@ struct FrameReport {
     var hitchMsPerSecond: Double
     var worstFrameMs: Double
     var openMs: Double?
+    /// The same three figures since the last `resetRun()`, so a whole scenario reads as one number.
+    var run = FrameStats()
+}
+
+struct FrameStats {
+    var fps: Double = 0
+    var hitchMsPerSecond: Double = 0
+    var worstFrameMs: Double = 0
+}
+
+/// Ticks, lateness and worst frame accumulated over a span of display-link time.
+private struct FrameTotals {
+    var start: CFTimeInterval = 0
+    var ticks = 0
+    var lateness: CFTimeInterval = 0
+    var worst: CFTimeInterval = 0
+
+    mutating func add(lateness late: CFTimeInterval, frame: CFTimeInterval) {
+        ticks += 1
+        lateness += late
+        worst = max(worst, frame)
+    }
+
+    func stats(at now: CFTimeInterval) -> FrameStats {
+        let elapsed = now - start
+        guard elapsed > 0 else { return FrameStats() }
+        return FrameStats(fps: Double(ticks) / elapsed, hitchMsPerSecond: lateness * 1000 / elapsed, worstFrameMs: worst * 1000)
+    }
 }
 
 /// Measures frame pacing with a display link. It sees main-thread and commit lateness only, not
@@ -18,10 +46,9 @@ final class FrameMeter {
     @ObservationIgnored private var link: CADisplayLink?
     @ObservationIgnored private var previousTimestamp: CFTimeInterval?
     @ObservationIgnored private var previousTarget: CFTimeInterval = 0
-    @ObservationIgnored private var windowStart: CFTimeInterval = 0
-    @ObservationIgnored private var ticks = 0
-    @ObservationIgnored private var lateness: CFTimeInterval = 0
-    @ObservationIgnored private var worst: CFTimeInterval = 0
+    @ObservationIgnored private var window = FrameTotals()
+    @ObservationIgnored private var run = FrameTotals()
+    @ObservationIgnored private var runResetPending = true
     @ObservationIgnored private var openStart: CFTimeInterval?
     @ObservationIgnored private var laidOut = false
 
@@ -45,6 +72,12 @@ final class FrameMeter {
         report.openMs = nil
     }
 
+    /// Starts the run totals over from the next tick.
+    func resetRun() {
+        runResetPending = true
+        report.run = FrameStats()
+    }
+
     /// Pass as the scroller's `onFirstLayout`; the next tick closes the open measurement.
     func markFirstLayout() {
         laidOut = true
@@ -59,22 +92,27 @@ final class FrameMeter {
             report.openMs = (CACurrentMediaTime() - openStart) * 1000
             self.openStart = nil
         }
+        // A reset starts the run at this tick, so this tick's frame belongs to the span before it.
+        let runStarts = runResetPending
+        if runStarts {
+            run = FrameTotals(start: link.timestamp)
+            runResetPending = false
+        }
         guard let previousTimestamp else {
-            windowStart = link.timestamp
+            window = FrameTotals(start: link.timestamp)
             return
         }
-        ticks += 1
-        lateness += max(0, link.timestamp - previousTarget)
-        worst = max(worst, link.timestamp - previousTimestamp)
-        let elapsed = link.timestamp - windowStart
-        guard elapsed >= 1 else { return }
-        report.fps = Double(ticks) / elapsed
-        report.hitchMsPerSecond = lateness * 1000 / elapsed
-        report.worstFrameMs = worst * 1000
-        windowStart = link.timestamp
-        ticks = 0
-        lateness = 0
-        worst = 0
+        let late = max(0, link.timestamp - previousTarget)
+        let frame = link.timestamp - previousTimestamp
+        window.add(lateness: late, frame: frame)
+        if !runStarts { run.add(lateness: late, frame: frame) }
+        guard link.timestamp - window.start >= 1 else { return }
+        let second = window.stats(at: link.timestamp)
+        report.fps = second.fps
+        report.hitchMsPerSecond = second.hitchMsPerSecond
+        report.worstFrameMs = second.worstFrameMs
+        report.run = run.stats(at: link.timestamp)
+        window = FrameTotals(start: link.timestamp)
     }
 }
 

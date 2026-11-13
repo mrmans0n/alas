@@ -22,13 +22,13 @@
 /* Begin PBXFileReference section */
 		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
 		12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeScreen.swift; sourceTree = "<group>"; };
-		23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
+		4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
+		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		8250C9560021C379E369398E /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
-		8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
 		9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionTranscriptView.swift; sourceTree = "<group>"; };
 		D36A12D26A237EF3A236956B /* SpikeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRowView.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -48,24 +48,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		1EF7156F26646EE30F2A2229 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */,
-				8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
-		2F6547DE76BCE39108D4C1DB /* nacho-mobile-app */ = {
-			isa = PBXGroup;
-			children = (
-				1EF7156F26646EE30F2A2229 /* Config */,
-			);
-			name = "nacho-mobile-app";
-			path = ..;
-			sourceTree = "<group>";
-		};
 		30FFFD63A2837F752463B155 /* Spike */ = {
 			isa = PBXGroup;
 			children = (
@@ -99,7 +81,7 @@
 		C7AF09C68FC5773484E44408 = {
 			isa = PBXGroup;
 			children = (
-				2F6547DE76BCE39108D4C1DB /* nacho-mobile-app */,
+				E8BE68B7690E4EB8C3B0DE9F /* Config */,
 				5DCBB4F5E953BC7D6DCB2D6C /* Packages */,
 				F615C7A44BB3004E95410496 /* Sources */,
 				D95E4E9B0E600B48EF875905 /* Products */,
@@ -112,6 +94,16 @@
 				F555B239BFDC686B6F661BF3 /* AlasMobile.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E8BE68B7690E4EB8C3B0DE9F /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */,
+				4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */,
+			);
+			name = Config;
+			path = ../Config;
 			sourceTree = "<group>";
 		};
 		F615C7A44BB3004E95410496 /* Sources */ = {
@@ -205,7 +197,7 @@
 /* Begin XCBuildConfiguration section */
 		11D861DB91FD9C253C62AC5B /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 23F8C0666991F822DAC02668 /* AlasMobile-Debug.xcconfig */;
+			baseConfigurationReference = 61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -222,7 +214,7 @@
 		};
 		360844A9A9B55664F0F266E2 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 8B52F997E24400E42450825C /* AlasMobile-Release.xcconfig */;
+			baseConfigurationReference = 4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";

@@ -40,6 +40,7 @@ struct SpikeScreen: View {
 
     private func rebuild() {
         model?.isStreaming = false
+        MarkdownBlockCache.shared.removeAll()
         // Scenario drivers, inert when absent: `-spikeWindowSize 20` puts the top of the window
         // (S4) a fling away; `-spikePreloadPages 23` opens 5,000 rows with the 2,000-line row in
         // the window (S2).
@@ -49,6 +50,7 @@ struct SpikeScreen: View {
         for _ in 0 ..< defaults.integer(forKey: "spikePreloadPages") { model.loadOlder() }
         // After the synthetic model is built: open time covers only the scroller.
         meter.markOpened(at: CACurrentMediaTime())
+        meter.resetRun()
         self.model = model
     }
 
@@ -71,7 +73,10 @@ struct SpikeScreen: View {
             }
             Toggle("Stream", isOn: Binding(
                 get: { model?.isStreaming ?? false },
-                set: { model?.isStreaming = $0 }))
+                set: {
+                    model?.isStreaming = $0
+                    meter.resetRun()
+                }))
                 .fixedSize()
         }
         .pickerStyle(.segmented)
@@ -101,9 +106,16 @@ private struct HUD: View {
     var body: some View {
         let r = meter.report
         VStack(alignment: .trailing, spacing: 2) {
+            Text(String(format: "1 s  %.0f fps  hitch %.1f ms/s  worst %.1f ms", r.fps, r.hitchMsPerSecond, r.worstFrameMs))
             Text(String(
-                format: "%.0f fps  hitch %.1f ms/s\nworst %.1f ms  open %@",
-                r.fps, r.hitchMsPerSecond, r.worstFrameMs, r.openMs.map { String(format: "%.0f ms", $0) } ?? "–"))
+                format: "run  %.0f fps  hitch %.1f ms/s  worst %.1f ms",
+                r.run.fps, r.run.hitchMsPerSecond, r.run.worstFrameMs))
+            HStack(spacing: 8) {
+                Text("open \(r.openMs.map { String(format: "%.0f ms", $0) } ?? "–")")
+                Button("Reset", action: meter.resetRun)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+            }
             Text("app-side hitches; confirm with Instruments").foregroundStyle(.white.opacity(0.7))
         }
         .font(.caption2.monospacedDigit())
@@ -111,6 +123,5 @@ private struct HUD: View {
         .padding(6)
         .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
         .padding(8)
-        .allowsHitTesting(false)
     }
 }
