@@ -5164,26 +5164,7 @@ final class AppState {
     }
 
     private func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, useBypassPermissions: Bool) -> String {
-        let binary = project.host == nil
-            ? Self.shellQuote(agent.resolvedBinary)
-            : remoteShellBinary(agent.configuredBinary)
-        var argv = [binary]
-        if let extra = agent.extraTerminalArgs, !extra.isEmpty {
-            argv.append(contentsOf: extra)
-        }
-        if useBypassPermissions,
-           let flag = agent.bypassPermissionsFlag {
-            argv.append(flag)
-        }
-        return ([binary] + argv.dropFirst().map(Self.shellQuote))
-            .joined(separator: " ")
-    }
-
-    private func remoteShellBinary(_ configuredBinary: String) -> String {
-        guard configuredBinary.hasPrefix("~/") else {
-            return Self.shellQuote(configuredBinary)
-        }
-        return "\"$HOME\"/\(Self.shellQuote(String(configuredBinary.dropFirst(2))))"
+        ScheduledTerminalPrompt.agentCommand(for: agent, remote: project.host != nil, useBypassPermissions: useBypassPermissions)
     }
 
     enum AgentTerminalLaunchError: LocalizedError, Equatable {
@@ -5479,14 +5460,7 @@ final class AppState {
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
-        switch project.startupScripts.worktreeAgentMode {
-        case .disabled:
-            return false
-        case .useGlobal:
-            return config.agents.worktreeAutoLaunch.useBypassPermissions
-        case .overrideGlobal, .appendToGlobal:
-            return project.startupScripts.worktreeAgentUseBypassPermissions
-        }
+        ScheduledTerminalPrompt.usesBypassPermissions(project: project, config: config)
     }
 
     nonisolated static func shellQuote(_ s: String) -> String {

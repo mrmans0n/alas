@@ -450,6 +450,21 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         return socket.write(ZmxIPC.encode(.resize, size, wire: wire))
     }
 
+    /// Writes `input` to a session's PTY from a one-shot connection, through
+    /// `Send`, which leaves leadership alone. False when the daemon can't be
+    /// probed, connected to, or written to.
+    public static func send(path: String, input: Data) -> Bool {
+        let wire: ZmxIPC.Wire
+        switch probe(path: path) {
+        case .v1: wire = .v1
+        case .preFreeze: wire = .preFreeze
+        case .unreachable: return false
+        }
+        guard let socket = try? connect(path: path) else { return false }
+        defer { socket.shutdown() }
+        return socket.write(ZmxIPC.encode(.send, input, wire: wire))
+    }
+
     /// `poll(2)` until the descriptor is readable (data or hangup) or the
     /// deadline passes. EINTR retries with the remaining time. Once the
     /// deadline has passed this is false even with bytes queued, so a peer

@@ -120,8 +120,9 @@ extension AlasCoreContext {
 // MARK: - Headless runner
 
 extension AlasCoreContext {
-    /// Fires schedules without the app: scripts run as core runs, agents as
-    /// chat sessions, and whatever needs someone at the screen is refused.
+    /// Fires schedules without the app: scripts run as core runs, ACP agents
+    /// as chat sessions, terminal agents in host consoles, and whatever needs
+    /// someone at the screen is refused.
     public func installDefaultRunScheduleRunner() {
         runScheduler.runner = { [weak self] schedule, invocation in
             guard let self else { return RunScheduleRunReport(outcome: .launchFailed("The host is stopping.")) }
@@ -148,18 +149,27 @@ extension AlasCoreContext {
             guard let agentID = composition.agentId
                 ?? SessionsAPI(core: self).defaultAgent(projectID: project.id, worktreeRoot: root)
             else { return (nil, "No agent is configured to launch for \(project.name).") }
+            let speaksACP = ACPLaunchCatalog.spec(for: agentID) != nil
+            if !speaksACP {
+                let agent = environment.agent(id: agentID)
+                guard let agent, agent.isEnabled, agent.supportsTerminal else {
+                    return (agentID, "\(agent?.displayName ?? agentID) isn't turned on in this host's profile.")
+                }
+                guard hostConsoles?.runsCommands == true else {
+                    return (agentID, "\(agent.displayName) runs in a terminal, which this host can't start: it needs zmx and a bash or zsh login shell.")
+                }
+            }
             return (agentID, RunSchedulePresentation.headlessRefusal(
                 composition: composition,
                 projectName: project.name,
                 projectHost: project.host,
-                agentName: environment.agent(id: agentID)?.displayName ?? agentID,
-                agentSpeaksACP: ACPLaunchCatalog.spec(for: agentID) != nil
+                agentSpeaksACP: speaksACP
             ))
         }
         // The project's host first: an SSH project's default agent may not
         // resolve at all, which would otherwise read as no agent configured.
         if let refusal = RunSchedulePresentation.headlessRefusal(
-            composition: nil, projectName: project.name, projectHost: project.host, agentName: nil, agentSpeaksACP: false
+            composition: nil, projectName: project.name, projectHost: project.host, agentSpeaksACP: false
         ) {
             return refuse(refusal, in: originWorktree)
         }
@@ -215,9 +225,13 @@ extension AlasCoreContext {
         guard let composition = schedule.composition, let agentID else {
             return RunScheduleRunReport(outcome: .succeeded, runs: references)
         }
-        var agent = await runScheduledChatSession(
-            schedule, composition: composition, agentID: agentID, worktree: worktree, project: project
-        )
+        var agent = ACPLaunchCatalog.spec(for: agentID) == nil
+            ? await runScheduledTerminalAgent(
+                schedule, composition: composition, agentID: agentID, worktree: worktree, project: project
+            )
+            : await runScheduledChatSession(
+                schedule, composition: composition, agentID: agentID, worktree: worktree, project: project
+            )
         agent.runs = references
         return agent
     }
@@ -297,6 +311,67 @@ extension AlasCoreContext {
         case .launchFailed(let message):
             return RunScheduleRunReport(outcome: .launchFailed(message))
         }
+    }
+
+    /// Starts a terminal agent in a host console, where a paired Mac can
+    /// watch it, then types the prompt as the app does into its terminal tab.
+    /// Like the app's, the firing succeeds once the agent is launched: a
+    /// terminal can't say when the agent's turn ends.
+    private func runScheduledTerminalAgent(
+        _ schedule: RunSchedule,
+        composition: RunScheduleComposition,
+        agentID: String,
+        worktree: Worktree,
+        project: ProjectConfig
+    ) async -> RunScheduleRunReport {
+        guard let consoles = hostConsoles, let agent = environment.agent(id: agentID) else {
+            let message = "Could not open a console for \(agentID) in \(worktree.title)."
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
+        }
+        let command = ScheduledTerminalPrompt.agentCommand(
+            for: agent,
+            remote: false,
+            useBypassPermissions: ScheduledTerminalPrompt.usesBypassPermissions(
+                project: project, config: environment.configuration()
+            )
+        )
+        let consoleID: String
+        do {
+            consoleID = try await consoles.open(worktreeId: worktree.id, command: command, title: agent.displayName)
+        } catch {
+            if Task.isCancelled {
+                return RunScheduleRunReport(outcome: .skipped(reason: "The schedule was removed while its agent was launching."))
+            }
+            let message = "\(agent.displayName) could not start in \(worktree.title): \(error.localizedDescription)"
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
+        }
+        runScheduleLogger.notice("\(schedule.name, privacy: .public): launched \(agent.displayName, privacy: .public) in \(worktree.title, privacy: .public)")
+        guard let prompt = composition.prompt else { return RunScheduleRunReport(outcome: .succeeded) }
+        let expected = HarnessKind.forAgent(id: agentID, binary: agent.configuredBinary)
+        let ownsTerminal = { () async -> Bool in
+            guard let expected else { return false }
+            return await consoles.foregroundHarness(consoleID) == expected
+        }
+        let outcome = await ScheduledTerminalPrompt.deliver(
+            prompt,
+            sendsAutomatically: composition.sendsPromptAutomatically,
+            waitUntilReady: {
+                guard expected != nil else { return false }
+                return await ScheduledTerminalPrompt.waitUntilOwned(
+                    ownsTerminal: ownsTerminal, isOpen: { consoles.hostSessionExists(consoleID) }
+                )
+            },
+            ownsTerminal: ownsTerminal,
+            type: { await consoles.type($0, into: consoleID) }
+        )
+        if let message = ScheduledTerminalPrompt.failureMessage(
+            outcome, scheduleName: schedule.name, worktreeTitle: worktree.title
+        ) {
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+        }
+        return RunScheduleRunReport(outcome: .succeeded)
     }
 
     /// Starts the schedule's chat session as the app's prepared launch does,

@@ -707,8 +707,7 @@ struct RunSchedulerTests {
     @Test(arguments: [
         (RunScheduleComposition?.none, String?.none, true, String?.none), // local script only
         (.none, "mini.local", true, "app is on mini.local; schedules there run only in the app."),
-        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, false,
-         "Claude runs in a terminal; terminal agents run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, false, nil), // typed into its console
         (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, true,
          "The schedule leaves its prompt for review; it runs only in the app."),
         (.some(.init(prompt: "  ", sendsPromptAutomatically: false)), nil, true, nil), // opens the agent only
@@ -719,14 +718,49 @@ struct RunSchedulerTests {
     ) {
         #expect(RunSchedulePresentation.headlessRefusal(
             composition: composition, projectName: "app", projectHost: host,
-            agentName: "Claude", agentSpeaksACP: speaksACP
+            agentSpeaksACP: speaksACP
         ) == reason)
+    }
+
+    /// A prompt is typed only after its agent is seen, and its Enter only
+    /// while the agent still owns the terminal: otherwise the shell would run
+    /// the prompt as a command.
+    @Test(arguments: [
+        (true, true, true, ["Fix the build.", "\r"], ScheduledTerminalPrompt.Outcome.sent),
+        (true, true, false, ["Fix the build."], .agentStopped),
+        (true, false, true, [], .closed),
+        (false, true, true, [], .notReady),
+    ])
+    func aScheduledPromptIsTypedOnlyIntoItsAgent(
+        ready: Bool, terminalOpen: Bool, ownsAtEnter: Bool, typed: [String], outcome: ScheduledTerminalPrompt.Outcome
+    ) async {
+        var written: [String] = []
+        let result = await ScheduledTerminalPrompt.deliver(
+            "Fix the\nbuild.",
+            sendsAutomatically: true,
+            waitUntilReady: { ready },
+            ownsTerminal: { ownsAtEnter },
+            type: { text in
+                guard terminalOpen else { return false }
+                written.append(text)
+                return true
+            }
+        )
+        #expect(result == outcome)
+        #expect(written == typed)
+    }
+
+    @Test func waitingForAnAgentEndsWhenItsTerminalCloses() async {
+        let owned = await ScheduledTerminalPrompt.waitUntilOwned(
+            ownsTerminal: { false }, isOpen: { false }, timeout: 600, pollInterval: .seconds(600)
+        )
+        #expect(!owned)
     }
 
     /// A schedule the host cannot run is refused, reported, and leaves no
     /// worktree behind; an SSH project says so even with no agent resolving there.
     @Test(arguments: [
-        (String?.none, String?.some("no-such-acp-agent"), "no-such-acp-agent runs in a terminal; terminal agents run only in the app."),
+        (String?.none, String?.some("no-such-agent"), "no-such-agent isn't turned on in this host's profile."),
         ("mini.local", nil, "app is on mini.local; schedules there run only in the app."),
     ])
     func aRefusedScheduleCreatesNoWorktree(host: String?, agentID: String?, reason: String) async {

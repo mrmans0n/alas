@@ -5,6 +5,7 @@ import AlasModel
 import AlasPlatform
 import AlasACP
 import AlasFeatures
+import AlasAgentKit
 
 private let consolesLogger = Logger(subsystem: "io.nlopez.alas", category: "HostConsoles")
 
@@ -127,6 +128,7 @@ public final class HostConsoles {
         // forgetting their project would hide them the same way.
         core.willRemoveWorktree = { try await consoles.terminateConsoles(inWorktree: $0) }
         core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
+        core.hostConsoles = consoles
         (core.environment as? HeadlessHostEnvironment)?.runLauncherOverride = consoles
         return consoles
     }
@@ -148,6 +150,10 @@ public final class HostConsoles {
     }
 
     public var isAvailable: Bool { zmx.isAvailable }
+
+    /// Whether a console can run a command after its session-open script,
+    /// which needs a shell the startup script can be injected into.
+    public var runsCommands: Bool { isAvailable && StartupScriptInstaller.supportsStartupScriptInjection(shell: shell) }
 
     /// Drops saved shells whose zmx session is gone: one that exited while
     /// the host was down.
@@ -205,8 +211,14 @@ public final class HostConsoles {
     /// The shell runs the session-open script as the app's terminals do. An
     /// unapproved repository hook is approved as `repoHook` says, or throws
     /// `RepoHookApprovalRequired` and opens nothing; nil skips it.
-    public func open(worktreeId: String, repoHook: RepoHookConsent? = nil) async throws -> String {
+    /// `command`, when given, runs after that script, and `title` names the
+    /// console instead of "Terminal N".
+    public func open(
+        worktreeId: String, repoHook: RepoHookConsent? = nil, command: String? = nil, title: String? = nil
+    ) async throws -> String {
         guard isAvailable else { throw PeerConsoleOpenError.zmxMissing }
+        // Unsupported shells drop the startup script, and with it the command.
+        if command != nil, !runsCommands { throw PeerConsoleOpenError.shellCantRunCommands }
         let worktree = try admittedWorktree(worktreeId)
         guard let (project, _) = core.projectAndWorktree(withWorktreeId: worktreeId) else { throw PeerConsoleOpenError.worktreeUnavailable }
         let gate: RepoHookGate
@@ -240,10 +252,15 @@ public final class HostConsoles {
                 throw error
             }
         }
-        let script = StartupScriptResolver.sessionOpenScript(
+        let script = [StartupScriptResolver.sessionOpenScript(
             global: core.environment.globalTerminalConfig(), repoScript: repoScript, project: project
-        )
+        ), command ?? ""]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
         await ShellEnvResolver.shared.waitUntilResolved()
+        // Neither wait above throws: work called off meanwhile never starts.
+        try Task.checkCancellation()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
         var registered = false
@@ -273,7 +290,7 @@ public final class HostConsoles {
         let taken = Set(entries.filter { $0.worktreeId == worktreeId }.map(\.title))
         let number = (1...).first { !taken.contains("Terminal \($0)") } ?? 1
         let entry = HostConsoleEntry(
-            id: id, worktreeId: worktreeId, title: "Terminal \(number)", zmxName: name,
+            id: id, worktreeId: worktreeId, title: title ?? "Terminal \(number)", zmxName: name,
             rows: Self.launchRows, columns: Self.launchColumns
         )
         // From here the entry owns the rc files: forgetting it removes them.
@@ -285,6 +302,20 @@ public final class HostConsoles {
         entries.append(entry)
         save()
         return id
+    }
+
+    /// The harness in the foreground of console `consoleId`, if one is.
+    public func foregroundHarness(_ consoleId: String) async -> HarnessKind? {
+        guard let name = entries.first(where: { $0.id == consoleId })?.zmxName else { return nil }
+        let zmx = zmx
+        return await BlockingWork.run { zmx.foregroundPid(forSession: name).flatMap { HarnessDetector.matchKind(pid: $0) } }
+    }
+
+    /// Types `text` into console `consoleId`; false when it is gone.
+    public func type(_ text: String, into consoleId: String) async -> Bool {
+        guard let socketPath = target(consoleId)?.socketPath else { return false }
+        let input = Data(text.utf8)
+        return await BlockingWork.run { ZmxIPCSocket.send(path: socketPath, input: input) }
     }
 
     /// Records a shell that must not run, then stops it: one zmx can't stop
