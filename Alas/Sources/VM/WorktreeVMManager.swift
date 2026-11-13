@@ -138,6 +138,9 @@ final class WorktreeVMManager {
     /// Whether VM `id` runs its project's first-boot setup. Such a VM is never offered to pause for
     /// a slot, and quitting stops it instead of pausing it, so its setup runs again on the next start.
     @ObservationIgnored var isRunningSetup: (String) -> Bool = { _ in false }
+    /// The project of worktree `worktreeID` and its guest setup script's hash; nil when the
+    /// worktree has no project or the project no script. A project's VMs share a template.
+    @ObservationIgnored var templateOwner: (_ worktreeID: String) -> (projectID: String, setupScriptHash: String)? = { _ in nil }
     /// Set once quitting began: no VM starts after `stopAll`.
     @ObservationIgnored private(set) var isQuitting = false
     /// Called with a VM's registry id once it started running here, booted or restored.
@@ -933,15 +936,25 @@ final class WorktreeVMManager {
     /// paused VM's point is its disk and saved state. Refused for a stopped VM, whose disk may not
     /// be the state the user means to keep.
     /// `setupScriptHash` is the project's guest setup script the point was taken after.
-    func takeCleanPoint(worktreeID: String, guest: VMGuestOS = .macOS, setupScriptHash: String? = nil) async throws {
+    /// With `publishTemplate`, the guest shuts down instead of pausing, and the point also becomes
+    /// its project's template for that script.
+    func takeCleanPoint(
+        worktreeID: String, guest: VMGuestOS = .macOS, setupScriptHash: String? = nil, publishTemplate: Bool = false
+    ) async throws {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         try await withDiskOperation(id) {
-            let wasRunning = try await shutDownForCleanPoint(id)
+            let wasRunning = try await shutDownForCleanPoint(id, allowPause: !publishTemplate)
             let bundle = bundle(forID: id)
             guard wasRunning || Self.isPaused(bundle) else {
                 throw VMError(message: "Start the VM to save its clean point")
             }
-            try withDiskClaimed(id) { try writeCleanPoint(id, bundle: bundle, setupScriptHash: setupScriptHash) }
+            try withDiskClaimed(id) {
+                try writeCleanPoint(id, bundle: bundle, setupScriptHash: setupScriptHash)
+                // A paused VM's disk is consistent only with its saved memory: no template from it.
+                if publishTemplate, let setupScriptHash, !Self.isPaused(bundle) {
+                    self.publishTemplate(id, bundle: bundle, setupScriptHash: setupScriptHash)
+                }
+            }
             logger.notice("Saved the clean point of VM \(id, privacy: .public)")
             if wasRunning { try await startAgain(id, done: "The clean point was saved") }
         }
@@ -1003,10 +1016,10 @@ final class WorktreeVMManager {
     /// Stops VM `id` for a clean point: pauses it where it can save its state, else shuts its
     /// guest down cleanly. A forced power-off would leave a disk unfit for a clean point. Returns
     /// whether it was running here.
-    private func shutDownForCleanPoint(_ id: String) async throws -> Bool {
+    private func shutDownForCleanPoint(_ id: String, allowPause: Bool = true) async throws -> Bool {
         if let pause = pauses[id] { _ = await pause.value }
         guard let vm = runningVMs[id] else { return false }
-        if canSaveState(id) {
+        if allowPause, canSaveState(id) {
             // A failed save still shut the guest down: the point is then the disk alone. Not when
             // that shutdown had to force it off.
             let outcome = await pauseVM(recordID: id)
@@ -1065,6 +1078,82 @@ final class WorktreeVMManager {
             } catch {
                 logger.error("Removing VM \(id, privacy: .public)'s first boot marker failed: \(String(describing: error), privacy: .public)")
             }
+        }
+    }
+
+    // MARK: - Templates
+
+    /// `<root>/templates/`: one slot per project and guest.
+    nonisolated static func templatesDirectory(root: URL) -> URL {
+        root.appendingPathComponent("templates", isDirectory: true)
+    }
+
+    /// The project's template slot for `guest`: `disk.img`, `aux.img` (macOS) and `template.json`.
+    nonisolated static func templateSlot(projectID: String, guest: VMGuestOS, root: URL) -> URL {
+        templatesDirectory(root: root)
+            .appendingPathComponent(VMTemplate.slotName(projectID: projectID, guest: guest), isDirectory: true)
+    }
+
+    nonisolated private static func templateFile(in slot: URL) -> URL {
+        slot.appendingPathComponent("template.json")
+    }
+
+    nonisolated static func readTemplate(at slot: URL) -> VMTemplate? {
+        guard let data = try? Data(contentsOf: templateFile(in: slot)) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(VMTemplate.self, from: data)
+    }
+
+    /// The newest sealed golden of `guest` under `root`: its build and when it was sealed. A
+    /// re-customized golden keeps its build but is sealed again.
+    nonisolated static func currentGolden(_ guest: VMGuestOS, root: URL) -> (build: String, sealedAt: Date)? {
+        let golden: (url: URL, marker: URL)? = switch guest {
+        case .macOS: GoldenImageInstaller.availableGolden(root: root).map { ($0.url, $0.sealedMarker) }
+        case .linux: LinuxGoldenInstaller.availableGolden(root: root).map { ($0.url, $0.sealedMarker) }
+        }
+        guard let golden,
+              let sealedAt = (try? FileManager.default.attributesOfItem(atPath: golden.marker.path))?[.modificationDate] as? Date
+        else { return nil }
+        return (golden.url.lastPathComponent, sealedAt)
+    }
+
+    /// Publishes VM `id`'s clean point, just taken after a clean shutdown, as its project's
+    /// template, replacing the project's earlier one. Skipped without a project, or for a VM
+    /// cloned from an older golden than the current one. Never throws: a VM without a template
+    /// only loses a shortcut. Called with the disk claimed.
+    private func publishTemplate(_ id: String, bundle: VMBundle, setupScriptHash: String) {
+        let vm = VMIdentity.parse(recordID: id)
+        guard let owner = templateOwner(vm.worktree),
+              let golden = Self.currentGolden(vm.guest, root: root),
+              let record = (try? registry.snapshot())?.first(where: { $0.id == id })
+        else { return }
+        let recordGolden = vm.guest == .linux
+            ? String(record.goldenBuild.dropFirst(VMIdentity.linuxGoldenPrefix.count)) : record.goldenBuild
+        guard recordGolden == golden.build else { return }
+        let fm = FileManager.default
+        let slot = Self.templateSlot(projectID: owner.projectID, guest: vm.guest, root: root)
+        let partial = slot.appendingPathExtension("partial")
+        do {
+            try? fm.removeItem(at: partial)
+            try fm.createDirectory(at: partial, withIntermediateDirectories: true)
+            try VMBundle.cloneFile(
+                Self.cleanDirectory(of: bundle).appendingPathComponent("disk.img"),
+                to: partial.appendingPathComponent("disk.img"))
+            if vm.guest == .macOS {
+                try VMBundle.cloneFile(bundle.auxiliaryStorage, to: partial.appendingPathComponent("aux.img"))
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(VMTemplate(
+                projectID: owner.projectID, guest: vm.guest, goldenBuild: golden.build,
+                goldenSealedAt: golden.sealedAt, setupScriptHash: setupScriptHash, createdAt: Date()))
+                .write(to: Self.templateFile(in: partial))
+            try Self.moveDirectory(partial, into: slot)
+            logger.notice("Published VM \(id, privacy: .public)'s clean point as its project's template")
+        } catch {
+            try? fm.removeItem(at: partial)
+            logger.error("Publishing VM \(id, privacy: .public)'s template failed: \(String(describing: error), privacy: .public)")
         }
     }
 

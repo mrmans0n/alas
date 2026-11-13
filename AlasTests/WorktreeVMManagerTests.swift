@@ -1196,6 +1196,68 @@ final class WorktreeVMManagerTests {
         #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == VMCleanPoint.scriptHash("brew install jq"))
         #expect(!manager.isFirstBootPending(recordID: "/repo/a"))
         #expect(manager.running("/repo/a") != nil)
+        // Without a project to own it, nothing is published.
+        #expect(!FileManager.default.fileExists(atPath: WorktreeVMManager.templatesDirectory(root: root).path))
+    }
+
+    private static let setupScript = "brew install jq"
+
+    private func templateSlot(_ projectID: String = "p1", _ guest: VMGuestOS = .macOS) -> URL {
+        WorktreeVMManager.templateSlot(projectID: projectID, guest: guest, root: root)
+    }
+
+    /// Creates worktree `worktree`'s VM of `guest` in project `p1`, boots it and runs its first-boot
+    /// setup, which publishes the project's template.
+    @discardableResult
+    private func publishTemplate(
+        _ manager: WorktreeVMManager, worktree: String = "/repo/a", guest: VMGuestOS = .macOS
+    ) async throws -> VMFirstBootSetup.Outcome {
+        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        try manager.createVM(worktreeID: worktree, guest: guest)
+        _ = try await manager.startVM(worktreeID: worktree, guest: guest)
+        return await makeFirstBootSetup(manager, runs: SetupScriptRuns())
+            .run(recordID: VMIdentity.recordID(worktree: worktree, guest: guest), script: Self.setupScript)
+    }
+
+    /// The template is the clean point taken after a clean shutdown: a paused disk without its
+    /// memory isn't consistent.
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func firstBootPublishesTheProjectTemplate(guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+
+        #expect(try await publishTemplate(manager, guest: guest) == .cleanPointTaken)
+
+        let slot = templateSlot("p1", guest)
+        let template = try #require(WorktreeVMManager.readTemplate(at: slot))
+        #expect(template.projectID == "p1")
+        #expect(template.setupScriptHash == VMCleanPoint.scriptHash(Self.setupScript))
+        let golden = guest == .macOS ? "25A1" : LinuxGoldenImage.serial
+        #expect(template.goldenBuild == golden)
+        let bundle = URL(fileURLWithPath: try record(VMIdentity.recordID(worktree: "/repo/a", guest: guest)).bundlePath)
+        #expect(try contents(slot.appendingPathComponent("disk.img"))
+            == contents(cleanDirectory(bundle).appendingPathComponent("disk.img")))
+        #expect(FileManager.default.fileExists(atPath: slot.appendingPathComponent("aux.img").path) == (guest == .macOS))
+        #expect(hypervisor.restoredFrom == [nil, nil])
+        #expect(!FileManager.default.fileExists(atPath: slot.path + ".partial"))
+    }
+
+    @Test func noTemplateFromAVMOfAnOlderGolden() async throws {
+        let bundle = try addRecord("/repo/a")
+        try Data().write(to: WorktreeVMManager.firstBootMarker(of: VMBundle(url: bundle)))
+        try Data("aux".utf8).write(to: VMBundle(url: bundle).auxiliaryStorage)
+        try makeSealedGoldens()
+        try FileManager.default.moveItem(
+            at: root.appendingPathComponent("golden/25A1"), to: root.appendingPathComponent("golden/25B1"))
+        let manager = makeManager()
+        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: SetupScriptRuns())
+            .run(recordID: "/repo/a", script: Self.setupScript)
+
+        #expect(outcome == .cleanPointTaken)
+        #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
     }
 
     @Test func aStopMidScriptIsNotAFailure() async throws {

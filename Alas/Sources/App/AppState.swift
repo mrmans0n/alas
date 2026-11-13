@@ -1978,6 +1978,11 @@ final class AppState {
         }
         vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
         vmManager.isRunningSetup = { [weak self] recordID in self?.vmSetupScriptsRunning.contains(recordID) ?? false }
+        vmManager.templateOwner = { [weak self] worktreeID in
+            guard let project = self?.projectAndWorktree(withWorktreeId: worktreeID)?.project,
+                  let hash = VMCleanPoint.scriptHash(project.vmGuestSetupScript) else { return nil }
+            return (project.id, hash)
+        }
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
