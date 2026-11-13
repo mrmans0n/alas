@@ -1072,12 +1072,12 @@ private struct ProjectDialog: View {
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Guest setup script · runs in each new VM, before its clean point")
+                    Text("Guest setup script · runs once per project, and new VMs start from its result")
                         .font(scale.meta.font(weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
                         .accessibilityLabel("Guest setup script")
-                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once.")
+                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once, and don't depend on a particular worktree's files: later VMs reuse its result. Reset from scratch runs it again.")
                         .font(scale.metaFont)
                         .foregroundColor(theme.color("fg-muted"))
                 }

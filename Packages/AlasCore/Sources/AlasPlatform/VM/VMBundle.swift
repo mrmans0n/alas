@@ -26,9 +26,11 @@ public struct VMBundle: Sendable {
     /// Clones a sealed golden bundle into `to`. Disk and auxiliary storage use
     /// `clonefile(2)` (APFS copy-on-write); the hardware model is copied and a
     /// fresh machine identifier and MAC address are written. The work happens
-    /// in `<to>.partial` and is renamed into place on success.
+    /// in `<to>.partial` and is renamed into place on success. `diskFrom` and
+    /// `auxiliaryStorageFrom` replace the golden's files, for a clone of a project template.
     public static func cloneForWorktree(
-        golden: VMBundle, to: URL, newMachineIdentifier: Data, newMACAddress: String
+        golden: VMBundle, to: URL, newMachineIdentifier: Data, newMACAddress: String,
+        diskFrom: URL? = nil, auxiliaryStorageFrom: URL? = nil
     ) throws -> VMBundle {
         guard golden.isSealed else {
             throw CloneError(description: "Golden VM bundle at \(golden.url.path) is not sealed")
@@ -40,8 +42,8 @@ public struct VMBundle: Sendable {
         do {
             try fm.createDirectory(at: partial, withIntermediateDirectories: false)
             let staged = VMBundle(url: partial)
-            try cloneFile(golden.diskImage, to: staged.diskImage)
-            try cloneFile(golden.auxiliaryStorage, to: staged.auxiliaryStorage)
+            try cloneFile(diskFrom ?? golden.diskImage, to: staged.diskImage)
+            try cloneFile(auxiliaryStorageFrom ?? golden.auxiliaryStorage, to: staged.auxiliaryStorage)
             try fm.copyItem(at: golden.hardwareModel, to: staged.hardwareModel)
             try newMachineIdentifier.write(to: staged.machineIdentifier)
             try Data(newMACAddress.utf8).write(to: staged.macAddress)

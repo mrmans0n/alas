@@ -191,12 +191,26 @@ actor VMGuestClient {
     /// was asked: the connection drops as the guest goes down, so the reply may never come, and
     /// the caller bounds the shutdown itself.
     func requestPoweroff() -> Bool {
+        request(Self.poweroffCommand)
+    }
+
+    /// Runs `command` over a live connection without waiting for its reply, for one that takes
+    /// the guest down. Returns whether it was sent.
+    func request(_ command: String) -> Bool {
         guard !closed, let connection, !connection.lost, connection.hello != nil else { return false }
-        Task { _ = try? await self.run(Self.poweroffCommand, timeoutSeconds: 60) }
+        Task { _ = try? await self.run(command, timeoutSeconds: 60) }
         return true
     }
 
     static let poweroffCommand = "sudo systemctl poweroff"
+
+    /// Generalizes a Linux guest as it powers off, for a disk clones start from (a golden, a
+    /// project template): an empty machine-id makes systemd generate a fresh one on each clone's
+    /// first boot, and the SSH host keys are removed so clones don't share them. Cloud-init is off
+    /// by then; the seed's `ssh.service` drop-in runs `ssh-keygen -A` to make each clone's own.
+    /// `rm -f` succeeds when there are none, so the poweroff always runs.
+    static let generalizingPoweroffCommand =
+        "sudo truncate -s0 /etc/machine-id && sudo rm -f /etc/ssh/ssh_host_* && sudo poweroff"
 
     /// Tells the guest about a session's lifecycle. Sent only over a live connection: when the
     /// connection dropped, the guest already ended its sessions. Returns whether it was sent.

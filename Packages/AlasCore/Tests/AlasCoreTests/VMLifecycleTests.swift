@@ -97,4 +97,41 @@ import Testing
         #expect(back.vmForNewWorktrees == true)
         #expect(back.vmGuestSetupScript == "brew install jq")
     }
+
+    // MARK: - Templates
+
+    private static let sealedAt = Date(timeIntervalSince1970: 50_000)
+    private static let template = VMTemplate(
+        projectID: "p1", guest: .macOS, goldenBuild: "25A1", goldenSealedAt: sealedAt,
+        setupScriptHash: "h", createdAt: now)
+
+    @Test(arguments: [
+        ("25A1", sealedAt, "h" as String?, true),
+        ("25A1", sealedAt.addingTimeInterval(0.4), "h", true),
+        ("25B1", sealedAt, "h", false),
+        ("25A1", sealedAt.addingTimeInterval(60), "h", false),
+        ("25A1", sealedAt, "other", false),
+        ("25A1", sealedAt, nil, false),
+    ])
+    func templateMatching(build: String, sealedAt: Date, hash: String?, expected: Bool) {
+        #expect(Self.template.matches(goldenBuild: build, goldenSealedAt: sealedAt, setupScriptHash: hash) == expected)
+    }
+
+    @Test(arguments: [
+        (Set(["p2"]), ("25A1", sealedAt) as (String, Date)?, true),
+        (Set(["p1"]), nil, true),
+        (Set(["p1"]), ("25B1", sealedAt), true),
+        (Set(["p1"]), ("25A1", sealedAt.addingTimeInterval(60)), true),
+        (Set(["p1"]), ("25A1", sealedAt), false),
+    ])
+    func templateStaleness(live: Set<String>, golden: (String, Date)?, expected: Bool) {
+        let current = golden.map { (build: $0.0, sealedAt: $0.1) }
+        #expect(Self.template.isStale(liveProjectIDs: live, currentGolden: current) == expected)
+    }
+
+    @Test func templateSlotsDifferPerGuestAndAreSingleComponents() {
+        let macOS = VMTemplate.slotName(projectID: "/a/b", guest: .macOS)
+        #expect(macOS != VMTemplate.slotName(projectID: "/a/b", guest: .linux))
+        #expect(!macOS.contains("/"))
+    }
 }
