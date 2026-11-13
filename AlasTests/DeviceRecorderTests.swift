@@ -9,8 +9,12 @@ struct DeviceRecorderTests {
     final class FakeRecording: ScreenRecording {
         var stopped = false
         var onExit: ((Bool) -> Void)?
+        /// Makes `stop` wait until `release` is called, like simctl finishing a file.
+        var holds = false
+        var release: (() -> Void)?
         func stop() async -> Bool {
             stopped = true
+            if holds { await withCheckedContinuation { release = $0.resume } }
             return !Task.isCancelled
         }
     }
@@ -103,6 +107,32 @@ struct DeviceRecorderTests {
         await recorder.simulatorStopped(udid: "on")
         #expect(handed.map(\.file) == [Self.file])
         await #expect(throws: DeviceRecorder.Failure.notRecording) { try await recorder.stop(udid: "on", owner: .user) }
+    }
+
+    @Test func anotherOwnersRecordingKeepsAnEndedOneForItsOwner() async throws {
+        let recordings = Recordings()
+        let recorder = Self.recorder(recordings)
+        let agent = DeviceRecorder.Owner.agent(sessionID: "s")
+        try recorder.start(udid: "on", owner: agent, file: Self.file)
+        recordings.made.first?.onExit?(true)
+        try recorder.start(udid: "on", owner: .user, file: URL(fileURLWithPath: "/tmp/other.mov"))
+        #expect(try await recorder.stop(udid: "on", owner: agent).file == Self.file)
+    }
+
+    @Test func aStopWhileARecordingFinishesWaitsForIt() async throws {
+        let recordings = Recordings()
+        let recorder = Self.recorder(recordings)
+        let agent = DeviceRecorder.Owner.agent(sessionID: "s")
+        try recorder.start(udid: "on", owner: agent, file: Self.file)
+        let recording = try #require(recordings.made.first)
+        recording.holds = true
+        let shutdown = Task { await recorder.simulatorStopped(udid: "on") }
+        try await eventually("simctl is finishing the file") { recording.release != nil }
+        async let stopped = recorder.stop(udid: "on", owner: agent)
+        await Task.yield()
+        recording.release?()
+        #expect(try await stopped.file == Self.file)
+        await shutdown.value
     }
 
     @Test func recordingsOlderThanAWeekAreDeleted() throws {

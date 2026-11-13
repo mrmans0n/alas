@@ -15,7 +15,7 @@ protocol ScreenRecording: AnyObject {
 @MainActor
 @Observable
 final class DeviceRecorder {
-    enum Owner: Equatable, Sendable {
+    enum Owner: Hashable, Sendable {
         case user
         case agent(sessionID: String)
     }
@@ -43,8 +43,9 @@ final class DeviceRecorder {
     /// nobody will press Stop for it, so it is handed on to be saved.
     @ObservationIgnored var onUserRecordingEnded: ((String, Finished) -> Void)?
     private var running: [String: Running] = [:]
-    /// Recordings that ended by themselves, kept for their owner's `stop`.
-    @ObservationIgnored private var ended: [String: (owner: Owner, result: Result<Finished, Failure>)] = [:]
+    /// Recordings that ended by themselves, per simulator and owner, kept for
+    /// the owner's `stop`; a task, so a stop during simctl's finishing waits for it.
+    @ObservationIgnored private var ended: [String: [Owner: Task<Result<Finished, Failure>, Never>]] = [:]
     @ObservationIgnored private let startRecording: @MainActor (String, URL) throws -> any ScreenRecording
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
@@ -69,7 +70,8 @@ final class DeviceRecorder {
 
     func start(udid: String, owner: Owner, file: URL) throws(Failure) {
         if let current = running[udid] { throw .busy(current.owner) }
-        ended[udid] = nil
+        // An ended recording this owner never collected gives way to its new one; others' stay.
+        ended[udid]?[owner] = nil
         let recording: any ScreenRecording
         do {
             recording = try startRecording(udid, file)
@@ -91,12 +93,13 @@ final class DeviceRecorder {
         if let current = running[udid], current.owner == owner {
             running[udid] = nil
             current.limit?.cancel()
+            let endedAt = now()
             let written = await Self.finish(current.recording)
-            return try finished(current, written: written).get()
+            return try Self.finished(current, written: written, at: endedAt).get()
         }
-        if let kept = ended[udid], kept.owner == owner {
-            ended[udid] = nil
-            return try kept.result.get()
+        if let kept = ended[udid]?[owner] {
+            ended[udid]?[owner] = nil
+            return try await kept.value.get()
         }
         throw .notRecording
     }
@@ -110,26 +113,31 @@ final class DeviceRecorder {
     private func stopByItself(udid: String, recording: any ScreenRecording) async {
         guard let current = running[udid], current.recording === recording else { return }
         running[udid] = nil
-        // This may run inside the limit task, which the cancel below reaches.
+        // This may run inside the limit task, which the cancel below reaches;
+        // the finishing task is a new one, so the cancel doesn't reach it.
         current.limit?.cancel()
-        let written = await Self.finish(recording)
-        keep(current, udid: udid, result: finished(current, written: written))
+        let endedAt = now()
+        let finishing = Task { Self.finished(current, written: await recording.stop(), at: endedAt) }
+        keep(current, udid: udid, result: finishing)
+        if current.owner == .user, case .success(let finished) = await finishing.value {
+            onUserRecordingEnded?(udid, finished)
+        }
     }
 
     private func endedByItself(udid: String, recording: any ScreenRecording, written: Bool) {
         guard let current = running[udid], current.recording === recording else { return }
         running[udid] = nil
         current.limit?.cancel()
-        keep(current, udid: udid, result: finished(current, written: written))
+        let result = Self.finished(current, written: written, at: now())
+        keep(current, udid: udid, result: Task { result })
+        if current.owner == .user, case .success(let finished) = result { onUserRecordingEnded?(udid, finished) }
     }
 
-    /// Keeps an agent's ended recording for its next stop; hands yours on at once.
-    private func keep(_ recording: Running, udid: String, result: Result<Finished, Failure>) {
-        guard recording.owner == .user else {
-            ended[udid] = (recording.owner, result)
-            return
-        }
-        if case .success(let finished) = result { onUserRecordingEnded?(udid, finished) }
+    /// Keeps an agent's ended recording for its next stop, also while it is
+    /// still finishing. Yours is handed on instead, once written.
+    private func keep(_ recording: Running, udid: String, result: Task<Result<Finished, Failure>, Never>) {
+        guard recording.owner != .user else { return }
+        ended[udid, default: [:]][recording.owner] = result
     }
 
     /// Stops a recording outside the caller's task: a cancelled caller (the
@@ -138,9 +146,9 @@ final class DeviceRecorder {
         await Task { await recording.stop() }.value
     }
 
-    private func finished(_ recording: Running, written: Bool) -> Result<Finished, Failure> {
+    private static func finished(_ recording: Running, written: Bool, at end: Date) -> Result<Finished, Failure> {
         guard written else { return .failure(.failed("simctl didn't write the video.")) }
-        return .success(Finished(file: recording.file, seconds: now().timeIntervalSince(recording.startedAt)))
+        return .success(Finished(file: recording.file, seconds: end.timeIntervalSince(recording.startedAt)))
     }
 
     // MARK: Files
