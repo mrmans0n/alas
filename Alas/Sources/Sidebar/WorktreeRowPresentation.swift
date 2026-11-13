@@ -30,6 +30,21 @@ enum WorktreeRowPresentation {
         }
     }
 
+    /// A line count short enough for a row: "840", "1.3k", "22k", "1.2M".
+    /// Written out rather than localized, so every row groups digits alike.
+    nonisolated static func compactCount(_ count: Int) -> String {
+        func scaled(_ unit: Int, _ suffix: String) -> String {
+            let tenths = count / (unit / 10)
+            if tenths >= 100 { return "\(count / unit)\(suffix)" }
+            return tenths % 10 == 0 ? "\(tenths / 10)\(suffix)" : "\(tenths / 10).\(tenths % 10)\(suffix)"
+        }
+        switch count {
+        case ..<1_000: return "\(count)"
+        case ..<1_000_000: return scaled(1_000, "k")
+        default: return scaled(1_000_000, "M")
+        }
+    }
+
     /// Being behind upstream has a pull action waiting; being ahead does not.
     nonisolated static func upstreamItemsAtRest(
         _ items: [WorktreeUpstreamStatus.SubtitleItem]

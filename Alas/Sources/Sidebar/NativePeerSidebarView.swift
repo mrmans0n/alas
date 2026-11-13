@@ -567,17 +567,16 @@ private struct NativePeerWorktreeRow: View, Equatable {
     private func secondLine(status: WorktreeRowView.StatusPresentation?) -> some View {
         if status != nil {
             // Everything a row knows stays on screen: narrow sidebars drop the
-            // diff bar, then the time, before the status word is cut short.
+            // time before the status word is cut short.
             ViewThatFits(in: .horizontal) {
-                secondLineContents(status: status, showsDiffBar: true, showsTime: true)
-                secondLineContents(status: status, showsDiffBar: false, showsTime: true)
-                secondLineContents(status: status, showsDiffBar: false, showsTime: false)
+                secondLineContents(status: status, showsTime: true)
+                secondLineContents(status: status, showsTime: false)
             }
             .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
             .padding(.leading, textInset)
         } else {
-            secondLineContents(status: nil, showsDiffBar: true, showsTime: true)
+            secondLineContents(status: nil, showsTime: true)
                 .font(scale.metaFont)
                 .foregroundColor(theme.color("fg-dim"))
                 .padding(.leading, textInset)
@@ -586,7 +585,6 @@ private struct NativePeerWorktreeRow: View, Equatable {
 
     private func secondLineContents(
         status: WorktreeRowView.StatusPresentation?,
-        showsDiffBar: Bool,
         showsTime: Bool
     ) -> some View {
         HStack(spacing: scale.space[2]) {
@@ -613,25 +611,13 @@ private struct NativePeerWorktreeRow: View, Equatable {
                     .truncationMode(.tail)
             }
             if let summary = worktree.worktree, summary.metricsAvailable,
-               let additionTicks = WorktreeRowView.diffBarAdditionCount(
-                   added: summary.addedLines, deleted: summary.deletedLines
-               ) {
+               summary.addedLines > 0 || summary.deletedLines > 0 {
                 HStack(spacing: 5) {
-                    if showsDiffBar {
-                        HStack(spacing: 1.5) {
-                            ForEach(0..<5) { tick in
-                                RoundedRectangle(cornerRadius: 1) // design-literal: 2pt-wide diff tick
-                                    .fill(theme.color(tick < additionTicks ? "add" : "del"))
-                                    .frame(width: 2, height: 7)
-                            }
-                        }
-                        .accessibilityHidden(true)
-                    }
                     if summary.addedLines > 0 {
-                        Text("+\(summary.addedLines)").foregroundColor(theme.color("add"))
+                        Text("+" + WorktreeRowPresentation.compactCount(summary.addedLines)).foregroundColor(theme.color("add"))
                     }
                     if summary.deletedLines > 0 {
-                        Text("−\(summary.deletedLines)").foregroundColor(theme.color("del"))
+                        Text("−" + WorktreeRowPresentation.compactCount(summary.deletedLines)).foregroundColor(theme.color("del"))
                     }
                 }
                 .monospacedDigit()
