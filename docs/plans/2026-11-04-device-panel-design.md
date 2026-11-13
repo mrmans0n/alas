@@ -192,9 +192,9 @@ Agents (phase 2 and after):
   held calls for simulators: a call waits up to 50 s for hand back
   (`2026-11-08-devices-agent-loop-design.md`). VM takeover still refuses
   calls; it never paused the agent's turn either.
-- [ ] Hide `device_*` from `tools/list` while the setting is off. Needs the
-  setting to reach the MCP server's environment.
-- [ ] Type non-ASCII text, for example through `simctl pbcopy` and paste.
+- [x] Hide `device_*` from `tools/list` while the setting is off, for
+  sessions started then (`ALAS_MCP_DEVICES=0`).
+- [x] Type non-ASCII text: `device_type` pastes words the US layout lacks.
 
 Expensive, not planned: network traffic capture (serve-sim uses mitmproxy),
 camera feed injection, and streaming to another machine over WebRTC.
