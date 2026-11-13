@@ -4,12 +4,14 @@ import Testing
 
 @MainActor
 struct DeviceRecorderTests {
+    /// Like `LiveScreenRecording`, a stop in a cancelled task can't wait for
+    /// simctl to finish the file, so nothing is written.
     final class FakeRecording: ScreenRecording {
         var stopped = false
         var onExit: ((Bool) -> Void)?
         func stop() async -> Bool {
             stopped = true
-            return true
+            return !Task.isCancelled
         }
     }
 
@@ -90,6 +92,17 @@ struct DeviceRecorderTests {
         try await eventually("the limit stops it") { recorder.owner(udid: "on") == nil }
         #expect(recordings.made.first?.stopped == true)
         #expect(try await recorder.stop(udid: "on", owner: agent).file == Self.file)
+    }
+
+    @Test func yourRecordingThatEndsByItselfIsHandedOnAtOnce() async throws {
+        let recordings = Recordings()
+        let recorder = Self.recorder(recordings)
+        var handed: [DeviceRecorder.Finished] = []
+        recorder.onUserRecordingEnded = { _, finished in handed.append(finished) }
+        try recorder.start(udid: "on", owner: .user, file: Self.file)
+        await recorder.simulatorStopped(udid: "on")
+        #expect(handed.map(\.file) == [Self.file])
+        await #expect(throws: DeviceRecorder.Failure.notRecording) { try await recorder.stop(udid: "on", owner: .user) }
     }
 
     @Test func recordingsOlderThanAWeekAreDeleted() throws {

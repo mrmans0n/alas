@@ -408,9 +408,15 @@ final class DeviceAgentControl {
 
     private func record(udid: String, start: Bool, sessionID: String) async -> AlasCLIResponse {
         let device: SimulatorDevice
-        switch await bootedDevice(udid) {
-        case .failure(let refusal): return refusal.response
-        case .success(let found): device = found
+        if start {
+            switch await bootedDevice(udid) {
+            case .failure(let refusal): return refusal.response
+            case .success(let found): device = found
+            }
+        } else {
+            // A recording that ended at shutdown is still collected.
+            let listed = try? await devices().first { $0.udid == udid }
+            device = listed ?? SimulatorDevice(udid: udid, name: udid, runtimeName: "", state: .shutdown)
         }
         let owner = DeviceRecorder.Owner.agent(sessionID: sessionID)
         do throws(DeviceRecorder.Failure) {

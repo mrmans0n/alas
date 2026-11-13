@@ -306,6 +306,19 @@ struct DeviceAgentControlTests {
             == "device_not_recording: No recording of iPhone by this session is running.")
     }
 
+    @Test func aRecordingThatEndedAtShutdownCanStillBeCollected() async throws {
+        let recorder = DeviceRecorderTests.recorder()
+        let control = control(FakeInput(), recorder: recorder)
+        try recorder.start(udid: "off", owner: .agent(sessionID: "s"), file: DeviceRecorderTests.file)
+        await recorder.simulatorStopped(udid: "off")
+        let stopped = await control.perform(.record(udid: "off", start: false), sessionID: "s")
+        guard case .text(let text) = stopped else {
+            Issue.record("Expected the video, got \(stopped)")
+            return
+        }
+        #expect(text.joined().contains(DeviceRecorderTests.file.path.replacingOccurrences(of: "/", with: "\\/")))
+    }
+
     private static func pasteboard(_ input: FakeInput = FakeInput()) -> DevicePasteboard {
         DevicePasteboard(input: input, pasteboard: DevicePasteboardTests.FakePasteboard(), frontmostApp: { _ in nil })
     }
