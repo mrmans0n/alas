@@ -898,21 +898,29 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPAttachmentStaging.stagedPDFUsage(ofURIs: [attachment.uri], attachmentsDirectory: composer.directory).count == 1)
     }
 
-    @Test("a mixed drop attaches in order and names the file it refused")
-    func mixedDropOfImagePDFAndUnsupportedFile() async throws {
+    @Test("the picker inserts file references beside images and embedded PDFs in selection order")
+    func mixedPickedFiles() async throws {
         let composer = try makePDFComposer(eligible: true)
         defer { composer.cleanUp() }
+        let notes = try composer.file("notes.txt", contents: Data("hello".utf8))
+        composer.textView.string = "replace tail"
+        composer.textView.setSelectedRange(NSRange(location: 0, length: 7))
 
-        composer.textView.insertPickedImageFilesForTesting([
+        composer.textView.insertPickedFilesForTesting([
             try composer.file("picture.png", contents: pngBytes),
-            try composer.file("notes.txt", contents: Data("hello".utf8)),
+            notes,
             try composer.file("report.pdf"),
         ])
-        try await eventually("the refusal is reported") { !composer.notices.isEmpty }
+        try await eventually("the picked files appear") { composer.attachments.count == 3 }
 
-        #expect(composer.attachments.map(\.mimeType) == ["image/png", nil])
+        #expect(composer.attachments.map(\.mimeType) == ["image/png", nil, nil])
+        #expect(composer.attachments[1] == .init(uri: notes.absoluteString, name: "notes.txt"))
         #expect(composer.attachments.last?.name == "report.pdf")
-        #expect(composer.notices == ["Couldn't attach notes.txt: only images and PDFs can be attached."])
+        #expect(ACPAttachmentStaging.stagedPDFUsage(
+            ofURIs: composer.attachments.map(\.uri), attachmentsDirectory: composer.directory).count == 1)
+        #expect(composer.textView.string.hasSuffix(" tail"))
+        #expect(!composer.textView.string.contains("replace"))
+        #expect(composer.notices.isEmpty)
     }
 
     @Test("the per-message limits count the PDFs already on the draft")
@@ -921,9 +929,9 @@ struct ACPComposerDraftBridgeTests {
         defer { composer.cleanUp() }
         let limit = ACPAttachmentStaging.maxPDFsPerMessage
 
-        composer.textView.insertPickedImageFilesForTesting(try (0..<limit).map { try composer.file("\($0).pdf") })
+        composer.textView.insertPickedFilesForTesting(try (0..<limit).map { try composer.file("\($0).pdf") })
         try await eventually("the draft is full") { composer.attachments.count == limit }
-        composer.textView.insertPickedImageFilesForTesting([try composer.file("extra.pdf")])
+        composer.textView.insertPickedFilesForTesting([try composer.file("extra.pdf")])
         try await eventually("the refusal is reported") { !composer.notices.isEmpty }
 
         #expect(composer.attachments.count == limit)
@@ -1095,7 +1103,7 @@ struct ACPComposerDraftBridgeTests {
         textView.string = "describe "
         textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
 
-        textView.insertPickedImageFilesForTesting([temp])
+        textView.insertPickedFilesForTesting([temp])
         coordinator.submit(textView)
         #expect(submitCount == 0)
 
@@ -1122,7 +1130,7 @@ struct ACPComposerDraftBridgeTests {
         defer { ACPNSTextView.imageFileReadGateForTesting = nil }
         textView.string = "describe "
 
-        textView.insertPickedImageFilesForTesting([temp])
+        textView.insertPickedFilesForTesting([temp])
         textView.string = ""
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
         await gate.open()

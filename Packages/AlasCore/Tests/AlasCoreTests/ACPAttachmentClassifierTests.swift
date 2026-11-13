@@ -35,6 +35,23 @@ struct ACPAttachmentClassifierTests {
         #expect(plan.handlesFiles)
     }
 
+    @Test("the picker keeps file references beside images and embedded PDFs", arguments: [true, false])
+    func pickedFileReferences(offersPDFs: Bool) {
+        let plan = Classifier.classify(
+            [
+                file("notes.txt", .unsupported),
+                file("picture.png", .image),
+                file("archive.zip", .unsupported, bytes: ACPImageStaging.maxBytes + 1),
+                file("report.pdf", .pdf),
+            ],
+            pdfs: offersPDFs ? .init(eligible: true, usage: Self.noPDFsYet) : nil,
+            referenceOtherFiles: true)
+
+        #expect(plan.accepted.map(\.kind) == [.reference, .image, .reference, offersPDFs ? .pdf : .reference])
+        #expect(acceptedNames(plan) == ["notes.txt", "picture.png", "archive.zip", "report.pdf"])
+        #expect(plan.refused.isEmpty)
+    }
+
     @Test("only a session known not to take PDFs refuses one at attach", arguments: [
         (eligible: Bool?.none, attaches: true),
         (eligible: Bool?.some(true), attaches: true),

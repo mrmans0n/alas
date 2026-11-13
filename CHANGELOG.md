@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Features
+
+- Let the local chat attachment picker select any file, keeping images and supported PDFs as attachments and showing other files as inline filename badges.
+
 ## [0.23.7] - 2026-11-13
 
 ### ✨ Features

@@ -108,6 +108,7 @@ public enum ACPAttachmentClassifier {
         public enum Kind: Equatable, Sendable {
             case image
             case pdf
+            case reference
         }
 
         public let url: URL
@@ -127,8 +128,9 @@ public enum ACPAttachmentClassifier {
     }
 
     /// `pdfs` is `nil` for a composer that doesn't take PDFs: there, one is a
-    /// file like any other.
-    public static func classify(_ files: [File], pdfs: PDFContext?) -> Plan {
+    /// file like any other. The attachment picker references other files;
+    /// drops and pastes keep their existing attachment-only policy.
+    public static func classify(_ files: [File], pdfs: PDFContext?, referenceOtherFiles: Bool = false) -> Plan {
         var accepted: [Accepted] = []
         var refused: [Refusal] = []
         var usage = pdfs?.usage ?? .init(count: 0, bytes: 0)
@@ -149,6 +151,9 @@ public enum ACPAttachmentClassifier {
                 reason = .notPDF
             case .unreadable where pdfs != nil:
                 reason = .unreadable
+            case _ where referenceOtherFiles:
+                reason = nil
+                accepted.append(.init(url: file.url, kind: .reference))
             case .pdf, .notPDF, .unreadable, .unsupported:
                 // The image path has always called any oversized file too large.
                 reason = isOverImageLimit(file) ? .image(.tooLarge) : .unsupported

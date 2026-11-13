@@ -941,11 +941,10 @@ struct ACPComposer: View {
     }
 
     private var attachButton: some View {
-        let offersPDFs = pdfAttachments.eligible != false
         return Button {
-            actions.presentImagePicker?()
+            actions.presentAttachmentPicker?(.allFiles)
         } label: {
-            Image(systemName: offersPDFs ? "paperclip" : "photo")
+            Image(systemName: "paperclip")
                 .font(scale.meta.font(weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
                 .frame(width: 28, height: 24)
@@ -953,8 +952,8 @@ struct ACPComposer: View {
                 .overlay(RoundedRectangle(cornerRadius: scale.radius.medium).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(offersPDFs ? "Attach image or PDF" : "Attach image")
-        .help(offersPDFs ? "Attach an image or a PDF" : "Attach an image")
+        .accessibilityLabel("Attach files")
+        .help("Attach files")
     }
 
     /// Route chip selections through manager-owned optimistic persistence and
