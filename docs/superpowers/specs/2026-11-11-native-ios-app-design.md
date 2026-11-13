@@ -213,7 +213,8 @@ Follow current iOS design language. The Mac's `DesignScale` work is the
 visual reference for Alas's identity, adapted to iOS rather than copied.
 
 Done: the Claude Design file "Alas iOS Glass" (iPhone and iPad, exported to
-`design/alas-ios/`) is the reference. Treat it as guidance, not a spec: keep
+`design/alas-ios/reference/alas-ios-glass.html`; open it in a browser) is the
+reference. Treat it as guidance, not a spec: keep
 its spirit, and drop anything the protocol cannot do or that it invented
 (for example the end-to-end encryption label, pairing permission scopes and
 matching words, "Switch agent" and "Network access" in session settings).
