@@ -1,11 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
-import AlasAgents
-import AlasACP
 
 /// Wire protocol version advertised in `hello`. Bump only for changes an
 /// older client or server cannot tolerate; additive optional fields do not
@@ -46,7 +39,7 @@ public struct RemoteServerIdentity: Equatable, Sendable {
 
     public init(
         serverId: String, name: String, peers: [RemoteHelloPeer] = [],
-        consoleCapabilities: [String] = PeerConsoleCapability.appHost, hostCapabilities: [String] = HostProtocolCapability.served,
+        consoleCapabilities: [String], hostCapabilities: [String],
         hostVersion: String? = nil
     ) {
         self.serverId = serverId
@@ -298,7 +291,7 @@ public struct RemoteBooleanOption: Codable, Equatable, Sendable {
 }
 
 /// Client → server. `type` discriminates.
-public enum RemoteClientMessage: Equatable, Sendable {
+public enum RemoteClientMessageOf<HostRequest: Codable & Equatable & Sendable, HostReply: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// Sent by Alas peer connections after the server's `hello`. Browsers
     /// never send it and servers never wait for it.
     ///
@@ -366,18 +359,18 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case queuePromote(sessionId: String, itemId: String)
     case listChanges(
         sessionId: String,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+        comparisonMode: ChangesComparisonMode? = nil
     )
     case fileDiff(
         sessionId: String,
         path: String,
         stage: String?,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+        comparisonMode: ChangesComparisonMode? = nil
     )
     case listFiles(
         sessionId: String,
         path: String?,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+        comparisonMode: ChangesComparisonMode? = nil
     )
     case listCommitFiles(sessionId: String, sha: String)
     case commitFileDiff(sessionId: String, sha: String, path: String)
@@ -393,13 +386,13 @@ public enum RemoteClientMessage: Equatable, Sendable {
     /// Forwarded run endpoint traffic; see `PeerPortForwardRequest`.
     case portForward(PeerPortForwardRequest)
     /// A host protocol message; see `HostClientMessage`.
-    case host(HostClientMessage)
+    case host(HostRequest)
     /// The answer to a `RemoteServerMessage.peerHost` request, or an event of
     /// a subscription it opened: see `HostProtocolCapability.delegationReverseV1`.
-    case peerHost(HostServerMessage)
+    case peerHost(HostReply)
 }
 
-extension RemoteClientMessage: Codable {
+extension RemoteClientMessageOf: Codable {
     private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook }
 
     public init(from decoder: Decoder) throws {
@@ -541,7 +534,7 @@ extension RemoteClientMessage: Codable {
             self = .listChanges(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 comparisonMode: try c.decodeIfPresent(
-                    AppConfig.Changes.ChangesComparisonMode.self,
+                    ChangesComparisonMode.self,
                     forKey: .comparisonMode
                 )
             )
@@ -551,7 +544,7 @@ extension RemoteClientMessage: Codable {
                 path: try c.decode(String.self, forKey: .path),
                 stage: try c.decodeIfPresent(String.self, forKey: .stage),
                 comparisonMode: try c.decodeIfPresent(
-                    AppConfig.Changes.ChangesComparisonMode.self,
+                    ChangesComparisonMode.self,
                     forKey: .comparisonMode
                 )
             )
@@ -560,7 +553,7 @@ extension RemoteClientMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decodeIfPresent(String.self, forKey: .path),
                 comparisonMode: try c.decodeIfPresent(
-                    AppConfig.Changes.ChangesComparisonMode.self,
+                    ChangesComparisonMode.self,
                     forKey: .comparisonMode
                 )
             )
@@ -582,9 +575,9 @@ extension RemoteClientMessage: Codable {
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardRequest.self, forKey: .portForward))
         case "host":
-            self = .host(try c.decode(HostClientMessage.self, forKey: .host))
+            self = .host(try c.decode(HostRequest.self, forKey: .host))
         case "peerHost":
-            self = .peerHost(try c.decode(HostServerMessage.self, forKey: .peerHost))
+            self = .peerHost(try c.decode(HostReply.self, forKey: .peerHost))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -786,7 +779,7 @@ extension RemoteClientMessage: Codable {
     }
 }
 
-extension RemoteClientMessage {
+extension RemoteClientMessageOf {
     /// Control messages bypass the per-connection serial processing chain
     /// (RemoteConnection.dispatchMessage): they are idempotent and must not
     /// queue behind transcript work. Everything else stays strictly ordered
@@ -865,7 +858,7 @@ extension RemoteClientMessage {
 }
 
 /// Server → client. `type` discriminates.
-public enum RemoteServerMessage: Equatable, Sendable {
+public enum RemoteServerMessageOf<HostReply: Codable & Equatable & Sendable, HostRequest: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
     /// `capabilities` lists optional features this Mac serves, such as
     /// `PeerConsoleCapability.v1`; absent on older Macs.
@@ -973,15 +966,15 @@ public enum RemoteServerMessage: Equatable, Sendable {
     /// Forwarded run endpoint traffic; see `PeerPortForwardEvent`.
     case portForward(PeerPortForwardEvent)
     /// A host protocol message; see `HostServerMessage`.
-    case host(HostServerMessage)
+    case host(HostReply)
     /// A host protocol request from this server to the client, sent only on a
     /// socket whose `helloAck` acknowledged
     /// `HostProtocolCapability.delegationReverseV1`. A client that does not
     /// know the case skips it.
-    case peerHost(HostClientMessage)
+    case peerHost(HostRequest)
 }
 
-extension RemoteServerMessage: Codable {
+extension RemoteServerMessageOf: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
@@ -1018,9 +1011,9 @@ extension RemoteServerMessage: Codable {
         case "portForward":
             self = .portForward(try c.decode(PeerPortForwardEvent.self, forKey: .portForward))
         case "host":
-            self = .host(try c.decode(HostServerMessage.self, forKey: .host))
+            self = .host(try c.decode(HostReply.self, forKey: .host))
         case "peerHost":
-            self = .peerHost(try c.decode(HostClientMessage.self, forKey: .peerHost))
+            self = .peerHost(try c.decode(HostRequest.self, forKey: .peerHost))
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),
@@ -1582,21 +1575,6 @@ extension RemoteServerMessage: Codable {
     }
 }
 
-extension RemoteServerMessage {
-    public static func hello(_ identity: RemoteServerIdentity) -> RemoteServerMessage {
-        .hello(
-            protocolVersion: RemoteProtocolVersion.current,
-            serverId: identity.serverId,
-            name: identity.name,
-            // Older peers refuse to link to a Mac that doesn't advertise this.
-            federationEnabled: true,
-            peers: identity.peers,
-            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1, PeerAdapterInstallCapability.v1]
-                + identity.hostCapabilities,
-            hostVersion: identity.hostVersion)
-    }
-}
-
 /// The host protocol, served to paired devices as `host` messages.
 public enum HostProtocolCapability: Sendable {
     /// Advertised in `hello` by hosts that answer `host` messages speaking
@@ -1687,16 +1665,6 @@ public enum HostProtocolCapability: Sendable {
     public static let updateV1 = "host.update.v1"
     /// Hosts that serve `shepherdSession`.
     public static let shepherdsV1 = "host.shepherds.v1"
-    /// Everything every host serves of the host protocol.
-    public static let served = [
-        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, transcriptImagesV1, runsScriptsV1,
-        worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1, worktreesFileHistoryV1, delegationV1,
-    ]
-    /// What only a headless host serves.
-    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
-                                       worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
-                                       worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2, worktreesFileBytesV3,
-                                       shepherdsV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

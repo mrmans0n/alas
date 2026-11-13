@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import AlasAgents
 import AlasModel
+import AlasRemoteKit
 @testable import AlasHostCore
 
 @MainActor

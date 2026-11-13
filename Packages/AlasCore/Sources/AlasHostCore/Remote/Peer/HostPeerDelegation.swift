@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// What `HostPeerDelegation` needs of the Remote server to reach a Mac over
 /// that Mac's own link, kept apart so its tests drive it with a fake.

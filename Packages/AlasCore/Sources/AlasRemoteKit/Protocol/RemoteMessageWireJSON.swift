@@ -1,12 +1,5 @@
 import CryptoKit
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
-import AlasAgents
-import AlasACP
 
 /// One transcript message as sent to the web client. `text` carries the
 /// human-visible body for simple kinds; `json` carries a structured blob
@@ -32,72 +25,6 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
             self.uri = uri
             self.name = name
         }
-    }
-
-    /// A conservative bound for compact JSONEncoder output, without serializing
-    /// or copying the bodies. The fixed overhead covers keys, punctuation,
-    /// string quotes and a signed 64-bit index. Absent bodies add no bytes.
-    public var transportByteCount: Int {
-        var count = 64
-            + Self.escapedTransportByteCount(stableId)
-            + Self.escapedTransportByteCount(kind)
-        if let text {
-            count += 10 + Self.escapedTransportByteCount(text)
-        }
-        if let json {
-            count += 10 + Self.escapedTransportByteCount(json)
-        }
-        if isHidden != nil { count += 17 }
-        if let checkpointId { count += 18 + Self.escapedTransportByteCount(checkpointId) }
-        if let images {
-            count += 12
-            for image in images {
-                count += 24 + Self.escapedTransportByteCount(image.uri)
-                if let name = image.name { count += Self.escapedTransportByteCount(name) }
-            }
-        }
-        return count
-    }
-
-    /// The notice a row of `kind` too large to send is replaced with.
-    public static func oversizedNotice(kind: String) -> String {
-        "This \(kind) content is too large for remote display. The full content is available on the owning Mac."
-    }
-
-    /// The budget must fit the row's identity and a short omission notice.
-    /// Returning the count lets callers batch rows without rescanning the body.
-    public func boundedForTransport(maximumBytes: Int) -> (message: RemoteWireMessage, byteCount: Int) {
-        let byteCount = transportByteCount
-        guard byteCount > maximumBytes else { return (self, byteCount) }
-
-        let notice = RemoteWireMessage(
-            stableId: stableId,
-            kind: "systemNotice",
-            text: Self.oversizedNotice(kind: kind),
-            json: nil,
-            index: index
-        )
-        let noticeByteCount = notice.transportByteCount
-        precondition(
-            noticeByteCount <= maximumBytes,
-            "The transport budget must fit the row identity and oversized-content notice."
-        )
-        return (notice, noticeByteCount)
-    }
-
-    private static func escapedTransportByteCount(_ value: String) -> Int {
-        var count = 0
-        for byte in value.utf8 {
-            switch byte {
-            case 0x00...0x1f:
-                count += 6 // \u00xx also bounds the shorter escapes such as \n.
-            case 0x22, 0x2f, 0x5c:
-                count += 2 // Quote, slash and backslash.
-            default:
-                count += 1
-            }
-        }
-        return count
     }
 
     public init(
@@ -160,25 +87,13 @@ public struct RemoteVisualAid: Codable, Equatable, Sendable {
     /// `"embedded"` or `"card"`, from `ACPVisualAid.Presentation`.
     public let presentation: String
 
-    public init(_ visual: ACPVisualAid) {
-        id = visual.id.uuidString
-        title = visual.title
-        html = visual.html
-        presentation = visual.presentation.rawValue
-        question = visual.question.map { question in
-            Question(
-                prompt: question.prompt,
-                options: question.options.map { Option(id: $0.id, label: $0.label) },
-                allowMultiple: question.allowMultiple)
-        }
-        switch visual.answer {
-        case .answered(let ids, let note, _):
-            answer = Answer(kind: "answered", selectedOptionIds: ids, note: note)
-        case .dismissed:
-            answer = Answer(kind: "dismissed", selectedOptionIds: nil, note: nil)
-        case nil:
-            answer = nil
-        }
+    public init(id: String, title: String, html: String, question: Question?, answer: Answer?, presentation: String) {
+        self.id = id
+        self.title = title
+        self.html = html
+        self.question = question
+        self.answer = answer
+        self.presentation = presentation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -193,7 +108,7 @@ public struct RemoteVisualAid: Codable, Equatable, Sendable {
         html = try c.decode(String.self, forKey: .html)
         question = try c.decodeIfPresent(Question.self, forKey: .question)
         answer = try c.decodeIfPresent(Answer.self, forKey: .answer)
-        presentation = try c.decodeIfPresent(String.self, forKey: .presentation) ?? ACPVisualAid.Presentation.card.rawValue
+        presentation = try c.decodeIfPresent(String.self, forKey: .presentation) ?? "card"
     }
 }
 
@@ -906,4 +821,15 @@ public enum RemoteFileBytesResult: Equatable, Sendable {
 public enum RemoteFileHistoryResult: Equatable, Sendable {
     case success(entries: [HostFileHistoryEntry], truncated: Bool)
     case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+/// One commit of a file's history, with the file's path in it, which differs before a rename.
+public struct HostFileHistoryEntry: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    public var pathAtCommit: String
+
+    public init(commit: CommitInfo, pathAtCommit: String) {
+        self.commit = commit
+        self.pathAtCommit = pathAtCommit
+    }
 }
