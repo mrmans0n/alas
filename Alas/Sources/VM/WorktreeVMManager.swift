@@ -1188,6 +1188,23 @@ final class WorktreeVMManager {
         return (golden.url.lastPathComponent, sealedAt)
     }
 
+    /// Removes the templates nothing can clone again: those of projects not in `liveProjectIDs`,
+    /// those made from another golden than the current one, and unreadable or partial slots.
+    // ponytail: a slot another Alas process is publishing right now (`.partial`) is removed too;
+    // that publish then fails and the next first boot publishes again.
+    nonisolated static func pruneTemplates(liveProjectIDs: Set<String>, root: URL) {
+        let fm = FileManager.default
+        let slots = (try? fm.contentsOfDirectory(at: templatesDirectory(root: root), includingPropertiesForKeys: nil)) ?? []
+        for slot in slots {
+            if let template = readTemplate(at: slot), slot.pathExtension != "partial",
+               !template.isStale(liveProjectIDs: liveProjectIDs, currentGolden: currentGolden(template.guest, root: root))
+            {
+                continue
+            }
+            try? fm.removeItem(at: slot)
+        }
+    }
+
     /// Publishes VM `id`'s clean point, just taken after a clean shutdown, as its project's
     /// template, replacing the project's earlier one. Skipped without a project, or for a VM
     /// cloned from an older golden than the current one. Never throws: a VM without a template

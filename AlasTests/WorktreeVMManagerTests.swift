@@ -1210,9 +1210,9 @@ final class WorktreeVMManagerTests {
     /// setup, which publishes the project's template.
     @discardableResult
     private func publishTemplate(
-        _ manager: WorktreeVMManager, worktree: String = "/repo/a", guest: VMGuestOS = .macOS
+        _ manager: WorktreeVMManager, worktree: String = "/repo/a", guest: VMGuestOS = .macOS, project: String = "p1"
     ) async throws -> VMFirstBootSetup.Outcome {
-        manager.templateOwner = { _ in ("p1", VMCleanPoint.scriptHash(Self.setupScript)!) }
+        manager.templateOwner = { _ in (project, VMCleanPoint.scriptHash(Self.setupScript)!) }
         try manager.createVM(worktreeID: worktree, guest: guest)
         _ = try await manager.startVM(worktreeID: worktree, guest: guest)
         return await makeFirstBootSetup(manager, runs: SetupScriptRuns())
@@ -1278,6 +1278,21 @@ final class WorktreeVMManagerTests {
         for file in ["machine-id.bin", "mac.txt"] {
             #expect(try Data(contentsOf: a.appendingPathComponent(file)) != Data(contentsOf: b.appendingPathComponent(file)))
         }
+    }
+
+    @Test func pruningRemovesOnlyStaleTemplates() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try await publishTemplate(manager)
+        try await publishTemplate(manager, worktree: "/repo/b", project: "p2")
+        let stray = WorktreeVMManager.templatesDirectory(root: root).appendingPathComponent("x.partial")
+        try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+
+        WorktreeVMManager.pruneTemplates(liveProjectIDs: ["p1"], root: root)
+
+        #expect(FileManager.default.fileExists(atPath: templateSlot("p1").path))
+        #expect(!FileManager.default.fileExists(atPath: templateSlot("p2").path))
+        #expect(!FileManager.default.fileExists(atPath: stray.path))
     }
 
     enum StaleTemplate: CaseIterable { case scriptChanged, goldenResealed, otherProject, diskMissing }

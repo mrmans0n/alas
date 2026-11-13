@@ -1983,6 +1983,13 @@ final class AppState {
                   let hash = VMCleanPoint.scriptHash(project.vmGuestSetupScript) else { return nil }
             return (project.id, hash)
         }
+        // The test host shares the user's VM root, and an unreadable projects.json reads as no
+        // projects: neither may delete templates.
+        if !Self.isRunningUnitTests, !projectsManager.projects.isEmpty {
+            let live = Set(projectsManager.projects.map(\.id))
+            let root = vmManager.root
+            Task.detached(priority: .utility) { WorktreeVMManager.pruneTemplates(liveProjectIDs: live, root: root) }
+        }
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
