@@ -182,13 +182,24 @@ A `CADisplayLink` meter reports hitch time and frame rate on screen. Nothing in 
 - Create: `docs/superpowers/specs/2026-11-13-ios-transcript-spike-results.md` (`git add -f`)
 - Modify: `docs/superpowers/specs/2026-11-11-native-ios-app-design.md` ("Left to the builder", the rendering line, which now records the choice)
 
-- [ ] **Step 1: The owner runs the Debug build on a ProMotion iPhone.** Copy `Config/AlasMobile-Local.xcconfig.example` to `Config/AlasMobile-Local.xcconfig` and set the team. For each candidate at 5,000 rows, record the HUD for:
+- [ ] **Step 1: The owner measures a Release build on a ProMotion iPhone.** Copy `Config/AlasMobile-Local.xcconfig.example` to `Config/AlasMobile-Local.xcconfig` and set the team. Runbook:
+  - Measure through Product › Profile. That builds Release and runs without the debugger. A Release install is `io.nlopez.alas`, shown as "Alas".
+  - Turn Low Power Mode off; it caps the display at 60 Hz.
+  - Choose the Animation Hitches template, so Instruments records in the same session as the HUD.
+  - The scenario drivers live in the scheme's Run arguments, which Profile inherits. Both are off by default:
+    - enable `-spikePreloadPages 23` for S2;
+    - enable `-spikeWindowSize 20` for S4.
+  - Before each scenario, tap Reset in the HUD. When the scenario ends, read the `run` line; the `1 s` line is only the last second.
+  - Rebuilding, or toggling Stream, also resets the run.
+
+  For each candidate at 5,000 rows, record the HUD run line for:
   - S1, streaming at the tail for 30 s;
   - a 10 s fling through history while streaming;
+  - S2, with the huge row;
   - S4, paging;
   - open time, measured 3 times.
 
-  Also run Instruments' Animation Hitches template once per candidate on the fling.
+  Keep the Animation Hitches trace for the fling of each candidate.
 - [ ] **Step 2: Measure the Safari baseline.** Open a real session of comparable length in the web client in Safari on the same phone. Record the Web Inspector Timelines frame rate for the same fling and streaming.
 - [ ] **Step 3: Write the results doc.** Include:
   - a table of the candidates by scenario: fps, hitch ms/s, worst frame, open ms;
