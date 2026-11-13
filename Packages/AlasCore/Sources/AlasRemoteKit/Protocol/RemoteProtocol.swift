@@ -290,7 +290,7 @@ public struct RemoteBooleanOption: Codable, Equatable, Sendable {
     }
 }
 
-/// Client → server. `type` discriminates.
+/// Client → server. `type` discriminates. The first generic parameter is this message's own `.host` payload and the second is the `.peerHost` payload; the Mac pins them via the typealiases in AlasHostCore.
 public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, ServerHost: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// Sent by Alas peer connections after the server's `hello`. Browsers
     /// never send it and servers never wait for it.
@@ -857,7 +857,7 @@ extension RemoteClientMessageOf {
     }
 }
 
-/// Server → client. `type` discriminates.
+/// Server → client. `type` discriminates. The first generic parameter is this message's own `.host` payload and the second is the `.peerHost` payload; the Mac pins them via the typealiases in AlasHostCore.
 public enum RemoteServerMessageOf<ServerHost: Codable & Equatable & Sendable, ClientHost: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
     /// `capabilities` lists optional features this Mac serves, such as

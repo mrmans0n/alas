@@ -3,7 +3,7 @@ import Foundation
 /// One forwarded transcript row, decoded into the value types the local ACP
 /// transcript renders so the peer pane can reuse its cards instead of showing
 /// flattened text.
-public enum RemoteTranscriptRow: Equatable {
+public enum RemoteTranscriptRow: Equatable, Sendable {
     /// `images` replace their `🖼` labels in the text; a viewer shows each
     /// label again until its bytes load.
     case user(String, checkpointID: UUID?, images: [RemoteWireMessage.Image] = [])
