@@ -55,8 +55,11 @@ coming later.
 
 ## Non-goals for v1
 
-Terminals, port forwarding, git mutations (commit/push/PR), the Inbox,
-on-device AI, Bonjour discovery from the phone, iPad-specific layout, Android.
+Terminals, port forwarding, git mutations (stage/commit/push/PR), the Mac's
+cross-host Inbox features beyond pending approvals and questions, on-device AI,
+Bonjour discovery from the phone, the iPad layout, Android. (The app's own
+Inbox tab, listing what waits on the user, is in v1: it is the approval
+surface.)
 These are the "go from there" list; the design must not block them.
 
 ## Anti-goals (fails even if it "works")
@@ -208,6 +211,26 @@ screens, produce mockups of the key surfaces (session list, transcript with
 each row kind, request sheets, composer, host list) for the owner to react to.
 Follow current iOS design language. The Mac's `DesignScale` work is the
 visual reference for Alas's identity, adapted to iOS rather than copied.
+
+Done: the Claude Design file "Alas iOS Glass" (iPhone and iPad, exported to
+`design/alas-ios/`) is the reference. Treat it as guidance, not a spec: keep
+its spirit, and drop anything the protocol cannot do or that it invented
+(for example the end-to-end encryption label, pairing permission scopes and
+matching words, "Switch agent" and "Network access" in session settings).
+Key rules it sets:
+
+- Liquid Glass only on controls that float over content (toolbars, tab bar,
+  search, segmented controls, composer, sheets). Lists, transcripts and diffs
+  sit on flat surfaces.
+- Tabs: Worktrees, Inbox, Peers, plus a separate search button. All root
+  screens share one header pattern.
+- Each approval kind (command, plan, question) has one card, shown the same
+  in the Inbox, the lock-screen push and the transcript.
+- Composer chips for model + thinking, mode, and the branch's +/−; the first
+  two open one settings sheet built from what the agent reports.
+- Changes and diffs are read-only on iOS.
+- iPad gets the floating-sidebar split layout after the iPhone app settles;
+  build navigation so that layout is additive.
 
 ## Constraints
 
