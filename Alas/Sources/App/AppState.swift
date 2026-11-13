@@ -749,7 +749,13 @@ final class AppState {
         // Your recordings go to the Desktop once written: after Stop, a shutdown, or quitting.
         recorder.onUserRecordingEnded = { [weak self] udid, finished in
             let name = self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
-            _ = try? DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
+            do {
+                return try DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
+            } catch {
+                // Not lost: show where it is.
+                NSWorkspace.shared.activateFileViewerSelecting([finished.file])
+                throw error
+            }
         }
         DeviceRecorder.pruneOldRecordings()
         madeDeviceRecorder = recorder

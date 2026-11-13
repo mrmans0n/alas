@@ -53,6 +53,18 @@ enum DeviceScreenshot {
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         let safeName = deviceName.replacingOccurrences(of: "/", with: "-")
         let desktop = try FileManager.default.url(for: .desktopDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
-        return desktop.appendingPathComponent("\(kind) - \(safeName) - \(formatter.string(from: now)).\(ext)")
+        return availableFile(in: desktop, named: "\(kind) - \(safeName) - \(formatter.string(from: now))", extension: ext)
+    }
+
+    /// `name.ext` in `directory`, or `name 2.ext`, `name 3.ext`… when taken,
+    /// as Finder numbers copies.
+    static func availableFile(in directory: URL, named name: String, extension ext: String) -> URL {
+        var file = directory.appendingPathComponent("\(name).\(ext)")
+        var number = 2
+        while FileManager.default.fileExists(atPath: file.path) {
+            file = directory.appendingPathComponent("\(name) \(number).\(ext)")
+            number += 1
+        }
+        return file
     }
 }

@@ -156,6 +156,8 @@ struct DevicesActions: View {
             // The recorder saves it to the Desktop (AppState's onUserRecordingEnded).
             _ = try await recorder.stop(udid: device.udid, owner: .user)
             text = "Saved to Desktop"
+        } catch DeviceRecorder.Failure.notSaved {
+            text = "Couldn't save to the Desktop; it's shown in Finder"
         } catch {
             text = "Couldn't save the recording"
         }

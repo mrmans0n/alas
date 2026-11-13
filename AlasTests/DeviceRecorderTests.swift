@@ -102,7 +102,10 @@ struct DeviceRecorderTests {
         let recordings = Recordings()
         let recorder = Self.recorder(recordings)
         var handed: [DeviceRecorder.Finished] = []
-        recorder.onUserRecordingEnded = { _, finished in handed.append(finished) }
+        recorder.onUserRecordingEnded = { _, finished in
+            handed.append(finished)
+            return finished.file
+        }
         try recorder.start(udid: "on", owner: .user, file: Self.file)
         await recorder.simulatorStopped(udid: "on")
         #expect(handed.map(\.file) == [Self.file])
@@ -157,7 +160,10 @@ struct DeviceRecorderTests {
         let recordings = Recordings()
         let recorder = Self.recorder(recordings)
         var handed: [String] = []
-        recorder.onUserRecordingEnded = { udid, _ in handed.append(udid) }
+        recorder.onUserRecordingEnded = { udid, finished in
+            handed.append(udid)
+            return finished.file
+        }
         let agent = DeviceRecorder.Owner.agent(sessionID: "s")
         try recorder.start(udid: "a", owner: .user, file: Self.file)
         try recorder.start(udid: "b", owner: agent, file: Self.file)
@@ -171,7 +177,10 @@ struct DeviceRecorderTests {
         let recordings = Recordings()
         let recorder = Self.recorder(recordings)
         var handed: [String] = []
-        recorder.onUserRecordingEnded = { udid, _ in handed.append(udid) }
+        recorder.onUserRecordingEnded = { udid, finished in
+            handed.append(udid)
+            return finished.file
+        }
         try recorder.start(udid: "on", owner: .user, file: Self.file)
         let recording = try #require(recordings.made.first)
         recording.holds = true
@@ -188,6 +197,29 @@ struct DeviceRecorderTests {
         await quitting.value
         #expect(handed == ["on"])
         _ = try await stopping.value
+    }
+
+    @Test func aRecordingThatCannotBeSavedSaysWhereItIs() async throws {
+        let recorder = Self.recorder()
+        recorder.onUserRecordingEnded = { _, _ in throw CocoaError(.fileWriteFileExists) }
+        try recorder.start(udid: "on", owner: .user, file: Self.file)
+        await #expect {
+            try await recorder.stop(udid: "on", owner: .user)
+        } throws: { error in
+            guard case DeviceRecorder.Failure.notSaved(let file, _) = error else { return false }
+            return file == Self.file
+        }
+    }
+
+    @Test func aTakenDesktopNameGetsANumber() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = DeviceScreenshot.availableFile(in: directory, named: "Simulator Recording - iPhone", extension: "mov")
+        FileManager.default.createFile(atPath: first.path, contents: Data())
+        let second = DeviceScreenshot.availableFile(in: directory, named: "Simulator Recording - iPhone", extension: "mov")
+        #expect(first.lastPathComponent == "Simulator Recording - iPhone.mov")
+        #expect(second.lastPathComponent == "Simulator Recording - iPhone 2.mov")
     }
 
     @Test func recordingsOlderThanAWeekAreDeleted() throws {

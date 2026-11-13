@@ -437,6 +437,9 @@ final class DeviceAgentControl {
                 return .error("device_not_recording: No recording of \(device.name) by this session is running.")
             case .failed(let reason):
                 return .error("device_record_failed: \(reason)")
+            case .notSaved(let file, let reason):
+                // Agents' recordings aren't moved; kept for completeness.
+                return .error("device_record_failed: \(reason) The video is at \(file.path).")
             }
         }
     }

@@ -29,6 +29,8 @@ final class DeviceRecorder {
         case busy(Owner)
         case notRecording
         case failed(String)
+        /// Written, but saving it failed; the video is still at the URL.
+        case notSaved(URL, String)
     }
 
     private struct Running {
@@ -41,7 +43,8 @@ final class DeviceRecorder {
 
     /// Each recording of yours once its video is written, however it ended
     /// (Stop, a shutdown, quitting), to be saved.
-    @ObservationIgnored var onUserRecordingEnded: ((String, Finished) -> Void)?
+    /// Returns where it was saved; throwing leaves the video where it is.
+    @ObservationIgnored var onUserRecordingEnded: ((String, Finished) throws -> URL)?
     /// Recordings whose video simctl is still writing, so quitting can wait for them.
     @ObservationIgnored private var finishing: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var running: [String: Running] = [:]
@@ -138,9 +141,18 @@ final class DeviceRecorder {
         guard let current = running[udid], current.recording === recording else { return }
         running[udid] = nil
         current.limit?.cancel()
-        let result = Self.finished(current, written: written, at: now())
+        let result = save(Self.finished(current, written: written, at: now()), of: current, udid: udid)
         keep(current, udid: udid, result: Task { result })
-        if current.owner == .user, case .success(let finished) = result { onUserRecordingEnded?(udid, finished) }
+    }
+
+    /// Saves your finished recording; an agent's stays where it was written.
+    private func save(_ result: Result<Finished, Failure>, of recording: Running, udid: String) -> Result<Finished, Failure> {
+        guard recording.owner == .user, case .success(let finished) = result, let save = onUserRecordingEnded else { return result }
+        do {
+            return .success(Finished(file: try save(udid, finished), seconds: finished.seconds))
+        } catch {
+            return .failure(.notSaved(finished.file, error.localizedDescription))
+        }
     }
 
     /// Keeps an agent's ended recording for its next stop, also while it is
@@ -156,8 +168,8 @@ final class DeviceRecorder {
     private func finalize(_ current: Running, udid: String, at end: Date) -> Task<Result<Finished, Failure>, Never> {
         let id = ObjectIdentifier(current.recording)
         let task = Task { [weak self] () -> Result<Finished, Failure> in
-            let result = Self.finished(current, written: await current.recording.stop(), at: end)
-            if current.owner == .user, case .success(let finished) = result { self?.onUserRecordingEnded?(udid, finished) }
+            let written = Self.finished(current, written: await current.recording.stop(), at: end)
+            let result = self?.save(written, of: current, udid: udid) ?? written
             self?.finishing[id] = nil
             return result
         }
