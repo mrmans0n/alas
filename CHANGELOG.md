@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Let the local chat attachment picker select any file, keeping images and supported PDFs as attachments and showing other files as inline filename badges.
 
+### Fixes
+
+- Prevent a crash during worktree refresh when symlink aliases resolve to the same directory, and clear cached stack summaries for every alias when its branch changes.
+
 ## [0.23.7] - 2026-11-13
 
 ### ✨ Features
