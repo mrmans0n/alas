@@ -12861,7 +12861,8 @@ final class AppState {
                         socketPath: socketPath,
                         worktreePath: worktreePath,
                         sessionId: sessionId,
-                        parentSessionId: parentSessionId
+                        parentSessionId: parentSessionId,
+                        deviceTools: self.config.deviceAgentsEnabled
                     ) {
                         return .local(BuiltInAlasMCP.injection(
                             enabled: self.config.harness.exposeAlasMCP,
@@ -12872,6 +12873,7 @@ final class AppState {
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
                             httpEndpoint: endpoint,
+                            deviceTools: self.config.deviceAgentsEnabled,
                             cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                             serverName: serverName
                         ))
@@ -12893,6 +12895,7 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId,
+                    deviceTools: self.config.deviceAgentsEnabled,
                     cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                     serverName: serverName
                 ))
@@ -12970,6 +12973,7 @@ final class AppState {
                 )
             }
         )
+        mgr.deviceToolsAvailable = { [weak self] in self?.config.deviceAgentsEnabled ?? false }
         mgr.delegationPeerNamesProvider = { [weak self] in
             ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
         }

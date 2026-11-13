@@ -291,6 +291,7 @@ public enum BuiltInAlasMCP: Sendable {
         httpEndpoint: HTTPEndpoint? = nil,
         workspaceContext: WorkspaceContext? = nil,
         headless: Bool = false,
+        deviceTools: Bool = true,
         cliBuild: String? = nil,
         serverName: String = BuiltInAlasMCP.serverName
     ) -> Injection? {
@@ -337,6 +338,7 @@ public enum BuiltInAlasMCP: Sendable {
                     + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
                     + workspaceEnvironment
                     + (headless ? [.init(name: "ALAS_MCP_HEADLESS", value: "1")] : [])
+                    + (deviceTools ? [] : [.init(name: "ALAS_MCP_DEVICES", value: "0")])
             )
             transport = .stdio
         }

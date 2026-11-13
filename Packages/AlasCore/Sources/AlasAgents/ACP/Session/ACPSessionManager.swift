@@ -166,6 +166,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// False for Workspace Checkout managers: their sessions get no computer tools,
     /// so the first-prompt preamble must not mention them.
     public var computerUseAvailable = true
+    /// Whether a session starting now gets the `device_*` tools; read at each
+    /// preamble, so a change applies to sessions started after it.
+    public var deviceToolsAvailable: @MainActor () -> Bool = { true }
     /// Whether user turns ask their agent for its predicted follow-up prompt:
     /// next-prompt suggestions are on with the agent as their source. Read at
     /// each send, so a change applies from the next turn.
@@ -8561,6 +8564,7 @@ extension ACPSessionManager {
                     nativeSubagentsDisabled: nativeSubagentsDisabled,
                     nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
                     computerUseAvailable: computerUseAvailable,
+                    deviceToolsAvailable: deviceToolsAvailable(),
                     isPeerChild: preambleMode == .mcp
                         ? (builtInMCP?.isPeerChild == true)
                         : (cliParentSessionId.flatMap(ACPPeerParent.serverId(from:)) != nil),

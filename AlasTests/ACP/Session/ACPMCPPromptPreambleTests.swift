@@ -322,6 +322,14 @@ struct ACPMCPPromptPreambleTests {
         ])
     }
 
+    @Test func withoutDeviceToolsThePreambleDoesNotMentionThem() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], deviceToolsAvailable: false))
+        #expect(!text.contains("device_"))
+        #expect(!text.contains("Device tools"))
+        #expect(text.contains("computer_"))
+    }
+
     @Test("cli mode swaps MCP wording for alas CLI commands")
     func cliMode() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
