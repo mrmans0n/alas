@@ -6,14 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.7] - 2026-11-13
+
 ### ✨ Features
 
-- Let each agent see the built-in Alas MCP server under a chosen name (Settings > Agents > edit an agent), for managed policies that only allow certain MCP server names.
-- Chain folders in the composer's `@` picker: ⇥ opens the highlighted folder, a breadcrumb shows the folder you are in, and each `/` segment fuzzy-matches one folder level, so `al/so/ui` finds `Alas/Sources/UI`. A query ending in `/` lists that folder first so it can be attached.
+- Show each landed stack entry and explain what a background `stack_ship` completed (#2459).
+- Chain folders in the composer's `@` picker with Tab navigation, breadcrumbs, and path-segment fuzzy matching (#2460).
+- Ship, resume, and stop a host session's shepherd from a paired Mac (#2463).
+- Show prompt attachments in the native paired-session transcript (#2464).
+- Let each agent name the built-in Alas MCP server and explain when Codex managed requirements block it (#2466).
+- Stream Simulator logs, filter them by level or process, and open symbolicated crash reports from the Devices tab (#2467).
+- Run terminal-agent schedules in headless-host consoles that paired Macs can inspect (#2470).
 
 ### 🐛 Fixes
 
-- Say when Codex's managed requirements block the built-in Alas MCP server, and name their source, instead of reporting a server that never started.
+- End a child request when its JSON-RPC transport terminates before session startup records it (#2457).
+- Size code hovers to their text and keep disabled dialog actions legible (#2458).
+- Collapse blocked gg actions into one notice and use consistent composer chip labels (#2461).
+- Keep the `@` picker highlight on the top result while results stream in (#2465).
+- Raise dim and faint theme text one step for more legible secondary labels (#2469).
+
+### 🏗️ Internal
+
+- Repair lifecycle races and timing-sensitive CI fixtures (#2462).
+- Update the Rust toolchain to 1.100.0 (#2468).
 
 ## [0.23.6] - 2026-11-12
 
