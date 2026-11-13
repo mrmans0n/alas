@@ -145,10 +145,12 @@ private struct AgentMarkdown: View {
                 switch block {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
-                case .code(_, let code):
-                    Text(code)
-                        .font(.system(.footnote, design: .monospaced))
-                        .padding(10)
+                case .code(_, let chunks):
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in Text(chunk) }
+                    }
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                 case .list(let items):

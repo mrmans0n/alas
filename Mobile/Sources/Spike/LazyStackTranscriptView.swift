@@ -5,10 +5,8 @@ struct LazyStackTranscriptView: View {
     let model: SpikeTranscriptModel
     let onFirstLayout: () -> Void
 
-    /// Tracks the top visible row id, which keeps that row in place when older rows are
-    /// prepended, and scrolls to the bottom edge for tail-follow.
+    /// Tracks the top visible row id, which keeps that row in place when older rows are prepended.
     @State private var position = ScrollPosition(idType: String.self)
-    @State private var atBottom = true
     @State private var phase = ScrollPhase.idle
     @State private var laidOut = false
 
@@ -19,7 +17,6 @@ struct LazyStackTranscriptView: View {
 
     private struct Metrics: Equatable {
         var top: CGFloat
-        var bottomGap: CGFloat
         var contentHeight: CGFloat
     }
 
@@ -35,28 +32,21 @@ struct LazyStackTranscriptView: View {
             .scrollTargetLayout()
         }
         .defaultScrollAnchor(.bottom)
+        // Tail-follow is the scroll view's own: while the reader is at the bottom, growth keeps
+        // the bottom edge in place. No manual scrollTo competes with it.
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .scrollPosition($position, anchor: .top)
         .onScrollPhaseChange { _, new in phase = new }
         .onScrollGeometryChange(for: Metrics.self) { geo in
-            Metrics(
-                top: geo.visibleRect.minY,
-                bottomGap: geo.contentSize.height - geo.visibleRect.maxY,
-                contentHeight: geo.contentSize.height)
-        } action: { old, new in
+            Metrics(top: geo.visibleRect.minY, contentHeight: geo.contentSize.height)
+        } action: { _, new in
             if !laidOut, new.contentHeight > 0 {
                 laidOut = true
                 onFirstLayout()
             }
-            // "At bottom" only changes when the reader moves it. A content-height change while
-            // idle keeps the earlier decision and re-pins after the layout that changed it.
-            if phase.isScrolling || new.contentHeight == old.contentHeight {
-                atBottom = new.bottomGap <= 8
-            } else if atBottom, new.bottomGap > 0.5 {
-                // The edge, not the last row's id: a row id makes the lazy stack estimate the
-                // rows it has not measured and can land past the content.
-                position.scrollTo(edge: .bottom)
-            }
-            if phase.isScrolling, new.top < 600, model.canLoadOlder {
+            // Only the reader's own scrolling pages; a programmatic scroll (status-bar
+            // scroll-to-top is `.animating`) does not.
+            if phase == .interacting || phase == .decelerating, new.top < 600, model.canLoadOlder {
                 model.loadOlder()
             }
         }

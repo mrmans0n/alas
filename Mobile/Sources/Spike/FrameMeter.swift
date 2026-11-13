@@ -1,5 +1,5 @@
-import Observation
-import QuartzCore
+import SwiftUI
+import UIKit
 
 struct FrameReport {
     var fps: Double
@@ -8,8 +8,9 @@ struct FrameReport {
     var openMs: Double?
 }
 
-/// Measures frame pacing with a display link. The report refreshes once a second so the HUD
-/// that shows it does not add a per-frame SwiftUI update to what it measures.
+/// Measures frame pacing with a display link. It sees main-thread and commit lateness only, not
+/// render-server or GPU hitches (glass blur, for one); confirm those with Instruments. The report
+/// refreshes once a second so the HUD does not add a per-frame SwiftUI update to what it measures.
 @MainActor @Observable
 final class FrameMeter {
     private(set) var report = FrameReport(fps: 0, hitchMsPerSecond: 0, worstFrameMs: 0, openMs: nil)

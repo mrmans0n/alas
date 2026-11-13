@@ -4,7 +4,9 @@ import Markdown
 enum MarkdownBlock: Equatable {
     case paragraph(AttributedString)
     case heading(Int, AttributedString)
-    case code(language: String?, text: String)
+    /// Split into runs of `codeChunkLines` lines so a long listing lays out and draws as many
+    /// small texts instead of one view thousands of points tall.
+    case code(language: String?, chunks: [String])
     case list([AttributedString])
     case quote(AttributedString)
     case table([[String]])
@@ -17,13 +19,22 @@ enum MarkdownBlock: Equatable {
         switch markup {
         case let p as Paragraph: .paragraph(inline(p))
         case let h as Heading: .heading(h.level, inline(h))
-        case let c as CodeBlock: .code(language: c.language, text: c.code.trimmingCharacters(in: .newlines))
+        case let c as CodeBlock: .code(language: c.language, chunks: chunked(c.code.trimmingCharacters(in: .newlines)))
         case let l as UnorderedList: .list(l.listItems.map { inline($0) })
         case let l as OrderedList: .list(l.listItems.map { inline($0) })
         case let q as BlockQuote: .quote(inline(q))
         case let t as Markdown.Table:
             .table(([Array(t.head.cells)] + t.body.rows.map { Array($0.cells) }).map { $0.map(\.plainText) })
         default: nil
+        }
+    }
+
+    static let codeChunkLines = 100
+
+    private static func chunked(_ code: String) -> [String] {
+        let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
+        return stride(from: 0, to: lines.count, by: codeChunkLines).map {
+            lines[$0 ..< min($0 + codeChunkLines, lines.count)].joined(separator: "\n")
         }
     }
 
