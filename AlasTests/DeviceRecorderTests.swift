@@ -167,6 +167,29 @@ struct DeviceRecorderTests {
         #expect(recorder.owner(udid: "b") == nil)
     }
 
+    @Test func quittingWaitsForARecordingAlreadyFinishing() async throws {
+        let recordings = Recordings()
+        let recorder = Self.recorder(recordings)
+        var handed: [String] = []
+        recorder.onUserRecordingEnded = { udid, _ in handed.append(udid) }
+        try recorder.start(udid: "on", owner: .user, file: Self.file)
+        let recording = try #require(recordings.made.first)
+        recording.holds = true
+        let stopping = Task { try await recorder.stop(udid: "on", owner: .user) }
+        try await eventually("simctl is finishing the file") { recording.release != nil }
+        var quit = false
+        let quitting = Task {
+            await recorder.stopAll()
+            quit = true
+        }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!quit)
+        recording.release?()
+        await quitting.value
+        #expect(handed == ["on"])
+        _ = try await stopping.value
+    }
+
     @Test func recordingsOlderThanAWeekAreDeleted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

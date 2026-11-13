@@ -153,8 +153,8 @@ struct DevicesActions: View {
     private func stopRecording() async {
         let text: String
         do {
-            let finished = try await recorder.stop(udid: device.udid, owner: .user)
-            _ = try DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: device.name)
+            // The recorder saves it to the Desktop (AppState's onUserRecordingEnded).
+            _ = try await recorder.stop(udid: device.udid, owner: .user)
             text = "Saved to Desktop"
         } catch {
             text = "Couldn't save the recording"

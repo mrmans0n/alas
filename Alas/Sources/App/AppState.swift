@@ -746,7 +746,7 @@ final class AppState {
     @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {
         let recorder = DeviceRecorder { udid, file in try LiveScreenRecording(udid: udid, file: file) }
         devicePane.onShutDown = { [weak recorder] udid in Task { await recorder?.simulatorStopped(udid: udid) } }
-        // Your recording of a simulator that shut down: nobody presses Stop, so save it now.
+        // Your recordings go to the Desktop once written: after Stop, a shutdown, or quitting.
         recorder.onUserRecordingEnded = { [weak self] udid, finished in
             let name = self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
             _ = try? DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
