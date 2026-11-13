@@ -738,8 +738,31 @@ final class AppState {
         launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
         settings: LiveSimulatorSettings(),
         logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
-        pasteboard: devicePasteboard
+        pasteboard: devicePasteboard,
+        recorder: deviceRecorder
     )
+    /// Screen recordings of simulators, yours and agents'. Made on first use,
+    /// which also deletes agents' recordings older than a week.
+    @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {
+        let recorder = DeviceRecorder { udid, file in try LiveScreenRecording(udid: udid, file: file) }
+        devicePane.onShutDown = { [weak recorder] udid in Task { await recorder?.simulatorStopped(udid: udid) } }
+        // Your recordings go to the Desktop once written: after Stop, a shutdown, or quitting.
+        recorder.onUserRecordingEnded = { [weak self] udid, finished in
+            let name = self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
+            do {
+                return try DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
+            } catch {
+                // Not lost: show where it is.
+                NSWorkspace.shared.activateFileViewerSelecting([finished.file])
+                throw error
+            }
+        }
+        DeviceRecorder.pruneOldRecordings()
+        madeDeviceRecorder = recorder
+        return recorder
+    }()
+    /// The recorder once something used it, so quitting doesn't make one.
+    @ObservationIgnored private var madeDeviceRecorder: DeviceRecorder?
     /// Pastes and copies on simulators, for agents and for the user.
     @ObservationIgnored lazy var devicePasteboard = DevicePasteboard(
         input: simulatorStreams, pasteboard: LiveSimulatorPasteboard(),
@@ -2022,6 +2045,8 @@ final class AppState {
             // Clears this process from the VM registry so its slots free up; macOS VMs pause.
             self?.vmIdleSweeper.stop()
             await self?.vmManager.stopAll()
+            // simctl would record on after Alas quits; this also saves your recordings.
+            await self?.madeDeviceRecorder?.stopAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
@@ -12855,7 +12880,8 @@ final class AppState {
                         socketPath: socketPath,
                         worktreePath: worktreePath,
                         sessionId: sessionId,
-                        parentSessionId: parentSessionId
+                        parentSessionId: parentSessionId,
+                        deviceTools: self.config.deviceAgentsEnabled
                     ) {
                         return .local(BuiltInAlasMCP.injection(
                             enabled: self.config.harness.exposeAlasMCP,
@@ -12866,6 +12892,7 @@ final class AppState {
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
                             httpEndpoint: endpoint,
+                            deviceTools: self.config.deviceAgentsEnabled,
                             cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                             serverName: serverName
                         ))
@@ -12887,6 +12914,7 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId,
+                    deviceTools: self.config.deviceAgentsEnabled,
                     cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL()),
                     serverName: serverName
                 ))
@@ -12964,6 +12992,7 @@ final class AppState {
                 )
             }
         )
+        mgr.deviceToolsAvailable = { [weak self] in self?.config.deviceAgentsEnabled ?? false }
         mgr.delegationPeerNamesProvider = { [weak self] in
             ACPDelegationPeerInfo.delegationNames(self?.core.delegationPeers?.peers ?? [])
         }

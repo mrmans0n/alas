@@ -23,10 +23,13 @@ enum SimServiceName {
     func describe(udid: String, reply: @escaping @Sendable (Data?, String?) -> Void)
     /// The bundle ID of the app in front, or nil (the home screen).
     func frontmostApp(udid: String, reply: @escaping @Sendable (String?) -> Void)
+    /// Turns the device to a UIDeviceOrientation. Replies nil, or why it didn't.
+    func rotate(udid: String, orientation: UInt32, reply: @escaping @Sendable (String?) -> Void)
 }
 
 /// Calls from AlasSimService back into Alas.
 @objc protocol SimFrameSink {
-    /// A new frame: an IOSurface-backed `420v` buffer from the service's pool.
-    func frame(udid: String, surface: IOSurface)
+    /// A new frame: an IOSurface-backed `420v` buffer from the service's pool,
+    /// laid out as the portrait panel, and the interface orientation it shows.
+    func frame(udid: String, surface: IOSurface, orientation: String?)
 }

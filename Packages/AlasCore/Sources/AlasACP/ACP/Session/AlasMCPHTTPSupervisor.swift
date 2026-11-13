@@ -52,7 +52,8 @@ public final class AlasMCPHTTPSupervisor {
         worktreePath: String,
         sessionId: String,
         parentSessionId: String?,
-        workspaceOnly: Bool = false
+        workspaceOnly: Bool = false,
+        deviceTools: Bool = true
     ) async -> BuiltInAlasMCP.HTTPEndpoint? {
         if let existing = running[sessionId], existing.process.isRunning {
             return Self.endpoint(port: existing.port, token: existing.token)
@@ -73,7 +74,8 @@ public final class AlasMCPHTTPSupervisor {
                 sessionId: sessionId,
                 token: attempt.token,
                 parentSessionId: parentSessionId,
-                workspaceOnly: workspaceOnly
+                workspaceOnly: workspaceOnly,
+                deviceTools: deviceTools
             )
             guard let launched = await Self.launch(
                 binaryPath: binaryPath,
@@ -235,7 +237,8 @@ public final class AlasMCPHTTPSupervisor {
         sessionId: String,
         token: String,
         parentSessionId: String?,
-        workspaceOnly: Bool = false
+        workspaceOnly: Bool = false,
+        deviceTools: Bool = true
     ) -> [String: String] {
         var env = base
         env["ALAS_SOCKET_PATH"] = socketPath
@@ -244,6 +247,7 @@ public final class AlasMCPHTTPSupervisor {
         env["ALAS_MCP_HTTP_TOKEN"] = token
         if let parentSessionId { env["ALAS_PARENT_SESSION_ID"] = parentSessionId }
         if workspaceOnly { env["ALAS_MCP_WORKSPACE_ONLY"] = "1" }
+        if !deviceTools { env["ALAS_MCP_DEVICES"] = "0" }
         return env
     }
 

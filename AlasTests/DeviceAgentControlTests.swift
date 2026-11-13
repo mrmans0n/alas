@@ -17,11 +17,12 @@ struct DeviceAgentControlTests {
         var onStops: [String: @MainActor (String) -> Void] = [:]
         /// Yields before each `describe` answers, in call order, to finish calls out of order.
         var describeYields: [Int] = []
+        var snapshotData = DeviceAgentControlTests.snapshot
         let frame = IOSurface(properties: [
             .width: 120, .height: 240, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
         ])
 
-        func subscribe(udid: String, onFrame: @escaping @MainActor (IOSurface) -> Void,
+        func subscribe(udid: String, onFrame: @escaping @MainActor (DeviceFrame) -> Void,
                        onStop: @escaping @MainActor (String) -> Void) -> UUID {
             subscribed.insert(udid)
             subscribeCount += 1
@@ -38,9 +39,18 @@ struct DeviceAgentControlTests {
         func describe(udid: String) async throws -> Data {
             let yields = describeYields.isEmpty ? 0 : describeYields.removeFirst()
             for _ in 0..<yields { await Task.yield() }
-            return DeviceAgentControlTests.snapshot
+            return snapshotData
         }
-        func lastFrame(udid: String) -> IOSurface? { frame }
+        /// The interface orientation of `frame`.
+        var orientation = DeviceScreenOrientation.portrait
+        /// False for an app that supports only portrait: rotating leaves its frames upright.
+        var followsRotation = true
+        var rotations: [DeviceScreenOrientation] = []
+        func lastFrame(udid: String) -> DeviceFrame? { frame.map { DeviceFrame(surface: $0, orientation: orientation) } }
+        func rotate(udid: String, to orientation: DeviceScreenOrientation) async throws {
+            rotations.append(orientation)
+            if followsRotation { self.orientation = orientation }
+        }
     }
 
     static let booted = SimulatorDevice(udid: "on", name: "iPhone", runtimeName: "iOS 26.5", state: .booted)
@@ -150,6 +160,7 @@ struct DeviceAgentControlTests {
         _ input: FakeInput, installs: Installs = Installs(), settings: FakeSettings = FakeSettings(),
         logs: FakeLogs = FakeLogs(),
         pasteboard: DevicePasteboardTests.FakePasteboard = .init(),
+        recorder: DeviceRecorder = DeviceRecorderTests.recorder(),
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
@@ -163,6 +174,7 @@ struct DeviceAgentControlTests {
             settings: settings,
             logs: logs,
             pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
+            recorder: recorder,
             sleep: sleep
         )
     }
@@ -231,6 +243,80 @@ struct DeviceAgentControlTests {
     private func error(_ response: AlasCLIResponse) -> String? {
         if case .error(let message) = response { return message }
         return nil
+    }
+
+    @Test func rotatingIsHeldDuringATakeoverAndReportsBothOrientations() async throws {
+        let input = FakeInput()
+        let control = control(input, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        async let rotated = control.perform(.rotate(udid: "on", orientation: .landscapeLeft), sessionID: "s")
+        try await eventually("held") { control.waitingSessions(udid: "on") == ["s"] }
+        #expect(input.rotations.isEmpty)
+        control.handBack(udid: "on")
+        #expect(await rotated == .text([#"{"device":"landscape_left","interface":"landscape_left"}"#]))
+        #expect(input.rotations == [.landscapeLeft])
+    }
+
+    @Test func aPortraitOnlyAppReportsItsInterfaceStayedPortrait() async {
+        let input = FakeInput()
+        input.followsRotation = false
+        let rotated = await control(input).perform(.rotate(udid: "on", orientation: .landscapeRight), sessionID: "s")
+        #expect(rotated == .text([#"{"device":"landscape_right","interface":"portrait"}"#]))
+    }
+
+    /// The application root turned landscape: 874×402 points, the cell still at (16, 320, 370×52).
+    static let landscapeSnapshot = Data(String(decoding: snapshot, as: UTF8.self)
+        .replacingOccurrences(of: #""width":402,"height":874"#, with: #""width":874,"height":402"#).utf8)
+
+    @Test(arguments: [true, false])
+    func tapsInLandscapeLandOnThePanel(byRef: Bool) async throws {
+        let input = FakeInput()
+        input.orientation = .landscapeLeft
+        input.snapshotData = Self.landscapeSnapshot
+        let control = control(input)
+        let upright: DeviceScreenPoint
+        if byRef {
+            _ = await control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "s")
+            _ = await control.perform(.tap(udid: "on", target: .ref("s1e2"), includeScreenshot: false), sessionID: "s")
+            upright = DeviceScreenPoint(x: 201.0 / 874, y: 346.0 / 402)
+        } else {
+            // The 120×240 panel frame comes out of device_screenshot upright, 240×120.
+            _ = await control.perform(.screenshot(udid: "on"), sessionID: "s")
+            _ = await control.perform(.tap(udid: "on", target: .point(x: 60, y: 60), includeScreenshot: false), sessionID: "s")
+            upright = DeviceScreenPoint(x: 0.25, y: 0.5)
+        }
+        let expected = DeviceScreenOrientation.landscapeLeft.panelPoint(upright)
+        let sent = try #require(input.touches.first?.point)
+        #expect(abs(sent.x - expected.x) < 0.001 && abs(sent.y - expected.y) < 0.001)
+    }
+
+    @Test func recordingWorksWhileTheUserDrivesAndReturnsTheVideo() async throws {
+        let control = control(FakeInput(), sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        #expect(await control.perform(.record(udid: "on", start: true), sessionID: "s") == .text([#"{"recording":true}"#]))
+        #expect(error(await control.perform(.record(udid: "on", start: true), sessionID: "t"))
+            == "device_recording_busy: Another agent session is recording iPhone.")
+        let stopped = await control.perform(.record(udid: "on", start: false), sessionID: "s")
+        guard case .text(let text) = stopped else {
+            Issue.record("Expected a video, got \(stopped)")
+            return
+        }
+        #expect(text.joined().contains(#""path":""#))
+        #expect(error(await control.perform(.record(udid: "on", start: false), sessionID: "s"))
+            == "device_not_recording: No recording of iPhone by this session is running.")
+    }
+
+    @Test func aRecordingThatEndedAtShutdownCanStillBeCollected() async throws {
+        let recorder = DeviceRecorderTests.recorder()
+        let control = control(FakeInput(), recorder: recorder)
+        try recorder.start(udid: "off", owner: .agent(sessionID: "s"), file: DeviceRecorderTests.file)
+        await recorder.simulatorStopped(udid: "off")
+        let stopped = await control.perform(.record(udid: "off", start: false), sessionID: "s")
+        guard case .text(let text) = stopped else {
+            Issue.record("Expected the video, got \(stopped)")
+            return
+        }
+        #expect(text.joined().contains(DeviceRecorderTests.file.path.replacingOccurrences(of: "/", with: "\\/")))
     }
 
     private static func pasteboard(_ input: FakeInput = FakeInput()) -> DevicePasteboard {
@@ -325,7 +411,7 @@ struct DeviceAgentControlTests {
                 return [Self.booted]
             },
             boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(),
+            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(),
             sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
@@ -356,7 +442,7 @@ struct DeviceAgentControlTests {
         let control = DeviceAgentControl(
             input: FakeInput(), devices: { listed }, boot: { _ in },
             install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
+            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
@@ -457,7 +543,7 @@ extension DeviceAgentControlTests {
         let control = DeviceAgentControl(
             input: input, devices: { [Self.booted] }, boot: { _ in },
             install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(input),
+            pasteboard: Self.pasteboard(input), recorder: DeviceRecorderTests.recorder(),
             // The lease window passes at once; each typing pause lets it fire.
             sleep: { duration in
                 guard duration != window else { return }

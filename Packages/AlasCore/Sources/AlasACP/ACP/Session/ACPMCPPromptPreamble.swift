@@ -82,7 +82,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "device_list", "device_open", "device_snapshot", "device_screenshot",
         "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
         "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url",
-        "device_logs", "device_clipboard",
+        "device_logs", "device_clipboard", "device_rotate", "device_record",
     ]
 
     /// What a child delegated from another Mac reports with. It cannot message
@@ -117,6 +117,8 @@ public enum ACPMCPPromptPreamble: Sendable {
     ///   or nil when none do.
     /// - Parameter computerUseAvailable: false where computer tools are withheld
     ///   (Workspace Checkout sessions), so the preamble doesn't mention them.
+    /// - Parameter deviceToolsAvailable: false when the session's server hides
+    ///   the `device_*` tools (the user hasn't let agents use simulators).
     /// - Parameter isPeerChild: the session was delegated from another Mac. It
     ///   implies `isDelegated`, reports with its final message, and loses the
     ///   machine and workspace tools.
@@ -131,6 +133,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         nativeSubagentsDisabled: Bool = false,
         nativeDelegationMechanism: ACPNativeDelegationMechanism? = nil,
         computerUseAvailable: Bool = true,
+        deviceToolsAvailable: Bool = true,
         isPeerChild: Bool = false,
         delegationPeerNames: [String] = []
     ) -> String? {
@@ -153,6 +156,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 issue: issue,
                 delegation: delegation,
                 computerUseAvailable: computerUseAvailable,
+                deviceToolsAvailable: deviceToolsAvailable,
                 isPeerChild: isPeerChild,
                 peersLine: isDelegated ? nil : peersLine(delegationPeerNames, cli: false))
         case .cli(let serverAvailability):
@@ -234,6 +238,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         issue: IssuePreambleContext?,
         delegation: String?,
         computerUseAvailable: Bool,
+        deviceToolsAvailable: Bool,
         isPeerChild: Bool,
         peersLine: String?
     ) -> String {
@@ -336,18 +341,21 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "computer_vm_starting and computer_vm_slot_pending mean try again shortly, and in a VM computer_user_active means the user took it over: wait for them to hand it back. "
                         + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools. "
                         + "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.")
-                    lines.append("Device tools drive an iOS simulator the user also sees in the Devices tab: "
-                        + builtInToolNames.filter { $0.hasPrefix("device_") }.joined(separator: ", ")
-                        + ". Call device_list, then device_open (it boots the simulator if needed). "
-                        + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
-                        + "x/y are pixels in the latest device_screenshot. "
-                        + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
-                        + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
-                        + "To test dark mode, Dynamic Type, permissions, location, notifications or deep links, use "
-                        + "device_set_appearance, device_set_permission, device_set_location, device_push and device_open_url. "
-                        + "Read the app's logs and crash reports with device_logs. "
-                        + "device_type types any text; read or set the simulator's pasteboard with device_clipboard. "
-                        + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
+                    if deviceToolsAvailable {
+                        lines.append("Device tools drive an iOS simulator the user also sees in the Devices tab: "
+                            + builtInToolNames.filter { $0.hasPrefix("device_") }.joined(separator: ", ")
+                            + ". Call device_list, then device_open (it boots the simulator if needed). "
+                            + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
+                            + "x/y are pixels in the latest device_screenshot. "
+                            + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
+                            + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
+                            + "To test dark mode, Dynamic Type, permissions, location, notifications or deep links, use "
+                            + "device_set_appearance, device_set_permission, device_set_location, device_push and device_open_url. "
+                            + "Read the app's logs and crash reports with device_logs. "
+                            + "device_type types any text; read or set the simulator's pasteboard with device_clipboard. "
+                            + "Rotate with device_rotate and record the screen with device_record. "
+                            + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
+                    }
                 }
             }
             if !isDelegated {

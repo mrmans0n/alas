@@ -9,7 +9,7 @@ import Observation
 protocol DeviceInput: AnyObject {
     func subscribe(
         udid: String,
-        onFrame: @escaping @MainActor (IOSurface) -> Void,
+        onFrame: @escaping @MainActor (DeviceFrame) -> Void,
         onStop: @escaping @MainActor (String) -> Void
     ) -> UUID
     func unsubscribe(udid: String, token: UUID)
@@ -17,7 +17,8 @@ protocol DeviceInput: AnyObject {
     func key(udid: String, usage: UInt32, down: Bool)
     func button(udid: String, name: String)
     func describe(udid: String) async throws -> Data
-    func lastFrame(udid: String) -> IOSurface?
+    func lastFrame(udid: String) -> DeviceFrame?
+    func rotate(udid: String, to orientation: DeviceScreenOrientation) async throws
 }
 
 extension SimulatorStreamClient: DeviceInput {}
@@ -48,6 +49,7 @@ final class DeviceAgentControl {
     @ObservationIgnored private let settings: any SimulatorSettingsControl
     @ObservationIgnored private let logs: any SimulatorLogsControl
     @ObservationIgnored private let pasteboard: DevicePasteboard
+    @ObservationIgnored private let recorder: DeviceRecorder
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
@@ -88,6 +90,7 @@ final class DeviceAgentControl {
         settings: any SimulatorSettingsControl,
         logs: any SimulatorLogsControl,
         pasteboard: DevicePasteboard,
+        recorder: DeviceRecorder,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
@@ -101,6 +104,7 @@ final class DeviceAgentControl {
         self.settings = settings
         self.logs = logs
         self.pasteboard = pasteboard
+        self.recorder = recorder
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
@@ -182,6 +186,10 @@ final class DeviceAgentControl {
                 udid: udid, since: since, bundleID: bundleID, level: level, includeApple: includeApple, query: query, limit: limit
             )
         }
+        // Recording doesn't touch the screen, so it works while the user drives.
+        if case .record(_, let start) = command {
+            return await record(udid: udid, start: start, sessionID: sessionID)
+        }
         if case .clipboard(_, nil) = command {
             switch await bootedDevice(udid) {
             case .failure(let refusal): return refusal.response
@@ -196,8 +204,8 @@ final class DeviceAgentControl {
         // installing and launching take their turn too.
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
-             .setAppearance, .setPermission, .setLocation, .push, .openURL, .clipboard: true
-        case .list, .open, .snapshot, .screenshot, .logs: false
+             .setAppearance, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate: true
+        case .list, .open, .snapshot, .screenshot, .logs, .record: false
         }
         var inputTurn: UUID?
         switch await holdWhileTakenOver(udid, sessionID: sessionID, isInput: isInput) {
@@ -371,9 +379,68 @@ final class DeviceAgentControl {
             } catch {
                 return .error("device_clipboard_failed: \(error.localizedDescription)")
             }
-        case .logs:
-            // Answered by readLogs before the hold.
-            return .error("device_logs_failed: The call took the wrong path.")
+        case .rotate(_, let orientation):
+            return await rotate(udid, to: orientation)
+        case .logs, .record:
+            // Answered before the hold.
+            return .error("device_unavailable: The call took the wrong path.")
+        }
+    }
+
+    /// Turns the device, then waits up to 2 s for a frame in the new
+    /// orientation; an app that supports only portrait never sends one.
+    private func rotate(_ udid: String, to orientation: DeviceScreenOrientation) async -> AlasCLIResponse {
+        // The service rotates through the device's stream, which the lease just started.
+        for _ in 0..<100 where input.lastFrame(udid: udid) == nil {
+            await sleep(.milliseconds(50))
+        }
+        do {
+            try await input.rotate(udid: udid, to: orientation)
+        } catch {
+            return .error("device_rotate_failed: \(error.localizedDescription)")
+        }
+        for _ in 0..<40 where input.lastFrame(udid: udid)?.orientation != orientation {
+            await sleep(.milliseconds(50))
+        }
+        let interface = input.lastFrame(udid: udid)?.orientation ?? .portrait
+        return .text([Self.json(["device": orientation.rawValue, "interface": interface.rawValue])])
+    }
+
+    private func record(udid: String, start: Bool, sessionID: String) async -> AlasCLIResponse {
+        let device: SimulatorDevice
+        if start {
+            switch await bootedDevice(udid) {
+            case .failure(let refusal): return refusal.response
+            case .success(let found): device = found
+            }
+        } else {
+            // A recording that ended at shutdown is still collected.
+            let listed = try? await devices().first { $0.udid == udid }
+            device = listed ?? SimulatorDevice(udid: udid, name: udid, runtimeName: "", state: .shutdown)
+        }
+        let owner = DeviceRecorder.Owner.agent(sessionID: sessionID)
+        do throws(DeviceRecorder.Failure) {
+            if start {
+                try recorder.start(udid: udid, owner: owner, file: DeviceRecorder.agentFile(udid: udid, now: now()))
+                return .text([Self.json(["recording": true])])
+            }
+            let finished = try await recorder.stop(udid: udid, owner: owner)
+            // A decimal, so the JSON says 3.3 and not 3.2999999999999998.
+            let seconds = NSDecimalNumber(string: String(format: "%.1f", finished.seconds))
+            return .text([Self.json(["path": finished.file.path, "seconds": seconds])])
+        } catch {
+            switch error {
+            case .busy(let other):
+                let who = other == .user ? "The user" : "Another agent session"
+                return .error("device_recording_busy: \(who) is recording \(device.name).")
+            case .notRecording:
+                return .error("device_not_recording: No recording of \(device.name) by this session is running.")
+            case .failed(let reason):
+                return .error("device_record_failed: \(reason)")
+            case .notSaved(let file, let reason):
+                // Agents' recordings aren't moved; kept for completeness.
+                return .error("device_record_failed: \(reason) The video is at \(file.path).")
+            }
         }
     }
 
@@ -553,29 +620,36 @@ final class DeviceAgentControl {
                     message: "device_stale_ref: \(ref) is not in the latest device_snapshot of this device. Take a new snapshot."
                 ))
             }
-            return .success(snapshot.center(of: element))
+            return .success(panelPoint(snapshot.center(of: element), udid: udid))
         case .point(let x, let y):
-            return screenPoint(x: x, y: y, udid: udid)
+            return screenPoint(x: x, y: y, udid: udid).map { panelPoint($0, udid: udid) }
         }
+    }
+
+    /// Snapshot refs, screenshot pixels and swipe directions are upright; touches go to the portrait panel.
+    private func panelPoint(_ upright: DeviceScreenPoint, udid: String) -> DeviceScreenPoint {
+        (input.lastFrame(udid: udid)?.orientation ?? .portrait).panelPoint(upright)
     }
 
     private func swipeEnds(
         _ gesture: DeviceCommand.Swipe, udid: String
     ) -> Result<(DeviceScreenPoint, DeviceScreenPoint), Failure> {
+        let upright: Result<(DeviceScreenPoint, DeviceScreenPoint), Failure>
         switch gesture {
         case .direction(let direction):
             let (low, high) = (0.25, 0.75)
-            switch direction {
-            case .up: return .success((.init(x: 0.5, y: high), .init(x: 0.5, y: low)))
-            case .down: return .success((.init(x: 0.5, y: low), .init(x: 0.5, y: high)))
-            case .left: return .success((.init(x: high, y: 0.5), .init(x: low, y: 0.5)))
-            case .right: return .success((.init(x: low, y: 0.5), .init(x: high, y: 0.5)))
+            upright = switch direction {
+            case .up: .success((.init(x: 0.5, y: high), .init(x: 0.5, y: low)))
+            case .down: .success((.init(x: 0.5, y: low), .init(x: 0.5, y: high)))
+            case .left: .success((.init(x: high, y: 0.5), .init(x: low, y: 0.5)))
+            case .right: .success((.init(x: low, y: 0.5), .init(x: high, y: 0.5)))
             }
         case .points(let fromX, let fromY, let toX, let toY):
-            return screenPoint(x: fromX, y: fromY, udid: udid).flatMap { from in
+            upright = screenPoint(x: fromX, y: fromY, udid: udid).flatMap { from in
                 screenPoint(x: toX, y: toY, udid: udid).map { to in (from, to) }
             }
         }
+        return upright.map { (panelPoint($0.0, udid: udid), panelPoint($0.1, udid: udid)) }
     }
 
     /// Pixels in the device's latest screenshot, as a fraction of the screen.

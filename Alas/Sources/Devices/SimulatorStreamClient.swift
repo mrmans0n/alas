@@ -2,23 +2,32 @@ import AlasCore
 import Foundation
 import IOSurface
 
+/// A simulator frame: the pixels in the portrait panel's layout, and the
+/// interface orientation they show.
+struct DeviceFrame {
+    let surface: IOSurface
+    let orientation: DeviceScreenOrientation
+}
+
 /// Alas's side of AlasSimService: one XPC connection, with each device's
 /// frames fanned out to the screens showing it.
 @MainActor
 final class SimulatorStreamClient {
     private struct Screen {
-        let onFrame: @MainActor (IOSurface) -> Void
+        let onFrame: @MainActor (DeviceFrame) -> Void
         let onStop: @MainActor (String) -> Void
     }
 
     private var connection: NSXPCConnection?
     private var subscriptions = StreamSubscriptions()
     private var screens: [String: [UUID: Screen]] = [:]
-    private var lastFrames: [String: IOSurface] = [:]
+    private var lastFrames: [String: DeviceFrame] = [:]
+    /// The device orientation Alas last turned each simulator to.
+    private var deviceOrientations: [String: DeviceScreenOrientation] = [:]
 
     func subscribe(
         udid: String,
-        onFrame: @escaping @MainActor (IOSurface) -> Void,
+        onFrame: @escaping @MainActor (DeviceFrame) -> Void,
         onStop: @escaping @MainActor (String) -> Void
     ) -> UUID {
         let token = UUID()
@@ -49,8 +58,32 @@ final class SimulatorStreamClient {
     }
 
     /// The newest frame of a device someone is watching.
-    func lastFrame(udid: String) -> IOSurface? {
+    func lastFrame(udid: String) -> DeviceFrame? {
         lastFrames[udid]
+    }
+
+    /// The orientation Alas last turned the device to; portrait until then.
+    /// Simulators don't report it back.
+    func deviceOrientation(udid: String) -> DeviceScreenOrientation {
+        deviceOrientations[udid] ?? .portrait
+    }
+
+    /// Turns the device. Its stream must be running.
+    func rotate(udid: String, to orientation: DeviceScreenOrientation) async throws {
+        let connection = self.connection ?? connect()
+        let failure: String? = try await withCheckedThrowingContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            let proxy = Self.proxy(connection) { error in
+                once.resume(throwing: SimulatorStreamError(message: "The simulator service stopped (\(error.localizedDescription))."))
+            }
+            guard let proxy else {
+                once.resume(throwing: SimulatorStreamError(message: "The simulator service is not available."))
+                return
+            }
+            proxy.rotate(udid: udid, orientation: orientation.deviceValue) { once.resume(returning: $0) }
+        }
+        if let failure { throw SimulatorStreamError(message: failure) }
+        deviceOrientations[udid] = orientation
     }
 
     /// serve-sim's accessibility JSON for `udid`.
@@ -96,12 +129,14 @@ final class SimulatorStreamClient {
     }
 
     // Handlers are copied before they run: an onStop may unsubscribe, which changes `screens`.
-    fileprivate func deliver(udid: String, surface: IOSurface) {
-        lastFrames[udid] = surface
-        for screen in Array(screens[udid]?.values ?? [:].values) { screen.onFrame(surface) }
+    fileprivate func deliver(udid: String, frame: DeviceFrame) {
+        lastFrames[udid] = frame
+        for screen in Array(screens[udid]?.values ?? [:].values) { screen.onFrame(frame) }
     }
 
     private func stopped(udid: String, reason: String) {
+        // A stream stops when its simulator shuts down; it boots in portrait.
+        deviceOrientations[udid] = nil
         for screen in Array(screens[udid]?.values ?? [:].values) { screen.onStop(reason) }
     }
 
@@ -190,9 +225,11 @@ private final class FrameSinkBridge: NSObject, SimFrameSink {
         self.client = client
     }
 
-    func frame(udid: String, surface: IOSurface) {
+    func frame(udid: String, surface: IOSurface, orientation: String?) {
         DispatchQueue.main.async { [weak client] in
-            MainActor.assumeIsolated { client?.deliver(udid: udid, surface: surface) }
+            MainActor.assumeIsolated {
+                client?.deliver(udid: udid, frame: DeviceFrame(surface: surface, orientation: .init(frameName: orientation)))
+            }
         }
     }
 }

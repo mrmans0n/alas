@@ -43,6 +43,8 @@ struct DeviceCommandTests {
         ("device_clipboard", #"{"udid":"U"}"#, .clipboard(udid: "U", text: nil)),
         ("device_clipboard", #"{"udid":"U","text":""}"#, .clipboard(udid: "U", text: "")),
         ("device_clipboard", #"{"udid":"U","text":"Café ☕️"}"#, .clipboard(udid: "U", text: "Café ☕️")),
+        ("device_rotate", #"{"udid":"U","orientation":"landscape_left"}"#, .rotate(udid: "U", orientation: .landscapeLeft)),
+        ("device_record", #"{"udid":"U","action":"stop"}"#, .record(udid: "U", start: false)),
     ] as [(String, String, DeviceCommand)])
     func decodesEachActionWithDefaults(command: String, params: String, expected: DeviceCommand) throws {
         #expect(try decode(command, params) == .device(expected))
@@ -77,6 +79,8 @@ struct DeviceCommandTests {
         ("device_logs", #"{"udid":"U","limit":0}"#),
         ("device_clipboard", #"{"udid":"U","text":"\#(String(repeating: "a", count: 65537))"}"#),
         ("device_clipboard", #"{"udid":"U","bundle_id":"b"}"#),
+        ("device_rotate", #"{"udid":"U","orientation":"sideways"}"#),
+        ("device_record", #"{"udid":"U"}"#),
     ])
     func refusesWhatAnActionDoesNotTake(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.malformed) { try decode(command, params) }

@@ -36,11 +36,14 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     }
 
     /// Starts capture, then input. `onFrame` runs on a capture queue with an
-    /// IOSurface-backed `420v` copy of each new frame, taken from a pool.
+    /// IOSurface-backed `420v` copy of each new frame, taken from a pool, and
+    /// the interface orientation it is drawn in (`portrait`, `landscape_left`,
+    /// `landscape_right`, `portrait_upside_down`, or nil when unknown). The
+    /// pixels stay in the panel's portrait layout whatever the orientation.
     /// Input sent before this returns waits until input is ready.
-    public func start(onFrame: @escaping @Sendable (CVPixelBuffer) -> Void) async throws {
-        try await capture.start(deviceUDID: udid) { pixelBuffer, _, _, _ in
-            onFrame(pixelBuffer)
+    public func start(onFrame: @escaping @Sendable (CVPixelBuffer, String?) -> Void) async throws {
+        try await capture.start(deviceUDID: udid) { pixelBuffer, _, _, info in
+            onFrame(pixelBuffer, info.display?.orientation)
         }
         try await hid.setup(deviceUDID: udid)
         // setup() targets the profile's sole panel, which a two-panel device
@@ -79,6 +82,12 @@ public final class AlasSimulatorSession: @unchecked Sendable {
     /// `usage` is a USB HID keyboard usage (page 0x07).
     public func key(usage: UInt32, down: Bool) {
         input.yield(.key(usage: usage, down: down))
+    }
+
+    /// Turns the device: UIDeviceOrientation 1 portrait, 2 upside down,
+    /// 3 landscape right, 4 landscape left. Works without Simulator.app.
+    public func rotate(_ deviceOrientation: UInt32) async -> Bool {
+        await hid.sendOrientation(orientation: deviceOrientation)
     }
 
     /// One of serve-sim's button names: `home`, `lock`, `siri`,

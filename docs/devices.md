@@ -34,6 +34,12 @@ asking, so Alas allows the app in front for the moment of the paste and then
 puts its previous setting back. A copy waits up to 2 seconds for the app to
 copy something.
 
+The rotate buttons under the hardware buttons turn the device left or right.
+The screen turns with the app, so an app that supports only portrait stays
+upright. The record button in the toolbar records the screen until you click
+it again, then saves the video to the Desktop. The video keeps the device's
+portrait frame, as Simulator.app's recordings do.
+
 ### Logs
 
 The Logs button in the toolbar opens a booted simulator's logs in a center
@@ -113,16 +119,19 @@ tools from the built-in `alas` MCP server:
 | `device_open_url` | Opens a web page or a deep link. |
 | `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
 | `device_clipboard` | Reads the simulator's pasteboard, or sets it. |
+| `device_rotate` | Turns the device, and returns the device and interface orientations. |
+| `device_record` | Starts or stops a screen recording; stop returns the video's path. |
 
 While an agent works on a simulator, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An
 agent's call made while you drive waits for you to hand the simulator back,
 for up to 50 seconds, and the pill says the agent is waiting; after that the
 call fails with `device_user_active` and the agent tries again later. Typing
-or a swipe already under way when you take over stops. With the setting off,
-every call fails with `device_disabled`. An agent's calls keep the
-simulator's stream running for a minute after its last call, so screenshots
-work with the Devices tab closed.
+or a swipe already under way when you take over stops. Sessions started
+while the setting is off don't get the `device_*` tools; sessions already
+running keep them, and their calls fail with `device_disabled`. An agent's
+calls keep the simulator's stream running for a minute after its last call,
+so screenshots work with the Devices tab closed.
 
-Not yet: Android, physical devices, rotation, and the clipboard. The
-follow-up list is in `docs/plans/2026-11-04-device-panel-design.md`.
+Not yet: Android and physical devices. The follow-up list is in
+`docs/plans/2026-11-04-device-panel-design.md`.

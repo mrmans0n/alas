@@ -74,14 +74,15 @@ enum DesignCaptureDevices {
     @MainActor
     private final class FakeInput: DeviceInput {
         func subscribe(
-            udid: String, onFrame: @escaping @MainActor (IOSurface) -> Void, onStop: @escaping @MainActor (String) -> Void
+            udid: String, onFrame: @escaping @MainActor (DeviceFrame) -> Void, onStop: @escaping @MainActor (String) -> Void
         ) -> UUID { UUID() }
         func unsubscribe(udid: String, token: UUID) {}
         func touch(udid: String, phase: String, point: DeviceScreenPoint) {}
         func key(udid: String, usage: UInt32, down: Bool) {}
         func button(udid: String, name: String) {}
         func describe(udid: String) async throws -> Data { Data() }
-        func lastFrame(udid: String) -> IOSurface? { nil }
+        func lastFrame(udid: String) -> DeviceFrame? { nil }
+        func rotate(udid: String, to orientation: DeviceScreenOrientation) async throws {}
     }
 
     private struct FakeSettings: SimulatorSettingsControl {
@@ -115,6 +116,10 @@ enum DesignCaptureDevices {
         func setAccess(udid: String, bundleID: String, _ action: SimulatorPrivacyAction) async throws {}
     }
 
+    private static func fakeRecorder() -> DeviceRecorder {
+        DeviceRecorder { _, _ in throw CocoaError(.featureUnsupported) }
+    }
+
     private static func fakePasteboard() -> DevicePasteboard {
         DevicePasteboard(input: FakeInput(), pasteboard: FakePasteboard(), frontmostApp: { _ in nil })
     }
@@ -122,7 +127,7 @@ enum DesignCaptureDevices {
     private static func makeControl() -> DeviceAgentControl {
         DeviceAgentControl(
             input: FakeInput(), devices: { [phone, air, pad] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard())
+            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard(), recorder: fakeRecorder())
     }
 
     // MARK: - Gallery
@@ -197,7 +202,8 @@ enum DesignCaptureDevices {
                 if let device {
                     DevicesActions(
                         device: device, booted: booted, client: SimulatorStreamClient(), control: control,
-                        canChangeSettings: booted, onShutDown: {}, onOpenLogs: {})
+                        canChangeSettings: booted, onShutDown: {}, onOpenLogs: {},
+                        recorder: fakeRecorder(), agentName: { _ in "Claude" })
                 }
             }
             .padding(.horizontal, 8)
@@ -228,7 +234,7 @@ enum DesignCaptureDevices {
             udid: demoUDIDPrefix + "USER", name: "iPhone 17", runtimeName: "iOS 26.5", state: .booted, deviceTypeIdentifier: "demo.phone")
         let userControl = DeviceAgentControl(
             input: FakeInput(), devices: { [userDevice] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard())
+            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard(), recorder: fakeRecorder())
         userControl.takeOver(udid: userDevice.udid)
         Task { _ = await userControl.perform(.button(udid: userDevice.udid, name: .home, includeScreenshot: false), sessionID: "demo-agent") }
         try? await Task.sleep(for: .milliseconds(300))

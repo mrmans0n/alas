@@ -72,8 +72,8 @@ struct DevicesSwitcher: View {
     }
 }
 
-/// The Devices tab's toolbar actions for a simulator: its settings, a
-/// screenshot to the Desktop, and Shut Down.
+/// The Devices tab's toolbar actions for a simulator: its logs and settings,
+/// a screen recording and a screenshot to the Desktop, and Shut Down.
 struct DevicesActions: View {
     let device: SimulatorDevice
     let booted: Bool
@@ -83,6 +83,9 @@ struct DevicesActions: View {
     let canChangeSettings: Bool
     let onShutDown: () -> Void
     let onOpenLogs: () -> Void
+    let recorder: DeviceRecorder
+    /// Names the agent session recording the device.
+    let agentName: (String) -> String
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     /// "Saved to Desktop", or why it wasn't, for a moment after a click.
@@ -109,6 +112,7 @@ struct DevicesActions: View {
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
                     DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings(), control: control)
                 }
+            recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)
                 .disabled(!booted)
             ToolbarMenuButton(iconName: "ellipsis", help: "More") {
@@ -117,6 +121,47 @@ struct DevicesActions: View {
             }
         }
         .fixedSize()
+    }
+
+    @ViewBuilder
+    private var recordButton: some View {
+        switch recorder.owner(udid: device.udid) {
+        case nil:
+            ToolbarBtn(icon: "record.circle", tooltip: "Record screen") {
+                do throws(DeviceRecorder.Failure) {
+                    try recorder.start(udid: device.udid, owner: .user, file: Self.userRecordingFile())
+                } catch {
+                    withAnimation { notice = "Couldn't start recording" }
+                }
+            }
+            .disabled(!booted)
+        case .user:
+            ToolbarBtn(icon: "stop.circle.fill", tooltip: "Stop recording", isActive: true) {
+                Task { await stopRecording() }
+            }
+        case .agent(let sessionID):
+            ToolbarBtn(icon: "record.circle", tooltip: "\(agentName(sessionID)) is recording", isActive: true) {}
+                .disabled(true)
+        }
+    }
+
+    /// A temporary file; stopping moves it to the Desktop.
+    private static func userRecordingFile() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("alas-recording-\(UUID().uuidString).mov")
+    }
+
+    private func stopRecording() async {
+        let text: String
+        do {
+            // The recorder saves it to the Desktop (AppState's onUserRecordingEnded).
+            _ = try await recorder.stop(udid: device.udid, owner: .user)
+            text = "Saved to Desktop"
+        } catch DeviceRecorder.Failure.notSaved {
+            text = "Couldn't save to the Desktop; it's shown in Finder"
+        } catch {
+            text = "Couldn't save the recording"
+        }
+        withAnimation { notice = text }
     }
 
     private func saveScreenshot() {

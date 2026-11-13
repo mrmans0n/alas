@@ -25,6 +25,9 @@ pub struct McpEnv {
     /// Set by `ALAS_MCP_HEADLESS`: the agent runs under a headless `alas-host`,
     /// which has no UI, so screen-bound tools are hidden.
     pub headless: bool,
+    /// False when `ALAS_MCP_DEVICES=0`: the user hasn't let agents use iOS
+    /// simulators, so `device_*` tools are hidden.
+    pub devices: bool,
     /// Set by `alas mcp --visual-only` or `--remote`: the backend of the
     /// remote-session relay, which lists and accepts only that relay's tools,
     /// whatever the other restrictions say.
@@ -54,6 +57,8 @@ impl McpEnv {
             ToolScope::Headless
         } else if self.workspace_only {
             ToolScope::Workspace
+        } else if !self.devices {
+            ToolScope::NoDevices
         } else {
             ToolScope::All
         }
@@ -72,6 +77,8 @@ enum ToolScope {
     Remote,
     /// A headless `alas-host`: everything except screen-bound tools.
     Headless,
+    /// Everything except `device_*`, which the user hasn't allowed.
+    NoDevices,
 }
 
 impl ToolScope {
@@ -82,6 +89,7 @@ impl ToolScope {
             ToolScope::Visual => name == "visual_show",
             ToolScope::Remote => matches!(name, "visual_show" | "pr_create" | "pr_status"),
             ToolScope::Headless => !is_headless_hidden(name),
+            ToolScope::NoDevices => !name.starts_with("device_"),
         }
     }
 
@@ -96,6 +104,7 @@ impl ToolScope {
                 -32602,
                 format!("Not available on a headless host: {name}"),
             ),
+            ToolScope::NoDevices => (-32602, DEVICE_DISABLED.into()),
             ToolScope::All | ToolScope::Visual | ToolScope::Remote => (-32602, format!("unknown tool: {name}")),
         }
     }
@@ -110,6 +119,7 @@ impl Clone for McpEnv {
             parent_session_id: self.parent_session_id.clone(),
             workspace_only: self.workspace_only,
             headless: self.headless,
+            devices: self.devices,
             relay: self.relay,
             transport: self.transport,
         }
@@ -162,6 +172,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         headless: get("ALAS_MCP_HEADLESS")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        devices: get("ALAS_MCP_DEVICES").is_none_or(|value| value != "0"),
         relay: None,
         transport: "stdio",
     })
@@ -899,6 +910,9 @@ const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 /// The buttons `device_button` presses.
 const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
 
+/// The same refusal the app gives a device call while the setting is off.
+const DEVICE_DISABLED: &str = "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators.";
+
 const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. While they drive it, a call waits up to 50 seconds for them to hand it back; `device_user_active` means it is still theirs: try again later. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
@@ -1138,8 +1152,37 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid"]
             }
         }),
+        json!({
+            "name": "device_rotate",
+            "description": format!("Turn the simulator to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "orientation": { "type": "string", "enum": DEVICE_ORIENTATIONS }
+                },
+                "required": ["udid", "orientation"]
+            }
+        }),
+        json!({
+            "name": "device_record",
+            "description": "Record the simulator's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes or when the simulator shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "action": { "type": "string", "enum": ["start", "stop"] }
+                },
+                "required": ["udid", "action"]
+            }
+        }),
     ]
 }
+
+/// The orientations `device_rotate` turns a simulator to.
+const DEVICE_ORIENTATIONS: &[&str] = &["portrait", "landscape_left", "landscape_right", "portrait_upside_down"];
 
 /// The longest `device_type` text accepted.
 const DEVICE_TYPE_MAX_BYTES: usize = 4096;
@@ -2215,6 +2258,24 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::Clipboard {
                 udid: required_limited_string(args, "udid", 64)?,
                 text,
+            }))
+        }
+        "device_rotate" => {
+            reject_arguments(args, name, &["udid", "orientation"])?;
+            let orientation = optional_enum(args, "orientation", DEVICE_ORIENTATIONS)?
+                .ok_or_else(|| "missing required argument 'orientation'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::Rotate {
+                udid: required_limited_string(args, "udid", 64)?,
+                orientation: orientation.into(),
+            }))
+        }
+        "device_record" => {
+            reject_arguments(args, name, &["udid", "action"])?;
+            let action = optional_enum(args, "action", &["start", "stop"])?
+                .ok_or_else(|| "missing required argument 'action'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::Record {
+                udid: required_limited_string(args, "udid", 64)?,
+                action: action.into(),
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -3984,6 +4045,23 @@ mod tests {
     }
 
     #[test]
+    fn device_tools_are_hidden_and_refused_while_agents_may_not_use_simulators() {
+        let base = [("ALAS_SOCKET_PATH", "/s"), ("ALAS_WORKTREE_DIR", "/wt"), ("ALAS_SESSION_ID", "s1")];
+        assert_eq!(env_from(env(&base)).unwrap().tool_scope(), ToolScope::All);
+        let mut off = base.to_vec();
+        off.push(("ALAS_MCP_DEVICES", "0"));
+        let scope = env_from(env(&off)).unwrap().tool_scope();
+        let names: Vec<String> = tool_definitions_for_session(scope, None)
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!names.iter().any(|name| name.starts_with("device_")));
+        assert!(names.iter().any(|name| name == "computer_apps"));
+        let reply = handle_line_with_parent(&call("device_list", json!({})), "/wt", None, scope, |_| unreachable!()).unwrap();
+        assert!(reply["error"]["message"].as_str().unwrap().starts_with("device_disabled:"));
+    }
+
+    #[test]
     fn headless_scope_hides_screen_bound_tools() {
         let env = env_from(env(&[
             ("ALAS_SOCKET_PATH", "/s"),
@@ -4384,6 +4462,8 @@ mod tests {
                 "device_open_url",
                 "device_logs",
                 "device_clipboard",
+                "device_rotate",
+                "device_record",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4636,6 +4716,7 @@ mod tests {
                 parent_session_id: Some("parent".into()),
                 workspace_only: true,
                 headless: false,
+                devices: true,
                 relay: Some(relay),
                 transport: "stdio",
             };
@@ -5102,6 +5183,7 @@ mod tests {
             parent_session_id: None,
             workspace_only: false,
             headless: false,
+            devices: true,
             relay: None,
             transport: "stdio",
         };
@@ -5272,6 +5354,13 @@ mod tests {
             })
         );
         assert_eq!(
+            map("device_rotate", json!({ "udid": "U", "orientation": "landscape_left" })).unwrap(),
+            Command::Device(DeviceCommand::Rotate {
+                udid: "U".into(),
+                orientation: "landscape_left".into()
+            })
+        );
+        assert_eq!(
             map("device_clipboard", json!({ "udid": "U", "text": "é" })).unwrap(),
             Command::Device(DeviceCommand::Clipboard {
                 udid: "U".into(),
@@ -5300,6 +5389,8 @@ mod tests {
             ("device_logs", json!({ "udid": "U", "since_seconds": 601 }), "since_seconds must be an integer from 1 to 600"),
             ("device_logs", json!({ "udid": "U", "level": "verbose" }), "level must be one of default, info, debug, error"),
             ("device_clipboard", json!({ "udid": "U", "text": 1 }), "text must be a string of at most 65536 bytes"),
+            ("device_rotate", json!({ "udid": "U" }), "missing required argument 'orientation'"),
+            ("device_record", json!({ "udid": "U", "action": "pause" }), "action must be one of start, stop"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }
@@ -6742,6 +6833,7 @@ mod tests {
             parent_session_id: None,
             workspace_only: false,
             headless: false,
+            devices: true,
             relay: None,
             transport: "stdio",
         };
