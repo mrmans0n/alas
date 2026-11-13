@@ -37,6 +37,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Alas
+        TARGETED_DEVICE_FAMILY: "1"
     info:
       path: Sources/Info.plist
       properties:

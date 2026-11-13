@@ -162,6 +162,13 @@ final class SpikeTranscriptModel {
             let call = ACPToolCall(
                 toolCallId: "stream\(streamed)", title: "Run stream", kind: "execute", status: "completed",
                 content: codeLines(Int.random(in: 5 ... 80, using: &rng), &rng))
+            if inFence, let last = rows.lastIndex(where: { if case .agent = $0.row { true } else { false } }),
+               case .agent(let text) = rows[last].row
+            {
+                rows[last].row = .agent(text + "\n```\n")
+                rows[last].revision += 1
+            }
+            inFence = false
             rows.append(SpikeRow(id: "s\(streamed)t", row: .toolCall(call), revision: 0))
             rows.append(SpikeRow(id: "s\(streamed)a", row: .agent(""), revision: 0))
             return

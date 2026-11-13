@@ -144,7 +144,7 @@ jobs:
         run: |
           cd Mobile
           xcodegen
-          xcodebuild -project AlasMobile.xcodeproj -scheme AlasMobile -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet build
+          xcodebuild -project AlasMobile.xcodeproj -scheme AlasMobile -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -disableAutomaticPackageResolution -quiet build
 
       - name: Test Swift test inventory harness
         run: bash scripts/tests/swift-test-inventory/run.sh
