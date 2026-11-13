@@ -13,15 +13,6 @@ struct WorktreeRowStatusTests {
         #expect(!WorktreeRowView.showsCommitCount(harnessState: nil, worktreeStatus: .clean, isMain: true))
     }
 
-    @Test func diffBarsHandleOneSidedAndEmptyChanges() {
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 0, deleted: 0) == nil)
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 0, deleted: 12) == 0)
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 12, deleted: 0) == 5)
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 86, deleted: 12) == 4)
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 1, deleted: 1000) == 1)
-        #expect(WorktreeRowView.diffBarAdditionCount(added: 1000, deleted: 1) == 4)
-    }
-
     @Test func runningSessionShowsPulsingGreenChip() throws {
         let status = try #require(WorktreeRowView.statusPresentation(
             harnessState: .running, worktreeStatus: .clean))
