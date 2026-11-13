@@ -6406,9 +6406,10 @@ final class AppState {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
             .filter { $0.id == projectId }
             .map { ($0.id, $0.path) })
-        let previousBranches = Dictionary(uniqueKeysWithValues: projectsManager
-            .worktrees(projectId: projectId)
-            .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
+        // Distinct worktree IDs can resolve to the same directory through symlinks.
+        let previousBranches = Dictionary(grouping: projectsManager.worktrees(projectId: projectId)) {
+            Self.canonicalWorktreePath($0.path.path)
+        }
         let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
         if changed { GGProjectMutationGate.shared.invalidate(project: projectId) }
@@ -6418,10 +6419,12 @@ final class AppState {
         )
         for worktree in projectsManager.worktrees(projectId: projectId) {
             let canonicalPath = Self.canonicalWorktreePath(worktree.path.path)
-            guard let previous = previousBranches[canonicalPath], previous.branch != worktree.branch else {
-                continue
+            guard let previous = previousBranches[canonicalPath],
+                  previous.contains(where: { $0.branch != worktree.branch })
+            else { continue }
+            for row in previous {
+                GGStackSummaryStore.shared.summaries[row.path.path] = nil
             }
-            GGStackSummaryStore.shared.summaries[previous.path] = nil
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
         if changed || completedCreateFailure {

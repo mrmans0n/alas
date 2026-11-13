@@ -333,13 +333,22 @@ struct AppStateGGACPWorktreeContextTests {
         #expect(GGStackSummaryStore.shared.summaries[unchangedPath.path] == unchangedSummary)
     }
 
-    @Test func fullTopologyRefreshClearsCachedSidebarSummaryWhenBranchChanges() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-gg-summary-topology-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+    @Test(arguments: [
+        ("nacho/new-stack", nil),
+        ("main", "nacho/old-stack"),
+        ("nacho/new-stack", "nacho/new-stack"),
+    ] as [(String, String?)])
+    func fullTopologyRefreshClearsChangedBranchSummariesIncludingSymlinkAliases(
+        refreshedBranch: String,
+        aliasBranch: String?
+    ) async throws {
+        let fixture = try await CheckpointTestRepository.makeFromTemplate()
+        let repo = fixture.root
+        let alias = repo.deletingLastPathComponent().appendingPathComponent("alas-summary-alias-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: alias)
+            fixture.remove()
+        }
         let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [])))
         let project = try await state.projectsManager.addProject(
             path: repo,
@@ -349,13 +358,33 @@ struct AppStateGGACPWorktreeContextTests {
         await state.refreshProjectTopology(projectId: project.id)
         let worktreePath = try #require(state.projectsManager.worktrees(projectId: project.id).first?.path.path)
         GGStackSummaryStore.shared.summaries[worktreePath] = GGStackSummary(merged: 1, total: 2)
+        if let aliasBranch {
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: repo)
+            state.projectsManager.insertOptimisticWorktree(Worktree(
+                id: Worktree.makeId(path: alias),
+                projectId: project.id,
+                name: aliasBranch,
+                branch: aliasBranch,
+                path: alias,
+                status: .clean,
+                lastActivity: .now
+            ))
+            GGStackSummaryStore.shared.summaries[alias.path] = GGStackSummary(merged: 1, total: 2)
+        }
+        defer { GGStackSummaryStore.shared.summaries[alias.path] = nil }
         defer { GGStackSummaryStore.shared.summaries[worktreePath] = nil }
         state.stopAllProjectGitWatchers()
 
-        _ = try await Process.git(["checkout", "-q", "-b", "nacho/new-stack"], cwd: repo)
+        if refreshedBranch != "main" {
+            try await fixture.git(["checkout", "-q", "-b", refreshedBranch])
+        }
         await state.refreshProjectTopology(projectId: project.id)
 
         #expect(GGStackSummaryStore.shared.summaries[worktreePath] == nil)
+        #expect(GGStackSummaryStore.shared.summaries[alias.path] == nil)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.map(\.path.path) == [worktreePath])
+        #expect(trees.map(\.branch) == [refreshedBranch])
     }
 
     @Test func cachedLiveBranchOverridesStaleTopologyForACPDecisions() throws {
