@@ -107,9 +107,15 @@ final class DevicePaneModel {
         }
     }
 
+    /// A simulator that was booted isn't any more; its recording ends.
+    @ObservationIgnored var onShutDown: (String) -> Void = { _ in }
+
     func refresh() async {
         do {
+            let before = Set((devices ?? []).filter { $0.state == .booted }.map(\.udid))
             devices = try await SimulatorControl.devices()
+            let booted = Set((devices ?? []).filter { $0.state == .booted }.map(\.udid))
+            before.subtracting(booted).forEach(onShutDown)
             listError = nil
         } catch {
             listError = error.localizedDescription

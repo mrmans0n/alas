@@ -82,7 +82,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "device_list", "device_open", "device_snapshot", "device_screenshot",
         "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
         "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url",
-        "device_logs", "device_clipboard",
+        "device_logs", "device_clipboard", "device_rotate", "device_record",
     ]
 
     /// What a child delegated from another Mac reports with. It cannot message
@@ -347,6 +347,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "device_set_appearance, device_set_permission, device_set_location, device_push and device_open_url. "
                         + "Read the app's logs and crash reports with device_logs. "
                         + "device_type types any text; read or set the simulator's pasteboard with device_clipboard. "
+                        + "Rotate with device_rotate and record the screen with device_record. "
                         + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
                 }
             }

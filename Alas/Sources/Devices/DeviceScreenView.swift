@@ -22,6 +22,8 @@ struct DeviceScreenView: NSViewRepresentable {
     var onPaste: () -> Void = {}
     /// Edit › Copy (⌘C) while the screen has focus.
     var onCopy: () -> Void = {}
+    /// The interface orientation of the frames changed.
+    var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
@@ -31,6 +33,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onDropTargeted = onDropTargeted
         view.onPaste = onPaste
         view.onCopy = onCopy
+        view.onOrientation = onOrientation
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -43,6 +46,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onDropTargeted = onDropTargeted
         view.onPaste = onPaste
         view.onCopy = onCopy
+        view.onOrientation = onOrientation
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -57,7 +61,10 @@ final class DeviceScreenNSView: NSView {
     private(set) var udid: String?
     private weak var client: SimulatorStreamClient?
     private var token: UUID?
+    /// The portrait panel's size in pixels.
     private var screenSize = CGSize.zero
+    /// Which way the frames' interface is turned.
+    private var orientation = DeviceScreenOrientation.portrait
     private var lastTouch: DeviceScreenPoint?
     private var heldKeys = HeldSimulatorKeys()
     var onStopped: (String) -> Void = { _ in }
@@ -66,6 +73,7 @@ final class DeviceScreenNSView: NSView {
     var onDropTargeted: (Bool) -> Void = { _ in }
     var onPaste: () -> Void = {}
     var onCopy: () -> Void = {}
+    var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
     var allowsInput = true {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
@@ -123,7 +131,15 @@ final class DeviceScreenNSView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = bounds
+        // The frames keep the portrait panel's layout; the layer turns them upright.
+        displayLayer.setAffineTransform(.identity)
+        displayLayer.bounds = CGRect(origin: .zero, size: orientation.isLandscape
+            ? CGSize(width: bounds.height, height: bounds.width) : bounds.size)
+        displayLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        // Angles turn counterclockwise in the layer's unflipped space.
+        displayLayer.setAffineTransform(CGAffineTransform(
+            rotationAngle: -CGFloat(orientation.clockwiseQuarterTurns) * .pi / 2
+        ))
         CATransaction.commit()
     }
 
@@ -152,13 +168,20 @@ final class DeviceScreenNSView: NSView {
         udid = nil
         token = nil
         screenSize = .zero
+        orientation = .portrait
         displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 
     // MARK: Frames
 
-    private func show(_ surface: IOSurface) {
+    private func show(_ frame: DeviceFrame) {
+        let surface = frame.surface
         screenSize = CGSize(width: surface.width, height: surface.height)
+        if frame.orientation != orientation {
+            orientation = frame.orientation
+            needsLayout = true
+            onOrientation(orientation)
+        }
         var unmanaged: Unmanaged<CVPixelBuffer>?
         guard CVPixelBufferCreateWithIOSurface(nil, surface as IOSurfaceRef, nil, &unmanaged) == kCVReturnSuccess,
               let pixelBuffer = unmanaged?.takeRetainedValue() else { return }
@@ -195,7 +218,7 @@ final class DeviceScreenNSView: NSView {
     private var geometry: DeviceScreenGeometry {
         DeviceScreenGeometry(
             screenWidth: screenSize.width, screenHeight: screenSize.height,
-            viewWidth: bounds.width, viewHeight: bounds.height
+            viewWidth: bounds.width, viewHeight: bounds.height, orientation: orientation
         )
     }
 

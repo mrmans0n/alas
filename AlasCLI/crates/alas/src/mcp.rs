@@ -1138,8 +1138,37 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid"]
             }
         }),
+        json!({
+            "name": "device_rotate",
+            "description": format!("Turn the simulator to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "orientation": { "type": "string", "enum": DEVICE_ORIENTATIONS }
+                },
+                "required": ["udid", "orientation"]
+            }
+        }),
+        json!({
+            "name": "device_record",
+            "description": "Record the simulator's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes or when the simulator shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "action": { "type": "string", "enum": ["start", "stop"] }
+                },
+                "required": ["udid", "action"]
+            }
+        }),
     ]
 }
+
+/// The orientations `device_rotate` turns a simulator to.
+const DEVICE_ORIENTATIONS: &[&str] = &["portrait", "landscape_left", "landscape_right", "portrait_upside_down"];
 
 /// The longest `device_type` text accepted.
 const DEVICE_TYPE_MAX_BYTES: usize = 4096;
@@ -2215,6 +2244,24 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::Clipboard {
                 udid: required_limited_string(args, "udid", 64)?,
                 text,
+            }))
+        }
+        "device_rotate" => {
+            reject_arguments(args, name, &["udid", "orientation"])?;
+            let orientation = optional_enum(args, "orientation", DEVICE_ORIENTATIONS)?
+                .ok_or_else(|| "missing required argument 'orientation'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::Rotate {
+                udid: required_limited_string(args, "udid", 64)?,
+                orientation: orientation.into(),
+            }))
+        }
+        "device_record" => {
+            reject_arguments(args, name, &["udid", "action"])?;
+            let action = optional_enum(args, "action", &["start", "stop"])?
+                .ok_or_else(|| "missing required argument 'action'".to_string())?;
+            Ok(Command::Device(alas_client::DeviceCommand::Record {
+                udid: required_limited_string(args, "udid", 64)?,
+                action: action.into(),
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4384,6 +4431,8 @@ mod tests {
                 "device_open_url",
                 "device_logs",
                 "device_clipboard",
+                "device_rotate",
+                "device_record",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -5272,6 +5321,13 @@ mod tests {
             })
         );
         assert_eq!(
+            map("device_rotate", json!({ "udid": "U", "orientation": "landscape_left" })).unwrap(),
+            Command::Device(DeviceCommand::Rotate {
+                udid: "U".into(),
+                orientation: "landscape_left".into()
+            })
+        );
+        assert_eq!(
             map("device_clipboard", json!({ "udid": "U", "text": "é" })).unwrap(),
             Command::Device(DeviceCommand::Clipboard {
                 udid: "U".into(),
@@ -5300,6 +5356,8 @@ mod tests {
             ("device_logs", json!({ "udid": "U", "since_seconds": 601 }), "since_seconds must be an integer from 1 to 600"),
             ("device_logs", json!({ "udid": "U", "level": "verbose" }), "level must be one of default, info, debug, error"),
             ("device_clipboard", json!({ "udid": "U", "text": 1 }), "text must be a string of at most 65536 bytes"),
+            ("device_rotate", json!({ "udid": "U" }), "missing required argument 'orientation'"),
+            ("device_record", json!({ "udid": "U", "action": "pause" }), "action must be one of start, stop"),
         ] {
             assert_eq!(map(name, args).unwrap_err(), error, "{name}");
         }

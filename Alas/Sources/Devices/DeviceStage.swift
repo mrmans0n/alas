@@ -25,6 +25,8 @@ struct DeviceStage: View {
     @State private var streamGeneration = 0
     @State private var pulse = false
     @State private var dropTargeted = false
+    /// The interface orientation of the frames shown; nil until one arrives.
+    @State private var frameOrientation: DeviceScreenOrientation?
 
     private static let margin: CGFloat = 12
     private static let gutter: CGFloat = 44
@@ -38,8 +40,10 @@ struct DeviceStage: View {
                 width: max(0, geometry.size.width - Self.margin * 2 - Self.gutter - Self.bezel * 2),
                 height: max(0, geometry.size.height - Self.margin * 2 - Self.bezel * 2)
             )
-            let size = Self.fit(shape, in: area)
-            let radius = shape?.cornerRadius(forFittedWidth: size.width) ?? 0
+            let landscape = (frameOrientation ?? client.lastFrame(udid: device.udid)?.orientation ?? .portrait).isLandscape
+            let size = Self.fit(shape, landscape: landscape, in: area)
+            // The radius scales with the device's short side, which is its width in portrait.
+            let radius = shape?.cornerRadius(forFittedWidth: landscape ? size.height : size.width) ?? 0
             HStack(spacing: 0) {
                 screen(allowsInput: allowsInput, driver: driver)
                     .frame(width: size.width, height: size.height)
@@ -63,11 +67,13 @@ struct DeviceStage: View {
         }
     }
 
-    /// The largest size of the screen's shape that fits `area`; all of it without a shape.
-    private static func fit(_ shape: DeviceScreenShape?, in area: CGSize) -> CGSize {
+    /// The largest size of the screen's shape, turned for landscape, that
+    /// fits `area`; all of it without a shape.
+    private static func fit(_ shape: DeviceScreenShape?, landscape: Bool, in area: CGSize) -> CGSize {
         guard let shape, shape.widthPoints > 0, shape.heightPoints > 0 else { return area }
-        let scale = min(area.width / shape.widthPoints, area.height / shape.heightPoints)
-        return CGSize(width: shape.widthPoints * scale, height: shape.heightPoints * scale)
+        let (width, height) = landscape ? (shape.heightPoints, shape.widthPoints) : (shape.widthPoints, shape.heightPoints)
+        let scale = min(area.width / width, area.height / height)
+        return CGSize(width: width * scale, height: height * scale)
     }
 
     private func screen(allowsInput: Bool, driver: VMDriver) -> some View {
@@ -76,7 +82,7 @@ struct DeviceStage: View {
                 udid: device.udid, client: client, onStopped: { streamError = $0 },
                 allowsInput: allowsInput, onBlockedClick: pulsePill,
                 onDropApp: onDropApp, onDropTargeted: { dropTargeted = $0 },
-                onPaste: onPaste, onCopy: onCopy
+                onPaste: onPaste, onCopy: onCopy, onOrientation: { frameOrientation = $0 }
             )
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
@@ -218,6 +224,8 @@ struct DeviceStage: View {
             hardwareButton("square.stack", help: "App switcher", name: "app_switcher")
             hardwareButton("lock", help: "Lock", name: "lock")
             hardwareButton("mic", help: "Siri", name: "siri")
+            rotateButton("rotate.left", help: "Rotate left") { $0.rotatedLeft }
+            rotateButton("rotate.right", help: "Rotate right") { $0.rotatedRight }
         }
         .padding(scale.space[1])
         .background(theme.color("bg-2"), in: Capsule())
@@ -232,6 +240,18 @@ struct DeviceStage: View {
             icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
         ) {
             client.button(udid: device.udid, name: name)
+        }
+    }
+
+    private func rotateButton(
+        _ symbol: String, help: String, turn: @escaping (DeviceScreenOrientation) -> DeviceScreenOrientation
+    ) -> some View {
+        ToolbarBtn(
+            icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
+        ) {
+            let udid = device.udid
+            let next = turn(client.deviceOrientation(udid: udid))
+            Task { try? await client.rotate(udid: udid, to: next) }
         }
     }
 }

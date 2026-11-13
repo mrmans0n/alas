@@ -535,6 +535,15 @@ pub enum DeviceCommand {
         udid: String,
         text: Option<String>,
     },
+    Rotate {
+        udid: String,
+        orientation: String,
+    },
+    /// `action` is `start` or `stop`.
+    Record {
+        udid: String,
+        action: String,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -586,7 +595,9 @@ impl DeviceCommand {
             | DeviceCommand::Push { .. }
             | DeviceCommand::OpenUrl { .. }
             | DeviceCommand::Logs { .. }
-            | DeviceCommand::Clipboard { .. } => false,
+            | DeviceCommand::Clipboard { .. }
+            | DeviceCommand::Rotate { .. }
+            | DeviceCommand::Record { .. } => false,
         }
     }
 }
@@ -1340,6 +1351,12 @@ fn device_request(command: &DeviceCommand) -> Request {
                 params["text"] = json!(text);
             }
             ("device_clipboard", params)
+        }
+        DeviceCommand::Rotate { udid, orientation } => {
+            ("device_rotate", json!({ "udid": udid, "orientation": orientation }))
+        }
+        DeviceCommand::Record { udid, action } => {
+            ("device_record", json!({ "udid": udid, "action": action }))
         }
     };
     let mut request = Request::new(name);
@@ -2897,6 +2914,14 @@ mod tests {
             })
             .1,
             serde_json::json!({ "udid": "U-1" })
+        );
+        assert_eq!(
+            build(DeviceCommand::Record {
+                udid: udid(),
+                action: "stop".into()
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1", "action": "stop" })
         );
         assert_eq!(
             read_timeout(&Command::Device(DeviceCommand::Install {

@@ -36,9 +36,9 @@ final class SimServiceHandler: NSObject, SimServiceProtocol, @unchecked Sendable
         Task {
             await previous?.stop()
             do {
-                try await session.start { pixelBuffer in
+                try await session.start { pixelBuffer, orientation in
                     guard let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() else { return }
-                    sink?.frame(udid: udid, surface: surface as IOSurface)
+                    sink?.frame(udid: udid, surface: surface as IOSurface, orientation: orientation)
                 }
                 reply(nil)
             } catch {
@@ -84,6 +84,11 @@ final class SimServiceHandler: NSObject, SimServiceProtocol, @unchecked Sendable
         DispatchQueue.global(qos: .userInitiated).async {
             reply(AlasSimulatorSession.frontmostApp(udid: udid))
         }
+    }
+
+    func rotate(udid: String, orientation: UInt32, reply: @escaping @Sendable (String?) -> Void) {
+        guard let session = session(udid) else { return reply("No stream for this simulator.") }
+        Task { reply(await session.rotate(orientation) ? nil : "The simulator didn't rotate.") }
     }
 
     func stopAll() {

@@ -738,8 +738,17 @@ final class AppState {
         launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
         settings: LiveSimulatorSettings(),
         logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
-        pasteboard: devicePasteboard
+        pasteboard: devicePasteboard,
+        recorder: deviceRecorder
     )
+    /// Screen recordings of simulators, yours and agents'. Made on first use,
+    /// which also deletes agents' recordings older than a week.
+    @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {
+        let recorder = DeviceRecorder { udid, file in try LiveScreenRecording(udid: udid, file: file) }
+        devicePane.onShutDown = { [weak recorder] udid in Task { await recorder?.simulatorStopped(udid: udid) } }
+        DeviceRecorder.pruneOldRecordings()
+        return recorder
+    }()
     /// Pastes and copies on simulators, for agents and for the user.
     @ObservationIgnored lazy var devicePasteboard = DevicePasteboard(
         input: simulatorStreams, pasteboard: LiveSimulatorPasteboard(),
