@@ -1,8 +1,9 @@
 import Foundation
+import AlasFoundation
 
 /// One file's change, read from an exact single-file git patch.
 public struct GitFilePatch: Equatable, Sendable {
-    public enum Change: String, Codable, Equatable, Hashable, Sendable { case modified, added, deleted, renamed }
+    public typealias Change = GitFilePatchChange
 
     /// The old name in git form, without the `a/` prefix. Nil when the file was added.
     public let oldPath: String?

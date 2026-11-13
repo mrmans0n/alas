@@ -1,9 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
 
 /// An HTML visual an agent showed through the `visual_show` MCP tool, with an
 /// optional single question the user answers from a native card.

@@ -1,6 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
 
 /// Wire projection of `FileTreeNode`. `kind` is "dir" or "file";
 /// `childrenState` carries `DirectoryChildrenState`'s raw value.

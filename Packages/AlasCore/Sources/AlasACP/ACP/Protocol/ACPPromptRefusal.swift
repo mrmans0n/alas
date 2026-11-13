@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Why a prompt was stopped before it left Alas. It reaches both send sites as
 /// an ordinary failure, and nothing about it says the agent saw the prompt.

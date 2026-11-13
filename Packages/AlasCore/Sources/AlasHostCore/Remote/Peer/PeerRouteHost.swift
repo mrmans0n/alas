@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// Serves the delegation requests a paired host sends back over this Mac's
 /// own link to it (`HostProtocolCapability.delegationReverseV1`): a host this

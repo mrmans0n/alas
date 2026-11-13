@@ -2,6 +2,7 @@ import Foundation
 import AlasACP
 import AlasModel
 import AlasCode
+import AlasFoundation
 
 /// Opt-in display projection. It grants no request, queue or process authority.
 @MainActor

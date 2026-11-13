@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 
 /// One `PeerHostChannel` per paired Mac that serves the host channel
 /// (`host.v1` and `host.events.v1`). There must be one per link: a second

@@ -1,10 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
-import AlasAgents
 
 /// Peer console traffic: viewing and controlling a host's existing
 /// zmx-backed console from a paired Mac. Attachment-scoped and separate from

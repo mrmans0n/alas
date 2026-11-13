@@ -427,17 +427,6 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     }
 }
 
-/// One commit of a file's history, with the file's path in it, which differs before a rename.
-public struct HostFileHistoryEntry: Codable, Equatable, Sendable {
-    public var commit: CommitInfo
-    public var pathAtCommit: String
-
-    public init(commit: CommitInfo, pathAtCommit: String) {
-        self.commit = commit
-        self.pathAtCommit = pathAtCommit
-    }
-}
-
 /// A stored side of a file, in the forms the host's diff reads accept.
 public enum HostFileRevision: Codable, Equatable, Sendable {
     case index

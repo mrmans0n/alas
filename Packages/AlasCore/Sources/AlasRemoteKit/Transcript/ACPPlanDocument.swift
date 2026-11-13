@@ -1,0 +1,120 @@
+import Foundation
+
+/// A plan file on the session's host.
+public struct ACPPlanFileReference: Codable, Equatable, Hashable, Sendable {
+    /// Absolute, on the session's host.
+    public let path: String
+    /// Adapter-reported (`planFile`), or nil for standard `file` plans.
+    public let sha256: String?
+
+    public init(path: String, sha256: String?) {
+        self.path = path
+        self.sha256 = sha256
+    }
+}
+
+/// A Markdown or file-backed plan, keyed by the agent's `planId`. Unlike a
+/// checklist (`ACPMessage.plan`), it never feeds the plan pill, `currentPlan`
+/// or session summaries.
+public struct ACPPlanDocument: Codable, Equatable, Hashable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case markdown
+        case file
+    }
+
+    public let planId: String
+    public var kind: Kind
+    /// The last snapshot; nil for a file plan.
+    public var markdown: String?
+    public var file: ACPPlanFileReference?
+    /// Set by `plan_removed`.
+    public var hidden: Bool
+
+    public init(planId: String, kind: Kind, markdown: String?, file: ACPPlanFileReference?, hidden: Bool = false) {
+        self.planId = planId
+        self.kind = kind
+        self.markdown = markdown
+        self.file = file
+        self.hidden = hidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case planId, kind, markdown, file, hidden
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        planId = try c.decode(String.self, forKey: .planId)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        markdown = try c.decodeIfPresent(String.self, forKey: .markdown)
+        file = try c.decodeIfPresent(ACPPlanFileReference.self, forKey: .file)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(planId, forKey: .planId)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(markdown, forKey: .markdown)
+        try c.encodeIfPresent(file, forKey: .file)
+        if hidden { try c.encode(true, forKey: .hidden) }
+    }
+}
+
+extension ACPPlanDocument {
+    /// What a plan document row shows.
+    public struct Display: Equatable, Sendable {
+        /// The Markdown body; nil for a file plan.
+        public let markdown: String?
+        /// Whether the row has a "Plan file" line.
+        public let showsFile: Bool
+        /// The file's path on the session's host, and the open action's
+        /// target; nil when unknown (a peer's copy carries no path).
+        public let filePath: String?
+        /// The plan's review is parked: the row collapses to
+        /// `underReviewLabel` and the review card shows the plan.
+        public let isUnderReview: Bool
+
+        public init(markdown: String?, showsFile: Bool, filePath: String?, isUnderReview: Bool = false) {
+            self.markdown = markdown
+            self.showsFile = showsFile
+            self.filePath = filePath
+            self.isUnderReview = isUnderReview
+        }
+
+        public static let underReviewLabel = "Plan · under review below"
+        static let underReview = Display(markdown: nil, showsFile: false, filePath: nil, isUnderReview: true)
+    }
+
+    /// Nil when the row shows nothing: removed by `plan_removed`, or with
+    /// neither text nor a file.
+    public var display: Display? { display(underReview: nil) }
+
+    /// The row's display while the review of `reviewedPlanId` is parked. That
+    /// review shows the plan in full, so this row collapses to one line
+    /// rather than showing it twice.
+    public func display(underReview reviewedPlanId: String?) -> Display? {
+        guard !hidden else { return nil }
+        let text = kind == .markdown ? markdown.flatMap { $0.isEmpty ? nil : $0 } : nil
+        let showsFile = kind == .file || file != nil
+        guard text != nil || showsFile else { return nil }
+        if let reviewedPlanId, reviewedPlanId == planId { return .underReview }
+        return Display(markdown: text, showsFile: showsFile, filePath: file?.path)
+    }
+}
+
+/// Where a Markdown or file `plan_update` lands in a transcript.
+public enum ACPPlanDocumentPlacement: Equatable, Sendable {
+    case replace(Int)
+    case append
+
+    /// Claude's shared id for clients without planFile: turn-scoped, never cross-turn.
+    public static let sharedClaudePlanId = "plan-mode"
+
+    /// `existing`: index of the newest .planDocument with this planId; `latestUserIndex`: the turn boundary.
+    public static func decide(planId: String, existing: Int?, latestUserIndex: Int?) -> ACPPlanDocumentPlacement {
+        guard let existing else { return .append }
+        if planId == sharedClaudePlanId, existing <= (latestUserIndex ?? -1) { return .append }
+        return .replace(existing)
+    }
+}

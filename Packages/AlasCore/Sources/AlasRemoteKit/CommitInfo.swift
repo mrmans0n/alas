@@ -1,6 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
 
 public struct CommitInfo: Identifiable, Hashable, Codable, Sendable {
     public var id: String { sha }

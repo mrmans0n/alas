@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 /// A generic JSON-RPC 2.0 envelope. Shared by every ACP wire type.

@@ -193,6 +193,36 @@ struct RemotePeerConnectionTests {
         #expect(events.states.first == .connecting)
     }
 
+    @Test func unknownServerMessageTypeIsSkippedAndTheConnectionStaysUp() async throws {
+        let encoder = JSONEncoder()
+        var frames = WebSocketFrame.encode(
+            opcode: .text,
+            payload: try encoder.encode(RemoteServerMessage.hello(
+                protocolVersion: RemoteProtocolVersion.current, serverId: "srv-a", name: "Mac A"
+            ))
+        )
+        frames.append(WebSocketFrame.encode(opcode: .text, payload: Data(#"{"type":"fromTheFuture"}"#.utf8)))
+        frames.append(WebSocketFrame.encode(
+            opcode: .text,
+            payload: try encoder.encode(RemoteServerMessage.sessionRenamed(sessionId: "s1", title: "Known"))
+        ))
+        let server = HandshakeThenDropServer(framesAfterUpgrade: frames)
+        try server.start()
+        defer { server.stop() }
+        try await waitUntil { server.port != nil }
+        let port = try #require(server.port)
+        let events = Events()
+        let link = RemotePeerConnection(
+            origins: ["http://127.0.0.1:\(port)"], lastOrigin: nil,
+            token: "peer-token", config: fastConfig()
+        ) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { !events.messages.isEmpty }
+        #expect(events.messages == [.sessionRenamed(sessionId: "s1", title: "Known")])
+        #expect(link.state == .online)
+    }
+
     @Test func receivesLegacyLargeTranscriptSnapshotAndFollowingMessage() async throws {
         let row = RemoteWireMessage(
             stableId: "large-agent-message", kind: "agent",

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasFoundation
 import AlasModel
 
 /// Stores attached PDFs under Application Support so drafts, the queue, and the

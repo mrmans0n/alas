@@ -8,9 +8,10 @@ let base: [Target.Dependency] = [
 
 let package = Package(
     name: "AlasCore",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS("26.0")],
     products: [
         .library(name: "AlasCore", targets: ["AlasCore"]),
+        .library(name: "AlasRemoteKit", targets: ["AlasRemoteKit"]),
         .executable(name: "alas-host", targets: ["alas-host"]),
     ],
     dependencies: [
@@ -20,8 +21,12 @@ let package = Package(
     targets: [
         // The modules AlasCore is split into, bottom to top; see
         // docs/plans/2026-10-20-alascore-modules.md. AlasCore re-exports them.
+        // Foundation, CryptoKit and Observation only: the remote wire types
+        // the iOS app shares with the Mac. Must build for iOS.
+        .target(name: "AlasRemoteKit"),
         .target(
             name: "AlasFoundation",
+            dependencies: ["AlasRemoteKit"],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(name: "AlasModel", dependencies: ["AlasFoundation"]),
