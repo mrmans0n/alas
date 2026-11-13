@@ -163,7 +163,8 @@ iOS:
 - [x] Install and launch an app (`simctl install`, `simctl launch`), for
   example from a run script's build output. Agents (`device_install`,
   `device_launch`), drag and drop, and run scripts with `# alas-app:`.
-- [ ] Clipboard both ways (`simctl pbcopy`, `simctl pbpaste`).
+- [x] Clipboard both ways: ⌘C/⌘V on the screen, `device_clipboard`, and
+  `device_type` pasting words beyond ASCII.
 - [ ] Screenshot and screen recording (`simctl io <udid> screenshot|recordVideo`,
   or a PNG from the frames Alas already receives).
 - [x] Device logs: a Logs tab following the foreground app, crash report

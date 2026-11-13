@@ -108,6 +108,32 @@ public enum SimulatorControl {
         guard result.exitCode == 0 else { throw SimulatorControlError(result) }
     }
 
+    /// `simctl pbcopy` decodes stdin in the locale's encoding, which is Mac
+    /// Roman in an app launched from Finder; Alas always writes UTF-8.
+    public static func pbcopy(udid: String, text: String) async throws {
+        let env = ProcessInfo.processInfo.environment.merging(["LC_ALL": "en_US.UTF-8"]) { _, utf8 in utf8 }
+        let result = try await Process.run(xcrun, args: ["simctl", "pbcopy", udid], env: env, stdin: text)
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func pbpaste(udid: String) async throws -> String {
+        let result = try await Process.run(xcrun, args: ["simctl", "pbpaste", udid])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        return result.stdout
+    }
+
+    /// `simctl privacy` takes `pasteboard` though its help doesn't list it, so
+    /// it isn't a `SimulatorPrivacyService` the user picks from.
+    public static func pasteboardPrivacy(udid: String, action: SimulatorPrivacyAction, bundleID: String) async throws {
+        let result = try await Process.run(xcrun, args: ["simctl", "privacy", udid, action.rawValue, "pasteboard", bundleID])
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
+    public static func tccDatabase(udid: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Developer/CoreSimulator/Devices/\(udid)/data/Library/TCC/TCC.db")
+    }
+
     /// Sets the simulated location, or clears it when `location` is nil.
     public static func location(udid: String, _ location: SimulatorLocation?) async throws {
         let args = location.map { ["simctl", "location", udid, "set", "\($0.latitude),\($0.longitude)"] }

@@ -47,6 +47,7 @@ final class DeviceAgentControl {
     @ObservationIgnored private let launch: (String, String) async throws -> Int32
     @ObservationIgnored private let settings: any SimulatorSettingsControl
     @ObservationIgnored private let logs: any SimulatorLogsControl
+    @ObservationIgnored private let pasteboard: DevicePasteboard
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
     @ObservationIgnored private let leaseWindow: Duration
@@ -86,6 +87,7 @@ final class DeviceAgentControl {
         launch: @escaping (String, String) async throws -> Int32,
         settings: any SimulatorSettingsControl,
         logs: any SimulatorLogsControl,
+        pasteboard: DevicePasteboard,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
@@ -98,6 +100,7 @@ final class DeviceAgentControl {
         self.launch = launch
         self.settings = settings
         self.logs = logs
+        self.pasteboard = pasteboard
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
@@ -179,12 +182,21 @@ final class DeviceAgentControl {
                 udid: udid, since: since, bundleID: bundleID, level: level, includeApple: includeApple, query: query, limit: limit
             )
         }
+        if case .clipboard(_, nil) = command {
+            switch await bootedDevice(udid) {
+            case .failure(let refusal): return refusal.response
+            case .success:
+                do { return .text([Self.json(["text": try await pasteboard.read(udid: udid)])]) } catch {
+                    return .error("device_clipboard_failed: \(error.localizedDescription)")
+                }
+            }
+        }
         // Touches and keys from two calls must not interleave on one simulator,
         // so input calls to a device run one at a time, in arrival order;
         // installing and launching take their turn too.
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
-             .setAppearance, .setPermission, .setLocation, .push, .openURL: true
+             .setAppearance, .setPermission, .setLocation, .push, .openURL, .clipboard: true
         case .list, .open, .snapshot, .screenshot, .logs: false
         }
         var inputTurn: UUID?
@@ -291,26 +303,12 @@ final class DeviceAgentControl {
             }
             return await finish(udid, includeScreenshot: includeScreenshot)
         case .type(_, let text, let includeScreenshot):
-            let presses: [DeviceTextInput.Press]
-            switch DeviceTextInput.presses(for: text) {
-            case .success(let resolved): presses = resolved
-            case .failure(let failure):
-                return .error("device_type_unsupported: device_type types ASCII only; it can't type \"\(failure.character)\".")
-            }
-            let shift: UInt32 = 0xE1
-            for (index, press) in presses.enumerated() {
-                if Task.isCancelled {
-                    return .error("device_cancelled: The call was cancelled after \(index) of \(presses.count) characters were typed.")
-                }
-                if userDriving(udid) {
-                    return .error("device_user_active: The user took over after \(index) of \(presses.count) characters were typed. Check the field before typing the rest.")
-                }
-                if press.shift { input.key(udid: udid, usage: shift, down: true) }
-                input.key(udid: udid, usage: press.usage, down: true)
-                input.key(udid: udid, usage: press.usage, down: false)
-                if press.shift { input.key(udid: udid, usage: shift, down: false) }
-                await sleep(.milliseconds(20))
-            }
+            let runs = DeviceTextInput.runs(for: text)
+            let total = runs.reduce(0) { $0 + $1.characterCount }
+            var paste: DevicePasteboard.Paste?
+            let stopped = await typeRuns(runs, total: total, udid: udid, paste: &paste)
+            if let paste { await pasteboard.close(paste) }
+            if let stopped { return stopped }
             return await finish(udid, includeScreenshot: includeScreenshot)
         case .button(_, let name, let includeScreenshot):
             input.button(udid: udid, name: name.rawValue)
@@ -366,26 +364,94 @@ final class DeviceAgentControl {
                 try await settings.openURL(udid: udid, url: url)
                 return .text([Self.json(["ok": true])])
             }
+        case .clipboard(_, let text):
+            do {
+                try await pasteboard.write(udid: udid, text: text ?? "")
+                return .text([Self.json(["ok": true])])
+            } catch {
+                return .error("device_clipboard_failed: \(error.localizedDescription)")
+            }
         case .logs:
             // Answered by readLogs before the hold.
             return .error("device_logs_failed: The call took the wrong path.")
         }
     }
 
+    /// Why a call can't use a simulator.
+    private struct Refusal: Error {
+        let response: AlasCLIResponse
+    }
+
+    private func bootedDevice(_ udid: String) async -> Result<SimulatorDevice, Refusal> {
+        let device: SimulatorDevice
+        do {
+            guard let found = try await devices().first(where: { $0.udid == udid }) else {
+                return .failure(Refusal(response: .error("device_not_found: No iOS simulator \(udid). Call device_list.")))
+            }
+            device = found
+        } catch {
+            return .failure(Refusal(response: .error("device_unavailable: \(error.localizedDescription)")))
+        }
+        guard device.state == .booted else {
+            return .failure(Refusal(response: .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")))
+        }
+        return .success(device)
+    }
+
+    /// Types key runs and pastes the rest, opening the paste on the first
+    /// paste run. Returns the response that stopped it, or nil when all of it went in.
+    private func typeRuns(
+        _ runs: [DeviceTextInput.Run], total: Int, udid: String, paste: inout DevicePasteboard.Paste?
+    ) async -> AlasCLIResponse? {
+        let shift: UInt32 = 0xE1
+        var typed = 0
+        func stop() -> AlasCLIResponse? {
+            if Task.isCancelled {
+                return .error("device_cancelled: The call was cancelled after \(typed) of \(total) characters were typed.")
+            }
+            if userDriving(udid) {
+                return .error("device_user_active: The user took over after \(typed) of \(total) characters were typed. Check the field before typing the rest.")
+            }
+            return nil
+        }
+        for run in runs {
+            switch run {
+            case .keys(let presses):
+                for press in presses {
+                    if let stopped = stop() { return stopped }
+                    if press.shift { input.key(udid: udid, usage: shift, down: true) }
+                    input.key(udid: udid, usage: press.usage, down: true)
+                    input.key(udid: udid, usage: press.usage, down: false)
+                    if press.shift { input.key(udid: udid, usage: shift, down: false) }
+                    await sleep(.milliseconds(20))
+                    typed += 1
+                }
+            case .paste(let text):
+                if let stopped = stop() { return stopped }
+                do {
+                    let open: DevicePasteboard.Paste
+                    if let paste { open = paste } else {
+                        open = try await pasteboard.open(udid: udid, keepText: true)
+                        paste = open
+                    }
+                    if let stopped = stop() { return stopped }
+                    try await pasteboard.paste(text, in: open)
+                } catch {
+                    return .error("device_paste_failed: \(error.localizedDescription) \(typed) of \(total) characters were typed.")
+                }
+                typed += text.count
+            }
+        }
+        return nil
+    }
+
     private func readLogs(
         udid: String, since: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int
     ) async -> AlasCLIResponse {
         let device: SimulatorDevice
-        do {
-            guard let found = try await devices().first(where: { $0.udid == udid }) else {
-                return .error("device_not_found: No iOS simulator \(udid). Call device_list.")
-            }
-            device = found
-        } catch {
-            return .error("device_unavailable: \(error.localizedDescription)")
-        }
-        guard device.state == .booted else {
-            return .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")
+        switch await bootedDevice(udid) {
+        case .failure(let refusal): return refusal.response
+        case .success(let found): device = found
         }
         var app = bundleID
         if app == nil { app = await logs.frontmostApp(udid: udid) }

@@ -1,14 +1,5 @@
-public struct DeviceTextInputError: Error, Equatable, Sendable {
-    /// The first character the US layout cannot type.
-    public let character: Character
-
-    public init(character: Character) {
-        self.character = character
-    }
-}
-
-/// Turns ASCII text into USB HID key presses on a US keyboard layout, with
-/// Shift where the character needs it.
+/// Turns text into USB HID key presses on a US keyboard layout, with Shift
+/// where the character needs it, and marks what the layout lacks for pasting.
 public enum DeviceTextInput {
     public struct Press: Equatable, Sendable {
         public let usage: UInt32
@@ -20,13 +11,62 @@ public enum DeviceTextInput {
         }
     }
 
-    public static func presses(for text: String) -> Result<[Press], DeviceTextInputError> {
-        var presses: [Press] = []
-        for character in text {
-            guard let press = press(for: character) else { return .failure(DeviceTextInputError(character: character)) }
-            presses.append(press)
+    /// A stretch of text typed as keys, or pasted because the US layout lacks it.
+    public enum Run: Equatable, Sendable {
+        case keys([Press])
+        case paste(String)
+
+        public var characterCount: Int {
+            switch self {
+            case .keys(let presses): presses.count
+            case .paste(let text): text.count
+            }
         }
-        return .success(presses)
+    }
+
+    /// Splits text into key runs and paste runs. A word with any character the
+    /// layout lacks is pasted whole: iOS's smart insert puts a space between
+    /// a pasted word and letters typed right before it ("Caf é"). A space
+    /// between two pasted words joins them into one paste.
+    public static func runs(for text: String) -> [Run] {
+        let characters = Array(text)
+        let pasted = pastedCharacters(characters)
+        var runs: [Run] = []
+        var index = 0
+        while index < characters.count {
+            var end = index
+            while end < characters.count, pasted[end] == pasted[index] { end += 1 }
+            let stretch = characters[index..<end]
+            runs.append(pasted[index] ? .paste(String(stretch)) : .keys(stretch.compactMap(press(for:))))
+            index = end
+        }
+        return runs
+    }
+
+    private static func pastedCharacters(_ characters: [Character]) -> [Bool] {
+        var pasted = characters.map { press(for: $0) == nil }
+        // Whole words.
+        var start = 0
+        while start < characters.count {
+            guard !characters[start].isWhitespace else {
+                start += 1
+                continue
+            }
+            var end = start
+            while end < characters.count, !characters[end].isWhitespace { end += 1 }
+            if pasted[start..<end].contains(true) {
+                for index in start..<end { pasted[index] = true }
+            }
+            start = end
+        }
+        // Spaces between two pasted words.
+        for (index, character) in characters.enumerated() where character == " " {
+            guard let before = characters[..<index].lastIndex(where: { $0 != " " }),
+                  let after = characters[(index + 1)...].firstIndex(where: { $0 != " " })
+            else { continue }
+            if pasted[before] && pasted[after] { pasted[index] = true }
+        }
+        return pasted
     }
 
     private static func press(for character: Character) -> Press? {

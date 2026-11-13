@@ -149,6 +149,7 @@ struct DeviceAgentControlTests {
     private func control(
         _ input: FakeInput, installs: Installs = Installs(), settings: FakeSettings = FakeSettings(),
         logs: FakeLogs = FakeLogs(),
+        pasteboard: DevicePasteboardTests.FakePasteboard = .init(),
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
@@ -161,6 +162,7 @@ struct DeviceAgentControlTests {
             },
             settings: settings,
             logs: logs,
+            pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
             sleep: sleep
         )
     }
@@ -231,6 +233,45 @@ struct DeviceAgentControlTests {
         return nil
     }
 
+    private static func pasteboard(_ input: FakeInput = FakeInput()) -> DevicePasteboard {
+        DevicePasteboard(input: input, pasteboard: DevicePasteboardTests.FakePasteboard(), frontmostApp: { _ in nil })
+    }
+
+    @Test func typingPastesWhatTheKeyboardLacksAndPutsThePasteboardBackOnce() async throws {
+        let input = FakeInput()
+        let pasteboard = DevicePasteboardTests.FakePasteboard()
+        let control = control(input, pasteboard: pasteboard)
+        let response = await control.perform(.type(udid: "on", text: "a é b ☕️\n", includeScreenshot: false), sessionID: "s")
+        #expect(error(response) == nil)
+        let downs = input.keys.filter(\.down).map(\.usage)
+        // a, space, ⌘V, space, b, space, ⌘V, Return
+        #expect(downs == [0x04, 0x2C, 0xE3, 0x19, 0x2C, 0x05, 0x2C, 0xE3, 0x19, 0x28])
+        #expect(pasteboard.log == ["read", "grant com.example.app", "write é", "write ☕️", "write old", "reset com.example.app"])
+    }
+
+    @Test func aTakeoverWhileTypingStillPutsThePasteboardBack() async throws {
+        let input = FakeInput()
+        let pasteboard = DevicePasteboardTests.FakePasteboard()
+        let control = control(input, pasteboard: pasteboard)
+        pasteboard.onRead = { control.takeOver(udid: "on") }
+        let response = await control.perform(.type(udid: "on", text: "é then more", includeScreenshot: false), sessionID: "s")
+        #expect(error(response)?.hasPrefix("device_user_active") == true)
+        #expect(pasteboard.log.suffix(2) == ["write old", "reset com.example.app"])
+    }
+
+    @Test func clipboardReadsAreNotHeldDuringATakeoverButWritesAre() async throws {
+        let pasteboard = DevicePasteboardTests.FakePasteboard()
+        let control = control(FakeInput(), pasteboard: pasteboard, sleep: Self.untilCancelled)
+        control.takeOver(udid: "on")
+        let read = await control.perform(.clipboard(udid: "on", text: nil), sessionID: "s")
+        #expect(read == .text([#"{"text":"old"}"#]))
+        async let write = control.perform(.clipboard(udid: "on", text: "new"), sessionID: "s")
+        try await eventually("write is held") { control.waitingSessions(udid: "on") == ["s"] }
+        control.handBack(udid: "on")
+        #expect(await write == .text([#"{"ok":true}"#]))
+        #expect(pasteboard.text == "new")
+    }
+
     /// For the 50-second hold, suspends until the held call's timer task is
     /// cancelled, which happens when the call is released; other sleeps return at once.
     private static let untilCancelled: @MainActor (Duration) async -> Void = { duration in
@@ -284,6 +325,7 @@ struct DeviceAgentControlTests {
                 return [Self.booted]
             },
             boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+            pasteboard: Self.pasteboard(),
             sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
@@ -313,7 +355,8 @@ struct DeviceAgentControlTests {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
             input: FakeInput(), devices: { listed }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), sleep: Self.untilCancelled
+            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+            pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s")
@@ -414,6 +457,7 @@ extension DeviceAgentControlTests {
         let control = DeviceAgentControl(
             input: input, devices: { [Self.booted] }, boot: { _ in },
             install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+            pasteboard: Self.pasteboard(input),
             // The lease window passes at once; each typing pause lets it fire.
             sleep: { duration in
                 guard duration != window else { return }

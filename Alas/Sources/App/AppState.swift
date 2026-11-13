@@ -737,8 +737,32 @@ final class AppState {
         install: { try await SimulatorControl.install(udid: $0, app: $1) },
         launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
         settings: LiveSimulatorSettings(),
-        logs: LiveSimulatorLogs { [simulatorStreams] udid in await simulatorStreams.frontmostApp(udid: udid) }
+        logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
+        pasteboard: devicePasteboard
     )
+    /// Pastes and copies on simulators, for agents and for the user.
+    @ObservationIgnored lazy var devicePasteboard = DevicePasteboard(
+        input: simulatorStreams, pasteboard: LiveSimulatorPasteboard(),
+        frontmostApp: { [weak self] udid in await self?.foregroundApp(udid: udid) }
+    )
+    @ObservationIgnored private var foregroundTrackers: [String: SimulatorForegroundTracker] = [:]
+
+    /// The simulator's SpringBoard tracker, started on first use and again when its stream ended.
+    func foregroundTracker(udid: String) -> SimulatorForegroundTracker {
+        if let tracker = foregroundTrackers[udid], tracker.isRunning { return tracker }
+        let tracker = SimulatorForegroundTracker(udid: udid) { [simulatorStreams] udid in
+            let reported = await simulatorStreams.frontmostApp(udid: udid)
+            // The bridge names SpringBoard when the home screen is in front.
+            return reported == "com.apple.springboard" ? nil : reported
+        }
+        foregroundTrackers[udid] = tracker
+        tracker.start()
+        return tracker
+    }
+
+    func foregroundApp(udid: String) async -> String? {
+        await foregroundTracker(udid: udid).bundleID()
+    }
     var harness: HarnessService { core.harness }
 
     /// The agents running in a worktree's terminal panes and chat tabs,

@@ -199,23 +199,12 @@ public protocol SimulatorLogsControl: Sendable {
 public struct LiveSimulatorLogs: SimulatorLogsControl {
     private let frontmost: @Sendable (String) async -> String?
 
-    /// `frontmostApp` asks AlasSimService's accessibility bridge, the fallback
-    /// when SpringBoard logged nothing recently.
+    /// `frontmostApp` answers which app is in front (the app's SpringBoard tracker).
     public init(frontmostApp: @escaping @Sendable (String) async -> String?) {
         frontmost = frontmostApp
     }
 
-    public func frontmostApp(udid: String) async -> String? {
-        if let fromLog = await SimulatorControl.foregroundFromLog(udid: udid) { return fromLog.bundleID }
-        return await reportedFrontmostApp(udid: udid)
-    }
-
-    /// The accessibility bridge's answer, for when SpringBoard's log is silent.
-    public func reportedFrontmostApp(udid: String) async -> String? {
-        let reported = await frontmost(udid)
-        // The bridge names SpringBoard when the home screen is in front.
-        return reported == "com.apple.springboard" ? nil : reported
-    }
+    public func frontmostApp(udid: String) async -> String? { await frontmost(udid) }
 
     public func executables(udid: String) async throws -> [String: String] {
         try await SimulatorControl.appExecutables(udid: udid)

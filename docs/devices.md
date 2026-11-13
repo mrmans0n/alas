@@ -27,6 +27,13 @@ Contrast, each showing the value the simulator reports back; privacy
 permissions and a test push notification for one of your installed apps; a
 simulated location, with a few preset places; and a URL or deep link to open.
 
+⌘C and ⌘V work while the screen has focus. ⌘V pastes the Mac clipboard's
+text into the focused field; ⌘C copies the simulator's selection to the Mac
+clipboard. iOS only pastes from these keys when the app may paste without
+asking, so Alas allows the app in front for the moment of the paste and then
+puts its previous setting back. A copy waits up to 2 seconds for the app to
+copy something.
+
 ### Logs
 
 The Logs button in the toolbar opens a booted simulator's logs in a center
@@ -95,7 +102,7 @@ tools from the built-in `alas` MCP server:
 | `device_screenshot` | Returns a PNG of the screen, at most 1280 px on the long edge. |
 | `device_tap` | Taps a ref from the latest snapshot, or x/y pixels in the latest screenshot. |
 | `device_swipe` | Swipes in a direction, or between two screenshot points. |
-| `device_type` | Types ASCII text as key presses; `\n` presses Return. |
+| `device_type` | Types text: ASCII as key presses, `\n` as Return; words with accents, emoji or other characters are pasted. |
 | `device_button` | Presses Home, Lock, Siri, the side button, or opens the app switcher. |
 | `device_install` | Installs a built `.app` on a booted simulator and returns its bundle ID. |
 | `device_launch` | Launches an installed app, ending a running copy first. |
@@ -105,6 +112,7 @@ tools from the built-in `alas` MCP server:
 | `device_push` | Sends a push notification to an installed app. |
 | `device_open_url` | Opens a web page or a deep link. |
 | `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
+| `device_clipboard` | Reads the simulator's pasteboard, or sets it. |
 
 While an agent works on a simulator, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An

@@ -17,13 +17,8 @@ struct SimulatorLogsTabView: View {
     }
 
     @State private var stream = SimulatorLogStream()
-    /// SpringBoard's visibility lines, while the source is the foreground app.
-    @State private var springboard = SimulatorLogStream()
-    @State private var foreground = SimulatorForeground()
-    /// SpringBoard lines already applied to `foreground`, dropped ones included.
-    @State private var springboardApplied = 0
-    /// False while the archive is read, so streamed lines wait for it.
-    @State private var springboardReady = false
+    /// Which app is in front, while the source is the foreground app.
+    @State private var tracker: SimulatorForegroundTracker?
     @State private var source = Source.foreground
     @State private var level = SimulatorLogLevel.default
     @State private var includeApple = false
@@ -68,11 +63,11 @@ struct SimulatorLogsTabView: View {
         .task { await watchCrashes() }
         .onChange(of: level) { restart() }
         .onChange(of: includeApple) { restart() }
-        .onChange(of: springboard.dropped + springboard.lines.count) { applySpringboard() }
-        .onDisappear {
-            stream.stop()
-            springboard.stop()
+        .onChange(of: tracker?.current) { _, front in
+            guard source == .foreground else { return }
+            Task { await show(front) }
         }
+        .onDisappear { stream.stop() }
     }
 
     private var toolbar: some View {
@@ -222,9 +217,9 @@ struct SimulatorLogsTabView: View {
     }
 
     /// Starts the stream for the chosen source; for the foreground app, follows
-    /// SpringBoard's log as apps come and go.
+    /// the simulator's SpringBoard tracker as apps come and go.
     private func followForeground() async {
-        springboard.stop()
+        tracker = nil
         switch source {
         case .all:
             following = nil
@@ -234,34 +229,9 @@ struct SimulatorLogsTabView: View {
             restart()
         case .foreground:
             following = ""
-            springboardReady = false
-            springboard.clear()
-            springboardApplied = 0
-            springboard.start(udid: udid, predicate: SimulatorForeground.predicate, levelArguments: [])
-            if let fromLog = await SimulatorControl.foregroundFromLog(udid: udid) {
-                foreground = fromLog
-                await show(foreground.bundleID)
-            } else {
-                foreground = SimulatorForeground()
-                await show(await logs.reportedFrontmostApp(udid: udid))
-            }
-            // Lines the stream caught while the archive was read.
-            springboardReady = true
-            applySpringboard()
-        }
-    }
-
-    private func applySpringboard() {
-        guard source == .foreground, springboardReady else { return }
-        let total = springboard.dropped + springboard.lines.count
-        let fresh = springboard.lines.suffix(min(total - springboardApplied, springboard.lines.count))
-        springboardApplied = total
-        guard !fresh.isEmpty else { return }
-        let before = foreground.bundleID
-        for line in fresh { foreground.apply(message: line.message) }
-        if foreground.bundleID != before {
-            let now = foreground.bundleID
-            Task { await show(now) }
+            let tracker = state.foregroundTracker(udid: udid)
+            self.tracker = tracker
+            await show(await tracker.bundleID())
         }
     }
 
@@ -270,10 +240,6 @@ struct SimulatorLogsTabView: View {
         guard let bundleID, let executable = await executable(for: bundleID), executable != following else { return }
         following = executable
         restart()
-    }
-
-    private var logs: LiveSimulatorLogs {
-        LiveSimulatorLogs { [simulatorStreams = state.simulatorStreams] udid in await simulatorStreams.frontmostApp(udid: udid) }
     }
 
     private func executable(for bundleID: String) async -> String? {

@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import AlasCore
 
@@ -43,5 +44,28 @@ struct SimulatorSettingsTests {
     ] as [(String, String?)])
     func pushPayloadsAreCheckedBeforeSending(payload: String, problem: String?) {
         #expect(SimulatorPushPayload.problem(Data(payload.utf8)) == problem)
+    }
+}
+
+struct SimulatorPasteAccessTests {
+    @Test func readsTheAppsPasteboardRowFromTCC() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tcc-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        sqlite3_exec(db, """
+            CREATE TABLE access (service TEXT, client TEXT, auth_value INTEGER);
+            INSERT INTO access VALUES ('kTCCServicePasteboard', 'com.example.allowed', 2);
+            INSERT INTO access VALUES ('kTCCServicePasteboard', 'com.example.denied', 0);
+            INSERT INTO access VALUES ('kTCCServicePasteboard', 'com.example.asks', 1);
+            INSERT INTO access VALUES ('kTCCServiceCamera', 'com.example.camera', 2);
+            """, nil, nil, nil)
+        sqlite3_close(db)
+
+        #expect(SimulatorPasteAccess.read(database: url, bundleID: "com.example.allowed") == .allowed)
+        #expect(SimulatorPasteAccess.read(database: url, bundleID: "com.example.denied") == .denied)
+        #expect(SimulatorPasteAccess.read(database: url, bundleID: "com.example.asks") == .notSet)
+        #expect(SimulatorPasteAccess.read(database: url, bundleID: "com.example.camera") == .notSet)
+        #expect(SimulatorPasteAccess.read(database: url.appendingPathExtension("missing"), bundleID: "x") == .notSet)
     }
 }

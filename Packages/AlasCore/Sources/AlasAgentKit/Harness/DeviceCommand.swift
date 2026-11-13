@@ -50,6 +50,8 @@ public enum DeviceCommand: Equatable, Sendable {
     case openURL(udid: String, url: String)
     /// `bundleID` nil means the app in front.
     case logs(udid: String, sinceSeconds: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int)
+    /// `text` nil reads the pasteboard; otherwise it sets it.
+    case clipboard(udid: String, text: String?)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -70,6 +72,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .push: "device_push"
         case .openURL: "device_open_url"
         case .logs: "device_logs"
+        case .clipboard: "device_clipboard"
         }
     }
 
@@ -80,7 +83,7 @@ public enum DeviceCommand: Equatable, Sendable {
              .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
              .install(let udid, _), .launch(let udid, _), .setAppearance(let udid, _, _, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _),
-             .logs(let udid, _, _, _, _, _, _):
+             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _):
             udid
         }
     }
@@ -134,6 +137,7 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_push": ["udid", "bundle_id", "payload"],
         "device_open_url": ["udid", "url"],
         "device_logs": ["udid", "since_seconds", "bundle_id", "level", "include_apple", "query", "limit"],
+        "device_clipboard": ["udid", "text"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -259,6 +263,9 @@ public enum DeviceCommand: Equatable, Sendable {
             let bundle: String? = params.bundle_id == nil ? nil : try bundleID()
             return .logs(udid: try udid(), sinceSeconds: since, bundleID: bundle, level: level,
                          includeApple: params.include_apple ?? false, query: params.query, limit: limit)
+        case "device_clipboard":
+            if let text = params.text, text.utf8.count > 65536 { throw AlasCLIRequestError.malformed }
+            return .clipboard(udid: try udid(), text: params.text)
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)

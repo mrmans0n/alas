@@ -18,6 +18,10 @@ struct DeviceScreenView: NSViewRepresentable {
     var onDropApp: (URL) -> Void = { _ in }
     /// Whether such a drag is over the screen.
     var onDropTargeted: (Bool) -> Void = { _ in }
+    /// Edit › Paste (⌘V) while the screen has focus.
+    var onPaste: () -> Void = {}
+    /// Edit › Copy (⌘C) while the screen has focus.
+    var onCopy: () -> Void = {}
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
@@ -25,6 +29,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onBlockedClick = onBlockedClick
         view.onDropApp = onDropApp
         view.onDropTargeted = onDropTargeted
+        view.onPaste = onPaste
+        view.onCopy = onCopy
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -35,6 +41,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onBlockedClick = onBlockedClick
         view.onDropApp = onDropApp
         view.onDropTargeted = onDropTargeted
+        view.onPaste = onPaste
+        view.onCopy = onCopy
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -56,6 +64,8 @@ final class DeviceScreenNSView: NSView {
     var onBlockedClick: () -> Void = {}
     var onDropApp: (URL) -> Void = { _ in }
     var onDropTargeted: (Bool) -> Void = { _ in }
+    var onPaste: () -> Void = {}
+    var onCopy: () -> Void = {}
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
     var allowsInput = true {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
@@ -75,6 +85,9 @@ final class DeviceScreenNSView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    @objc func paste(_ sender: Any?) { onPaste() }
+    @objc func copy(_ sender: Any?) { onCopy() }
 
     /// One `.app` the simulator can run; anything else isn't offered a drop.
     private func droppedApp(_ info: NSDraggingInfo) -> URL? {
@@ -264,5 +277,14 @@ final class DeviceScreenNSView: NSView {
     private func releaseHeldInput() {
         if let last = lastTouch { send("end", last) }
         heldKeys.releaseAll().forEach(sendKey)
+    }
+}
+
+extension DeviceScreenNSView: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(paste(_:)), #selector(copy(_:)): allowsInput && udid != nil
+        default: true
+        }
     }
 }

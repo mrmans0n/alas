@@ -530,6 +530,11 @@ pub enum DeviceCommand {
         query: Option<String>,
         limit: u64,
     },
+    /// `text` None reads the pasteboard; otherwise it sets it.
+    Clipboard {
+        udid: String,
+        text: Option<String>,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -580,7 +585,8 @@ impl DeviceCommand {
             | DeviceCommand::SetLocation { .. }
             | DeviceCommand::Push { .. }
             | DeviceCommand::OpenUrl { .. }
-            | DeviceCommand::Logs { .. } => false,
+            | DeviceCommand::Logs { .. }
+            | DeviceCommand::Clipboard { .. } => false,
         }
     }
 }
@@ -1327,6 +1333,13 @@ fn device_request(command: &DeviceCommand) -> Request {
                 params["query"] = json!(query);
             }
             ("device_logs", params)
+        }
+        DeviceCommand::Clipboard { udid, text } => {
+            let mut params = json!({ "udid": udid });
+            if let Some(text) = text {
+                params["text"] = json!(text);
+            }
+            ("device_clipboard", params)
         }
     };
     let mut request = Request::new(name);
@@ -2876,6 +2889,14 @@ mod tests {
             })
             .1,
             serde_json::json!({ "udid": "U-1", "since_seconds": 60, "level": "default", "include_apple": false, "limit": 200 })
+        );
+        assert_eq!(
+            build(DeviceCommand::Clipboard {
+                udid: udid(),
+                text: None
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1" })
         );
         assert_eq!(
             read_timeout(&Command::Device(DeviceCommand::Install {
