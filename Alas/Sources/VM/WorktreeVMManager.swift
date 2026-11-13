@@ -153,6 +153,8 @@ final class WorktreeVMManager {
     /// Turns sshd off on a stopped VM's disk, attached on the host. Called
     /// under a disk claim by `turnOffLeftoverSSH`.
     @ObservationIgnored var disableSSHOffline: @MainActor (VMBundle) async throws -> Void
+    /// Sends VM `id`'s guest helper a command that takes the guest down; whether it was sent.
+    @ObservationIgnored var sendGuestShutdown: @MainActor (_ id: String, _ command: String) async -> Bool = { _, _ in false }
 
     private(set) var runningVMs: [String: RunningVM] = [:]
     /// The worktree whose tab asked to customize the base image, or
@@ -224,6 +226,10 @@ final class WorktreeVMManager {
         self.linuxHelperDirectory = linuxHelperDirectory
         self.start = start
         disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
+        sendGuestShutdown = { [weak self] id, command in
+            guard let client = self?.existingGuestClient(for: id) else { return false }
+            return await client.request(command)
+        }
     }
 
     private static func disableSSHOnDisk(_ bundle: VMBundle, root: URL) async throws {
@@ -981,8 +987,8 @@ final class WorktreeVMManager {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         try await withDiskOperation(id) {
             let bundle = bundle(forID: id)
-            let template = publishTemplate ? templateToPublish(id, bundle: bundle, setupScriptHash: setupScriptHash) : nil
-            let wasRunning = try await shutDownForCleanPoint(id, forTemplate: template != nil)
+            var template = publishTemplate ? templateToPublish(id, bundle: bundle, setupScriptHash: setupScriptHash) : nil
+            let wasRunning = try await shutDownForCleanPoint(id, template: &template)
             guard wasRunning || Self.isPaused(bundle) else {
                 throw VMError(message: "Start the VM to save its clean point")
             }
@@ -1051,13 +1057,22 @@ final class WorktreeVMManager {
     /// Stops VM `id` for a clean point: pauses it where it can save its state, else shuts its
     /// guest down cleanly. A forced power-off would leave a disk unfit for a clean point. Returns
     /// whether it was running here.
-    /// `forTemplate` always shuts the guest down, from inside where the helper is connected, and
-    /// generalizes a Linux guest on the way: a template's disk must be consistent without memory.
-    private func shutDownForCleanPoint(_ id: String, forTemplate: Bool = false) async throws -> Bool {
+    /// With a `template`, it always shuts the guest down, from inside where the helper is connected,
+    /// and generalizes a Linux guest on the way: a template's disk must be consistent without
+    /// memory. A Linux guest the power button shut down wasn't generalized: `template` becomes nil.
+    private func shutDownForCleanPoint(_ id: String, template: inout VMTemplate?) async throws -> Bool {
         if let pause = pauses[id] { _ = await pause.value }
         guard let vm = runningVMs[id] else { return false }
-        if forTemplate {
-            guard await vm.stopGracefully(requestingShutdown: templateShutdown(id), timeout: GoldenProvisioner.shutdownTimeout)
+        if template != nil {
+            // macOS through `shutdown`, which a logged-in guest obeys where the power button only asks.
+            let linux = VMIdentity.parse(recordID: id).guest == .linux
+            let command = linux ? VMGuestClient.generalizingPoweroffCommand : GoldenProvisioner.shutdownCommand(account: .alas)
+            var sent = false
+            let send: @MainActor () async -> Bool = { [self] in
+                sent = await sendGuestShutdown(id, command)
+                return sent
+            }
+            guard await vm.stopGracefully(requestingShutdown: send, timeout: GoldenProvisioner.shutdownTimeout)
             else {
                 throw VMError(message: "The VM didn't shut down, so no clean point was saved. Try again.")
             }
@@ -1067,6 +1082,7 @@ final class WorktreeVMManager {
             guard cleanlyShutDown[id] != nil else {
                 throw VMError(message: "The VM didn't shut down cleanly, so no clean point was saved. Try again.")
             }
+            if linux, !sent { template = nil }
             return true
         }
         if canSaveState(id) {
@@ -1273,16 +1289,6 @@ final class WorktreeVMManager {
             goldenBuild: recordGolden, goldenSealedAt: Date(timeIntervalSince1970: stamp), setupScriptHash: setupScriptHash)
         else { return nil }
         return template
-    }
-
-    /// Asks VM `id`'s guest to shut down for a template: macOS through `shutdown`, which a logged-in
-    /// guest obeys where the power button only asks; Linux generalized like its golden. Nil without
-    /// a connected helper, which presses the power button.
-    private func templateShutdown(_ id: String) -> (@MainActor () async -> Bool)? {
-        guard let client = existingGuestClient(for: id) else { return nil }
-        let command = VMIdentity.parse(recordID: id).guest == .linux
-            ? VMGuestClient.generalizingPoweroffCommand : GoldenProvisioner.shutdownCommand(account: .alas)
-        return { await client.request(command) }
     }
 
     /// Publishes VM `id`'s clean point, just taken after a clean shutdown, as `template`,

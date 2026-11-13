@@ -99,6 +99,11 @@ final class WorktreeVMManagerTests {
         var restoreFails = false
         /// Boots from this count on throw, like a configuration that no longer validates.
         var bootsFailFrom: Int?
+        /// Whether a guest helper takes shutdown commands; without one the manager presses the power button.
+        var helperConnected = true
+        /// The shutdown commands sent to guest helpers.
+        private(set) var shutdownCommands: [String] = []
+        private var machines: [String: FakeMachine] = [:]
         let bootGate = Gate()
         let stopGate = Gate()
         let saveGate = Gate()
@@ -110,10 +115,9 @@ final class WorktreeVMManagerTests {
             boots += 1
             await bootGate.passIfArmed()
             if let bootsFailFrom, boots >= bootsFailFrom { throw HypervisorFailure() }
-            let vm = RunningVM(
-                worktreeID: worktreeID,
-                machine: FakeMachine(hypervisor: self, stopFails: stopFails, guestStopError: guestStopError),
-                supportsSaveRestore: supportsSaveRestore)
+            let machine = FakeMachine(hypervisor: self, stopFails: stopFails, guestStopError: guestStopError)
+            machines[worktreeID] = machine
+            let vm = RunningVM(worktreeID: worktreeID, machine: machine, supportsSaveRestore: supportsSaveRestore)
             if let state {
                 try await vm.restoreState(from: state)
                 try await vm.resume()
@@ -122,6 +126,14 @@ final class WorktreeVMManagerTests {
             }
             restoredFrom.append(state)
             return vm
+        }
+
+        /// The guest runs `command`, which takes it down.
+        func sendShutdown(_ worktreeID: String, _ command: String) -> Bool {
+            guard helperConnected, let machine = machines[worktreeID] else { return false }
+            shutdownCommands.append(command)
+            try? machine.requestStop()
+            return true
         }
 
         func holdStopIfGated() async {
@@ -152,12 +164,14 @@ final class WorktreeVMManagerTests {
 
     private func makeManager() -> WorktreeVMManager {
         let hypervisor = hypervisor
-        return WorktreeVMManager(
+        let manager = WorktreeVMManager(
             registry: registry, root: root, helperDirectory: helperDirectory,
             linuxHelperDirectory: linuxHelperDirectory
         ) { worktreeID, _, _, state in
             try await hypervisor.boot(worktreeID, restoringFrom: state)
         }
+        manager.sendGuestShutdown = { id, command in hypervisor.sendShutdown(id, command) }
+        return manager
     }
 
     /// A VM record with a bundle holding a disk image. `id` is a registry id: a Linux one
@@ -1240,6 +1254,9 @@ final class WorktreeVMManagerTests {
         #expect(FileManager.default.fileExists(atPath: slot.appendingPathComponent("aux.img").path) == (guest == .macOS))
         #expect(hypervisor.restoredFrom == [nil, nil])
         #expect(!FileManager.default.fileExists(atPath: slot.path + ".partial"))
+        #expect(hypervisor.shutdownCommands == [
+            guest == .linux ? VMGuestClient.generalizingPoweroffCommand : GoldenProvisioner.shutdownCommand(account: .alas),
+        ])
     }
 
     /// A stop the hypervisor ended with an error left no evidence of a clean shutdown: the disk
@@ -1255,6 +1272,17 @@ final class WorktreeVMManagerTests {
             return
         }
         #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
+    }
+
+    /// A Linux guest the power button shut down kept its machine-id and SSH host keys: its clean
+    /// point is saved, but clones must not share them, so it publishes no template.
+    @Test func aLinuxTemplateNeedsAGeneralizingShutdown() async throws {
+        try makeSealedGoldens()
+        hypervisor.helperConnected = false
+
+        #expect(try await publishTemplate(makeManager(), guest: .linux) == .cleanPointTaken)
+
+        #expect(!FileManager.default.fileExists(atPath: templateSlot("p1", .linux).path))
     }
 
     enum GoldenChange: CaseIterable { case newBuild, resealed }
