@@ -1058,6 +1058,11 @@ final class WorktreeVMManager {
                 throw VMError(message: "The VM didn't shut down, so no clean point was saved. Try again.")
             }
             didStop(id)
+            // Stopped is not enough: one that ended in an error or was forced off may leave an
+            // inconsistent disk. Its boot cleared any earlier evidence, as for sealing a golden.
+            guard cleanlyShutDown[id] != nil else {
+                throw VMError(message: "The VM didn't shut down cleanly, so no clean point was saved. Try again.")
+            }
             return true
         }
         if canSaveState(id) {

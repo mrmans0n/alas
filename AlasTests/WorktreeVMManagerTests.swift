@@ -1242,6 +1242,21 @@ final class WorktreeVMManagerTests {
         #expect(!FileManager.default.fileExists(atPath: slot.path + ".partial"))
     }
 
+    /// A stop the hypervisor ended with an error left no evidence of a clean shutdown: the disk
+    /// may be inconsistent, so it becomes neither the clean point nor the template.
+    @Test func aTemplateNeedsACleanShutdown() async throws {
+        try makeSealedGoldens()
+        hypervisor.guestStopError = HypervisorFailure()
+
+        let outcome = try await publishTemplate(makeManager())
+
+        guard case .cleanPointFailed = outcome else {
+            Issue.record("Expected a failed clean point, got \(outcome)")
+            return
+        }
+        #expect(!FileManager.default.fileExists(atPath: templateSlot().path))
+    }
+
     enum GoldenChange: CaseIterable { case newBuild, resealed }
 
     /// A VM cloned before the golden changed carries the old golden's disk: it publishes nothing.
