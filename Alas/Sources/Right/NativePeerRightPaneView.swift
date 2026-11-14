@@ -25,6 +25,8 @@ struct NativePeerRightPaneView: View {
     @State private var ggStack: HostGGStackRead?
     @State private var ggStackRefreshing = false
     @State private var ggStackAction: HostGGStackAction?
+    /// The running action's own; a reply for an earlier one clears nothing.
+    @State private var ggStackActionToken: UUID?
     @State private var gitError: String?
     @State private var pendingDiscard: PendingDiscard?
     @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
@@ -143,6 +145,7 @@ struct NativePeerRightPaneView: View {
             checkpointRestorePreview = nil
             ggStack = nil
             ggStackAction = nil
+            ggStackActionToken = nil
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -793,10 +796,15 @@ struct NativePeerRightPaneView: View {
     /// reads as no status.
     private func runGGStackAction(_ action: HostGGStackAction, stackName: String) {
         guard ggStackAction == nil, let gitTarget, let hosts = client.hosts else { return }
+        let token = UUID()
         ggStackAction = action
+        ggStackActionToken = token
         Task { @MainActor in
             _ = await hosts.runGGStackAction(action, stackName: stackName, in: gitTarget.worktree, serverId: gitTarget.serverId)
+            // Another worktree's action may have started since.
+            guard ggStackActionToken == token else { return }
             ggStackAction = nil
+            ggStackActionToken = nil
             // A pause, a pushed stack or a rebase all show in both.
             client.pollChanges()
             await readGGStack(refresh: true)

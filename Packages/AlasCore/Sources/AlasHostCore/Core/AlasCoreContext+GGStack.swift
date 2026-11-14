@@ -57,8 +57,20 @@ extension AlasCoreContext {
             }
         }
         let response = await serializedPublish(worktreeID: worktree.id) {
+            // Checked again once it is this action's turn: work that ran
+            // before it can have changed the stack, and the coordinator then
+            // refuses any other than this one.
+            var expected: GGStackIdentity?
+            if action == .sync || action == .rebase {
+                let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
+                let snapshot = try await GGService().currentStackSnapshot(worktreePath: worktree.path.path, refreshRemote: !localOnly)
+                guard let identity = snapshot.identity, identity.stackName == stackName else {
+                    throw GGMutationError.staleConfirmation
+                }
+                expected = identity
+            }
             let state = GGStackActionState()
-            try await self.runShepherdGGMutation(request, confirmedAgainst: nil, worktreeID: worktree.id, actionState: state)
+            try await self.runShepherdGGMutation(request, confirmedAgainst: expected, worktreeID: worktree.id, actionState: state)
             if action == .sync, state.syncHasTerminalFailure {
                 throw GGMutationError.syncTerminalFailure(message: state.lastError ?? "GG sync failed.")
             }
