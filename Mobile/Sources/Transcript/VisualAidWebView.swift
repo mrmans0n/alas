@@ -172,7 +172,7 @@ final class VisualAidPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         // The web makes a question visual's frame `inert`: the native controls answer it, and a tap could reach
         // page script while the network is still open.
         webView.isUserInteractionEnabled = !locksNetworkAfterLoad
-        // VoiceOver activation is the other way in; it stays out until the network is shut.
+        // VoiceOver activation is the other way in. Both stay out until the network is shut.
         webView.accessibilityElementsHidden = locksNetworkAfterLoad
         webView.scrollView.bounces = false
         webView.scrollView.isScrollEnabled = false
@@ -259,6 +259,8 @@ final class VisualAidPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         // page could close selectively once it sees the user's choice. After `didFinish` this is a no-op.
         if hasCommitted { webView.stopLoading() }
         isLocked = true
+        // Taps and VoiceOver come back once nothing can leave; choices and links still check the answer state.
+        webView.isUserInteractionEnabled = true
         webView.accessibilityElementsHidden = false
         // Cancelling the stalled loads means no `didFinish` will follow, so a committed page is ready now.
         if hasCommitted, !isReady { markReady() }
