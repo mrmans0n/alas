@@ -52,16 +52,28 @@ extension AlasCoreContext {
     }
 
     /// Runs `request` on `worktree`'s stack only while it is still the one
-    /// named `stackName`, the stack the Mac saw.
-    func runCheckedGGStackMutation(_ request: GGMutationRequest, stackName: String, in worktree: Worktree) async throws {
+    /// named `stackName`, the stack the Mac saw, and `stillHolds` accepts it.
+    func runCheckedGGStackMutation(
+        _ request: GGMutationRequest, stackName: String, in worktree: Worktree,
+        stillHolds: @escaping @Sendable (GGStack) -> Bool = { _ in true }
+    ) async throws {
         let read = await ggStackRead(of: worktree, refresh: false)
-        guard read.stack?.name == stackName else {
+        guard let stack = read.stack, stack.name == stackName, stillHolds(stack) else {
             throw HostError.failed(message: "The stack changed on the host. Review it and try again.")
         }
-        try await runGGStackMutation(request, stackName: stackName, in: worktree)
+        try await runGGStackMutation(request, stackName: stackName, in: worktree, stillHolds: stillHolds)
     }
 
-    private func runGGStackMutation(_ request: GGMutationRequest, stackName: String?, in worktree: Worktree) async throws {
+    /// The ids of the entries `gg land --until through` merges, bottom
+    /// first; nil when `through` is not in `stack`.
+    nonisolated static func ggLandScope(through: String, in stack: GGStack) -> [String]? {
+        stack.entries.first { $0.id == through }.map { GGLandReadiness.scope(upTo: $0, in: stack).map(\.id) }
+    }
+
+    private func runGGStackMutation(
+        _ request: GGMutationRequest, stackName: String?, in worktree: Worktree,
+        stillHolds: @escaping @Sendable (GGStack) -> Bool = { _ in true }
+    ) async throws {
         let response = await serializedPublish(worktreeID: worktree.id) {
             // Checked again once it is this request's turn: work that ran
             // before it can have changed the stack, and the coordinator then
@@ -70,7 +82,9 @@ extension AlasCoreContext {
             if let stackName {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 let snapshot = try await GGService().currentStackSnapshot(worktreePath: worktree.path.path, refreshRemote: !localOnly)
-                guard let identity = snapshot.identity, identity.stackName == stackName else {
+                guard let identity = snapshot.identity, identity.stackName == stackName,
+                      let stack = snapshot.stack, stillHolds(stack)
+                else {
                     throw GGMutationError.staleConfirmation
                 }
                 expected = identity

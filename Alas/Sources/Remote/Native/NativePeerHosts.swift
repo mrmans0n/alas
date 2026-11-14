@@ -480,12 +480,14 @@ final class NativePeerHosts {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesGGStackLandV1)
     }
 
-    /// Lands the stack named `stackName` up to and including the entry `through`.
-    func landGGStack(stackName: String, through: String, in worktree: PeerHostWorktree, serverId: String) async -> Bool {
+    /// Lands the stack named `stackName` up to and including the entry
+    /// `through`, while the entries it merges are still `scope`.
+    func landGGStack(
+        stackName: String, through: String, scope: [String], in worktree: PeerHostWorktree, serverId: String
+    ) async -> Bool {
         guard servesGGStackLand(serverId: serverId) else { return false }
-        return await runGGStackRequest(
-            .ggStackLand(worktree: Self.ref(worktree), stackName: stackName, through: through), title: "Land Failed", serverId: serverId
-        )
+        let request = HostRequest.ggStackLand(worktree: Self.ref(worktree), stackName: stackName, through: through, scope: scope)
+        return await runGGStackRequest(request, title: "Land Failed", serverId: serverId)
     }
 
     /// Reorders the stack named `stackName` to `order`, GG IDs bottom first.

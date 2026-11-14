@@ -484,6 +484,19 @@ struct HostProtocolServerTests {
             == .failure(error: .failed(message: refusal)))
     }
 
+    /// A land confirmed on the Mac holds only while it would merge the same
+    /// entries: one inserted below the target, or the target gone, refuses it.
+    @Test func aLandScopeChangesWhenAnEntryLandsInsideIt() {
+        func stack(_ ids: [String]) -> GGStack {
+            GGStack(name: "auth", base: "main", totalCommits: ids.count, syncedCommits: ids.count, currentPosition: 1, behindBase: 0,
+                    entries: ids.enumerated().map { GGStackEntry(position: $0.offset + 1, sha: "s\($0.offset)", title: $0.element, ggId: $0.element) })
+        }
+        let confirmed = AlasCoreContext.ggLandScope(through: "c-2", in: stack(["c-1", "c-2", "c-3"]))
+        #expect(confirmed == ["c-1", "c-2"])
+        #expect(AlasCoreContext.ggLandScope(through: "c-2", in: stack(["c-1", "c-x", "c-2", "c-3"])) != confirmed)
+        #expect(AlasCoreContext.ggLandScope(through: "c-2", in: stack(["c-1", "c-3"])) == nil)
+    }
+
     /// A removed project leaves the host and the persisted list.
     @Test func removeProjectForgetsIt() async throws {
         let fixture = try await RepoFixture()

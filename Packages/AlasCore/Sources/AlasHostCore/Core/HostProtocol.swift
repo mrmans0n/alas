@@ -156,8 +156,10 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// client last saw it (`host.worktrees.ggStackActions.v1`).
     case ggStackAction(worktree: WorktreeRef, stackName: String, action: HostGGStackAction)
     /// `gg land` on the stack named `stackName`, up to and including the
-    /// entry whose id is `through` (`host.worktrees.ggStackLand.v1`).
-    case ggStackLand(worktree: WorktreeRef, stackName: String, through: String)
+    /// entry whose id is `through`, while the entries it merges are still
+    /// `scope`, the ids the client confirmed, bottom first
+    /// (`host.worktrees.ggStackLand.v1`).
+    case ggStackLand(worktree: WorktreeRef, stackName: String, through: String, scope: [String])
     /// Reorders the stack named `stackName` to `order`, its entries' GG IDs
     /// bottom first (`host.worktrees.ggStackLand.v1`).
     case ggStackReorder(worktree: WorktreeRef, stackName: String, order: [String])

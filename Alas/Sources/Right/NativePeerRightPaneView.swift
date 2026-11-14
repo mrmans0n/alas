@@ -28,7 +28,7 @@ struct NativePeerRightPaneView: View {
     /// The running operation's own; a reply for an earlier one clears nothing.
     @State private var ggStackRunningToken: UUID?
     /// The entry a land waits on confirmation to stop at.
-    @State private var pendingGGLand: (stackName: String, entry: GGStackEntry, merges: Int)?
+    @State private var pendingGGLand: (stackName: String, entry: GGStackEntry, scope: [String])?
     @State private var ggReorder: GGReorderPresentation?
     @State private var gitError: String?
     @State private var pendingDiscard: PendingDiscard?
@@ -426,7 +426,7 @@ struct NativePeerRightPaneView: View {
                         onAction: { action in runGGStackOperation(.action(action), stackName: ggStack.stack?.name ?? "") },
                         onLand: servesGGStackLand ? { entry in
                             guard let stack = ggStack.stack else { return }
-                            pendingGGLand = (stack.name, entry, GGLandReadiness.scope(upTo: entry, in: stack).count)
+                            pendingGGLand = (stack.name, entry, GGLandReadiness.scope(upTo: entry, in: stack).map(\.id))
                         } : nil,
                         onReorder: servesGGStackLand ? { requestGGReorder(ggStack.stack) } : nil
                     )
@@ -438,18 +438,18 @@ struct NativePeerRightPaneView: View {
                         Button("Land") {
                             guard let pending = pendingGGLand else { return }
                             pendingGGLand = nil
-                            runGGStackOperation(.land(pending.entry.id), stackName: pending.stackName)
+                            runGGStackOperation(.land(pending.entry.id), stackName: pending.stackName, ids: pending.scope)
                         }
                         Button("Cancel", role: .cancel) { pendingGGLand = nil }
                     } message: {
-                        let merges = pendingGGLand?.merges ?? 0
+                        let merges = pendingGGLand?.scope.count ?? 0
                         Text("The host merges \(merges) pull request\(merges == 1 ? "" : "s") from the bottom of the stack.")
                     }
                     .sheet(item: $ggReorder) { presentation in
                         GGReorderSheet(
                             presentation: presentation,
                             onApply: { model in
-                                runGGStackOperation(.reorder, stackName: presentation.snapshot.stackName, order: model.orderedIDs)
+                                runGGStackOperation(.reorder, stackName: presentation.snapshot.stackName, ids: model.orderedIDs)
                             },
                             onCancel: { ggReorder = nil }
                         )
@@ -841,7 +841,8 @@ struct NativePeerRightPaneView: View {
         ggReorder = GGReorderPresentation(snapshot: GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: head), model: model)
     }
 
-    private func runGGStackOperation(_ operation: NativePeerGGStackOperation, stackName: String, order: [String] = []) {
+    /// `ids` is a land's confirmed scope, or a reorder's new order.
+    private func runGGStackOperation(_ operation: NativePeerGGStackOperation, stackName: String, ids: [String] = []) {
         guard ggStackRunning == nil, let gitTarget, let hosts = client.hosts else { return }
         let token = UUID()
         ggStackRunning = operation
@@ -850,8 +851,9 @@ struct NativePeerRightPaneView: View {
             let (worktree, serverId) = (gitTarget.worktree, gitTarget.serverId)
             _ = switch operation {
             case .action(let action): await hosts.runGGStackAction(action, stackName: stackName, in: worktree, serverId: serverId)
-            case .land(let through): await hosts.landGGStack(stackName: stackName, through: through, in: worktree, serverId: serverId)
-            case .reorder: await hosts.reorderGGStack(stackName: stackName, order: order, in: worktree, serverId: serverId)
+            case .land(let through):
+                await hosts.landGGStack(stackName: stackName, through: through, scope: ids, in: worktree, serverId: serverId)
+            case .reorder: await hosts.reorderGGStack(stackName: stackName, order: ids, in: worktree, serverId: serverId)
             }
             // Another worktree's operation may have started since.
             guard ggStackRunningToken == token else { return }
