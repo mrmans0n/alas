@@ -60,6 +60,8 @@ final class TranscriptSession {
     var rejection: String?
     /// Candidates for the latest query only.
     private(set) var mentionCandidates: [RemoteMention] = []
+    /// The query `mentionCandidates` answers; nil while a new query is in flight.
+    private(set) var mentionCandidatesQuery: String?
     var draft = ComposerDraft()
 
     let hostID: UUID
@@ -217,6 +219,8 @@ final class TranscriptSession {
     /// The caller debounces.
     func searchMentions(_ query: String) {
         lastMentionQuery = query
+        mentionCandidates = []
+        mentionCandidatesQuery = nil
         hub.send(.searchMentions(sessionId: sessionId, query: query), to: hostID)
     }
 
@@ -306,7 +310,10 @@ final class TranscriptSession {
         case .queueEditRestored(let id, _, let text) where id == sessionId:
             draft.text += draft.text.isEmpty ? text : "\n" + text
         case .mentionCandidates(let id, let query, let candidates) where id == sessionId:
-            if query == lastMentionQuery { mentionCandidates = candidates }
+            if query == lastMentionQuery {
+                mentionCandidates = candidates
+                mentionCandidatesQuery = query
+            }
             return
         case .error(let message, let id) where id == sessionId:
             rejection = message

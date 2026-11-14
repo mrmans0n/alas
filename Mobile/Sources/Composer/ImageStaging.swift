@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import ImageIO
 import PhotosUI
 import SwiftUI
 
@@ -19,29 +20,38 @@ enum ImageStaging {
             if let refusal = RemoteAttachmentLimits.refusal(adding: encoded.jpeg.count,
                                                             to: session.draft.images.map(\.data.count)) {
                 session.rejection = refusal
-                return
+                continue
             }
             session.draft.images.append(StagedImage(id: UUID(), data: encoded.jpeg, mimeType: "image/jpeg",
                                                     thumbnail: encoded.thumbnail))
         }
     }
 
-    /// Decodes any format UIKit reads (HEIC included), downscales to `maxSide` and re-encodes.
+    /// ImageIO decodes straight to the downscaled size, so a 48 MP photo is never held at full
+    /// size. HEIC and other formats come out as JPEG; transparency is flattened onto white.
     @concurrent
     private nonisolated static func encode(_ data: Data) async -> (jpeg: Data, thumbnail: UIImage)? {
-        guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
-        let full = render(image, longestSide: maxSide)
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: maxSide,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let full = flatten(UIImage(cgImage: cgImage), longestSide: maxSide)
         guard let jpeg = full.jpegData(compressionQuality: 0.8) else { return nil }
-        return (jpeg, render(full, longestSide: thumbSide))
+        return (jpeg, flatten(full, longestSide: thumbSide))
     }
 
-    private nonisolated static func render(_ image: UIImage, longestSide: CGFloat) -> UIImage {
+    private nonisolated static func flatten(_ image: UIImage, longestSide: CGFloat) -> UIImage {
         let scale = min(1, longestSide / max(image.size.width, image.size.height))
-        let size = CGSize(width: (image.size.width * scale).rounded(), height: (image.size.height * scale).rounded())
+        let size = CGSize(width: max(1, (image.size.width * scale).rounded()), height: max(1, (image.size.height * scale).rounded()))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
-        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }

@@ -40,7 +40,8 @@ struct ComposerBar: View {
                     replaceToken(from: RemoteComposerText.slashToken(in: text as NSString, caret: selection.location)?.start,
                                  with: name + " ")
                 }
-            } else if mentionToken != nil, !session.mentionCandidates.isEmpty {
+            } else if let token = mentionToken, token.query == session.mentionCandidatesQuery,
+                      !session.mentionCandidates.isEmpty {
                 MentionPicker(candidates: session.mentionCandidates) { mention in
                     replaceToken(from: mentionToken?.start, with: "@" + mention.name + " ")
                     if !session.draft.mentions.contains(mention) { session.draft.mentions.append(mention) }
