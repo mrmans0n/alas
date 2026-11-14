@@ -33,6 +33,9 @@ final class HostHub {
 
     @ObservationIgnored private var connections: [UUID: PhoneConnection] = [:]
     @ObservationIgnored private var listeners: [UUID: [UUID: @MainActor (PhoneServerMessage) -> Void]] = [:]
+    /// Holders per session per host. The host keeps one follow per socket, so
+    /// only the last holder's release may unsubscribe.
+    @ObservationIgnored private var subscriptions: [UUID: [String: Int]] = [:]
     @ObservationIgnored private let store: HostStore
     /// One client for the app's life: each default client owns a URLSession.
     @ObservationIgnored private let pairingClient = RemotePairingClient()
@@ -88,6 +91,7 @@ final class HostHub {
         states[id] = nil
         sessionLists[id] = nil
         listeners[id] = nil
+        subscriptions[id] = nil
         store.save(hosts)
         store.deleteToken(for: id)
     }
@@ -114,6 +118,23 @@ final class HostHub {
         listeners[id, default: [:]][key] = handler
         return ListenerToken { [weak self] in
             self?.listeners[id]?[key] = nil
+        }
+    }
+
+    /// Follows `sessionId` until the token is released. Every holder asks for
+    /// its own snapshot; `.unsubscribe` goes out only when the last one lets go,
+    /// so a covered screen closing cannot freeze a visible one.
+    func subscribe(_ sessionId: String, on id: UUID) -> ListenerToken {
+        subscriptions[id, default: [:]][sessionId, default: 0] += 1
+        send(.subscribe(sessionId: sessionId), to: id)
+        return ListenerToken { [weak self] in
+            guard let self, let count = subscriptions[id]?[sessionId] else { return }
+            if count > 1 {
+                subscriptions[id]?[sessionId] = count - 1
+            } else {
+                subscriptions[id]?[sessionId] = nil
+                send(.unsubscribe(sessionId: sessionId), to: id)
+            }
         }
     }
 

@@ -94,6 +94,13 @@ final class MarkdownBlockCache {
         return blocks
     }
 
+    /// A closing transcript drops its rows, so the cache never outlives what is on screen.
+    func remove(ids: [String]) {
+        for id in ids {
+            entries[id] = nil
+        }
+    }
+
     /// The benchmark clears it per run: a warm cache would make every open after the first look
     /// cheaper than a real cold open.
     func removeAll() {

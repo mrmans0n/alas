@@ -36,6 +36,7 @@ final class TranscriptSession {
     @ObservationIgnored private var shownGeneration: UInt64?
     @ObservationIgnored private var fetchingOlder = false
     @ObservationIgnored private var listener: ListenerToken?
+    @ObservationIgnored private var subscription: ListenerToken?
     @ObservationIgnored private var hostWatch: Task<Void, Never>?
     @ObservationIgnored private var lastSummary: RemoteSessionSummary?
 
@@ -72,9 +73,9 @@ final class TranscriptSession {
         hub.state(of: hostID)
     }
 
-    /// Closed by the host, or gone from its session list.
+    /// Closed by the host, gone from its session list, or listed as no longer open.
     var hasEnded: Bool {
-        isClosed || !hub.sessions(of: hostID).contains { $0.id == sessionId }
+        isClosed || hub.sessions(of: hostID).first { $0.id == sessionId }?.isActive != true
     }
 
     isolated deinit {
@@ -86,14 +87,15 @@ final class TranscriptSession {
         listener = hub.addListener(hostID) { [weak self] message in
             self?.receive(message)
         }
-        hub.send(.subscribe(sessionId: sessionId), to: hostID)
+        subscription = hub.subscribe(sessionId, on: hostID)
         watchHost()
     }
 
     func close() {
         guard listener != nil else { return }
-        hub.send(.unsubscribe(sessionId: sessionId), to: hostID)
+        subscription = nil
         listener = nil
+        MarkdownBlockCache.shared.remove(ids: items.map(\.id))
         // Unanswered reads die with the subscription; a reopened row asks again.
         requestedImages = requestedImages.filter { images[$0] != nil }
         hostWatch?.cancel()

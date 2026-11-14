@@ -89,6 +89,8 @@ struct WorktreesView: View {
                 TranscriptScreen(hub: hub, hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: searchActive) { _, active in searchPresented = active }
+            // A forgotten Mac's transcripts pop instead of reading as ended.
+            .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }
@@ -104,7 +106,9 @@ struct WorktreesView: View {
                         .first?.worktrees ?? []
                     ForEach(entries) { entry in
                         WorktreeRow(entry: entry) { session in
-                            path.append(SessionRoute(hostID: item.host.id, sessionId: session.id))
+                            let route = SessionRoute(hostID: item.host.id, sessionId: session.id)
+                            // A double tap must not push the same transcript twice.
+                            if path.last != route { path.append(route) }
                         }
                     }
                 } header: {
