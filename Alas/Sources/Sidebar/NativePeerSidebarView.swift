@@ -355,7 +355,7 @@ private struct NativePeerHeaderRow: View, Equatable {
         }
         .padding(.horizontal, scale.space[1])
         .padding(.vertical, scale.space[2])
-        .background(hovering && online ? theme.color("bg-3").opacity(0.55) : .clear,
+        .background(hovering && online ? theme.sidebarHoverFill : .clear,
                     in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
             RoundedRectangle(cornerRadius: scale.radius.medium)
@@ -499,7 +499,7 @@ private struct NativePeerRepoHeaderRow: View, Equatable {
         }
         .padding(.horizontal, scale.space[1])
         .padding(.vertical, scale.space[2])
-        .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: scale.radius.medium))
+        .background(hovering ? theme.sidebarHoverFill : .clear, in: RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay {
             RoundedRectangle(cornerRadius: scale.radius.medium)
                 .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
@@ -565,7 +565,7 @@ private struct NativePeerWorktreeRow: View, Equatable {
                     )
             } else if hovering {
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .fill(theme.color("bg-3").opacity(0.55))
+                    .fill(theme.sidebarHoverFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: scale.radius.medium)
                             .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)

@@ -103,7 +103,8 @@ struct RightPaneToolbar: View {
             ))
             .font(scale.meta.font)
             .foregroundColor(theme.color("fg-muted"))
-            .lineLimit(1)
+            // Two lines fit the toolbar's height, so a long branch reads in full.
+            .lineLimit(2)
             .truncationMode(.middle)
         }
     }

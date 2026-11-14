@@ -151,9 +151,10 @@ struct ACPComposerChips {
 
     func thinkingChip(_ spec: ChipSpec) -> some View {
         chip(spec: spec,
-             label: iconChipLabel(icon: "🧠", spec: spec, fallback: "Thinking"),
+             label: selectedName(spec: spec, fallback: "Thinking"),
              placeholder: "Thinking",
-             accent: theme.color("warn"))
+             accent: theme.color("warn"),
+             fallbackIcon: .system("brain"))
     }
 
     func modelChip(_ spec: ChipSpec) -> some View {
@@ -172,9 +173,10 @@ struct ACPComposerChips {
         switch parameter.presentation {
         case .cursorContextWindow:
             chip(spec: parameter.spec,
-                 label: iconChipLabel(icon: "🪟", spec: parameter.spec, fallback: parameter.label),
+                 label: selectedName(spec: parameter.spec, fallback: parameter.label),
                  placeholder: parameter.label,
-                 accent: cursorContextAccent)
+                 accent: cursorContextAccent,
+                 fallbackIcon: .system("macwindow"))
         case .fastMode:
             chip(spec: parameter.spec,
                  label: chipLabel(prefix: parameter.label, spec: parameter.spec),
@@ -254,10 +256,6 @@ struct ACPComposerChips {
         theme.darkMode
             ? Color(.sRGB, red: 0.90, green: 0.52, blue: 0.76, opacity: 1)
             : Color(.sRGB, red: 0.78, green: 0.25, blue: 0.56, opacity: 1)
-    }
-
-    private func iconChipLabel(icon: String, spec: ChipSpec, fallback: String) -> String {
-        "\(icon) \(selectedName(spec: spec, fallback: fallback))"
     }
 
     func selectedName(spec: ChipSpec, fallback: String) -> String {

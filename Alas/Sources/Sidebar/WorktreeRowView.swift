@@ -401,7 +401,7 @@ struct WorktreeRowView: View {
                     .fill(theme.color("accent-soft"))
             } else if hovering || isHighlighted {
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .fill(theme.color("bg-3").opacity(0.55))
+                    .fill(theme.sidebarHoverFill)
             }
         }
         .aiBeam(isActive: isNamingBranch, cornerRadius: scale.radius.medium)
@@ -472,7 +472,8 @@ struct WorktreeRowView: View {
             Text(worktree.title)
                 .font(isSelected ? scale.emphasisFont : scale.bodyFont)
                 .foregroundColor(theme.color(branchColorToken))
-                .lineLimit(1)
+                // The selected row may wrap, so the branch you are on reads in full.
+                .lineLimit(isSelected ? 2 : 1)
                 // Sibling branches differ at the end, so that is what survives.
                 .truncationMode(.middle)
                 // The full name, for when the middle is cut.

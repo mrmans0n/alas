@@ -186,7 +186,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         .padding(.horizontal, scale.space[1])
         .padding(.vertical, scale.space[1])
         .background(
-            selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-3").opacity(0.55) : .clear),
+            selected ? theme.color("accent-soft") : (hovering ? theme.sidebarHoverFill : .clear),
             in: RoundedRectangle(cornerRadius: scale.radius.medium)
         )
         .contentShape(Rectangle())
@@ -260,7 +260,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             .padding(.trailing, scale.space[1])
             // Same selection and hover language as a worktree row.
             .background(
-                selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-3").opacity(0.55) : .clear),
+                selected ? theme.color("accent-soft") : (hovering ? theme.sidebarHoverFill : .clear),
                 in: RoundedRectangle(cornerRadius: scale.radius.medium)
             )
             .sidebarHover { hovering in
