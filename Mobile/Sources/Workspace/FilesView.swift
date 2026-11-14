@@ -18,6 +18,9 @@ struct FilesView: View {
                 }
             } else {
                 List {
+                    if let error = workspace.treeError {
+                        Text(error).font(.footnote).foregroundStyle(.red).listRowSeparator(.hidden)
+                    }
                     ForEach(rows, id: \.node.path) { row in
                         FileTreeRow(node: row.node, depth: row.depth, expanded: workspace.tree.expanded.contains(row.node.path))
                             .contentShape(Rectangle())

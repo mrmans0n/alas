@@ -189,7 +189,9 @@ final class SessionWorkspace {
             treeError = nil
             if truncated { truncatedDirs.insert(path ?? "") } else { truncatedDirs.remove(path ?? "") }
             if path == nil { for dir in tree.pathsToRefresh() { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) } }
-        case .fileTreeFailed(let id, _, let reason, let message) where id == sessionId:
+        case .fileTreeFailed(let id, let path, let reason, let message) where id == sessionId:
+            // A directory that failed to list must not stay open and empty.
+            if let path, tree.children[path] == nil { tree.expanded.remove(path) }
             treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
         case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
             guard file?.path == path else { return }
