@@ -11,9 +11,9 @@ struct SessionSettingsSheet: View {
             Form {
                 if let config = session.config {
                     if let chips = config.chips {
-                        chipSection("Model", chips.model) { session.setModel($0) }
+                        chipSection("Model", chips.model) { route($0, chips.model) }
                         chipSection("Thinking", chips.thinking) { route($0, chips.thinking) }
-                        chipSection("Mode", chips.mode) { session.setMode($0) }
+                        chipSection("Mode", chips.mode) { route($0, chips.mode) }
                         ForEach(chips.parameters, id: \.id) { p in
                             chipSection(p.label, p.chip) { route($0, p.chip) }
                         }
@@ -53,8 +53,9 @@ struct SessionSettingsSheet: View {
         switch chip.source {
         case "model": session.setModel(id)
         case "mode": session.setMode(id)
-        default:
+        case "config":
             if let configId = chip.configId { session.setConfigOption(configId, value: .string(id)) }
+        default: break
         }
     }
 
