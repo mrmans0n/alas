@@ -453,6 +453,19 @@ struct HostProtocolServerTests {
         )
     }
 
+    /// A host without gg says so only for a worktree its settings mean as a
+    /// stack; any other keeps its pull request drawer.
+    @Test(arguments: [
+        (GGWorktreeContext.inactive(reason: .cliMissing), true, true),
+        (.inactive(reason: .cliMissing), false, false),
+        (.inactive(reason: .branchUsernameMissing), true, true),
+        (.inactive(reason: .policyOff), true, false),
+        (.active(stackName: "auth"), true, false),
+    ])
+    func aGGStackProblemShowsOnlyForAWorktreeMeantAsAStack(_ context: GGWorktreeContext, meantAsStack: Bool, shows: Bool) {
+        #expect((AlasCoreContext.ggStackProblem(context, meantAsStack: meantAsStack) != nil) == shows)
+    }
+
     /// A removed project leaves the host and the persisted list.
     @Test func removeProjectForgetsIt() async throws {
         let fixture = try await RepoFixture()

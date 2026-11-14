@@ -149,6 +149,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// A listed worktree's branch sync and pull request status, read again
     /// first (`host.worktrees.git.v1`).
     case reviewStatus(worktree: WorktreeRef)
+    /// A listed worktree's gg stack by the host's gg settings, its pull
+    /// requests read again with `refresh` (`host.worktrees.ggStack.v1`).
+    case ggStack(worktree: WorktreeRef, refresh: Bool)
     /// A listed worktree's draft reviews, newest first (`host.reviews.v1`).
     case listReviews(worktree: WorktreeRef)
     /// One of them, `sessionID` as listed, with every comment (`host.reviews.v1`).
@@ -703,6 +706,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case commitMessageInput(input: CommitMessageSuggestionInput)
     /// The answer to `reviewStatus`; nil when the host could not read it.
     case reviewStatus(snapshot: ReviewLoopSnapshot?)
+    /// The answer to `ggStack`.
+    case ggStack(read: HostGGStackRead)
     /// The answer to `listReviews`.
     case reviews(reviews: [HostReviewSummary])
     /// The answer to `readReview`.
@@ -764,4 +769,18 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case peerIdentityUnproven
     /// The file is no longer at the version the client named: `current`, or nil when it is gone.
     case fileChanged(current: WorktreeFileVersion?)
+}
+
+/// A worktree's gg stack as its host sees it.
+public struct HostGGStackRead: Codable, Equatable, Sendable {
+    /// Nil when the worktree's branch is not a stack.
+    public var stack: GGStack?
+    /// Why a worktree meant to be a stack shows none: gg is missing or
+    /// unconfigured on the host, or could not read it.
+    public var problem: String?
+
+    public init(stack: GGStack?, problem: String?) {
+        self.stack = stack
+        self.problem = problem
+    }
 }

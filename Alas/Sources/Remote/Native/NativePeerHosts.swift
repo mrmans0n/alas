@@ -444,6 +444,16 @@ final class NativePeerHosts {
         return snapshot
     }
 
+    /// `worktree`'s gg stack by the host's settings, its pull requests read
+    /// again with `refresh`. Nil from a host that doesn't serve it, or no answer.
+    func ggStack(in worktree: PeerHostWorktree, refresh: Bool, serverId: String) async -> HostGGStackRead? {
+        guard servesGit(serverId: serverId), supports(serverId, HostProtocolCapability.worktreesGGStackV1),
+              let channel = channels.channel(for: serverId),
+              case .ggStack(let read) = await channel.request(.ggStack(worktree: Self.ref(worktree), refresh: refresh))
+        else { return nil }
+        return read
+    }
+
     /// Whether `serverId` lists, shows and changes its worktrees' stashes.
     func servesStash(serverId: String) -> Bool {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesStashV1)

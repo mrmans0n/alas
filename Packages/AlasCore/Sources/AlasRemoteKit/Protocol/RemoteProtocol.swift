@@ -1667,6 +1667,8 @@ public enum HostProtocolCapability: Sendable {
     public static let shepherdsV1 = "host.shepherds.v1"
     /// Hosts that serve `setProjectGGMode` and list each project's `ggMode`.
     public static let projectsGGModeV1 = "host.projects.ggMode.v1"
+    /// Hosts that serve `ggStack`.
+    public static let worktreesGGStackV1 = "host.worktrees.ggStack.v1"
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

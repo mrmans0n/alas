@@ -1803,6 +1803,7 @@
 		EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 0CA29ACACE519DE00507EB73 /* AlasHost */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4C58E8C0B1BC5B7CB2BBCB /* Code.swift */; };
 		EF8ECFE012675EE7C7F2347E /* ImageDiffPair+AppKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAD8F83EDBFABC3327254E1A /* ImageDiffPair+AppKit.swift */; };
+		EFBE3B2A98811368F659A98F /* NativePeerGGStackDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02090E00CC07E2BA09EAF84 /* NativePeerGGStackDrawer.swift */; };
 		EFC7C4236178EB3E3FE6D105 /* ACPTranscriptRowExpansionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369B312B65E6D4C969B8BF2B /* ACPTranscriptRowExpansionStore.swift */; };
 		F036E3B2EDD52D67A55C9283 /* WorkspaceDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1C02F995A1A770255E98C2 /* WorkspaceDialogs.swift */; };
 		F0440F0D4E6B9BD0ACD7B0C9 /* GGReorderSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111B9EB86E55850C982CEEFA /* GGReorderSheet.swift */; };
@@ -1979,10 +1980,10 @@
 		1A51DA06B445C208E5F643EF /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
-			dstSubfolderSpec = 16;
+			dstPath = "alas-vm-guest";
+			dstSubfolderSpec = 7;
 			files = (
-				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
+				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2000,10 +2001,10 @@
 		AF4AF5D7242A7B87F7C9E278 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
-			dstSubfolderSpec = 7;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/XPCServices";
+			dstSubfolderSpec = 16;
 			files = (
-				CF66032F829FB00D791925E8 /* Install Alas VM Guest.command in CopyFiles */,
+				8E7C4F7DFA7D3E2D74767C2B /* AlasSimService.xpc in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3692,6 +3693,7 @@
 		DF919734A34EEB87FA61FE07 /* WebSocketFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketFrameTests.swift; sourceTree = "<group>"; };
 		DFBD2A49431277EB68106AAA /* ACPConnectingPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConnectingPlaceholder.swift; sourceTree = "<group>"; };
 		DFE20A3822FC26672DFD552C /* MarkdownImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImageLoader.swift; sourceTree = "<group>"; };
+		E02090E00CC07E2BA09EAF84 /* NativePeerGGStackDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerGGStackDrawer.swift; sourceTree = "<group>"; };
 		E032F7E66585D9762C6BFEBE /* RemoteFederatedSessionIDTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFederatedSessionIDTests.swift; sourceTree = "<group>"; };
 		E09A66AE390C7748A8847C8E /* MarkdownTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTabView.swift; sourceTree = "<group>"; };
 		E0C3EBB53D3D8C51F64B0D4A /* GatewayHostFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayHostFixture.swift; sourceTree = "<group>"; };
@@ -5132,6 +5134,7 @@
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
 				BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */,
+				E02090E00CC07E2BA09EAF84 /* NativePeerGGStackDrawer.swift */,
 				FF62C1AE2F26ACA30F3E8CF1 /* NativePeerRightPaneView.swift */,
 				7881A2BE28B8F9BA6AD7719C /* NativePeerRunTabView.swift */,
 				4941BFBEEEAF9DE9E1752548 /* OperationCard.swift */,
@@ -8135,6 +8138,7 @@
 				63FE9896BFDEEA686A2C2500 /* NativePeerConsoleView.swift in Sources */,
 				658D2CFB088A1B71D18C9E8E /* NativePeerConsoles.swift in Sources */,
 				7AA2476101B701424946D716 /* NativePeerDocumentView.swift in Sources */,
+				EFBE3B2A98811368F659A98F /* NativePeerGGStackDrawer.swift in Sources */,
 				DCFE09C4572BA6B534DEE15A /* NativePeerHosts.swift in Sources */,
 				1C352F18720FC59CAD3FB68F /* NativePeerNewSession.swift in Sources */,
 				E05DCD5C1151953912226A8C /* NativePeerNewSessionSheet.swift in Sources */,

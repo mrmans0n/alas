@@ -163,6 +163,13 @@ struct HostProtocolTests {
         .response(id: 3, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty")))),
         .response(id: 4, result: .failure(error: .workspace(error: .checkoutNotFound))),
         .response(id: 5, result: .session(session: session)),
+        .response(id: 6, result: .ggStack(read: HostGGStackRead(stack: GGStack(
+            name: "auth", base: "main", totalCommits: 2, syncedCommits: 1, currentPosition: 2, behindBase: 3,
+            entries: [
+                GGStackEntry(position: 1, sha: "abc1234", title: "Add login", ggId: "c-1", prNumber: 7, prState: .merged, approved: true, ciStatus: .success),
+                GGStackEntry(position: 2, sha: "def5678", title: "Add logout", isCurrent: true),
+            ]
+        ), problem: nil))),
         .response(id: 6, result: .failure(error: .session(refusal: .ownerUnavailable(reason: "busy")))),
         .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
         .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),

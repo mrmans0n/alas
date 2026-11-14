@@ -148,7 +148,13 @@ extension AlasCoreContext {
     /// The gg stack the stacked-diffs settings put `worktree` on, as the app
     /// resolves it; nil outside gg mode.
     private func shepherdStackName(project: ProjectConfig, worktree: Worktree) -> String? {
-        let context = GGWorktreeContextResolver.resolve(
+        guard case .active(let name) = ggContext(project: project, worktree: worktree) else { return nil }
+        return name
+    }
+
+    /// Whether `worktree` is a gg stack by this host's settings.
+    func ggContext(project: ProjectConfig, worktree: Worktree) -> GGWorktreeContext {
+        GGWorktreeContextResolver.resolve(
             masterEnabled: environment.configuration().changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
             isRemoteProject: project.host != nil || project.isFolder,
@@ -159,8 +165,6 @@ extension AlasCoreContext {
             branchUsername: GGConfigReader.branchUsername(repoPath: project.path),
             branch: worktree.branch
         )
-        guard case .active(let name) = context else { return nil }
-        return name
     }
 
     func headlessShepherdRules(worktreeID: String) async throws -> ShepherdRules {
