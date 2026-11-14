@@ -460,12 +460,11 @@ Each PR stands alone and is reviewable.
   reuse `RepositoryImportService.clone`.
 - **Workspaces** are unchanged in v1 (see Hidden linked records).
 
-**For Nacho:**
+**Decided by Nacho:**
 
-1. **Machine fields.** This design keeps only label, destination and projects
-   folder, and defers user, port, identity and jump host to `~/.ssh/config`.
-   Orca stores them per target. Is `~/.ssh/config` as the source of truth
-   fine, or should the pane edit those fields?
+1. **Machine fields.** A machine stores only a label, a destination and a
+   projects folder. User, port, identity and jump host stay in
+   `~/.ssh/config`.
 2. **Main checkout row.** When Alas clones on a machine, the clone's main
    worktree is hidden from the sidebar. Folded existing SSH projects keep
-   theirs. Agree?
+   theirs.
