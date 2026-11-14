@@ -29,7 +29,10 @@ struct TranscriptScreen: View {
         TranscriptContent(session: session)
             .safeAreaInset(edge: .bottom) {
                 if !session.hasEnded {
-                    ComposerBar(session: session)
+                    VStack(spacing: 0) {
+                        RequestCard(session: session).padding(.horizontal, 12).padding(.bottom, 4)
+                        ComposerBar(session: session)
+                    }
                 } else {
                     Text("This session has ended.")
                         .font(.footnote)

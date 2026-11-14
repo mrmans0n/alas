@@ -158,7 +158,7 @@ private extension View {
     }
 }
 
-private struct AgentMarkdown: View {
+struct AgentMarkdown: View {
     let id: String
     let text: String
 

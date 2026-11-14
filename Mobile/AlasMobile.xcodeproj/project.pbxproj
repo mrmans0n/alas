@@ -12,14 +12,18 @@
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
+		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
 		3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */; };
 		3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
+		44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */; };
 		468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836FA1B810A2D04B52F5C3BD /* QueueTray.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
+		7000D63FB53A488810B6E422 /* InboxModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB4C7CE3F100F5656449A2C /* InboxModel.swift */; };
 		73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD039065974B934F0D88642 /* FrameMeter.swift */; };
 		86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21958EE58C9376495D96344 /* ImageStaging.swift */; };
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
+		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
@@ -35,6 +39,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
 		12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeScreen.swift; sourceTree = "<group>"; };
@@ -45,8 +50,10 @@
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
 		4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
+		5675178FB5741806BEB65930 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
 		57A94D2BB531632B6E5027AE /* ComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerBar.swift; sourceTree = "<group>"; };
 		57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageRing.swift; sourceTree = "<group>"; };
+		5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElicitationFormView.swift; sourceTree = "<group>"; };
 		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostHub.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
@@ -61,6 +68,7 @@
 		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EB8F788F5756229A6125FB0A /* ComposerPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerPickers.swift; sourceTree = "<group>"; };
+		EEB4C7CE3F100F5656449A2C /* InboxModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModel.swift; sourceTree = "<group>"; };
 		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -89,6 +97,15 @@
 			path = Spike;
 			sourceTree = "<group>";
 		};
+		3532103143A737814C349FAA /* Inbox */ = {
+			isa = PBXGroup;
+			children = (
+				EEB4C7CE3F100F5656449A2C /* InboxModel.swift */,
+				5675178FB5741806BEB65930 /* InboxView.swift */,
+			);
+			path = Inbox;
+			sourceTree = "<group>";
+		};
 		5DCBB4F5E953BC7D6DCB2D6C /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -103,6 +120,15 @@
 				36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A2B95EC638C15843966D4066 /* Requests */ = {
+			isa = PBXGroup;
+			children = (
+				5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */,
+				06499964301D8FB5B30EB8B6 /* RequestCard.swift */,
+			);
+			path = Requests;
 			sourceTree = "<group>";
 		};
 		C7AF09C68FC5773484E44408 = {
@@ -186,6 +212,8 @@
 				86D2285A87658206EB81FAF0 /* App */,
 				CC8E626A8FE5ED036DE7FB8B /* Composer */,
 				E8C2655B49BA1922799A4F7E /* Hosts */,
+				3532103143A737814C349FAA /* Inbox */,
+				A2B95EC638C15843966D4066 /* Requests */,
 				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
 				D4974DEDF2DA5907B0A209CC /* Transcript */,
@@ -261,16 +289,20 @@
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
 				E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */,
 				A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */,
+				44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */,
 				73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */,
 				E77139BEB6A5145597C12214 /* HostHub.swift in Sources */,
 				3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */,
 				86D9AB9FE0BDDAC8209FCCA2 /* ImageStaging.swift in Sources */,
+				7000D63FB53A488810B6E422 /* InboxModel.swift in Sources */,
+				28905A744E97862B779D9BBB /* InboxView.swift in Sources */,
 				EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */,
 				06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */,
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
+				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
 				CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,

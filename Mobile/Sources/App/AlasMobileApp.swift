@@ -23,12 +23,9 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees) { selection = .peers }
                 }
                 Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
-                    NavigationStack {
-                        ContentUnavailableView("Nothing needs you", systemImage: "tray",
-                                               description: Text("Permission requests and questions from your agents arrive here in a later build."))
-                            .navigationTitle("Inbox")
-                    }
+                    InboxView(hub: hub)
                 }
+                .badge(InboxModel.entries(in: hub).count)
                 Tab("Peers", systemImage: "laptopcomputer", value: AppTab.peers) {
                     PeersView(hub: hub)
                 }
