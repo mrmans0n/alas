@@ -784,9 +784,12 @@ struct NativePeerRightPaneView: View {
     private func readGGStack(refresh: Bool) async {
         guard let gitTarget, let hosts = client.hosts, hosts.gitFollowKey != nil else { return }
         let key = gitTargetKey
-        let read = await hosts.ggStack(in: gitTarget.worktree, refresh: refresh, serverId: gitTarget.serverId)
+        var read = await hosts.ggStack(in: gitTarget.worktree, refresh: refresh, serverId: gitTarget.serverId)
         // A late reply must not land on another worktree.
-        guard !Task.isCancelled, gitTargetKey == key, read != ggStack else { return }
+        guard !Task.isCancelled, gitTargetKey == key else { return }
+        // A local-only read has no pull request state: keep what the last refresh read, as locally.
+        if !refresh, let stack = read?.stack { read?.stack = stack.mergingRemoteMetadata(from: ggStack?.stack) }
+        guard read != ggStack else { return }
         ggStack = read
     }
 
