@@ -88,7 +88,10 @@ final class TranscriptSession {
     /// Bumped on open and close, so a watch left over from an earlier open stops.
     @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var stopGeneration = 0
-    @ObservationIgnored private var lastSent: ComposerDraft?
+    /// Sent drafts the host has neither shown nor refused, oldest first. The host settles prompts
+    /// in the order they arrive, so a rejection belongs to the oldest; once a prompt shows up in the
+    /// queue or transcript, a later rejection (its turn failed) has no draft to restore.
+    @ObservationIgnored private var unsettled: [ComposerDraft] = []
     @ObservationIgnored private var lastMentionQuery: String?
     @ObservationIgnored private var lastSummary: RemoteSessionSummary?
 
@@ -163,7 +166,7 @@ final class TranscriptSession {
         let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
                          offline: "Your message wasn't sent.")
         guard sent else { return }
-        lastSent = draft
+        unsettled.append(draft)
         draft = ComposerDraft()
     }
 
@@ -309,6 +312,20 @@ final class TranscriptSession {
         publish()
     }
 
+    private func settleRows(_ rows: [RemoteWireMessage]) {
+        settle(shown: rows.compactMap { $0.kind == "user" ? $0.text : nil })
+    }
+
+    /// Drops each unsettled draft the host now shows. A user row appends attachment labels after
+    /// the text, and the host trims what it records, so match on a prefix of the trimmed text.
+    private func settle(shown texts: [String]) {
+        guard !unsettled.isEmpty, !texts.isEmpty else { return }
+        unsettled.removeAll { sent in
+            let text = sent.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return texts.contains { $0.hasPrefix(text) }
+        }
+    }
+
     private func resubscribe() {
         state.resetResubscribeRequest()
         // A page request or image read sent before a reconnect has no reply coming, and
@@ -333,6 +350,9 @@ final class TranscriptSession {
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
+            if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message { settleRows(rows) }
+        case .transcriptDelta(let id, _, _, let rows, _, _, _) where id == sessionId:
+            settleRows(rows)
         case .stopPending(let id) where id == sessionId:
             isStopping = true
             stopGeneration += 1
@@ -342,8 +362,10 @@ final class TranscriptSession {
                 if let self, generation == stopGeneration { isStopping = false }
             }
         case .promptRejected(let id, let reason) where id == sessionId:
-            if draft.text.isEmpty, draft.images.isEmpty, let lastSent { draft = lastSent }
-            lastSent = nil
+            if !unsettled.isEmpty {
+                let rejected = unsettled.removeFirst()
+                if draft.text.isEmpty, draft.images.isEmpty { draft = rejected }
+            }
             rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
         case .queueEditRestored(let id, _, let text) where id == sessionId:
             draft.text += draft.text.isEmpty ? text : "\n" + text
@@ -355,6 +377,8 @@ final class TranscriptSession {
             return
         case .error(let message, let id) where id == sessionId:
             rejection = message
+        case .queueState(let id, let queued) where id == sessionId:
+            settle(shown: queued.map(\.text))
         default:
             break
         }

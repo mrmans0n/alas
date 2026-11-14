@@ -61,6 +61,7 @@ struct RemoteElicitationFormTests {
     @Test func contentEncodesTypedValuesAndOmitsUntouchedOptionals() {
         let fields = [
             field("age", "integer", required: true),
+            field("big", "integer"),
             field("ratio", "number"),
             field("ok", "boolean"),
             field("tags", "array", options: ["a", "b"]),
@@ -69,13 +70,13 @@ struct RemoteElicitationFormTests {
             field("note", "string"),
         ]
         let inputs: [String: RemoteElicitationInput] = [
-            "age": .text("4"), "ratio": .text("4.5"), "ok": .toggle(true),
+            "age": .text("4"), "big": .text("9007199254740993"), "ratio": .text("4.5"), "ok": .toggle(true),
             "tags": .selection(["a", "b"]), "pick": .selection(["x"]),
             "when": .date(Date(timeIntervalSince1970: 1_794_650_400)),
         ]
         let content = try? RemoteElicitationForm.content(fields, inputs: inputs).get()
         #expect(content == [
-            "age": .integer(4), "ratio": .number(4.5), "ok": .boolean(true),
+            "age": .integer(4), "big": .integer(9_007_199_254_740_993), "ratio": .number(4.5), "ok": .boolean(true),
             "tags": .strings(["a", "b"]), "pick": .string("x"),
             "when": .string("2026-11-14T10:00:00Z"),
         ])

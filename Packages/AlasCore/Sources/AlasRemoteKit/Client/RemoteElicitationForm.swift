@@ -118,11 +118,15 @@ public enum RemoteElicitationForm {
 
         switch field.type {
         case "number", "integer":
-            guard let number = Double(raw.trimmingCharacters(in: .whitespaces)), number.isFinite else { throw invalid }
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            guard let number = Double(trimmed), number.isFinite else { throw invalid }
             if let min = field.minimum, number < min { throw invalid }
             if let max = field.maximum, number > max { throw invalid }
             if field.type == "number" { return .number(number) }
-            guard let whole = Int(exactly: number) else {
+            // Parse the digits exactly: going through Double rounds anything past 2^53.
+            if let whole = Int(trimmed) { return .integer(whole) }
+            // "3.0" or "1e3" is whole, but only within Double's exact range.
+            guard abs(number) <= 9_007_199_254_740_992, let whole = Int(exactly: number) else {
                 throw RemoteElicitationFormError(message: "Enter a whole number for \(field.title).")
             }
             return .integer(whole)
