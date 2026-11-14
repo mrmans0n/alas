@@ -48,6 +48,10 @@ targets:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: Alas connects to your Macs on this network.
+        NSCameraUsageDescription: Scan a pairing code from your Mac.
 
 schemes:
   AlasMobile:
