@@ -280,16 +280,31 @@ private struct ElicitationCard: View {
     let payload: RemoteElicitationPayload
     @Environment(\.openURL) private var openURL
 
+    /// Only web links with a host, as on the Mac.
+    private var webURL: URL? {
+        guard let url = payload.url.flatMap(URL.init(string:)),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              url.host() != nil else { return nil }
+        return url
+    }
+
     var body: some View {
         CardChrome(icon: "text.badge.checkmark", tint: .teal, kind: "Request", title: payload.title ?? "The agent needs input") {
             Text(payload.message).font(.subheadline).foregroundStyle(.secondary)
-            if payload.mode == "url", let url = payload.url.flatMap(URL.init(string:)) {
-                if let host = url.host() {
-                    Label(host, systemImage: "globe").font(.subheadline.weight(.medium))
-                }
-                CardButton(title: "Open in Browser", primary: true) {
-                    openURL(url)
-                    session.answerElicitation(action: "accept", content: [:])
+            if payload.mode == "url" {
+                if let url = webURL {
+                    Label(url.absoluteString, systemImage: "globe")
+                        .font(.subheadline.weight(.medium))
+                        .textSelection(.enabled)
+                    CardButton(title: "Open in Browser", primary: true) {
+                        // Accepted only once the link actually opened.
+                        openURL(url) { opened in
+                            if opened { session.answerElicitation(action: "accept", content: [:]) }
+                        }
+                    }
+                } else {
+                    Label("This link can\u{2019}t be opened.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline).foregroundStyle(.orange)
                 }
                 HStack(spacing: 8) {
                     CardButton(title: "Decline") { session.answerElicitation(action: "decline", content: nil) }
