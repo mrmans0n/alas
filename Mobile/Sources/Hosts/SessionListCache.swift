@@ -7,6 +7,10 @@ import Foundation
 actor SessionListCache {
     private let directory: URL
     private var pending: [UUID: [RemoteSessionSummary]] = [:]
+    /// Highest sequence number seen per host. Detached callers reach the actor
+    /// in any order, so anything older than this (a late list, or a save
+    /// arriving after `delete`) is dropped.
+    private var newest: [UUID: Int] = [:]
 
     init(directory: URL = URL.applicationSupportDirectory.appending(path: "session-lists")) {
         self.directory = directory
@@ -24,7 +28,9 @@ actor SessionListCache {
         }
     }
 
-    func save(_ list: [RemoteSessionSummary], for id: UUID) async {
+    func save(_ list: [RemoteSessionSummary], for id: UUID, seq: Int) async {
+        guard seq > newest[id, default: 0] else { return }
+        newest[id] = seq
         let alreadyQueued = pending[id] != nil
         pending[id] = list
         guard !alreadyQueued else { return }
@@ -35,7 +41,9 @@ actor SessionListCache {
         try? JSONEncoder().encode(newest).write(to: fileURL(id), options: .atomic)
     }
 
-    func delete(_ id: UUID) {
+    func delete(_ id: UUID, seq: Int) {
+        guard seq > newest[id, default: 0] else { return }
+        newest[id] = seq
         pending[id] = nil
         try? FileManager.default.removeItem(at: fileURL(id))
     }
