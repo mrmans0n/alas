@@ -35,7 +35,9 @@ struct ChangedRow: View {
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
 
-    private var showsStageChip: Bool { onStage != nil || stageState != nil }
+    nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
+        12 + CGFloat(depth * 14)
+    }
 
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
@@ -44,23 +46,17 @@ struct ChangedRow: View {
         let resolvedStageState = stageState ?? (file.stage == .staged ? .staged : .unstaged)
         return Button(action: onSelect) {
             HStack(spacing: 6) {
-                if showsStageChip {
+                if onStage != nil || stageState != nil {
                     StageChip(state: resolvedStageState, action: onStage)
                 }
                 HStack(spacing: 6) {
-                    // Holds the place of a folder's chevron, so file icons
-                    // line up with their folder's icon one level in.
-                    HStack(spacing: scale.space[1]) {
-                        Color.clear.frame(width: scale.glyph.size)
-                        FileTypeIconView(filename: basename, size: 18)
-                    }
+                    FileTypeIconView(filename: basename, size: 18)
                     Text(basename)
                         .font(scale.body.font)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
                 }
-                .padding(.leading, WorkingTreeSectionView.treeIndent(depth: depth))
                 .contentShape(Rectangle())
                 Spacer()
                 // A fixed gutter keeps the status letter from reading as part
@@ -75,7 +71,7 @@ struct ChangedRow: View {
                 }
             }
             .font(scale.meta.font(design: .monospaced))
-            .padding(.leading, WorkingTreeSectionView.rowLeadingInset(showsStageChip: showsStageChip))
+            .padding(.leading, Self.rowLeadingPadding(depth: depth))
             .padding(.trailing, scale.space[3])
             .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)

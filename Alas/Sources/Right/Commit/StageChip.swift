@@ -33,7 +33,7 @@ struct StageChip: View {
                             .strokeBorder(border, lineWidth: 0.5)
                     )
                     .frame(width: 14, height: 14)
-                if let glyph { Icon(name: glyph, size: 9, color: glyphColor) }
+                Icon(name: glyph, size: 9, color: glyphColor)
             }
             .frame(width: 20, height: 20)
             .contentShape(Rectangle())
@@ -46,15 +46,14 @@ struct StageChip: View {
         .help(help)
     }
 
-    /// An unstaged chip is an empty checkbox until hovered.
-    private var glyph: String? {
+    private var glyph: String {
         switch state {
         case .staged:
             return hovering ? "x" : "check"
         case .mixed:
             return hovering ? "plus" : "minus"
         case .unstaged:
-            return hovering ? "check" : nil
+            return "plus"
         }
     }
 
