@@ -39,3 +39,26 @@ struct MachineTests {
         #expect(seeded.isEmpty)
     }
 }
+
+extension MachineTests {
+    @Test func aRemovedMachineStaysRemovedOnLaterLaunches() {
+        var config = AppConfig.defaults
+        let firstLaunchChanged = config.seedMachinesIfNeeded(projectHosts: ["mini"])
+        #expect(firstLaunchChanged)
+        config.machines.removeAll()
+        let laterLaunchChanged = config.seedMachinesIfNeeded(projectHosts: ["mini"])
+        #expect(!laterLaunchChanged)
+        #expect(config.machines.isEmpty)
+    }
+
+    @Test(arguments: [
+        #"{"machines":[{"destination":"mini"},{"label":"no destination"},{"destination":"devbox","label":"Dev","projectsFolder":"/srv"}]}"#,
+    ])
+    func oneBadMachineEntryDoesNotDropTheOthers(json: String) throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.machines == [
+            Machine(destination: "mini", projectsFolder: "~/code"),
+            Machine(destination: "devbox", label: "Dev", projectsFolder: "/srv"),
+        ])
+    }
+}

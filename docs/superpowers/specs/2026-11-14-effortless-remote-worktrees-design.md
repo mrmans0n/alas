@@ -108,9 +108,11 @@ public struct Machine: Codable, Equatable, Identifiable, Sendable {
 - The default projects folder is the local `repositoryCloneRootPath` with the
   local home swapped for `~`, reusing `destinationPathReplacingLocalHome`. If
   that path is empty or outside home, the default is `~/code`.
-- Seeding: on load, every distinct `host` of an existing SSH project that is
-  not yet in the list is added with label = host. This makes Run on show
-  machines people already use, with no setup.
+- Seeding: on load and after an SSH project is added, every project host
+  not seeded before is added with label = host. Seeded hosts are remembered
+  (`AppConfig.seededMachineHosts`), so a machine the user removes stays
+  removed. A `config.json` that fails to parse is never overwritten at launch.
+  This makes Run on show machines people already use, with no setup.
 
 ### `ProjectConfig.linkedProjectId: String?`
 

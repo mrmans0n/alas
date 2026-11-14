@@ -113,6 +113,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var repositoryCloneRootPath: String = ""
     /// SSH machines offered as places to run new worktrees.
     public var machines: [Machine] = []
+    /// Project hosts already offered as machines. A host is seeded once, so a
+    /// machine the user removed is not added back.
+    public var seededMachineHosts: [String] = []
 
     public struct Remote: Codable, Equatable, Sendable {
         public var enabled: Bool = false
@@ -953,7 +956,8 @@ extension AppConfig {
              contentMaterialOverrides,
              shortcutOverrides,
              repositoryCloneRootPath,
-             machines
+             machines,
+             seededMachineHosts
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -1241,7 +1245,8 @@ extension AppConfig {
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
         repositoryCloneRootPath =
             (try? c.decode(String.self, forKey: .repositoryCloneRootPath)) ?? ""
-        machines = (try? c.decode([Machine].self, forKey: .machines)) ?? []
+        machines = (try? c.superDecoder(forKey: .machines)).flatMap { try? Machine.decodeList(from: $0) } ?? []
+        seededMachineHosts = (try? c.decode([String].self, forKey: .seededMachineHosts)) ?? []
         migrateLegacyFindAndReplaceShortcutOverride()
         migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
@@ -1332,5 +1337,24 @@ extension AppConfig {
     public func contentMaterialOverride(forThemeId themeId: String) -> ContentMaterialOverride {
         if let saved = contentMaterialOverrides[themeId] { return saved }
         return ContentMaterialOverride.bundledDefaults[themeId] ?? .zero
+    }
+}
+
+extension AppConfig {
+    /// Offers each project host not seeded before as a machine. Returns
+    /// whether the config changed and needs saving.
+    public mutating func seedMachinesIfNeeded(projectHosts: [String]) -> Bool {
+        let seeded = Set(seededMachineHosts)
+        let fresh = projectHosts.filter { !seeded.contains($0) }
+        guard !fresh.isEmpty else { return false }
+        machines = Machine.seeded(
+            machines,
+            projectHosts: fresh,
+            defaultProjectsFolder: Machine.defaultProjectsFolder(cloneRoot: repositoryCloneRootPath)
+        )
+        for host in fresh where !seededMachineHosts.contains(host) {
+            seededMachineHosts.append(host)
+        }
+        return true
     }
 }
