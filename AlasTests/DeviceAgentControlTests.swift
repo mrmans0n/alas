@@ -356,6 +356,16 @@ struct DeviceAgentControlTests {
         #expect(abs(point.y - (394.0 + 26) / 874) < 0.001)
     }
 
+    @Test func aSessionGetsTheWholeScreenWhenAnotherSessionSawItLast() async throws {
+        let control = control(FakeInput())
+        _ = await control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "a")
+        _ = await control.perform(.button(udid: "on", name: .home, includeScreenshot: false), sessionID: "b")
+        let reply = try Self.reply(await control.perform(
+            .button(udid: "on", name: .home, includeScreenshot: false), sessionID: "a"
+        ))
+        #expect(reply["screen_changed"] as? Bool == true)
+    }
+
     @Test func withoutDiffAnActionAnswersAsBefore() async {
         let response = await control(FakeInput()).perform(
             .button(udid: "on", name: .home, includeScreenshot: false, diff: false), sessionID: "s"
