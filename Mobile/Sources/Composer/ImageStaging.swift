@@ -8,7 +8,7 @@ enum ImageStaging {
     static let maxSide: CGFloat = 2048
     private static let thumbSide: CGFloat = 160
 
-    /// Loads, transcodes and stages each pick, stopping at the first refusal.
+    /// Loads, transcodes and stages each pick, skipping any it cannot read or that the limits refuse.
     @MainActor
     static func stage(_ items: [PhotosPickerItem], into session: TranscriptSession) async {
         for item in items {

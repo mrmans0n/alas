@@ -51,7 +51,9 @@ struct QueueTray: View {
                     }
                 }
             }
+            .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: 220)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }

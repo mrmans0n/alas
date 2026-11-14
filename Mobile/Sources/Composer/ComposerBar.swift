@@ -41,12 +41,15 @@ struct ComposerBar: View {
                     replaceToken(from: RemoteComposerText.slashToken(in: text as NSString, caret: selection.location)?.start,
                                  with: name + " ")
                 }
-            } else if let token = mentionToken, token.query == session.mentionCandidatesQuery,
-                      !session.mentionCandidates.isEmpty {
+            } else if let token = mentionToken, !session.mentionCandidates.isEmpty {
+                // Rows from an earlier query stay up, dimmed and inert, until this one is answered.
+                let current = token.query == session.mentionCandidatesQuery
                 MentionPicker(candidates: session.mentionCandidates) { mention in
                     replaceToken(from: mentionToken?.start, with: "@" + mention.name + " ")
                     if !session.draft.mentions.contains(mention) { session.draft.mentions.append(mention) }
                 }
+                .opacity(current ? 1 : 0.5)
+                .allowsHitTesting(current)
             }
             if queueOpen { QueueTray(session: session).transition(.move(edge: .bottom).combined(with: .opacity)) }
             field
@@ -54,6 +57,7 @@ struct ComposerBar: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
         .onChange(of: mentionToken?.query) { _, query in searchMentions(query) }
+        .onChange(of: RemoteQueueRules.waiting(session.queue).isEmpty) { _, empty in if empty { queueOpen = false } }
         .onChange(of: picked) { _, items in
             guard !items.isEmpty else { return }
             picked = []
@@ -70,6 +74,7 @@ struct ComposerBar: View {
                 if text.isEmpty {
                     Text("Message").foregroundStyle(.tertiary).padding(.horizontal, 4).padding(.vertical, 8)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
                 ComposerTextView(text: $session.draft.text, selection: $selection)
             }
@@ -123,13 +128,19 @@ struct ComposerBar: View {
         .accessibilityLabel("Attach photo")
     }
 
+    /// Scrolls sideways when the row is crowded, so no chip, the model above all, truncates.
     private var chips: some View {
-        HStack(spacing: 6) {
+        let row = HStack(spacing: 6) {
             chip(name(config?.chips?.model, fallback: config?.currentModel, in: config?.models))
             chip(name(config?.chips?.thinking, fallback: nil, in: nil))
             chip(name(config?.chips?.mode, fallback: config?.currentMode, in: config?.modes))
         }
         .lineLimit(1)
+        .fixedSize()
+        return ViewThatFits(in: .horizontal) {
+            row
+            ScrollView(.horizontal, showsIndicators: false) { row }
+        }
     }
 
     @ViewBuilder
