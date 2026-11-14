@@ -1818,6 +1818,11 @@ final class AppState {
             saving: unitTestHost ? nil : store,
             migrateStores: { unitTestHost ? false : RemotePathMigration.migrate(idMap: $0, defaults: AlasProfile.userDefaults) }
         )
+        let seededMachines = Self.seededMachines(config, projects: projectsFile.projects)
+        if seededMachines != config.machines {
+            config.machines = seededMachines
+            if !unitTestHost { try? store.write(config, to: Paths.appConfigFile) }
+        }
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
         self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
@@ -5580,6 +5585,22 @@ final class AppState {
         }
         let refreshedProject = projectsManager.projects.first { $0.id == project.id } ?? project
         startProjectGitWatcher(for: refreshedProject)
+        if host != nil {
+            let seeded = Self.seededMachines(config, projects: projects)
+            if seeded != config.machines {
+                config.machines = seeded
+                _ = saveConfig()
+            }
+        }
+    }
+
+    /// Every SSH project's host is offered as a machine.
+    static func seededMachines(_ config: AppConfig, projects: [ProjectConfig]) -> [Machine] {
+        Machine.seeded(
+            config.machines,
+            projectHosts: projects.compactMap(\.host),
+            defaultProjectsFolder: Machine.defaultProjectsFolder(cloneRoot: config.repositoryCloneRootPath)
+        )
     }
 
     func addProject(
