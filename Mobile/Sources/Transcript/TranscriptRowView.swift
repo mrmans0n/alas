@@ -1,9 +1,11 @@
 import AlasRemoteKit
 import SwiftUI
 
-struct SpikeRowView: View {
-    let row: SpikeRow
+struct TranscriptRowView: View {
+    let item: TranscriptItem
     let isExpanded: Bool
+    /// A user image's bytes by its uri; nil shows the image's label instead.
+    var image: (String) -> UIImage? = { _ in nil }
     let toggle: () -> Void
 
     var body: some View {
@@ -15,15 +17,32 @@ struct SpikeRowView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch row.row {
-        case .user(let text, _, _):
-            Text(text)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.leading, 48)
+        switch item.row {
+        case .user(let text, _, let images):
+            VStack(alignment: .trailing, spacing: 6) {
+                if !images.isEmpty {
+                    HStack(spacing: 6) {
+                        // The same image attached twice shares a uri.
+                        ForEach(Array(images.enumerated()), id: \.offset) { _, attached in
+                            if let loaded = image(attached.uri) {
+                                Image(uiImage: loaded)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    .accessibilityLabel(attached.name ?? "Image")
+                            } else {
+                                bubble("\u{1F5BC} \(attached.name ?? "Image")")
+                            }
+                        }
+                    }
+                }
+                if !text.isEmpty { bubble(text) }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 48)
         case .agent(let text):
-            AgentMarkdown(id: row.id, revision: row.revision, text: text)
+            AgentMarkdown(id: item.id, text: text)
         case .thought(let text):
             Text(text)
                 .font(.callout.italic())
@@ -49,6 +68,12 @@ struct SpikeRowView: View {
         case .systemNotice(let text):
             Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }
+    }
+
+    private func bubble(_ text: String) -> some View {
+        Text(text)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func toolCall(_ call: ACPToolCall) -> some View {
@@ -135,11 +160,10 @@ private extension View {
 
 private struct AgentMarkdown: View {
     let id: String
-    let revision: Int
     let text: String
 
     var body: some View {
-        let blocks = MarkdownBlockCache.shared.blocks(id: id, revision: revision, text: text)
+        let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {

@@ -57,7 +57,7 @@ struct SpikeScreen: View {
     @ViewBuilder
     private func scroller(_ model: SpikeTranscriptModel) -> some View {
         switch renderer {
-        case .a: CollectionTranscriptView(model: model) { meter.markFirstLayout() }
+        case .a: SpikeCollection(model: model) { meter.markFirstLayout() }
         case .b: LazyStackTranscriptView(model: model) { meter.markFirstLayout() }
         }
     }
@@ -96,6 +96,18 @@ struct SpikeScreen: View {
         .glassEffect()
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
+    }
+}
+
+/// Its own view so a streamed tick re-evaluates only the scroller, not the screen and its HUD.
+private struct SpikeCollection: View {
+    @Bindable var model: SpikeTranscriptModel
+    let onFirstLayout: () -> Void
+
+    var body: some View {
+        TranscriptCollectionView(
+            items: model.rows, expanded: $model.expanded, canLoadOlder: model.canLoadOlder,
+            loadOlder: { model.loadOlder() }, onFirstLayout: onFirstLayout)
     }
 }
 

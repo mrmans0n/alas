@@ -86,12 +86,7 @@ struct WorktreesView: View {
             .navigationTitle(title)
             .searchable(text: $model.query, isPresented: $searchPresented)
             .navigationDestination(for: SessionRoute.self) { route in
-                // Task 6 swaps this for TranscriptScreen(hub:hostID:session:).
-                if let session = hub.sessions(of: route.hostID).first(where: { $0.id == route.sessionId }) {
-                    Text(session.title)
-                } else {
-                    ContentUnavailableView("Session unavailable", systemImage: "bubble.left")
-                }
+                TranscriptScreen(hub: hub, hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: searchActive) { _, active in searchPresented = active }
             .safeAreaInset(edge: .bottom) {

@@ -82,18 +82,20 @@ enum MarkdownBlock: Equatable {
 final class MarkdownBlockCache {
     static let shared = MarkdownBlockCache()
 
-    private var entries: [String: (revision: Int, blocks: [MarkdownBlock])] = [:]
+    private var entries: [String: (text: String, blocks: [MarkdownBlock])] = [:]
 
-    /// Keeps only the newest revision per id, so a streaming row re-parses only itself.
-    func blocks(id: String, revision: Int, text: String) -> [MarkdownBlock] {
-        if let hit = entries[id], hit.revision == revision { return hit.blocks }
+    /// Keeps only the newest text per id, so a streaming row re-parses only itself. Keyed on the
+    /// text itself, so a changed message can never be served stale blocks; an unchanged row's
+    /// text usually shares storage with the cached copy, which makes the comparison cheap.
+    func blocks(id: String, text: String) -> [MarkdownBlock] {
+        if let hit = entries[id], hit.text == text { return hit.blocks }
         let blocks = MarkdownBlock.parse(text)
-        entries[id] = (revision, blocks)
+        entries[id] = (text, blocks)
         return blocks
     }
 
-    /// Ids repeat across rebuilt models (streamed rows restart at `s1a`), and a warm cache would
-    /// make every open after the first look cheaper than a real cold open.
+    /// The benchmark clears it per run: a warm cache would make every open after the first look
+    /// cheaper than a real cold open.
     func removeAll() {
         entries.removeAll()
     }
