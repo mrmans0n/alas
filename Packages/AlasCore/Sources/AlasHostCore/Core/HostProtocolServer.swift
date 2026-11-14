@@ -228,6 +228,12 @@ public final class HostProtocolConnection {
         case .removeProject(let projectID):
             try await host.projects.remove(projectID: projectID, caller: caller)
             return .done
+        case .setProjectGGMode(let projectID, let mode):
+            guard host.servedCapabilities.contains(HostProtocolCapability.projectsGGModeV1) else {
+                throw HostError.invalidRequest(reason: "This host doesn't set gg modes.")
+            }
+            try host.projects.setGGMode(projectID: projectID, mode: mode, caller: caller)
+            return .done
         case .createWorktree(let projectID, let base, let branch, let destination):
             var request = WorktreeCreateRequest(
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
