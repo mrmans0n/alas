@@ -18,12 +18,24 @@ struct SessionRoute: Hashable {
 struct WorktreesView: View {
     let hub: HostHub
     @Bindable var model: WorktreesModel
-    /// The Search tab opens with the field active.
-    var focusSearchOnAppear = false
+    var title = "Worktrees"
+    /// True while the Search tab is selected: the field is presented, and dismissed when it leaves.
+    var searchActive = false
     var onPairMac: () -> Void = {}
 
     @State private var path: [SessionRoute] = []
-    @FocusState private var searchFocused: Bool
+    @State private var searchPresented: Bool
+
+    init(hub: HostHub, model: WorktreesModel, title: String = "Worktrees", searchActive: Bool = false,
+         onPairMac: @escaping () -> Void = {}) {
+        self.hub = hub
+        self.model = model
+        self.title = title
+        self.searchActive = searchActive
+        self.onPairMac = onPairMac
+        // Only the first appearance presents the field; popping back must not.
+        _searchPresented = State(initialValue: searchActive)
+    }
 
     private var filter: RemoteSessionFilter { model.filter }
     private var query: String { model.query }
@@ -71,9 +83,8 @@ struct WorktreesView: View {
                     list(visible)
                 }
             }
-            .navigationTitle("Worktrees")
-            .searchable(text: $model.query)
-            .searchFocused($searchFocused)
+            .navigationTitle(title)
+            .searchable(text: $model.query, isPresented: $searchPresented)
             .navigationDestination(for: SessionRoute.self) { route in
                 // Task 6 swaps this for TranscriptScreen(hub:hostID:session:).
                 if let session = hub.sessions(of: route.hostID).first(where: { $0.id == route.sessionId }) {
@@ -82,12 +93,7 @@ struct WorktreesView: View {
                     ContentUnavailableView("Session unavailable", systemImage: "bubble.left")
                 }
             }
-            .task {
-                guard focusSearchOnAppear else { return }
-                // The field is created by the tab transition, so focus it just after.
-                try? await Task.sleep(for: .milliseconds(400))
-                searchFocused = true
-            }
+            .onChange(of: searchActive) { _, active in searchPresented = active }
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }

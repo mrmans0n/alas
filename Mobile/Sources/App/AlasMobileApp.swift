@@ -26,7 +26,7 @@ struct AlasMobileApp: App {
                     PeersView(hub: hub)
                 }
                 Tab(value: AppTab.search, role: .search) {
-                    WorktreesView(hub: hub, model: worktrees, focusSearchOnAppear: true) { selection = .peers }
+                    WorktreesView(hub: hub, model: worktrees, title: "Search", searchActive: selection == .search) { selection = .peers }
                 }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
