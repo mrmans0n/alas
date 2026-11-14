@@ -747,6 +747,25 @@ final class NativePeerSessions {
         return HostShepherdAction.offered(for: selectedShepherd)
     }
 
+    /// Whether the selected session's host runs its Ship, which `/ship` asks for.
+    var selectedSessionShips: Bool {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return false }
+        return hosts?.canShepherd(serverId: id.serverId) == true
+    }
+
+    /// Clears `text` from the selected session's composer once it was
+    /// handled without reaching the agent, unless the draft changed since.
+    func clearSentDraft(_ text: String) {
+        guard let selectedSessionId else { return }
+        let composer = composerState(for: selectedSessionId)
+        let sent = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard composer.draft.plainText.trimmingCharacters(in: .whitespacesAndNewlines) == sent else { return }
+        composer.replaceDraft(.empty)
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent { draft = "" }
+    }
+
     func shepherdSelected(_ action: HostShepherdAction) {
         guard let selectedSessionId,
               let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))

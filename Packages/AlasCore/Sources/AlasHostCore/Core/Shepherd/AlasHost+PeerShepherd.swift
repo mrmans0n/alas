@@ -40,28 +40,51 @@ extension SessionsAPI {
             guard stack == nil, request == nil else {
                 throw HostError.failed(message: "This session already shepherds a pull request.")
             }
-            guard let worktreeID = core.sessionManagers.values.lazy.compactMap({ $0.liveSession(for: sessionID)?.worktreeId }).first else {
+            guard let manager = core.sessionManagers.values.first(where: { $0.liveSession(for: sessionID) != nil }),
+                  let worktreeID = manager.liveSession(for: sessionID)?.worktreeId else {
                 throw SessionRefusal.notFound
             }
+            // Adopting rebinds the shepherd, which only the session's driver may do.
+            guard manager.isWriter(for: sessionID) else { throw SessionRefusal.notWriter }
             guard let context = core.reviewShepherd.effects?.worktreeContext(worktreeID), context.isEligible else {
                 throw HostError.failed(message: "The shepherd works on git worktrees only.")
             }
-            let remotes = (try? await GitService().remotes(worktreePath: context.path)) ?? []
-            guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
-                throw HostError.failed(message: "This worktree has no GitHub or GitLab remote.")
-            }
-            let prompt: String
             if let stackName = core.stackShepherd.effects?.worktreeContext(worktreeID)?.stackName {
+                let remotes = (try? await GitService().remotes(worktreePath: context.path)) ?? []
+                guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
+                    throw HostError.failed(message: "This worktree has no GitHub or GitLab remote.")
+                }
                 // As the app's Ship does, so an earlier partial choice never carries over.
                 core.stackShepherd.setPendingShipPlan(
                     .wholeStack, sessionID: sessionID, id: StackShepherdRecordID(worktreeID: worktreeID, stackName: stackName)
                 )
-                prompt = StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack)
-            } else {
-                prompt = ShepherdPromptBuilder.createPrompt(kind: kind)
+                // Answers once the session took the prompt, not when its turn ends.
+                _ = try await submit(sessionID, prompt: StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack), caller: caller)
+                return
             }
-            // Answers once the session took the prompt, not when its turn ends.
-            _ = try await submit(sessionID, prompt: prompt, caller: caller)
+            // As the app's Ship: the branch's open request is adopted, and
+            // only a branch without one asks the agent to open it.
+            let other = core.reviewShepherd.record(forWorktree: worktreeID)
+                .flatMap { $0.sessionID != sessionID && !$0.phase.isTerminal ? $0 : nil }
+            let snapshot = if let other {
+                await core.reviewShepherd.statusSnapshot(for: other.id)
+            } else {
+                await core.reviewShepherd.fetchSnapshot(worktreePath: context.path, baseBranch: context.baseBranch)
+            }
+            let isBusy = await core.shepherdSessionState(sessionID: sessionID, in: manager) == .busy
+            switch ShepherdShipAction.resolve(
+                record: nil, otherRecord: other, request: snapshot?.reviewRequest, snapshot: snapshot, isBusy: isBusy
+            ) {
+            case .adopt(let request):
+                let rules = try await core.headlessShepherdRules(worktreeID: worktreeID)
+                _ = await core.bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request, contextRules: rules)
+            case .create(let kind):
+                _ = try await submit(sessionID, prompt: ShepherdPromptBuilder.createPrompt(kind: kind), caller: caller)
+            case .shepherding(let number):
+                throw HostError.failed(message: "This session already shepherds \(number).")
+            case .unavailable(let reason):
+                throw HostError.failed(message: reason)
+            }
         }
     }
 }

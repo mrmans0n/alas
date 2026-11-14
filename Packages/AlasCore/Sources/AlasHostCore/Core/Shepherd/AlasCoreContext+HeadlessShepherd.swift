@@ -163,7 +163,7 @@ extension AlasCoreContext {
         return name
     }
 
-    private func headlessShepherdRules(worktreeID: String) async throws -> ShepherdRules {
+    func headlessShepherdRules(worktreeID: String) async throws -> ShepherdRules {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeID) else { return ShepherdRules.none }
         return try await ShepherdRulesResolver.load(worktreePath: resolved.worktree.path, projectSettings: resolved.project.shepherd)
     }

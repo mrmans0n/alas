@@ -958,6 +958,22 @@ struct HostSessionsTests {
         }
     }
 
+    /// Ship can rebind the shepherd, so a host that doesn't drive the
+    /// session refuses it before anything changes.
+    @Test func aPeerCannotShipASessionThisHostDoesNotDrive() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        await manager.releaseWriterLease(sessionId: id)
+
+        await #expect(throws: SessionRefusal.notWriter) {
+            try await sessions.shepherd(id, action: .ship, caller: .remotePeer(deviceID: "d"))
+        }
+    }
+
     /// An attention badge with auto-fix off is not escalated: Resume would do nothing.
     @Test(arguments: [
         (badge: nil as ShepherdBadgeState?, resumable: false, offered: [HostShepherdAction.ship]),

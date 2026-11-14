@@ -569,8 +569,11 @@ private struct NativePeerComposer: View {
                 },
                 onDraftClear: {},
                 onStopDictation: { dictation.stop() },
-                onSubmit: { _, attachments, intent, _, completion in
-                    submit(attachments: attachments, intent: intent, completion: completion)
+                onSubmit: { text, attachments, intent, _, completion in
+                    if offersShip, case .ship(let arguments)? = ACPAlasSlashCommand.parse(text) {
+                        return ship(text, arguments: arguments, attachments: attachments, intent: intent, completion: completion)
+                    }
+                    return submit(attachments: attachments, intent: intent, completion: completion)
                 },
                 onImageError: { showNotice($0.userMessage) },
                 filesProvider: { [] },
@@ -578,7 +581,8 @@ private struct NativePeerComposer: View {
                 acceptsImages: acceptsImages,
                 onEditorSelectionChange: { reconcileMentionPicker() },
                 onEditorKeyDown: handleMentionKey,
-                onDictationShortcut: { dictation.handleShortcut($0) }
+                onDictationShortcut: { dictation.handleShortcut($0) },
+                alasCommands: offersShip ? [ACPAlasSlashCommand.shipSuggestion] : []
             )
             .disabled(!sessionOpen)
             .accessibilityLabel("Message peer session")
@@ -600,6 +604,38 @@ private struct NativePeerComposer: View {
         // The client also receives Queue Edit restores while the editor is unmounted.
         // Its draft observer keeps this same rich state synchronized.
         reconcileMentionPicker()
+    }
+
+    /// `/ship` runs the toolbar's Ship, which needs the session's driver.
+    private var offersShip: Bool { canDrive && client.selectedSessionShips }
+
+    /// `/ship` asks the host for the session's Ship instead of reaching the
+    /// agent, as it does in a local session.
+    private func ship(
+        _ text: String, arguments: String, attachments: [ACPMessage.Attachment], intent: ACPSubmitIntent,
+        completion: @escaping ACPComposerSubmitCompletion
+    ) -> Bool {
+        let refusal: String? = if !arguments.isEmpty {
+            "/ship doesn't take arguments."
+        } else if !attachments.isEmpty {
+            "/ship doesn't take attachments. Remove them to ship."
+        } else if case .schedule = intent {
+            "/ship can't be scheduled. Send it now to ship."
+        } else if let shepherd = client.selectedShepherd {
+            shepherd.number.map { "This session already shepherds \($0). Its status is in the toolbar's \($0) button." }
+                ?? "This session already shepherds a pull request."
+        } else {
+            nil
+        }
+        if let refusal {
+            showNotice(refusal)
+            return false
+        }
+        client.shepherdSelected(.ship)
+        client.clearSentDraft(text)
+        // Completed like a sent prompt so `/ship` doesn't stay in the draft.
+        Task { @MainActor in completion(true) }
+        return true
     }
 
     private func send(_ intent: ACPSubmitIntent) {
