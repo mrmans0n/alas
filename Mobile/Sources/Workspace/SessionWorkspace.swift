@@ -61,6 +61,9 @@ final class SessionWorkspace {
         self.sessionId = sessionId
     }
 
+    /// True while a view pushed from the session screen (diff; Task 5's file viewer) is open.
+    var hasPushedChild: Bool { diff != nil || file != nil }
+
     // MARK: Lifecycle
 
     func activate() {

@@ -27,11 +27,6 @@ struct ChangesView: View {
                 Button("Refresh Changes", systemImage: "arrow.clockwise") { workspace.refreshChanges() }
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { workspace.diff != nil },
-            set: { if !$0 { workspace.closeDiff() } })) {
-            DiffView(workspace: workspace)
-        }
         .onAppear {
             if case .idle = workspace.changes { workspace.refreshChanges() }
         }

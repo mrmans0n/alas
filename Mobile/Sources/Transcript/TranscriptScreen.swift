@@ -23,6 +23,9 @@ struct TranscriptScreen: View {
         }
         .onAppear { acquire() }
         .onDisappear {
+            // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
+            // the session and workspace alive until the screen itself leaves the stack.
+            if workspace?.hasPushedChild == true { return }
             held = nil
             workspace?.deactivate()
         }
@@ -37,6 +40,7 @@ struct TranscriptScreen: View {
     }
 
     private func acquire() {
+        guard held == nil else { return }
         let (session, token) = registry.acquire(hostID: hostID, sessionId: sessionId)
         held = (session, token)
         let workspace = registry.workspace(hostID: hostID, sessionId: sessionId)
@@ -66,6 +70,12 @@ struct TranscriptScreen: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 4)
+            }
+            // Destinations for views pushed from the tabs live here, on a view that stays mounted.
+            .navigationDestination(isPresented: Binding(
+                get: { workspace.diff != nil },
+                set: { if !$0 { workspace.closeDiff() } })) {
+                DiffView(workspace: workspace)
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
