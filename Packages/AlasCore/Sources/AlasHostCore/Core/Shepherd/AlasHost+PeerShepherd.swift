@@ -59,7 +59,10 @@ extension SessionsAPI {
                     .wholeStack, sessionID: sessionID, id: StackShepherdRecordID(worktreeID: worktreeID, stackName: stackName)
                 )
                 // Answers once the session took the prompt, not when its turn ends.
-                _ = try await submit(sessionID, prompt: StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack), caller: caller)
+                _ = try await submit(
+                    sessionID, prompt: StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: .wholeStack),
+                    delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: UUID()), caller: caller
+                )
                 return
             }
             // As the app's Ship: the branch's open request is adopted, and
@@ -79,7 +82,11 @@ extension SessionsAPI {
                 let rules = try await core.headlessShepherdRules(worktreeID: worktreeID)
                 _ = await core.bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request, contextRules: rules)
             case .create(let kind):
-                _ = try await submit(sessionID, prompt: ShepherdPromptBuilder.createPrompt(kind: kind), caller: caller)
+                let branch = core.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.branch ?? ""
+                _ = try await submit(
+                    sessionID, prompt: ShepherdPromptBuilder.createPrompt(kind: kind),
+                    delegatedSource: .shipCreate(kind: kind, branch: branch, messageID: UUID()), caller: caller
+                )
             case .shepherding(let number):
                 throw HostError.failed(message: "This session already shepherds \(number).")
             case .unavailable(let reason):

@@ -1422,7 +1422,7 @@ public final class RemoteSessionGateway {
     ) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
-        case .user(_, _, let text, let attachments, _, _):
+        case .user(_, _, let text, let attachments, let source, _):
             // The text labels each attachment, so an image-only prompt isn't a
             // blank bubble on a viewer that can't show the image; `images`
             // lets one that can read the bytes show it instead.
@@ -1438,7 +1438,8 @@ public final class RemoteSessionGateway {
             let files = images.filter { $0.uri.hasPrefix("/") || $0.uri.lowercased().hasPrefix("file:") }
             return .init(stableId: sid, kind: "user", text: rowText, json: nil, index: index,
                          checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString,
-                         images: files.isEmpty ? nil : files.map { .init(uri: $0.uri, name: $0.name) })
+                         images: files.isEmpty ? nil : files.map { .init(uri: $0.uri, name: $0.name) },
+                         card: ACPPromptCard.resolved(for: source).flatMap { Self.encodeJSON($0) })
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):

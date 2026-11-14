@@ -16,6 +16,10 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     /// A user row's attached images, in the order of its `🖼` lines. Viewers
     /// read their bytes with `readTranscriptImage`; the key is left out when nil.
     public var images: [Image]? = nil
+    /// A user row Alas injected (Ship, a shepherd, review feedback): its
+    /// `ACPPromptCard` as JSON, shown in place of `text`, which stays the
+    /// instruction the agent got. The key is left out when nil.
+    public var card: String? = nil
 
     public struct Image: Codable, Equatable, Sendable {
         public let uri: String
@@ -29,7 +33,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
 
     public init(
         stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
-        checkpointId: String? = nil, images: [Image]? = nil
+        checkpointId: String? = nil, images: [Image]? = nil, card: String? = nil
     ) {
         self.stableId = stableId
         self.kind = kind
@@ -39,6 +43,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         self.isHidden = isHidden
         self.checkpointId = checkpointId
         self.images = images
+        self.card = card
     }
 }
 

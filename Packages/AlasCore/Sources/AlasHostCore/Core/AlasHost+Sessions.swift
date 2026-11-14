@@ -194,11 +194,13 @@ extension SessionsAPI {
     /// attachments are the caller's to clean up. `steer` stops the running
     /// turn and sends this prompt at once, keeping the queue. With `owner`,
     /// only that owner's session: ids are not unique across owners.
+    /// `delegatedSource` marks a turn Alas sends (Ship), shown as its card.
     public func submit(
         _ sessionID: String,
         prompt: String,
         attachments: [ACPMessage.Attachment] = [],
         steer: Bool = false,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         owner: SessionOwnerID? = nil,
         caller: HostCaller
     ) async throws -> Task<Bool, Never> {
@@ -215,7 +217,10 @@ extension SessionsAPI {
         if steer {
             await manager.steerPrompt(for: sessionID, text: prompt, attachments: attachments, onResult: onResult)
         } else {
-            await manager.sendPrompt(for: sessionID, text: prompt, attachments: attachments, onResult: onResult)
+            await manager.sendPrompt(
+                for: sessionID, text: prompt, attachments: attachments,
+                delegatedSource: delegatedSource, normalUserTurn: delegatedSource == nil, onResult: onResult
+            )
         }
         submission.isSubmitting = false
         if submission.refusedAtOnce { throw SessionRefusal.promptRejected }
