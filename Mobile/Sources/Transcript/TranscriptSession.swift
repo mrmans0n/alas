@@ -143,10 +143,13 @@ final class TranscriptSession {
 
     private func resubscribe() {
         state.resetResubscribeRequest()
-        // A page request or image read sent before a reconnect has no reply coming.
+        // A page request or image read sent before a reconnect has no reply coming, and
+        // rows whose messages are unchanged won't ask again, so resend the unanswered reads.
         fetchingOlder = false
-        requestedImages = requestedImages.filter { images[$0] != nil }
         hub.send(.subscribe(sessionId: sessionId), to: hostID)
+        for path in requestedImages where images[path] == nil {
+            hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
+        }
         refreshCanLoadOlder()
     }
 
