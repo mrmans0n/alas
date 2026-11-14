@@ -132,7 +132,6 @@ public enum RemoteVisualAidWebPolicy: Sendable {
     })();
     """
 
-
     /// The height a visual's surface takes for the content it reports: cards cap at `maxCardHeight` and
     /// scroll inside, embedded visuals grow with the transcript up to `maxEmbeddedHeight`.
     public static func contentHeight(forContentHeight height: Double, presentation: ACPVisualAid.Presentation) -> Double {

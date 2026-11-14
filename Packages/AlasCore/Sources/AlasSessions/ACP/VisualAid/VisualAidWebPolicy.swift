@@ -24,7 +24,6 @@ public enum VisualAidWebPolicy: Sendable {
         return .init(status: status, headers: headers, body: status == 200 ? document : Data())
     }
 
-
     /// Layout variables an embedded visual inherits from the app's UI font. The family is the user's own
     /// setting but lands in a `<style>` block, so characters that could end the declaration are dropped.
     /// An empty family (the system font) leaves just the system stack.
