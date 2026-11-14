@@ -20,6 +20,11 @@ struct ChangeListReply {
     let commits: [RemoteCommit]
     let truncated: Bool
     let commitsTruncated: Bool
+
+    /// `changedFiles` in changes-view.js: the branch files, else staged and unstaged once each.
+    var changedFiles: [RemoteChangedFile] {
+        files.isEmpty ? Array(Dictionary(grouping: staged + unstaged, by: \.path).values.compactMap(\.first)) : files
+    }
 }
 
 struct DiffReply {
@@ -42,6 +47,9 @@ final class SessionWorkspace {
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
+    /// The screen that pushed the open diff or file. The session can be open in several tabs at once;
+    /// only that screen's stack shows it.
+    private(set) var pushedBy: UUID?
     /// Directories the host cut short, and the last listing failure.
     private(set) var truncatedDirs: Set<String> = []
     private(set) var treeError: String?
@@ -57,6 +65,8 @@ final class SessionWorkspace {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var hostWasOnline = false
+    @ObservationIgnored private var holders = 0
+    @ObservationIgnored private var treeRequested = false
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -64,20 +74,31 @@ final class SessionWorkspace {
         self.sessionId = sessionId
     }
 
-    /// True while a view pushed from the session screen (diff; Task 5's file viewer) is open.
-    var hasPushedChild: Bool { diff != nil || file != nil }
+    /// True while a view `owner` pushed (a diff or a file) is open.
+    func hasPushedChild(_ owner: UUID) -> Bool { pushedBy == owner && (diff != nil || file != nil) }
 
     // MARK: Lifecycle
 
-    func activate() {
-        guard listener == nil else { return }
-        listener = hub.addListener(hostID) { [weak self] in self?.receive($0) }
-        hostWasOnline = hub.state(of: hostID) == .online
-        watchGeneration += 1
-        watchHost(generation: watchGeneration)
+    /// Listens while any screen showing the session holds the token; the last release stops.
+    /// The first holder asks again for whatever is open, since replies sent while nobody listened
+    /// were dropped and the host may have reconnected meanwhile.
+    func activate() -> ListenerToken {
+        holders += 1
+        if holders == 1 {
+            listener = hub.addListener(hostID) { [weak self] in self?.receive($0) }
+            hostWasOnline = hub.state(of: hostID) == .online
+            if hostWasOnline { replay() }
+            watchGeneration += 1
+            watchHost(generation: watchGeneration)
+        }
+        return ListenerToken { [weak self] in
+            guard let self else { return }
+            holders -= 1
+            if holders == 0 { deactivate() }
+        }
     }
 
-    func deactivate() {
+    private func deactivate() {
         listener = nil
         watchGeneration += 1
         refreshTask?.cancel()
@@ -99,8 +120,11 @@ final class SessionWorkspace {
     private func replay() {
         if case .idle = changes {} else { refreshChanges() }
         if let diff { send(.fileDiff(sessionId: sessionId, path: diff.key.path, stage: diff.key.stage)) }
-        if !tree.children.isEmpty { loadTree() }
-        if let file { openFile(file.path) }
+        if treeRequested { loadTree() }
+        if let file {
+            self.file = (file.path, .loading)
+            send(.readFile(sessionId: sessionId, path: file.path))
+        }
     }
 
     // MARK: Changes
@@ -110,7 +134,8 @@ final class SessionWorkspace {
         send(.listChanges(sessionId: sessionId))
     }
 
-    func openDiff(_ path: String, stage: String?) {
+    func openDiff(_ path: String, stage: String?, by owner: UUID) {
+        pushedBy = owner
         diff = (DiffKey(path: path, stage: stage), .loading)
         send(.fileDiff(sessionId: sessionId, path: path, stage: stage))
     }
@@ -145,6 +170,7 @@ final class SessionWorkspace {
     // MARK: Files (Task 5)
 
     func loadTree() {
+        treeRequested = true
         send(.listFiles(sessionId: sessionId, path: nil, comparisonMode: nil))
     }
 
@@ -154,7 +180,8 @@ final class SessionWorkspace {
         if tree.children[dir] == nil { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) }
     }
 
-    func openFile(_ path: String) {
+    func openFile(_ path: String, by owner: UUID) {
+        pushedBy = owner
         file = (path, .loading)
         send(.readFile(sessionId: sessionId, path: path))
     }

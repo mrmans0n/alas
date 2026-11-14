@@ -4,6 +4,7 @@ import SwiftUI
 /// The Changes tab: branch, staged, unstaged and commit sections as a flat list; a file opens its diff.
 struct ChangesView: View {
     let workspace: SessionWorkspace
+    let owner: UUID
 
     var body: some View {
         Group {
@@ -19,7 +20,7 @@ struct ChangesView: View {
                     Button("Try Again") { workspace.refreshChanges() }
                 }
             case .loaded(let reply):
-                ChangeList(reply: reply, workspace: workspace)
+                ChangeList(reply: reply, workspace: workspace, owner: owner)
             }
         }
         .toolbar {
@@ -36,6 +37,7 @@ struct ChangesView: View {
 private struct ChangeList: View {
     let reply: ChangeListReply
     let workspace: SessionWorkspace
+    let owner: UUID
 
     private struct Section: Identifiable {
         let title: String
@@ -59,9 +61,7 @@ private struct ChangeList: View {
     }
 
     private var summary: String {
-        let files = reply.files.isEmpty
-            ? Array(Dictionary(grouping: reply.staged + reply.unstaged, by: \.path).values.compactMap(\.first))
-            : reply.files
+        let files = reply.changedFiles
         return RemoteChangesRules.summary(
             comparisonRef: reply.comparisonRef, fileCount: files.count,
             add: files.reduce(0) { $0 + $1.add }, del: files.reduce(0) { $0 + $1.del },
@@ -84,7 +84,7 @@ private struct ChangeList: View {
                                     .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
                             }
                             ForEach(group.files, id: \.path) { file in
-                                Button { workspace.openDiff(file.path, stage: section.stage) } label: {
+                                Button { workspace.openDiff(file.path, stage: section.stage, by: owner) } label: {
                                     FileRow(file: file, nested: !group.directory.isEmpty)
                                 }
                                 .buttonStyle(.plain)

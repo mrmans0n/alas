@@ -8,6 +8,10 @@ struct TranscriptScreen: View {
     let sessionId: String
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
     @State private var workspace: SessionWorkspace?
+    @State private var workspaceToken: ListenerToken?
+    /// Owns this screen's pushed diff or file: the same session may be open in another tab too.
+    @State private var screenID = UUID()
+    @State private var visible = false
     @State private var mode = SessionMode.transcript
     @State private var showSettings = false
     @State private var renaming = false
@@ -21,16 +25,21 @@ struct TranscriptScreen: View {
                 Color(.systemBackground)
             }
         }
-        .onAppear { acquire() }
+        .onAppear {
+            visible = true
+            acquire()
+        }
         .onDisappear {
+            visible = false
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
             // Checked a turn later so a pushed view popped along with this screen has cleared
-            // its state first (DiffView's own onDisappear).
+            // its state first (DiffView's own onDisappear), and so a screen that came straight
+            // back keeps what it holds.
             Task { @MainActor in
-                if workspace?.hasPushedChild == true { return }
+                if visible || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
-                workspace?.deactivate()
+                workspaceToken = nil
             }
         }
     }
@@ -48,7 +57,7 @@ struct TranscriptScreen: View {
         let (session, token) = registry.acquire(hostID: hostID, sessionId: sessionId)
         held = (session, token)
         let workspace = registry.workspace(hostID: hostID, sessionId: sessionId)
-        workspace.activate()
+        workspaceToken = workspace.activate()
         self.workspace = workspace
     }
 
@@ -62,13 +71,13 @@ struct TranscriptScreen: View {
             .overlay {
                 switch mode {
                 case .transcript: EmptyView()
-                case .changes: ChangesView(workspace: workspace).background(Color(.systemBackground))
-                case .files: FilesView(workspace: workspace).background(Color(.systemBackground))
+                case .changes: ChangesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
+                case .files: FilesView(workspace: workspace, owner: screenID).background(Color(.systemBackground))
                 }
             }
             .safeAreaInset(edge: .top) {
                 Picker("View", selection: $mode) {
-                    ForEach(available, id: \.self) { Text($0.rawValue) }
+                    ForEach(available, id: \.self) { Text(label($0, session, workspace)) }
                 }
                 .pickerStyle(.segmented)
                 .glassEffect(.regular.interactive(), in: .capsule)
@@ -77,12 +86,12 @@ struct TranscriptScreen: View {
             }
             // Destinations for views pushed from the tabs live here, on a view that stays mounted.
             .navigationDestination(isPresented: Binding(
-                get: { workspace.diff != nil },
+                get: { workspace.diff != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeDiff() } })) {
                 DiffView(workspace: workspace)
             }
             .navigationDestination(isPresented: Binding(
-                get: { workspace.file != nil },
+                get: { workspace.file != nil && workspace.pushedBy == screenID },
                 set: { if !$0 { workspace.closeFile() } })) {
                 FileViewer(workspace: workspace)
             }
@@ -127,6 +136,16 @@ struct TranscriptScreen: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { session.rename(newTitle) }
             }
+    }
+
+    /// Changes carries the web's tab badge: the loaded count, else the worktree summary's.
+    private func label(_ mode: SessionMode, _ session: TranscriptSession, _ workspace: SessionWorkspace) -> String {
+        guard mode == .changes else { return mode.rawValue }
+        let loaded: ChangeListReply? = if case .loaded(let reply) = workspace.changes, reply.metricsAvailable { reply } else { nil }
+        let badge = RemoteChangesRules.badge(
+            loaded: loaded?.changedFiles.count, truncated: loaded?.truncated ?? false,
+            fallback: session.summary?.worktree?.changedFileCount ?? 0)
+        return badge.map { "\(mode.rawValue) \($0)" } ?? mode.rawValue
     }
 
     private func subtitle(_ session: TranscriptSession) -> String {

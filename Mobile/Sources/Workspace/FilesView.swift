@@ -4,13 +4,18 @@ import SwiftUI
 /// The session's file tree. The first appearance asks the host for the root listing.
 struct FilesView: View {
     let workspace: SessionWorkspace
+    let owner: UUID
 
     var body: some View {
         let rows = workspace.tree.rows()
         Group {
             if rows.isEmpty {
                 if let error = workspace.treeError {
-                    ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
+                    ContentUnavailableView {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                    } actions: {
+                        Button("Try Again") { workspace.loadTree() }
+                    }
                 } else if workspace.tree.children[""] != nil {
                     ContentUnavailableView("No files", systemImage: "folder")
                 } else {
@@ -28,7 +33,7 @@ struct FilesView: View {
                                 if row.node.kind == "dir" {
                                     if RemoteFileTree.canExpand(row.node) { workspace.toggle(row.node.path) }
                                 } else {
-                                    workspace.openFile(row.node.path)
+                                    workspace.openFile(row.node.path, by: owner)
                                 }
                             }
                     }
