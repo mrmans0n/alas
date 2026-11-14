@@ -63,9 +63,10 @@ struct ChangedRow: View {
                 // of the counts.
                 HStack(spacing: scale.space[2]) {
                     HStack(spacing: scale.space[1]) {
-                        if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
-                        if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
+                        if add > 0 { Text("+" + WorktreeRowPresentation.compactCount(add)).foregroundColor(theme.color("add")) }
+                        if del > 0 { Text("−" + WorktreeRowPresentation.compactCount(del)).foregroundColor(theme.color("del")) }
                     }
+                    .help(add > 0 || del > 0 ? "\(add) lines added, \(del) lines deleted" : "")
                     StatusBadge(status: file.status)
                 }
             }
