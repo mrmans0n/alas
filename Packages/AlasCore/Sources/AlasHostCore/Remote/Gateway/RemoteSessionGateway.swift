@@ -1273,40 +1273,11 @@ public final class RemoteSessionGateway {
 
         guard !RemoteVisualAidLimits.exceedsBounds(ids: selectedOptionIds, note: note) else { return reject("invalid") }
 
-        guard let answer = Self.visualAidAnswer(to: question, action: action, selectedOptionIds: selectedOptionIds, note: note) else {
+        guard let answer = RemoteVisualAidAnswer.answer(to: question, action: action, selectedOptionIds: selectedOptionIds, note: note) else {
             return reject("invalid")
         }
         guard (try? await sessions.answerVisualAid(sessionId, visualID: id, answer: answer, caller: hostCaller)) != nil else {
             return reject("failed")
-        }
-    }
-
-    /// The answer a viewer's response to a visual aid's question stands for,
-    /// or nil when it does not fit the question: choices in question order,
-    /// the note trimmed like the phone trims it.
-    public nonisolated static func visualAidAnswer(
-        to question: ACPVisualAid.Question,
-        action: String,
-        selectedOptionIds: [String],
-        note: String?,
-        at date: Date = Date()
-    ) -> ACPVisualAid.Answer? {
-        switch action {
-        case "dismiss":
-            return .dismissed(at: date)
-        case "answer":
-            let known = Set(question.options.map(\.id))
-            let picked = Set(selectedOptionIds)
-            guard picked.count == selectedOptionIds.count, !picked.isEmpty, picked.isSubset(of: known),
-                  question.allowMultiple || picked.count == 1
-            else { return nil }
-            let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let trimmed, trimmed.count > ACPVisualAidQuestionForm.noteMaxLength { return nil }
-            // Question order, like a native answer.
-            let ordered = question.options.map(\.id).filter(picked.contains)
-            return .answered(selectedOptionIds: ordered, note: (trimmed?.isEmpty ?? true) ? nil : trimmed, at: date)
-        default:
-            return nil
         }
     }
 

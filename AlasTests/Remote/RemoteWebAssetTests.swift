@@ -1828,7 +1828,7 @@ struct RemoteWebAssetTests {
         context.evaluateScript(module)
         #expect(context.exception == nil)
         let csp = context.evaluateScript("globalThis.RemoteVisualAid.CSP")?.toString()
-        #expect(csp == VisualAidWebPolicy.contentSecurityPolicy)
+        #expect(csp == RemoteVisualAidWebPolicy.contentSecurityPolicy)
     }
 
     @Test func visualAidFrameCopyHasEveryDesktopClass() throws {

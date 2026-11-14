@@ -2071,16 +2071,6 @@ struct RemoteSessionGatewayTests {
         return nil
     }
 
-    @Test func visualAnswersKeepQuestionOrderAndTrimTheNote() throws {
-        let question = try #require(makeVisual(allowMultiple: true).question)
-        #expect(RemoteSessionGateway.visualAidAnswer(
-            to: question, action: "answer", selectedOptionIds: ["b", "a"], note: "  keep it  ", at: .distantPast
-        ) == .answered(selectedOptionIds: ["a", "b"], note: "keep it", at: .distantPast))
-        #expect(RemoteSessionGateway.visualAidAnswer(
-            to: question, action: "dismiss", selectedOptionIds: [], note: nil, at: .distantPast
-        ) == .dismissed(at: .distantPast))
-    }
-
     @Test(arguments: [
         ("notWriter", false, false, "answer", ["a"], Optional<String>.none),
         ("invalid", true, false, "answer", [String](), nil),
@@ -2144,34 +2134,6 @@ struct RemoteSessionGatewayTests {
     ])
     func visualResponseBoundsRejectOversizedInputBeforeAnyWork(ids: [String], note: String?, exceeds: Bool) {
         #expect(RemoteVisualAidLimits.exceedsBounds(ids: ids, note: note) == exceeds)
-    }
-
-    @Test(arguments: [(2000, true), (2001, false)])
-    func aNoteIsLimitedByGraphemesNotBytes(count: Int, accepted: Bool) throws {
-        let question = try #require(makeVisual().question)
-        let note = String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: count)
-        #expect((RemoteSessionGateway.visualAidAnswer(to: question, action: "answer", selectedOptionIds: ["a"], note: note) != nil) == accepted)
-    }
-
-    /// The same vectors run in scripts/tests/remote-web-visual-aid/test-visual-aid.js against `trimNote`: the phone
-    /// must count and send exactly what this side trims (CharacterSet.whitespacesAndNewlines).
-    @Test(arguments: [
-        (0x85, true), (0x200B, true), (0xA0, true), (0x2028, true), (0x3000, true), (0x1680, true),
-        (0x202F, true), (0xFEFF, false),
-    ] as [(UInt32, Bool)])
-    func noteEdgesTrimLikeThePhone(scalar: UInt32, trimmed: Bool) throws {
-        let question = try #require(makeVisual().question)
-        let edge = String(Unicode.Scalar(scalar)!)
-        let body = String(repeating: "x", count: 2000)
-        for (note, expectedNote) in [(edge + body, trimmed ? body : nil), (edge + body + edge, trimmed ? body : nil), (edge, trimmed ? "" : edge)] {
-            let answer = RemoteSessionGateway.visualAidAnswer(to: question, action: "answer", selectedOptionIds: ["a"], note: note)
-            // Kept edge characters push the 2000-character body over the limit; the edge-only note stays valid.
-            let accepted = trimmed || note == edge
-            #expect((answer != nil) == accepted, "U+\(String(scalar, radix: 16)) \(note.count)")
-            if accepted, case .answered(_, let stored, _) = answer {
-                #expect(stored == (expectedNote?.isEmpty == true ? nil : expectedNote))
-            }
-        }
     }
 
     @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {

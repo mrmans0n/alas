@@ -333,7 +333,7 @@ struct ACPVisualAidCard: View {
     /// and links open only once it is not.
     private func installChoiceHandler() {
         guard let page else { return }
-        page.externalLinksEnabled = VisualAidWebPolicy.allowsExternalLinks(
+        page.externalLinksEnabled = RemoteVisualAidWebPolicy.allowsExternalLinks(
             hasQuestion: visual.question != nil, answer: visual.answer)
         guard ACPVisualAidQuestionForm.isEditable(answer: visual.answer, canAnswer: canAnswer), let form else {
             page.onChoice = { _ in }

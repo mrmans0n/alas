@@ -24,34 +24,7 @@ struct VisualAidWebPolicyTests {
         let response = VisualAidWebPolicy.response(for: try #require(URL(string: url)), visualID: Self.id, document: Data("doc".utf8))
         #expect(response.status == status)
         #expect(response.body == (status == 200 ? Data("doc".utf8) : Data()))
-        #expect(response.headers["Content-Security-Policy"] == VisualAidWebPolicy.contentSecurityPolicy)
-    }
-
-    @Test(arguments: [
-        ("alas-visual://\(visualHost)/", true, true),
-        ("alas-visual://\(visualHost)/#section", true, true),
-        ("alas-visual://\(visualHost)/", false, false),
-        ("https://example.com/", true, false),
-    ])
-    func navigationStaysOnTheDocument(url: String, mainFrame: Bool, allowed: Bool) {
-        #expect(VisualAidWebPolicy.allowsNavigation(to: URL(string: url), mainFrame: mainFrame, visualID: Self.id) == allowed)
-    }
-
-    @Test(arguments: [
-        ("<!DOCTYPE html><html></html>", true),
-        ("  \n<!doctype html>", true),
-        ("<!-- note --> <HTML lang=\"en\">", true),
-        ("<!-- unterminated <html>", false),
-        ("<div>hi</div>", false),
-        ("<h2>html</h2>", false),
-        ("<html-preview>x</html-preview>", false),
-        ("<!doctype-widget>", false),
-        ("<html>", true),
-        ("<html/>", true),
-        ("<!DOCTYPE\nhtml>", true),
-    ])
-    func fullDocumentDetection(html: String, full: Bool) {
-        #expect(VisualAidWebPolicy.isFullDocument(html) == full)
+        #expect(response.headers["Content-Security-Policy"] == RemoteVisualAidWebPolicy.contentSecurityPolicy)
     }
 
     @Test("a wheel event scrolls the page only while it can move that way", arguments: [
@@ -131,33 +104,6 @@ struct VisualAidWebPolicyTests {
             == .deliver(.transcript, includingHeld: true))
     }
 
-    @Test("fragments go inside the template verbatim, placeholders included")
-    func fragmentAssembly() {
-        let html = "<p>{{CONTENT}} and {{HEAD}}</p>"
-        let document = String(decoding: VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: .card), as: UTF8.self)
-        #expect(document.contains("<body><p>{{CONTENT}} and {{HEAD}}</p></body>"))
-        #expect(document.contains("--alas-text: red;"))
-        #expect(document.contains(VisualAidWebPolicy.contentSecurityPolicy))
-    }
-
-    @Test("the frame carries the presentation class and never rewrites agent HTML", arguments: [
-        (ACPVisualAid.Presentation.embedded, "alas-embedded"), (.card, "alas-card"),
-    ])
-    func fragmentGetsPresentationClass(presentation: ACPVisualAid.Presentation, expected: String) {
-        let document = String(decoding: VisualAidWebPolicy.document(
-            html: "<p>{{HTML_CLASS}}</p>", themeVariables: [:], frameTemplate: Self.template, presentation: presentation), as: UTF8.self)
-        #expect(document.contains(#"<html class="\#(expected)">"#))
-        #expect(document.contains("<body><p>{{HTML_CLASS}}</p></body>"))
-    }
-
-    @Test("content height clamps per presentation", arguments: [
-        (ACPVisualAid.Presentation.card, CGFloat(5000), CGFloat(720)),
-        (.embedded, 5000, 2000), (.embedded, 900, 900), (.embedded, 10, 120),
-    ])
-    func contentHeightClamps(presentation: ACPVisualAid.Presentation, content: CGFloat, expected: CGFloat) {
-        #expect(VisualAidWebPolicy.contentHeight(forContentHeight: content, presentation: presentation) == expected)
-    }
-
     @Test("a font family cannot break out of its declaration")
     func layoutVariablesSanitizeTheFamily() throws {
         let variables = VisualAidWebPolicy.layoutVariables(fontFamily: #"Evil"; } body { x"#, fontSize: 14.5)
@@ -171,51 +117,6 @@ struct VisualAidWebPolicyTests {
     func layoutVariablesWithoutAFamily(family: String) {
         let variables = VisualAidWebPolicy.layoutVariables(fontFamily: family, fontSize: 13.5)
         #expect(variables["--alas-font-sans"] == "-apple-system, system-ui, sans-serif")
-    }
-
-    @Test("a full document is returned unchanged", arguments: [
-        "<!DOCTYPE html><html><HEAD lang=\"x\"><title>t</title></HEAD><body>b</body></html>",
-        "<html><body>b</body></html>",
-        "<html><!-- <head> --><head><title>t</title></head></html>",
-        "<html><head data-x=\"a>b\"><title>t</title></head></html>",
-        "<html><header>h</header><head><title>t</title></head></html>",
-        "<html data-note=\"<head>\"><body>b</body></html>",
-        "<html><body><script>const tag = '<head>';</script></body></html>",
-    ])
-    func fullDocumentIsReturnedUnchanged(html: String) {
-        for presentation in [ACPVisualAid.Presentation.embedded, .card] {
-            let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: presentation)
-            #expect(document == Data(html.utf8), "\(presentation)")
-        }
-    }
-
-    @Test("the sandbox never allows connections or form posts")
-    func cspBlocksExfiltrationChannels() {
-        #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("connect-src 'none'"))
-        #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("form-action 'none'"))
-    }
-
-    @Test("a question visual's links stay dead until it is answered, and a dismissal does not unlock them", arguments: [
-        (false, ACPVisualAid.Answer?.none, true),
-        (true, ACPVisualAid.Answer?.none, false),
-        (true, .dismissed(at: Date(timeIntervalSince1970: 0)), false),
-        (true, .answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 0)), true),
-    ])
-    func externalLinksWaitForTheAnswer(hasQuestion: Bool, answer: ACPVisualAid.Answer?, allowed: Bool) {
-        #expect(VisualAidWebPolicy.allowsExternalLinks(hasQuestion: hasQuestion, answer: answer) == allowed)
-    }
-
-    @Test("only the loading rules let https resources in; the locked rules keep the scheme, data and blob")
-    func lockedRulesDropHttps() throws {
-        func filters(_ rules: String) throws -> [String] {
-            let list = try #require(JSONSerialization.jsonObject(with: Data(rules.utf8)) as? [[String: Any]])
-            return list.compactMap { ($0["trigger"] as? [String: Any])?["url-filter"] as? String }
-        }
-        let loading = try filters(VisualAidWebPolicy.contentRules)
-        let locked = try filters(VisualAidWebPolicy.lockedContentRules)
-        #expect(loading.contains { $0.hasPrefix("^https:") })
-        #expect(!locked.contains { $0.hasPrefix("^https:") })
-        #expect(locked.contains("^alas-visual:"))
     }
 
     @Test("the page budget closes the least recently admitted page")
@@ -282,7 +183,7 @@ extension VisualAidWebPolicyTests {
         defer { page.close() }
         try await waitUntilReady(page)
         let edges = try await page.webView.evaluateJavaScript(
-            "alasVisualScrollEdges()", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
+            "alasVisualScrollEdges()", in: nil, contentWorld: .world(name: RemoteVisualAidWebPolicy.bridgeWorldName))
         let result = try #require(edges as? [String: Bool])
         #expect(result == ["scrollUp": false, "scrollDown": scrollsDown])
     }
@@ -297,7 +198,7 @@ extension VisualAidWebPolicyTests {
         page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         defer { page.close() }
         try await waitUntilReady(page)
-        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let world = WKContentWorld.world(name: RemoteVisualAidWebPolicy.bridgeWorldName)
         let inside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
         #expect(inside as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
         let outside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 160)", in: nil, contentWorld: world)
@@ -322,7 +223,7 @@ extension VisualAidWebPolicyTests {
         page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         defer { page.close() }
         try await waitUntilReady(page)
-        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let world = WKContentWorld.world(name: RemoteVisualAidWebPolicy.bridgeWorldName)
         let edges = try await page.webView.evaluateJavaScript(
             "document.getElementById('box').scrollTop = 1e6; alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
         #expect(edges as? [String: Bool] == ["scrollUp": true, "scrollDown": scrollsDown])
@@ -400,7 +301,7 @@ extension VisualAidWebPolicyTests {
         expectInput(of: page.webView, blocked: false)
         // The bridge script still ran once the stalled load was cancelled, so selection mirroring works.
         let bridge = try await page.webView.evaluateJavaScript(
-            "typeof alasVisualSelect", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
+            "typeof alasVisualSelect", in: nil, contentWorld: .world(name: RemoteVisualAidWebPolicy.bridgeWorldName))
         #expect(bridge as? String == "function")
     }
 
@@ -431,7 +332,7 @@ extension VisualAidWebPolicyTests {
         var opened: [URL] = []
         page.onChoice = { choices.append($0) }
         page.openExternal = { opened.append($0) }
-        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let world = WKContentWorld.world(name: RemoteVisualAidWebPolicy.bridgeWorldName)
         /// Runs the bridge's click handler on a real element; true when it called `preventDefault`.
         func click(_ selector: String) async throws -> Bool {
             let result = try await page.webView.callAsyncJavaScript(
@@ -468,10 +369,10 @@ extension VisualAidWebPolicyTests {
         try await waitUntilReady(page)
         var opened: [URL] = []
         page.openExternal = { opened.append($0) }
-        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let world = WKContentWorld.world(name: RemoteVisualAidWebPolicy.bridgeWorldName)
         func post(_ link: String) async throws {
             _ = try await page.webView.evaluateJavaScript(
-                "window.webkit.messageHandlers.\(VisualAidWebPolicy.bridgeHandlerName).postMessage({open: '\(link)'}) && null",
+                "window.webkit.messageHandlers.\(RemoteVisualAidWebPolicy.bridgeHandlerName).postMessage({open: '\(link)'}) && null",
                 in: nil, contentWorld: world)
         }
 
