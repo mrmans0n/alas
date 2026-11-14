@@ -12,6 +12,7 @@
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
+		185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */; };
 		1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
@@ -21,6 +22,7 @@
 		422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1547D85F76565F3FE516B06A /* SessionWorkspace.swift */; };
 		44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */; };
 		468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836FA1B810A2D04B52F5C3BD /* QueueTray.swift */; };
+		4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
 		7000D63FB53A488810B6E422 /* InboxModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB4C7CE3F100F5656449A2C /* InboxModel.swift */; };
 		73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD039065974B934F0D88642 /* FrameMeter.swift */; };
@@ -60,6 +62,7 @@
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
 		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
+		416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionSheet.swift; sourceTree = "<group>"; };
 		4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
 		5675178FB5741806BEB65930 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
 		57A94D2BB531632B6E5027AE /* ComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerBar.swift; sourceTree = "<group>"; };
@@ -72,6 +75,7 @@
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		836FA1B810A2D04B52F5C3BD /* QueueTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTray.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
+		B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionModel.swift; sourceTree = "<group>"; };
 		B7A9014AA3A262509E8B3DB3 /* frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = frame.html; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidCard.swift; sourceTree = "<group>"; };
@@ -242,6 +246,8 @@
 		ED52D1A93EE737EF94C55636 /* Sessions */ = {
 			isa = PBXGroup;
 			children = (
+				B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */,
+				416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */,
 				E827B4E05449D23196D8F673 /* WorktreeRow.swift */,
 				CFC88463B7E1083C886AC282 /* WorktreesView.swift */,
 			);
@@ -358,6 +364,8 @@
 				28905A744E97862B779D9BBB /* InboxView.swift in Sources */,
 				EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */,
 				06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */,
+				4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */,
+				185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */,
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
