@@ -11,6 +11,7 @@ struct ComposerBar: View {
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var picked: [PhotosPickerItem] = []
     @State private var searchTask: Task<Void, Never>?
+    @State private var queueOpen = false
 
     private var config: RemoteSessionConfig? { session.config }
     private var text: String { session.draft.text }
@@ -47,6 +48,7 @@ struct ComposerBar: View {
                     if !session.draft.mentions.contains(mention) { session.draft.mentions.append(mention) }
                 }
             }
+            if queueOpen { QueueTray(session: session).transition(.move(edge: .bottom).combined(with: .opacity)) }
             field
         }
         .padding(.horizontal, 12)
@@ -74,6 +76,7 @@ struct ComposerBar: View {
             HStack(spacing: 6) {
                 if config?.acceptsImages == true { attachButton }
                 chips
+                QueueBadge(session: session, open: $queueOpen)
                 Spacer(minLength: 0)
                 if let usage = config?.usage, let context = usage.context { UsageRing(usage: usage, context: context) }
                 actionButton
