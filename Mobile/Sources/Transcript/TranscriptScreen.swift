@@ -28,7 +28,9 @@ struct TranscriptScreen: View {
     private func content(_ session: TranscriptSession) -> some View {
         TranscriptContent(session: session)
             .safeAreaInset(edge: .bottom) {
-                if session.hasEnded {
+                if !session.hasEnded {
+                    ComposerBar(session: session)
+                } else {
                     Text("This session has ended.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

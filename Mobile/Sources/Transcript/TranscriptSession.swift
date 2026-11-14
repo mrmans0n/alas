@@ -56,6 +56,7 @@ final class TranscriptSession {
     private(set) var plan: RemotePlanPayload?
     private(set) var elicitation: RemoteElicitationPayload?
     private(set) var isStopping = false
+    private(set) var hasCancellableBackgroundWork = false
     var rejection: String?
     /// Candidates for the latest query only.
     private(set) var mentionCandidates: [RemoteMention] = []
@@ -339,6 +340,9 @@ final class TranscriptSession {
         if isClosed != state.isClosed { isClosed = state.isClosed }
         if streamingState != state.streamingState { streamingState = state.streamingState }
         if streamingState == "idle", isStopping { isStopping = false }
+        if hasCancellableBackgroundWork != state.hasCancellableBackgroundWork {
+            hasCancellableBackgroundWork = state.hasCancellableBackgroundWork
+        }
         if config != state.config { config = state.config }
         if queue != state.queue { queue = state.queue }
         if canDrive != state.canDrive { canDrive = state.canDrive }
