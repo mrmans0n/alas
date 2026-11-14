@@ -37,7 +37,9 @@ final class TranscriptSession {
     @ObservationIgnored private var fetchingOlder = false
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var subscription: ListenerToken?
-    @ObservationIgnored private var hostWatch: Task<Void, Never>?
+    @ObservationIgnored private var hostWasOnline = false
+    /// Bumped on open and close, so a watch left over from an earlier open stops.
+    @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var lastSummary: RemoteSessionSummary?
 
     private enum LoadedImage {
@@ -78,28 +80,25 @@ final class TranscriptSession {
         isClosed || hub.sessions(of: hostID).first { $0.id == sessionId }?.isActive != true
     }
 
-    isolated deinit {
-        hostWatch?.cancel()
-    }
-
     func open() {
         guard listener == nil else { return }
         listener = hub.addListener(hostID) { [weak self] message in
             self?.receive(message)
         }
         subscription = hub.subscribe(sessionId, on: hostID)
-        watchHost()
+        hostWasOnline = hub.state(of: hostID) == .online
+        watchGeneration += 1
+        watchHost(generation: watchGeneration)
     }
 
     func close() {
         guard listener != nil else { return }
         subscription = nil
         listener = nil
+        watchGeneration += 1
         MarkdownBlockCache.shared.remove(ids: items.map(\.id))
         // Unanswered reads die with the subscription; a reopened row asks again.
         requestedImages = requestedImages.filter { images[$0] != nil }
-        hostWatch?.cancel()
-        hostWatch = nil
     }
 
     func loadOlder() {
@@ -123,22 +122,18 @@ final class TranscriptSession {
         }
     }
 
-    /// Resubscribes each time the host comes back online. `Observations` re-reads the hub's
-    /// state after every change, so no connection event needs forwarding to listeners.
-    private func watchHost() {
-        let hub = hub
-        let hostID = hostID
-        let initiallyOnline = hub.state(of: hostID) == .online
-        hostWatch = Task { [weak self] in
-            var wasOnline = initiallyOnline
-            for await state in Observations({ @MainActor in hub.state(of: hostID) }) {
-                let online = state == .online
-                defer { wasOnline = online }
-                guard online, !wasOnline else { continue }
-                guard let self else { return }
-                self.resubscribe()
-            }
+    /// Resubscribes each time the host comes back online. Observation tracking re-reads the
+    /// hub's state after every change, so no connection event needs forwarding to listeners.
+    /// (Not `Observations`: Swift 6.3.3, in CI's Xcode 26.6, crashes compiling that closure.)
+    private func watchHost(generation: Int) {
+        guard generation == watchGeneration else { return }
+        let online = withObservationTracking {
+            hub.state(of: hostID) == .online
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.watchHost(generation: generation) }
         }
+        defer { hostWasOnline = online }
+        if online, !hostWasOnline { resubscribe() }
     }
 
     private func resubscribe() {
