@@ -178,7 +178,8 @@ final class SessionWorkspace {
     func toggle(_ dir: String) {
         if tree.expanded.remove(dir) != nil { return }
         tree.expanded.insert(dir)
-        if tree.children[dir] == nil { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) }
+        // Always re-lists: a collapsed directory misses the refreshes, so its cached listing shows only until the reply.
+        send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil))
     }
 
     func openFile(_ path: String, by owner: UUID) {
