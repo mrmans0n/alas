@@ -24,7 +24,9 @@ extension AlasCoreContext {
         // A branch off the naming scheme can still be a stack; gg answers.
         guard context.permitsCurrentStackQuery else { return HostGGStackRead(stack: nil, problem: nil) }
         do {
-            let stack = try await GGService().currentStack(worktreePath: worktree.path.path, refreshRemote: refresh)
+            // Older gg builds lack `--no-refresh`; they read remote state too.
+            let localOnly = !refresh && GGAvailability.shared.capabilities.localStackSnapshot
+            let stack = try await GGService().currentStack(worktreePath: worktree.path.path, refreshRemote: !localOnly)
             return HostGGStackRead(stack: stack, problem: nil)
         } catch {
             return HostGGStackRead(stack: nil, problem: (error as? GGServiceError)?.userMessage ?? error.localizedDescription)
