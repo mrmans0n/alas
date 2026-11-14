@@ -29,6 +29,20 @@ struct ACPDelegatedPromptSourceTests {
             == "# Chat\n\n## Alas · \(title)\n\nOpen a PR.\n")
     }
 
+    /// A paired Mac shows a host's Ship and shepherd turns as their cards,
+    /// not as the instruction the agent got.
+    @Test @MainActor // The gateway's encoder is main-actor isolated.
+    func aCardedTurnReachesAPeerWithItsCard() throws {
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
+        let message = ACPMessage.user(id: UUID(), messageId: nil, text: "Open a PR.", attachments: [], delegatedSource: source)
+        guard case .user(let text, _, _, let json?) = RemoteTranscriptRow(message: RemoteSessionGateway.toWire(message, index: 0)) else {
+            Issue.record("expected a carded user row")
+            return
+        }
+        #expect(text == "Open a PR.")
+        #expect(try JSONDecoder().decode(ACPPromptCard.self, from: Data(json.utf8)) == source.card)
+    }
+
     @Test("queue editing cannot turn an app action into user-authored content", arguments: ["compose", "replace"])
     @MainActor // Queue mutations belong to the main-actor session.
     func editingKeepsAppActionAttribution(action: String) throws {

@@ -454,6 +454,10 @@ struct RemoteProtocolTests {
             text: String(repeating: "\u{0}", count: 512), json: nil, index: 43
         ),
         RemoteWireMessage(
+            stableId: "large-card", kind: "user", text: "Ship it.", json: nil, index: 46,
+            card: #"{"title":""# + String(repeating: "x", count: 8192) + #""}"#
+        ),
+        RemoteWireMessage(
             stableId: "large-tool", kind: "toolCall", text: nil,
             json: #"{"output":""# + String(repeating: "x", count: 8192) + #""}"#, index: 44
         ),

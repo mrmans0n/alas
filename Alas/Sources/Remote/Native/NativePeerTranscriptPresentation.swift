@@ -86,7 +86,7 @@ final class NativePeerRowCache {
 
     private func proxy(for row: NativePeerRow, stableId: String) -> ACPMessage {
         switch row {
-        case .user(let text, _, _):
+        case .user(let text, _, _, _):
             .user(id: UUID(), messageId: nil, text: text, attachments: [])
         case .agent(let text):
             .agent(id: UUID(), messageId: nil, StreamingText(text))

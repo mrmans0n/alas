@@ -87,6 +87,7 @@ extension RemoteWireMessage {
         }
         if isHidden != nil { count += 17 }
         if let checkpointId { count += 18 + Self.escapedTransportByteCount(checkpointId) }
+        if let card { count += 10 + Self.escapedTransportByteCount(card) }
         if let images {
             count += 12
             for image in images {

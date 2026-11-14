@@ -518,9 +518,18 @@ private struct NativePeerRowView: View {
     var visualStatus: (UUID) -> ACPVisualAidSendStatus = { _ in ACPVisualAidSendStatus() }
     @State private var showsVisualPreview = false
 
+    static func promptCard(_ json: String) -> ACPPromptCard? {
+        try? JSONDecoder().decode(ACPPromptCard.self, from: Data(json.utf8))
+    }
+
     var body: some View {
         switch row {
-        case .user(let text, let checkpointID, let images):
+        case .user(let text, _, _, let card?) where Self.promptCard(card) != nil:
+            // A turn Alas sent, as the local transcript shows it.
+            PromptCardRow(card: Self.promptCard(card)!, text: text, contentMaxWidth: contentMaxWidth, typography: typography)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contextMenu { messageMenu(text, checkpointID: nil) }
+        case .user(let text, let checkpointID, let images, _):
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 4) {

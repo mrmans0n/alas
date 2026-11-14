@@ -6,7 +6,8 @@ import Foundation
 public enum RemoteTranscriptRow: Equatable, Sendable {
     /// `images` replace their `🖼` labels in the text; a viewer shows each
     /// label again until its bytes load.
-    case user(String, checkpointID: UUID?, images: [RemoteWireMessage.Image] = [])
+    /// `card` is the row's `ACPPromptCard` as JSON, for one Alas injected.
+    case user(String, checkpointID: UUID?, images: [RemoteWireMessage.Image] = [], card: String? = nil)
     case agent(String)
     case thought(String)
     case toolCall(ACPToolCall)
@@ -24,7 +25,8 @@ public enum RemoteTranscriptRow: Equatable, Sendable {
             self = .user(
                 images.isEmpty ? text : RemoteWireMessage.userRowText(text, removingImageNames: images.map(\.name)),
                 checkpointID: message.checkpointId.flatMap(UUID.init(uuidString:)),
-                images: images
+                images: images,
+                card: message.card
             )
         case "agent":
             self = .agent(text)
