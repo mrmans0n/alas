@@ -338,10 +338,12 @@ settings are read when the host starts: run `alas-host restart` after changing
 them. Their alerts go to paired Macs, which show them as banners.
 
 A paired Mac's session toolbar shows a host session's shepherd pill. Its menu
-offers **Ship with agent** when the session shepherds nothing: the host sends
-the session the same prompt the app's Ship does, so the agent opens the pull
-request or ships the gg stack and the host shepherds it. It also offers
-**Resume** for a shepherd that needs attention and **Stop shepherding**.
+offers **Ship with agent** when the session shepherds nothing, and `/ship` in
+the composer does the same. As in the app, the host shepherds the branch's open
+pull request with the session; without one, it sends the session the app's
+Ship prompt, so the agent opens the pull request or ships the gg stack and the
+host shepherds it. It also offers **Resume** for a shepherd that needs
+attention and **Stop shepherding**.
 
 ## Start at login
 

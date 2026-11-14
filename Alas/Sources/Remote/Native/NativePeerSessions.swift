@@ -747,6 +747,14 @@ final class NativePeerSessions {
         return HostShepherdAction.offered(for: selectedShepherd)
     }
 
+    /// Whether the selected session's host runs its Ship, which `/ship` asks for.
+    var selectedSessionShips: Bool {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return false }
+        return hosts?.canShepherd(serverId: id.serverId) == true
+    }
+
     func shepherdSelected(_ action: HostShepherdAction) {
         guard let selectedSessionId,
               let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))

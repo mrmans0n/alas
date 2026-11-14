@@ -396,7 +396,10 @@ extension AlasCoreContext {
     /// Re-binding a PR this session already shepherds keeps its toggles; a new
     /// binding, including one taken over from another session, takes the
     /// Settings defaults.
-    private func bindPRShepherd(sessionID: String, worktreeID: String, request: ReviewRequest) async -> ShepherdRecord {
+    /// With `contextRules`, the session is also sent the context prompt.
+    func bindPRShepherd(
+        sessionID: String, worktreeID: String, request: ReviewRequest, contextRules: ShepherdRules? = nil
+    ) async -> ShepherdRecord {
         let current = reviewShepherd.records[ShepherdRecordID(worktreeID: worktreeID, request: request)]
             .flatMap { $0.sessionID == sessionID ? $0 : nil }
         let defaults = environment.configuration().changes.shepherd
@@ -409,7 +412,7 @@ extension AlasCoreContext {
             autoFix: current?.autoFix ?? defaults.autoFix,
             autoMerge: current?.autoMerge ?? defaults.autoMerge,
             maxFixAttempts: current?.fixAttemptBudget ?? defaults.maxFixAttempts,
-            contextRules: nil
+            contextRules: contextRules
         )
     }
 
