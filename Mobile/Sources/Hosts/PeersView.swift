@@ -11,6 +11,7 @@ struct PeersView: View {
     }
 
     @State private var pairRequest: PairRequest?
+    @State private var forgetting: PairedHost?
 
     var body: some View {
         NavigationStack {
@@ -22,7 +23,7 @@ struct PeersView: View {
                                 pairRequest = PairRequest(origins: host.origins)
                             }
                             .swipeActions {
-                                Button("Forget", systemImage: "trash", role: .destructive) { hub.forget(host.id) }
+                                Button("Forget", systemImage: "trash", role: .destructive) { forgetting = host }
                             }
                         }
                     }
@@ -58,6 +59,15 @@ struct PeersView: View {
             }
             .sheet(item: $pairRequest) { request in
                 PairHostView(hub: hub, prefilledOrigins: request.origins)
+            }
+            .confirmationDialog(
+                "Forget \(forgetting?.name ?? "this Mac")?",
+                isPresented: Binding { forgetting != nil } set: { if !$0 { forgetting = nil } },
+                titleVisibility: .visible, presenting: forgetting
+            ) { host in
+                Button("Forget", role: .destructive) { hub.forget(host.id) }
+            } message: { _ in
+                Text("You'll need to pair again from the Mac.")
             }
         }
     }

@@ -24,6 +24,10 @@ struct PairHostView: View {
     /// sheet animates away.
     @State private var paired = false
     @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
+    /// The last scanned QR whose code the Mac rejected. VisionKit reports a code again each time
+    /// it re-acquires it, and every redeem of a dead code spends the Mac's failed-attempt budget,
+    /// which is shared by every client.
+    @State private var rejectedScan: String?
 
     init(hub: HostHub, prefilledOrigins: [String] = []) {
         self.hub = hub
@@ -95,7 +99,8 @@ struct PairHostView: View {
             Group {
                 if camera == .authorized {
                     QRScannerView { scanned in
-                        pair(link: scanned)
+                        guard scanned != rejectedScan else { return }
+                        pair(link: scanned) { rejectedScan = scanned }
                     }
                 } else {
                     ProgressView().task { await requestCamera() }
@@ -187,17 +192,17 @@ struct PairHostView: View {
         }
     }
 
-    private func pair(link: String) {
+    private func pair(link: String, onRejected: @escaping () -> Void = {}) {
         guard pairing == nil, !paired else { return }
         guard let parts = RemotePairingLink.parse(link) else {
             error = "That isn't an Alas pairing link."
             return
         }
-        pair(origins: parts.origins, code: parts.code)
+        pair(origins: parts.origins, code: parts.code, onRejected: onRejected)
     }
 
     /// Single-flight: every path (Pair, Return, Paste, a scan) funnels through here.
-    private func pair(origins: [String], code: String) {
+    private func pair(origins: [String], code: String, onRejected: @escaping () -> Void = {}) {
         guard pairing == nil, !paired else { return }
         error = nil
         pairing = Task {
@@ -208,6 +213,7 @@ struct PairHostView: View {
                 dismiss()
             } catch {
                 guard !Task.isCancelled else { return }
+                if error == .codeRejected { onRejected() }
                 self.error = switch error {
                 case .codeRejected: "That code was wrong or has expired. Make a new one on your Mac."
                 case .originNotAllowed: "This Mac doesn't accept connections from this address."
