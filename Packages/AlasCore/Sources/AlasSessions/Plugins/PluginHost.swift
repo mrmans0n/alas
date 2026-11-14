@@ -712,7 +712,7 @@ public final class PluginHost {
                 inventory.busy = self.mutationGate.isBusy(project: self.project.id)
                 if let problem = self.mutationGate.problem(project: self.project.id) { inventory.error = problem
                 inventory.complete = false }
-                return self.encode(PluginResponse(id: id, result: PluginStackInventoryResult(inventory: inventory), error: nil))
+                return self.encode(PluginResponse(id: id, result: PluginStackInventoryResult(inventory: inventory.reviewLinked), error: nil))
             }
         case "stacks/open":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginStackOpenParams>.self, from: data).params, params.isValid else {

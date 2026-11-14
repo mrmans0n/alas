@@ -240,6 +240,18 @@ struct PluginStacksTests {
         #expect(fresh.retainingKnownStacks(from: .init(complete: false, busy: false, stacks: [known])) == fresh)
     }
 
+    @Test func reviewLinkedDropsOnlyStacksConfirmedToHaveNoReviews() {
+        func stack(_ id: String, number: Int?, reviewNumbers: [Int]?) -> NativeStack {
+            NativeStack(id: id, name: id, base: "main", host: "github.com", repo: "owner/repo", complete: false,
+                        entries: [.init(id: "a", sha: "a", position: 1, number: number, title: "A")], actions: [], reviewNumbers: reviewNumbers)
+        }
+        let inventory = StackInventory(complete: true, busy: false, stacks: [
+            stack("none", number: nil, reviewNumbers: []), stack("entry", number: 1, reviewNumbers: []),
+            stack("saved", number: nil, reviewNumbers: [2]), stack("unknown", number: nil, reviewNumbers: nil),
+        ])
+        #expect(inventory.reviewLinked.stacks.map(\.id) == ["entry", "saved", "unknown"])
+    }
+
     private func fixture(sha: String = "head") -> NativeStack {
         NativeStack(id: "stack", name: "test", base: "main", host: "github.com", repo: "owner/repo", worktree: "wt", complete: true,
                     entries: [.init(id: "a", sha: "base", position: 1, number: 1, title: "First"),
