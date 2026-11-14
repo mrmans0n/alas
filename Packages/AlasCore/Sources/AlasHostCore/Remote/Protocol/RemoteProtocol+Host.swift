@@ -42,7 +42,7 @@ extension HostProtocolCapability {
                                        worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
                                        worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2, worktreesFileBytesV3,
                                        shepherdsV1, projectsGGModeV1, worktreesGGStackV1, worktreesGGStackActionsV1,
-                                       worktreesGGStackLandV1]
+                                       worktreesGGStackLandV1, shepherdsTogglesV1]
 }
 
 extension RemoteVisualAid {

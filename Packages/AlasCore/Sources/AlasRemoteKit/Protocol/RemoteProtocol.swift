@@ -1665,6 +1665,9 @@ public enum HostProtocolCapability: Sendable {
     public static let updateV1 = "host.update.v1"
     /// Hosts that serve `shepherdSession`.
     public static let shepherdsV1 = "host.shepherds.v1"
+    /// Hosts that take a pull request shepherd's switches in `shepherdSession`
+    /// and send them, with its phase line, in `HostSessionShepherd`.
+    public static let shepherdsTogglesV1 = "host.shepherds.toggles.v1"
     /// Hosts that serve `setProjectGGMode` and list each project's `ggMode`.
     public static let projectsGGModeV1 = "host.projects.ggMode.v1"
     /// Hosts that serve `ggStack`.
