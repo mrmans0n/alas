@@ -1,7 +1,8 @@
 import AlasRemoteKit
 import SwiftUI
 
-/// The session's file tree. The first appearance asks the host for the root listing.
+/// The session's file tree. Each appearance asks the host for the root listing again, and the
+/// root reply re-lists every expanded directory, so files the agent changed show up.
 struct FilesView: View {
     let workspace: SessionWorkspace
     let owner: UUID
@@ -45,7 +46,7 @@ struct FilesView: View {
                 .listStyle(.plain)
             }
         }
-        .task { if workspace.tree.children.isEmpty { workspace.loadTree() } }
+        .task { workspace.loadTree() }
     }
 }
 

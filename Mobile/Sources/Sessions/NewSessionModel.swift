@@ -293,7 +293,7 @@ final class NewSessionModel {
         effortId = nil
     }
 
-    /// Reloads when the host comes back, and records an in-flight create as unknown when it drops.
+    /// Reloads what is open when the host comes back, and records an in-flight create as unknown when it drops.
     /// (Not `Observations`: Swift 6.3.3, in CI's Xcode 26.6, crashes compiling that closure.)
     private func watchHost(generation: Int) {
         guard generation == watchGeneration, let hostID else { return }
@@ -304,7 +304,10 @@ final class NewSessionModel {
         }
         defer { hostWasOnline = online }
         if online, !hostWasOnline {
+            // The host forgot every request it was asked while away; ask again for what is still loading.
             loadLists()
+            if mode == .new, projects == nil { send(.listProjects) }
+            if let projectId, branches == nil { send(.listBranches(projectId: projectId)) }
         } else if !online, hostWasOnline, isCreating {
             pendingHook = nil
             if mode == .new {

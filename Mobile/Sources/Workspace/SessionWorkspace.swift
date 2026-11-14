@@ -145,10 +145,11 @@ final class SessionWorkspace {
         if refreshDeferred { scheduleRefresh() }
     }
 
-    /// Refreshes the list when the agent goes idle, once the Changes tab has been opened.
+    /// Refreshes the list and the file tree when the agent goes idle, once their tab has been opened.
     func noteStreaming(_ state: String) {
         defer { streaming = state }
         guard state == "idle", streaming != "idle" else { return }
+        if treeRequested { loadTree() }
         if case .idle = changes { return }
         scheduleRefresh()
     }
