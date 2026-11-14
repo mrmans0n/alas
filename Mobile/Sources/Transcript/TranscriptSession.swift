@@ -67,6 +67,10 @@ final class TranscriptSession {
     @ObservationIgnored private var replacedAt: [RequestKind: ContinuousClock.Instant] = [:]
     private(set) var isStopping = false
     @ObservationIgnored private var holdTask: Task<Void, Never>?
+    /// Answers given while another device drove. A take-over makes the host forget its request
+    /// ids and surface the pending requests again, so an answer sent right behind it is dropped;
+    /// each waits here until its request is back, then goes out under the id it now has.
+    @ObservationIgnored private var deferredAnswers: [RequestKind: () -> PhoneClientMessage?] = [:]
     private(set) var hasCancellableBackgroundWork = false
     var rejection: String?
     /// Candidates for `mentionCandidatesQuery`, or for an earlier query while a new one is in flight.
@@ -197,22 +201,74 @@ final class TranscriptSession {
 
     func answerPermission(optionId: String) {
         guard let permission, accepts(.permission) else { return }
-        if drive(.permissionDecision(sessionId: sessionId, requestId: permission.requestId, optionId: optionId, persistScope: nil)) { answered.insert(.permission) }
+        let id = sessionId
+        answer(.permission, permission, current: { [weak self] in self?.state.pendingPermission }) {
+            .permissionDecision(sessionId: id, requestId: $0.requestId, optionId: optionId, persistScope: nil)
+        }
     }
 
     func answerQuestion(_ answers: [RemoteQuestionAnswer]) {
         guard let question, accepts(.question) else { return }
-        if drive(.questionAnswer(sessionId: sessionId, requestId: question.requestId, answers: answers)) { answered.insert(.question) }
+        let id = sessionId
+        answer(.question, question, current: { [weak self] in self?.state.pendingQuestion }) {
+            .questionAnswer(sessionId: id, requestId: $0.requestId, answers: answers)
+        }
     }
 
     func answerPlan(action: String, reason: String?) {
         guard let plan, accepts(.plan) else { return }
-        if drive(.planResponse(sessionId: sessionId, requestId: plan.requestId, action: action, reason: reason)) { answered.insert(.plan) }
+        let id = sessionId
+        answer(.plan, plan, current: { [weak self] in self?.state.pendingPlan }) {
+            .planResponse(sessionId: id, requestId: $0.requestId, action: action, reason: reason)
+        }
     }
 
     func answerElicitation(action: String, content: [String: ACPElicitationValue]?) {
         guard let elicitation, accepts(.elicitation) else { return }
-        if drive(.elicitationResponse(sessionId: sessionId, requestId: elicitation.requestId, action: action, content: content)) { answered.insert(.elicitation) }
+        let id = sessionId
+        answer(.elicitation, elicitation, current: { [weak self] in self?.state.pendingElicitation }) {
+            .elicitationResponse(sessionId: id, requestId: $0.requestId, action: action, content: content)
+        }
+    }
+
+    /// Sends the answer now when this phone drives; otherwise takes over and defers it until
+    /// the same request (same content, any id) is pending again under the new lease.
+    private func answer<P: Encodable>(_ kind: RequestKind, _ shown: P, current: @escaping () -> P?,
+                                      message: @escaping (P) -> PhoneClientMessage) {
+        if state.canDrive {
+            if drive(message(shown)) { answered.insert(kind) }
+            return
+        }
+        guard hub.state(of: hostID) == .online else {
+            rejection = "\(hostName) is offline. Nothing was sent."
+            return
+        }
+        let identity = Self.requestIdentity(shown)
+        deferredAnswers[kind] = {
+            guard let now = current(), Self.requestIdentity(now) == identity else { return nil }
+            return message(now)
+        }
+        answered.insert(kind)
+        takeOver()
+    }
+
+    private func sendDeferredAnswers() {
+        guard state.canDrive, !deferredAnswers.isEmpty else { return }
+        for (kind, build) in deferredAnswers {
+            guard let message = build() else { continue }
+            deferredAnswers[kind] = nil
+            // A changed id made the card look new; it is answered.
+            answered.insert(kind)
+            hub.send(message, to: hostID)
+        }
+    }
+
+    /// A request's content without its wire id, which a fresh follow may change.
+    private static func requestIdentity<P: Encodable>(_ payload: P) -> Data? {
+        guard let data = try? JSONEncoder().encode(payload),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        object["requestId"] = nil
+        return try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
     }
 
     /// False once answered, and briefly after the request changed under the user's finger.
@@ -312,6 +368,7 @@ final class TranscriptSession {
         // the re-send gets the full grace period.
         answered = []
         replacedAt = [:]
+        deferredAnswers = [:]
         holdTask?.cancel()
         holdTask = nil
         isStopping = false
@@ -368,8 +425,12 @@ final class TranscriptSession {
             }
         case .promptRejected(let id, let reason) where id == sessionId:
             if !unsettled.isEmpty {
+                // Ahead of what the user typed since, as the Mac does, so neither is lost.
                 let rejected = unsettled.removeFirst().draft
-                if draft.text.isEmpty, draft.images.isEmpty { draft = rejected }
+                draft = ComposerDraft(
+                    text: [rejected.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n"),
+                    images: rejected.images + draft.images,
+                    mentions: rejected.mentions + draft.mentions)
             }
             rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
         case .queueEditRestored(let id, _, let text) where id == sessionId:
@@ -424,6 +485,7 @@ final class TranscriptSession {
         holding = settle(\.question, state.pendingQuestion, .question) || holding
         holding = settle(\.plan, state.pendingPlan, .plan) || holding
         holding = settle(\.elicitation, state.pendingElicitation, .elicitation) || holding
+        sendDeferredAnswers()
         if holding, holdTask == nil {
             holdTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(500))
