@@ -108,9 +108,11 @@ struct NativePeerSessionsTests {
 
         let shepherd = HostSessionShepherd(badge: "watching", number: "#7", tooltip: "")
         #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["history": shepherd], worktreeID: "w1", number: "#7") == nil)
-        // Another worktree's shepherd, or one of an older request, leaves it unbound.
+        // Another worktree's shepherd, or one of an older request, leaves the request unbound.
         #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["elsewhere": shepherd], worktreeID: "w1", number: "#7") != nil)
-        #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["old": shepherd], worktreeID: "w1", number: "#8") != nil)
+        // A session that shepherded an older request can't Ship again.
+        #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["old": shepherd], worktreeID: "w1", number: "#8")?
+            .map(\.sessionID) == ["new"])
     }
 
     @Test func remotePermissionMapsOntoTheNativeCard() {

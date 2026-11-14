@@ -742,9 +742,10 @@ final class NativePeerSessions {
         return Self.shepherdCandidates(sessions, shepherds: hosts?.shepherds[serverId] ?? [:], worktreeID: worktreeID, number: number)
     }
 
-    /// The worktree's sessions its host drives, newest first, which Ship
-    /// binds to the open request. Nil while one of the worktree's sessions
-    /// shepherds `number`: that session's toolbar pill owns it.
+    /// The worktree's sessions its host drives and would Ship, newest first;
+    /// Ship binds the open request to the one picked. A session holding any
+    /// shepherd record, even a finished one, refuses Ship. Nil while one of
+    /// the worktree's sessions shepherds `number`: its toolbar pill owns it.
     static func shepherdCandidates(
         _ sessions: [(sessionID: String, summary: RemoteSessionSummary)],
         shepherds: [String: HostSessionShepherd],
@@ -753,7 +754,8 @@ final class NativePeerSessions {
     ) -> [(sessionID: String, summary: RemoteSessionSummary)]? {
         let here = sessions.filter { $0.summary.worktreeId == worktreeID }
         if here.contains(where: { shepherds[$0.sessionID]?.number == number }) { return nil }
-        return here.filter(\.summary.canDrive).sorted { $0.summary.updatedAt > $1.summary.updatedAt }
+        return here.filter { $0.summary.canDrive && HostShepherdAction.offered(for: shepherds[$0.sessionID]).contains(.ship) }
+            .sorted { $0.summary.updatedAt > $1.summary.updatedAt }
     }
 
     /// The selected session's shepherd pill on its host.
