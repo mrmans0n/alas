@@ -612,10 +612,19 @@ final class DeviceAgentControl {
             return await screenshot(udid)
         }
         var reply = await diffReply(udid, sessionID: sessionID)
-        // Taken after settling, so it shows the screen the diff describes.
-        if includeScreenshot, case .text(let parts) = await screenshot(udid),
-           let shot = (try? JSONSerialization.jsonObject(with: Data(parts.joined().utf8))) as? [String: Any] {
-            reply.merge(shot) { current, _ in current }
+        // Taken after settling, so it shows the screen the diff describes. The
+        // action already happened, so a failed screenshot is reported, not raised.
+        if includeScreenshot {
+            switch await screenshot(udid) {
+            case .text(let parts):
+                if let shot = (try? JSONSerialization.jsonObject(with: Data(parts.joined().utf8))) as? [String: Any] {
+                    reply.merge(shot) { current, _ in current }
+                }
+            case .error(let message):
+                reply["screenshot_error"] = message
+            default:
+                break
+            }
         }
         return .text([Self.json(reply)])
     }

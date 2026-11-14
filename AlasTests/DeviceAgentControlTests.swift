@@ -18,7 +18,7 @@ struct DeviceAgentControlTests {
         /// Yields before each `describe` answers, in call order, to finish calls out of order.
         var describeYields: [Int] = []
         var snapshotData = DeviceAgentControlTests.snapshot
-        let frame = IOSurface(properties: [
+        var frame = IOSurface(properties: [
             .width: 120, .height: 240, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
         ])
 
@@ -363,6 +363,16 @@ struct DeviceAgentControlTests {
         let reply = try Self.reply(await control.perform(
             .button(udid: "on", name: .home, includeScreenshot: false), sessionID: "a"
         ))
+        #expect(reply["screen_changed"] as? Bool == true)
+    }
+
+    @Test func aScreenshotThatFailsIsReportedNextToTheDiff() async throws {
+        let input = FakeInput()
+        input.frame = nil
+        let reply = try Self.reply(await control(input).perform(
+            .button(udid: "on", name: .home, includeScreenshot: true), sessionID: "s"
+        ))
+        #expect((reply["screenshot_error"] as? String)?.hasPrefix("device_unavailable") == true)
         #expect(reply["screen_changed"] as? Bool == true)
     }
 
