@@ -171,6 +171,12 @@ extension Color {
 }
 
 extension Theme {
+    /// A hovered sidebar row. Kept well under the selection fill, so the row
+    /// under the pointer never reads as the selected one.
+    var sidebarHoverFill: Color {
+        color("bg-3").opacity(0.3)
+    }
+
     /// The opaque color a selected sidebar row's `accent-soft` fill comes to over `fill`.
     func selectionFill(over fill: String) -> Color {
         Color.composited(color("accent-soft"), over: color(fill))

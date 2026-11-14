@@ -204,7 +204,7 @@ struct NativePeerNewSessionSheet: View {
             + efforts.filter { !$0.id.isEmpty }.map { ACPSelectChip.Item(id: $0.id, name: $0.name, description: nil) }
         let selected = effortId ?? Self.defaultItemId
         return ACPSelectChip(
-            label: "🧠 \(items.first { $0.id == selected }?.name ?? "Default")",
+            label: items.first { $0.id == selected }?.name ?? "Default",
             placeholder: "Thinking",
             accent: theme.color("warn"),
             items: items,
@@ -212,6 +212,7 @@ struct NativePeerNewSessionSheet: View {
             searchDescriptions: false,
             searchIdentifiers: false,
             fillsWidth: false,
+            fallbackIcon: .system("brain"),
             onSelect: { effortId = $0.id == Self.defaultItemId ? nil : $0.id }
         )
     }
