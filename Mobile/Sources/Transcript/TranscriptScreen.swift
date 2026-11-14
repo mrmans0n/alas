@@ -25,9 +25,13 @@ struct TranscriptScreen: View {
         .onDisappear {
             // A view pushed from this screen (a diff, a file) covers it and fires this too; keep
             // the session and workspace alive until the screen itself leaves the stack.
-            if workspace?.hasPushedChild == true { return }
-            held = nil
-            workspace?.deactivate()
+            // Checked a turn later so a pushed view popped along with this screen has cleared
+            // its state first (DiffView's own onDisappear).
+            Task { @MainActor in
+                if workspace?.hasPushedChild == true { return }
+                held = nil
+                workspace?.deactivate()
+            }
         }
     }
 

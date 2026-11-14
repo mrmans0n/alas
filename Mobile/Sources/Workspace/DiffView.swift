@@ -20,6 +20,8 @@ struct DiffView: View {
         .navigationSubtitle(workspace.diff?.key.stage?.capitalized ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
+        // Backstop for a pop that skips the destination binding (a stack reset to the root).
+        .onDisappear { workspace.closeDiff() }
     }
 }
 
