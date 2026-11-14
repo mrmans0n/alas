@@ -436,6 +436,9 @@ public final class HostProtocolConnection {
             let listed = try gitWorktree(ref)
             await host.core.refreshFollowedReviewStatus(listed.id)
             return .reviewStatus(snapshot: host.reviews.status(of: listed.id))
+        case .ggStack(let ref, let refresh):
+            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesGGStackV1)
+            return .ggStack(read: await host.core.ggStackRead(of: listed, refresh: refresh))
         case .listReviews(let ref):
             return .reviews(reviews: try host.reviews.list(in: try reviewWorktree(ref)))
         case .readReview(let ref, let sessionID):

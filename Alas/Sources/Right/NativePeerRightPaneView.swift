@@ -21,6 +21,9 @@ struct NativePeerRightPaneView: View {
     @State private var runRefreshGeneration = 0
     /// The git target's review status, as the host reads it.
     @State private var reviewLoop = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/"), baseBranch: "")
+    /// The selected worktree's gg stack on the host; nil when it isn't one.
+    @State private var ggStack: HostGGStackRead?
+    @State private var ggStackRefreshing = false
     @State private var gitError: String?
     @State private var pendingDiscard: PendingDiscard?
     @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
@@ -137,11 +140,13 @@ struct NativePeerRightPaneView: View {
             checkpointPages = [:]
             creatingCheckpoint = false
             checkpointRestorePreview = nil
+            ggStack = nil
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
         // Once per follow sent: the host repeats no unchanged status to a new subscription.
         .task(id: client.hosts?.gitFollowKey) { await readReviewStatus() }
+        .task(id: client.hosts?.gitFollowKey) { await readGGStack(refresh: true) }
         .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
         .task(id: reviewsKey) { await readReviews() }
         .task(id: stashesKey) { await readStashes() }
@@ -157,6 +162,7 @@ struct NativePeerRightPaneView: View {
                 runRefreshGeneration += 1
                 await readStashes()
                 await readCheckpoints()
+                await readGGStack(refresh: false)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -393,7 +399,15 @@ struct NativePeerRightPaneView: View {
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
                 .frame(maxHeight: .infinity, alignment: .top)
-                if let gitTarget, reviewLoop.snapshot != nil {
+                if let ggStack, ggStack.stack != nil || ggStack.problem != nil {
+                    NativePeerGGStackDrawer(read: ggStack, isRefreshing: ggStackRefreshing) {
+                        Task { @MainActor in
+                            ggStackRefreshing = true
+                            await readGGStack(refresh: true)
+                            ggStackRefreshing = false
+                        }
+                    }
+                } else if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
                         canOpenAgentHandoff: false,
@@ -767,6 +781,15 @@ struct NativePeerRightPaneView: View {
 
     /// The git target's review status, read again on the host. A refusal
     /// reads as no status.
+    private func readGGStack(refresh: Bool) async {
+        guard let gitTarget, let hosts = client.hosts, hosts.gitFollowKey != nil else { return }
+        let key = gitTargetKey
+        let read = await hosts.ggStack(in: gitTarget.worktree, refresh: refresh, serverId: gitTarget.serverId)
+        // A late reply must not land on another worktree.
+        guard !Task.isCancelled, gitTargetKey == key, read != ggStack else { return }
+        ggStack = read
+    }
+
     private func readReviewStatus() async {
         guard let gitTarget, let hosts = client.hosts else {
             reviewLoop.showHostSnapshot(nil)

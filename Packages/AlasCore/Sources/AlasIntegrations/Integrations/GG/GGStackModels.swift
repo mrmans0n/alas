@@ -109,7 +109,7 @@ public struct GGStackSnapshot: Decodable, Equatable, Sendable {
     }
 }
 
-public struct GGStack: Decodable, Equatable, Sendable {
+public struct GGStack: Codable, Equatable, Sendable {
     public let name: String
     public let base: String
     public let totalCommits: Int
@@ -249,7 +249,7 @@ public struct GGStack: Decodable, Equatable, Sendable {
     }
 }
 
-public struct GGUnintegratedCommit: Decodable, Equatable, Sendable {
+public struct GGUnintegratedCommit: Codable, Equatable, Sendable {
     public let sha: String
     public let subject: String
     public let sitsOnPosition: Int
@@ -287,15 +287,15 @@ public enum GGStackCommitProjectionError: Error, Equatable, LocalizedError, Send
     }
 }
 
-public enum GGPRState: String, Equatable, Sendable {
+public enum GGPRState: String, Codable, Equatable, Sendable {
     case open, merged, closed, draft
 }
 
-public enum GGCIStatus: String, Equatable, Sendable {
+public enum GGCIStatus: String, Codable, Equatable, Sendable {
     case pending, running, success, failed, canceled, unknown
 }
 
-public struct GGStackEntry: Decodable, Equatable, Identifiable, Sendable {
+public struct GGStackEntry: Codable, Equatable, Identifiable, Sendable {
     /// Stable identity across rebases/amends: the GG-ID trailer when
     /// present, the (rewriting) SHA otherwise.
     public var id: String { ggId ?? sha }
