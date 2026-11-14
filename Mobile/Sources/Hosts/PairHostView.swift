@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import AVFoundation
 import SwiftUI
 import VisionKit
 
@@ -19,17 +20,25 @@ struct PairHostView: View {
     @State private var code = ""
     @State private var error: String?
     @State private var pairing: Task<Void, Never>?
+    @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
 
     init(hub: HostHub, prefilledOrigins: [String] = []) {
         self.hub = hub
         self.prefilledOrigins = prefilledOrigins
         _address = State(initialValue: prefilledOrigins.first ?? "")
-        _method = State(initialValue: !prefilledOrigins.isEmpty ? .address : Self.canScan ? .scan : .link)
+        let scannable = Self.canScan(AVCaptureDevice.authorizationStatus(for: .video))
+        _method = State(initialValue: !prefilledOrigins.isEmpty ? .address : scannable ? .scan : .link)
     }
 
-    /// Hidden when the camera is denied or restricted, where the scanner would be blank.
-    private static var canScan: Bool {
-        DataScannerViewController.isSupported && DataScannerViewController.isAvailable
+    /// Hidden when the camera is denied or restricted, where the scanner would
+    /// be blank. Shown while undecided: picking Scan asks for access.
+    private static func canScan(_ camera: AVAuthorizationStatus) -> Bool {
+        DataScannerViewController.isSupported && (camera == .notDetermined || camera == .authorized)
+    }
+
+    /// Camera access was refused on this device, so Scan is gone.
+    private var cameraRefused: Bool {
+        DataScannerViewController.isSupported && (camera == .denied || camera == .restricted)
     }
 
     var body: some View {
@@ -37,7 +46,7 @@ struct PairHostView: View {
             Form {
                 Section {
                     Picker("Method", selection: $method) {
-                        if Self.canScan { Text("Scan").tag(Method.scan) }
+                        if Self.canScan(camera) { Text("Scan").tag(Method.scan) }
                         Text("Link").tag(Method.link)
                         Text("Address").tag(Method.address)
                     }
@@ -80,10 +89,17 @@ struct PairHostView: View {
 
     private var scanSection: some View {
         Section {
-            QRScannerView { scanned in
-                guard pairing == nil else { return }
-                pair(link: scanned)
+            Group {
+                if camera == .authorized {
+                    QRScannerView { scanned in
+                        guard pairing == nil else { return }
+                        pair(link: scanned)
+                    }
+                } else {
+                    ProgressView().task { await requestCamera() }
+                }
             }
+            .frame(maxWidth: .infinity)
             .frame(height: 300)
             .overlay {
                 if pairing != nil { ProgressView().controlSize(.large) }
@@ -109,7 +125,9 @@ struct PairHostView: View {
             }
             .labelStyle(.titleAndIcon)
         } footer: {
-            Text("\(help) Then copy the pairing link.")
+            Text(cameraRefused
+                ? "Camera access is off, so use the pairing link. \(help)"
+                : "\(help) Then copy the pairing link.")
         }
     }
 
@@ -128,6 +146,13 @@ struct PairHostView: View {
         } footer: {
             Text("\(help) The code is shown under the QR.")
         }
+    }
+
+    private func requestCamera() async {
+        guard camera == .notDetermined else { return }
+        let granted = await AVCaptureDevice.requestAccess(for: .video)
+        camera = granted ? .authorized : AVCaptureDevice.authorizationStatus(for: .video)
+        if !granted { method = .link }
     }
 
     private var help: String {
