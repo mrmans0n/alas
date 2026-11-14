@@ -63,7 +63,7 @@ struct TranscriptScreen: View {
                 switch mode {
                 case .transcript: EmptyView()
                 case .changes: ChangesView(workspace: workspace).background(Color(.systemBackground))
-                case .files: ContentUnavailableView("Files", systemImage: "folder").background(Color(.systemBackground))
+                case .files: FilesView(workspace: workspace).background(Color(.systemBackground))
                 }
             }
             .safeAreaInset(edge: .top) {
@@ -80,6 +80,11 @@ struct TranscriptScreen: View {
                 get: { workspace.diff != nil },
                 set: { if !$0 { workspace.closeDiff() } })) {
                 DiffView(workspace: workspace)
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { workspace.file != nil },
+                set: { if !$0 { workspace.closeFile() } })) {
+                FileViewer(workspace: workspace)
             }
             .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
             .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }

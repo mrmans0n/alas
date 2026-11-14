@@ -42,6 +42,9 @@ final class SessionWorkspace {
     private(set) var diff: (key: DiffKey, Load<DiffReply>)?
     private(set) var tree = RemoteFileTree()
     private(set) var file: (path: String, Load<FileReply>)?
+    /// Directories the host cut short, and the last listing failure.
+    private(set) var truncatedDirs: Set<String> = []
+    private(set) var treeError: String?
     var error: String?
 
     let hostID: UUID
@@ -141,10 +144,24 @@ final class SessionWorkspace {
 
     // MARK: Files (Task 5)
 
-    func loadTree() {}
-    func toggle(_ dir: String) {}
-    func openFile(_ path: String) {}
-    func closeFile() {}
+    func loadTree() {
+        send(.listFiles(sessionId: sessionId, path: nil, comparisonMode: nil))
+    }
+
+    func toggle(_ dir: String) {
+        if tree.expanded.remove(dir) != nil { return }
+        tree.expanded.insert(dir)
+        if tree.children[dir] == nil { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) }
+    }
+
+    func openFile(_ path: String) {
+        file = (path, .loading)
+        send(.readFile(sessionId: sessionId, path: path))
+    }
+
+    func closeFile() {
+        file = nil
+    }
 
     // MARK: Replies
 
@@ -167,6 +184,19 @@ final class SessionWorkspace {
         case .fileDiffFailed(let id, let path, let stage, let reason, let message) where id == sessionId:
             guard diff?.key == DiffKey(path: path, stage: stage) else { return }
             diff = (DiffKey(path: path, stage: stage), .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)))
+        case .fileTree(let id, let path, let nodes, let truncated) where id == sessionId:
+            tree.apply(path: path, nodes: nodes)
+            treeError = nil
+            if truncated { truncatedDirs.insert(path ?? "") } else { truncatedDirs.remove(path ?? "") }
+            if path == nil { for dir in tree.pathsToRefresh() { send(.listFiles(sessionId: sessionId, path: dir, comparisonMode: nil)) } }
+        case .fileTreeFailed(let id, _, let reason, let message) where id == sessionId:
+            treeError = RemoteChangesRules.accessMessage(reason, message: message, byteSize: nil)
+        case .fileContents(let id, let path, let text, let truncated, _) where id == sessionId:
+            guard file?.path == path else { return }
+            file = (path, .loaded(FileReply(text: text, truncated: truncated)))
+        case .fileUnavailable(let id, let path, let reason, let byteSize, let message) where id == sessionId:
+            guard file?.path == path else { return }
+            file = (path, .failed(RemoteChangesRules.accessMessage(reason, message: message, byteSize: byteSize)))
         default:
             break
         }

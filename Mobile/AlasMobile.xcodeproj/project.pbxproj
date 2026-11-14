@@ -37,9 +37,11 @@
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
 		EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */; };
+		F089F4FEFE5CB481C1682375 /* FileViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */; };
 		FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8C41B3901C2155F0CB451B1 /* PairHostView.swift */; };
 		FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A0D3457CA4F83043146752 /* SpikeTranscript.swift */; };
 		FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372565FA395364953D615BC3 /* TranscriptScreen.swift */; };
+		FEF3659FCEE49A303B28CC95 /* FilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BE14FB4617210C8AB913F2 /* FilesView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +64,7 @@
 		5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElicitationFormView.swift; sourceTree = "<group>"; };
 		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostHub.swift; sourceTree = "<group>"; };
+		69BE14FB4617210C8AB913F2 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		836FA1B810A2D04B52F5C3BD /* QueueTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTray.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
@@ -69,6 +72,7 @@
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
 		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
+		DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewer.swift; sourceTree = "<group>"; };
 		E21958EE58C9376495D96344 /* ImageStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStaging.swift; sourceTree = "<group>"; };
 		E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSession.swift; sourceTree = "<group>"; };
 		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
@@ -99,6 +103,8 @@
 			children = (
 				ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */,
 				03FA6AEA78D99344CAAD8095 /* DiffView.swift */,
+				69BE14FB4617210C8AB913F2 /* FilesView.swift */,
+				DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */,
 				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
 			);
 			path = Workspace;
@@ -312,6 +318,8 @@
 				A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */,
 				B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */,
 				44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */,
+				F089F4FEFE5CB481C1682375 /* FileViewer.swift in Sources */,
+				FEF3659FCEE49A303B28CC95 /* FilesView.swift in Sources */,
 				73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */,
 				E77139BEB6A5145597C12214 /* HostHub.swift in Sources */,
 				3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */,
