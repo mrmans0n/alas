@@ -450,6 +450,16 @@ public final class HostProtocolConnection {
             caller.log("worktrees.ggStackAction", "\(listed.id) \(action.rawValue)")
             try await host.core.runGGStackAction(action, stackName: stackName, in: listed)
             return .done
+        case .ggStackLand(let ref, let stackName, let through):
+            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesGGStackLandV1)
+            caller.log("worktrees.ggStackLand", "\(listed.id) through \(through)")
+            try await host.core.runCheckedGGStackMutation(.land(target: through), stackName: stackName, in: listed)
+            return .done
+        case .ggStackReorder(let ref, let stackName, let order):
+            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesGGStackLandV1)
+            caller.log("worktrees.ggStackReorder", "\(listed.id)")
+            try await host.core.runCheckedGGStackMutation(.reorder(order: order), stackName: stackName, in: listed)
+            return .done
         case .listReviews(let ref):
             return .reviews(reviews: try host.reviews.list(in: try reviewWorktree(ref)))
         case .readReview(let ref, let sessionID):

@@ -33,6 +33,18 @@ struct GGReorderModel: Equatable {
         originalIDs = entries.map(\.id)
     }
 
+    /// `stack`'s entries bottom first, merged ones fixed; nil when one has
+    /// no GG ID to reorder it by.
+    init?(stack: GGStack) {
+        let ordered = stack.entries.sorted(by: { $0.position < $1.position })
+        guard ordered.allSatisfy({ $0.ggId != nil }) else { return nil }
+        self.init(entries: ordered.map { entry in
+            entry.prState == .merged
+                ? .immutable(id: entry.ggId!, title: entry.title)
+                : .mutable(id: entry.ggId!, title: entry.title)
+        })
+    }
+
     var orderedIDs: [String] { entries.map(\.id) }
     var hasChanges: Bool { orderedIDs != originalIDs }
     var availableActions: [GGReorderSheetAction] { [.apply, .cancel] }

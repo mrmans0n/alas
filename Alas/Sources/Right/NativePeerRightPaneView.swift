@@ -24,9 +24,12 @@ struct NativePeerRightPaneView: View {
     /// The selected worktree's gg stack on the host; nil when it isn't one.
     @State private var ggStack: HostGGStackRead?
     @State private var ggStackRefreshing = false
-    @State private var ggStackAction: HostGGStackAction?
-    /// The running action's own; a reply for an earlier one clears nothing.
-    @State private var ggStackActionToken: UUID?
+    @State private var ggStackRunning: NativePeerGGStackOperation?
+    /// The running operation's own; a reply for an earlier one clears nothing.
+    @State private var ggStackRunningToken: UUID?
+    /// The entry a land waits on confirmation to stop at.
+    @State private var pendingGGLand: (stackName: String, entry: GGStackEntry, merges: Int)?
+    @State private var ggReorder: GGReorderPresentation?
     @State private var gitError: String?
     @State private var pendingDiscard: PendingDiscard?
     @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
@@ -144,8 +147,10 @@ struct NativePeerRightPaneView: View {
             creatingCheckpoint = false
             checkpointRestorePreview = nil
             ggStack = nil
-            ggStackAction = nil
-            ggStackActionToken = nil
+            ggStackRunning = nil
+            ggStackRunningToken = nil
+            pendingGGLand = nil
+            ggReorder = nil
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -417,9 +422,38 @@ struct NativePeerRightPaneView: View {
                         },
                         actions: gitTarget.flatMap { client.hosts?.servesGGStackActions(serverId: $0.serverId) } == true
                             ? NativePeerGGStackDrawer.offeredActions(for: ggStack) : [],
-                        runningAction: ggStackAction,
-                        onAction: { runGGStackAction($0, stackName: ggStack.stack?.name ?? "") }
+                        running: ggStackRunning,
+                        onAction: { action in runGGStackOperation(.action(action), stackName: ggStack.stack?.name ?? "") },
+                        onLand: servesGGStackLand ? { entry in
+                            guard let stack = ggStack.stack else { return }
+                            pendingGGLand = (stack.name, entry, GGLandReadiness.scope(upTo: entry, in: stack).count)
+                        } : nil,
+                        onReorder: servesGGStackLand ? { requestGGReorder(ggStack.stack) } : nil
                     )
+                    .confirmationDialog(
+                        "Land the stack up to and including \u{201C}\(pendingGGLand?.entry.title ?? "")\u{201D}?",
+                        isPresented: Binding(get: { pendingGGLand != nil }, set: { if !$0 { pendingGGLand = nil } }),
+                        titleVisibility: .visible
+                    ) {
+                        Button("Land") {
+                            guard let pending = pendingGGLand else { return }
+                            pendingGGLand = nil
+                            runGGStackOperation(.land(pending.entry.id), stackName: pending.stackName)
+                        }
+                        Button("Cancel", role: .cancel) { pendingGGLand = nil }
+                    } message: {
+                        let merges = pendingGGLand?.merges ?? 0
+                        Text("The host merges \(merges) pull request\(merges == 1 ? "" : "s") from the bottom of the stack.")
+                    }
+                    .sheet(item: $ggReorder) { presentation in
+                        GGReorderSheet(
+                            presentation: presentation,
+                            onApply: { model in
+                                runGGStackOperation(.reorder, stackName: presentation.snapshot.stackName, order: model.orderedIDs)
+                            },
+                            onCancel: { ggReorder = nil }
+                        )
+                    }
                 } else if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
@@ -794,17 +828,35 @@ struct NativePeerRightPaneView: View {
 
     /// The git target's review status, read again on the host. A refusal
     /// reads as no status.
-    private func runGGStackAction(_ action: HostGGStackAction, stackName: String) {
-        guard ggStackAction == nil, let gitTarget, let hosts = client.hosts else { return }
+    private var servesGGStackLand: Bool {
+        gitTarget.flatMap { client.hosts?.servesGGStackLand(serverId: $0.serverId) } == true
+    }
+
+    private func requestGGReorder(_ stack: GGStack?) {
+        guard let stack, let model = GGReorderModel(stack: stack) else {
+            client.hosts?.showError("Can't Reorder", "Every stack commit needs a GG ID before it can be reordered.")
+            return
+        }
+        let head = stack.entries.max(by: { $0.position < $1.position })?.sha ?? ""
+        ggReorder = GGReorderPresentation(snapshot: GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: head), model: model)
+    }
+
+    private func runGGStackOperation(_ operation: NativePeerGGStackOperation, stackName: String, order: [String] = []) {
+        guard ggStackRunning == nil, let gitTarget, let hosts = client.hosts else { return }
         let token = UUID()
-        ggStackAction = action
-        ggStackActionToken = token
+        ggStackRunning = operation
+        ggStackRunningToken = token
         Task { @MainActor in
-            _ = await hosts.runGGStackAction(action, stackName: stackName, in: gitTarget.worktree, serverId: gitTarget.serverId)
-            // Another worktree's action may have started since.
-            guard ggStackActionToken == token else { return }
-            ggStackAction = nil
-            ggStackActionToken = nil
+            let (worktree, serverId) = (gitTarget.worktree, gitTarget.serverId)
+            _ = switch operation {
+            case .action(let action): await hosts.runGGStackAction(action, stackName: stackName, in: worktree, serverId: serverId)
+            case .land(let through): await hosts.landGGStack(stackName: stackName, through: through, in: worktree, serverId: serverId)
+            case .reorder: await hosts.reorderGGStack(stackName: stackName, order: order, in: worktree, serverId: serverId)
+            }
+            // Another worktree's operation may have started since.
+            guard ggStackRunningToken == token else { return }
+            ggStackRunning = nil
+            ggStackRunningToken = nil
             // A pause, a pushed stack or a rebase all show in both.
             client.pollChanges()
             await readGGStack(refresh: true)

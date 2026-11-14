@@ -41,7 +41,8 @@ extension HostProtocolCapability {
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
                                        worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
                                        worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2, worktreesFileBytesV3,
-                                       shepherdsV1, projectsGGModeV1, worktreesGGStackV1, worktreesGGStackActionsV1]
+                                       shepherdsV1, projectsGGModeV1, worktreesGGStackV1, worktreesGGStackActionsV1,
+                                       worktreesGGStackLandV1]
 }
 
 extension RemoteVisualAid {

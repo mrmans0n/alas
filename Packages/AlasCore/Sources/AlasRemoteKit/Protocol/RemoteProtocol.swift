@@ -1671,6 +1671,8 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesGGStackV1 = "host.worktrees.ggStack.v1"
     /// Hosts that serve `ggStackAction`.
     public static let worktreesGGStackActionsV1 = "host.worktrees.ggStackActions.v1"
+    /// Hosts that serve `ggStackLand` and `ggStackReorder`.
+    public static let worktreesGGStackLandV1 = "host.worktrees.ggStackLand.v1"
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

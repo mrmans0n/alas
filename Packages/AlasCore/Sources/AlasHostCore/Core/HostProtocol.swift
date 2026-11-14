@@ -155,6 +155,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Runs `action` on a listed worktree's gg stack, named `stackName` as the
     /// client last saw it (`host.worktrees.ggStackActions.v1`).
     case ggStackAction(worktree: WorktreeRef, stackName: String, action: HostGGStackAction)
+    /// `gg land` on the stack named `stackName`, up to and including the
+    /// entry whose id is `through` (`host.worktrees.ggStackLand.v1`).
+    case ggStackLand(worktree: WorktreeRef, stackName: String, through: String)
+    /// Reorders the stack named `stackName` to `order`, its entries' GG IDs
+    /// bottom first (`host.worktrees.ggStackLand.v1`).
+    case ggStackReorder(worktree: WorktreeRef, stackName: String, order: [String])
     /// A listed worktree's draft reviews, newest first (`host.reviews.v1`).
     case listReviews(worktree: WorktreeRef)
     /// One of them, `sessionID` as listed, with every comment (`host.reviews.v1`).

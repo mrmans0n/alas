@@ -292,7 +292,9 @@ extension AlasCoreContext {
                 invalidateInbox: {},
                 selectWorktreeAtPath: { _ in },
                 currentBranch: { nil },
-                publishLandEvent: { _ in false }
+                // gg's stream is validated as it is read; nothing on the
+                // host shows its progress.
+                publishLandEvent: { _ in true }
             )
         )
         guard let operation = coordinator.startApplying(request, confirmedAgainst: expected) else {

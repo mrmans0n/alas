@@ -358,8 +358,11 @@ gg is missing on the host, or has no branch username, the drawer says so.
 Its **Sync** pushes the stack and opens or updates its pull requests, and
 **Rebase** moves it onto its base when it is behind. An operation paused on
 conflicts offers **Continue** and **Abort** once they are resolved in the
-changes list. Landing and reordering still happen on the host, through an
-agent or a shell.
+changes list. An entry whose pull request, and every one below it, is
+approved and green offers **Land**, which merges them from the bottom of the
+stack after you confirm. **Reorder…** opens the same sheet as on the Mac;
+merged entries stay where they are. Every action is checked again on the host
+when its turn comes, and refused if the stack changed since the Mac read it.
 
 ## Start at login
 

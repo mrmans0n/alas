@@ -463,15 +463,42 @@ final class NativePeerHosts {
     func runGGStackAction(
         _ action: HostGGStackAction, stackName: String, in worktree: PeerHostWorktree, serverId: String
     ) async -> Bool {
-        guard servesGGStackActions(serverId: serverId), let channel = channels.channel(for: serverId) else { return false }
+        guard servesGGStackActions(serverId: serverId) else { return false }
         let title = switch action {
         case .sync: "Sync Failed"
         case .rebase: "Rebase Failed"
         case .continueOperation: "Continue Failed"
         case .abortOperation: "Abort Failed"
         }
-        // gg sync pushes every entry and talks to the code host: far longer than a read.
-        let request = HostRequest.ggStackAction(worktree: Self.ref(worktree), stackName: stackName, action: action)
+        return await runGGStackRequest(
+            .ggStackAction(worktree: Self.ref(worktree), stackName: stackName, action: action), title: title, serverId: serverId
+        )
+    }
+
+    /// Whether `serverId` lands and reorders its worktrees' gg stacks.
+    func servesGGStackLand(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesGGStackLandV1)
+    }
+
+    /// Lands the stack named `stackName` up to and including the entry `through`.
+    func landGGStack(stackName: String, through: String, in worktree: PeerHostWorktree, serverId: String) async -> Bool {
+        guard servesGGStackLand(serverId: serverId) else { return false }
+        return await runGGStackRequest(
+            .ggStackLand(worktree: Self.ref(worktree), stackName: stackName, through: through), title: "Land Failed", serverId: serverId
+        )
+    }
+
+    /// Reorders the stack named `stackName` to `order`, GG IDs bottom first.
+    func reorderGGStack(stackName: String, order: [String], in worktree: PeerHostWorktree, serverId: String) async -> Bool {
+        guard servesGGStackLand(serverId: serverId) else { return false }
+        return await runGGStackRequest(
+            .ggStackReorder(worktree: Self.ref(worktree), stackName: stackName, order: order), title: "Reorder Failed", serverId: serverId
+        )
+    }
+
+    private func runGGStackRequest(_ request: HostRequest, title: String, serverId: String) async -> Bool {
+        guard let channel = channels.channel(for: serverId) else { return false }
+        // gg pushes, merges and talks to the code host: far longer than a read.
         switch await channel.request(request, timeout: .seconds(600)) {
         case .done:
             return true

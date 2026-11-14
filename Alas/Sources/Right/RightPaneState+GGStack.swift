@@ -455,19 +455,10 @@ extension RightPaneState {
     }
 
     func requestGGReorder() {
-        guard let stack = ggStack,
-              stack.entries.allSatisfy({ $0.ggId != nil })
-        else {
+        guard let stack = ggStack, let model = GGReorderModel(stack: stack) else {
             ggActionState.setError("Every stack commit needs a GG ID before it can be reordered.")
             return
         }
-        let entries = stack.entries.sorted(by: { $0.position < $1.position }).map { entry in
-            let id = entry.ggId!
-            return entry.prState == .merged
-                ? GGReorderEntry.immutable(id: id, title: entry.title)
-                : GGReorderEntry.mutable(id: id, title: entry.title)
-        }
-        let model = GGReorderModel(entries: entries)
         Task { @MainActor in
             do {
                 let prepared = try await ggMutationCoordinator.prepare(.reorder(order: model.orderedIDs))
