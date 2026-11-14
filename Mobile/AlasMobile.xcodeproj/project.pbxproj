@@ -8,10 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */; };
+		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
 		3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD039065974B934F0D88642 /* FrameMeter.swift */; };
 		7650BED35947C8E4EFB25A34 /* CollectionTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */; };
+		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
 		9DEA36562A5134739052EBC3 /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8250C9560021C379E369398E /* MarkdownBlocks.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
@@ -38,8 +40,10 @@
 		9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionTranscriptView.swift; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
+		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
 		D36A12D26A237EF3A236956B /* SpikeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRowView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
+		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -128,12 +132,22 @@
 			path = Hosts;
 			sourceTree = "<group>";
 		};
+		ED52D1A93EE737EF94C55636 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				E827B4E05449D23196D8F673 /* WorktreeRow.swift */,
+				CFC88463B7E1083C886AC282 /* WorktreesView.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
 		F615C7A44BB3004E95410496 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				E8A21515D98FB4756AD79B19 /* Info.plist */,
 				86D2285A87658206EB81FAF0 /* App */,
 				E8C2655B49BA1922799A4F7E /* Hosts */,
+				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
 			);
 			path = Sources;
@@ -217,6 +231,8 @@
 				D3DB8E846E8D84254E305E74 /* SpikeRowView.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
+				06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */,
+				90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

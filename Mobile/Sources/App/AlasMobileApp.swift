@@ -1,37 +1,31 @@
 import SwiftUI
 
+private enum AppTab { case worktrees, inbox, peers, search }
+
 @main
 struct AlasMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var hub = HostHub()
-    @State private var searchText = ""
+    @State private var selection = AppTab.worktrees
 
     var body: some Scene {
         WindowGroup {
-            TabView {
-                Tab("Worktrees", systemImage: "folder") {
-                    NavigationStack {
-                        ContentUnavailableView("Worktrees", systemImage: "folder",
-                                               description: Text("Sessions from your Macs will show here."))
-                            .navigationTitle("Worktrees")
-                    }
+            TabView(selection: $selection) {
+                Tab("Worktrees", systemImage: "folder", value: AppTab.worktrees) {
+                    WorktreesView(hub: hub) { selection = .peers }
                 }
-                Tab("Inbox", systemImage: "tray") {
+                Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
                     NavigationStack {
                         ContentUnavailableView("Nothing needs you", systemImage: "tray",
                                                description: Text("Permission requests and questions from your agents arrive here in a later build."))
                             .navigationTitle("Inbox")
                     }
                 }
-                Tab("Peers", systemImage: "laptopcomputer") {
+                Tab("Peers", systemImage: "laptopcomputer", value: AppTab.peers) {
                     PeersView(hub: hub)
                 }
-                Tab(role: .search) {
-                    NavigationStack {
-                        ContentUnavailableView.search(text: searchText)
-                            .navigationTitle("Search")
-                    }
-                    .searchable(text: $searchText)
+                Tab(value: AppTab.search, role: .search) {
+                    WorktreesView(hub: hub) { selection = .peers }
                 }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
