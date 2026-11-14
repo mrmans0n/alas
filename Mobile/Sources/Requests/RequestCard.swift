@@ -232,10 +232,12 @@ private struct PlanCard: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if !payload.overview.isEmpty { Text(payload.overview).font(.subheadline).foregroundStyle(.secondary) }
                     if !payload.plan.isEmpty { AgentMarkdown(id: "plan-\(payload.toolCallId)", text: payload.plan) }
-                    ForEach(payload.todos, id: \.id) { todo in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: icon(todo.status)).foregroundStyle(todo.status == "completed" ? Color.green : .secondary)
-                            Text(todo.content).font(.subheadline)
+                    todoList(payload.todos)
+                    // Phased plans may carry all their tasks here, with no top-level todos.
+                    ForEach(Array(payload.phases.enumerated()), id: \.offset) { _, phase in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(phase.name).font(.subheadline.weight(.semibold))
+                            todoList(phase.todos)
                         }
                     }
                 }
@@ -260,6 +262,15 @@ private struct PlanCard: View {
                     CardButton(title: "Reject") { rejecting = true }
                     CardButton(title: "Accept", primary: true) { session.answerPlan(action: "accept", reason: nil) }
                 }
+            }
+        }
+    }
+
+    private func todoList(_ todos: [RemotePlanTodo]) -> some View {
+        ForEach(todos, id: \.id) { todo in
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: icon(todo.status)).foregroundStyle(todo.status == "completed" ? Color.green : .secondary)
+                Text(todo.content).font(.subheadline)
             }
         }
     }
