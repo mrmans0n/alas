@@ -62,7 +62,8 @@ struct NewSessionSheet: View {
     private var form: some View {
         Form {
             let hosts = model.onlineHosts
-            if hosts.count > 1 {
+            // Also when the chosen Mac dropped while another is online, so the user can move to that one.
+            if hosts.count > 1 || (!hosts.isEmpty && !hosts.contains { $0.id == model.hostID }) {
                 Section {
                     Picker("Mac", selection: Binding(get: { model.hostID }, set: { model.select(host: $0) })) {
                         ForEach(hosts) { Text($0.name).tag(Optional($0.id)) }
