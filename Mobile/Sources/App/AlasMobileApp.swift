@@ -6,13 +6,14 @@ private enum AppTab { case worktrees, inbox, peers, search }
 struct AlasMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var hub = HostHub()
+    @State private var worktrees = WorktreesModel()
     @State private var selection = AppTab.worktrees
 
     var body: some Scene {
         WindowGroup {
             TabView(selection: $selection) {
                 Tab("Worktrees", systemImage: "folder", value: AppTab.worktrees) {
-                    WorktreesView(hub: hub) { selection = .peers }
+                    WorktreesView(hub: hub, model: worktrees) { selection = .peers }
                 }
                 Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
                     NavigationStack {
@@ -25,7 +26,7 @@ struct AlasMobileApp: App {
                     PeersView(hub: hub)
                 }
                 Tab(value: AppTab.search, role: .search) {
-                    WorktreesView(hub: hub) { selection = .peers }
+                    WorktreesView(hub: hub, model: worktrees, focusSearchOnAppear: true) { selection = .peers }
                 }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in

@@ -74,10 +74,10 @@ struct RepoTile: View {
 }
 
 /// One worktree: branch, status line, diff stats, and its open sessions as
-/// tappable sub-rows. `destination` builds the screen a session row pushes.
-struct WorktreeRow<Destination: View>: View {
+/// tappable sub-rows. `open` reports the tapped session.
+struct WorktreeRow: View {
     let entry: RemoteWorktreeEntry
-    @ViewBuilder let destination: (RemoteSessionSummary) -> Destination
+    let open: (RemoteSessionSummary) -> Void
 
     var body: some View {
         let status = RepoDisplay.status(entry)
@@ -112,11 +112,8 @@ struct WorktreeRow<Destination: View>: View {
             }
             .padding(.leading, 22)
             ForEach(entry.activeSessions, id: \.id) { session in
-                NavigationLink {
-                    destination(session)
-                } label: {
-                    SessionLine(session: session)
-                }
+                Button { open(session) } label: { SessionLine(session: session) }
+                    .buttonStyle(.plain)
             }
         }
         .padding(.vertical, 6)
@@ -137,6 +134,9 @@ private struct SessionLine: View {
             Spacer(minLength: 8)
             Text(RepoDisplay.relativeTime(session.updatedAt))
                 .font(.caption)
+                .foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 8)
