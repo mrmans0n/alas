@@ -36,10 +36,11 @@ struct SubHeader: View {
                 Spacer(minLength: 8)
                 if let stats, shouldShowChangeSummary(additions: stats.add, deletions: stats.del) {
                     HStack(spacing: 6) {
-                        Text("+\(stats.add)").foregroundColor(theme.color("add"))
-                        Text("−\(stats.del)").foregroundColor(theme.color("del"))
+                        Text("+" + WorktreeRowPresentation.compactCount(stats.add)).foregroundColor(theme.color("add"))
+                        Text("−" + WorktreeRowPresentation.compactCount(stats.del)).foregroundColor(theme.color("del"))
                     }
                     .font(scale.caption.font(weight: .semibold, design: .monospaced))
+                    .help("\(stats.add) lines added, \(stats.del) lines deleted")
                 }
                 if let trailing { trailing }
             }

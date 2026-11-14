@@ -65,8 +65,16 @@ struct WorkingTreeSectionView: View {
         WorkingTreeChangeGroup.group(files: changes)
     }
 
-    nonisolated static func directoryRowLeadingPadding(depth: Int) -> CGFloat {
-        12 + CGFloat(depth * 14)
+    /// The tree indents after the stage column, which stays put so every
+    /// checkbox lines up whatever the depth.
+    nonisolated static func treeIndent(depth: Int) -> CGFloat {
+        CGFloat(depth * 14)
+    }
+
+    /// The stage chip's 20pt frame insets its box by 3pt, so a row with one
+    /// starts 3pt sooner to keep the box on the section header's 12pt edge.
+    nonisolated static func rowLeadingInset(showsStageChip: Bool) -> CGFloat {
+        showsStageChip ? 9 : 12
     }
 
     private var totalAdd: Int { changeGroups.reduce(0) { $0 + $1.add } }
@@ -237,20 +245,32 @@ struct WorkingTreeFlatRowView: View {
                         }
                     )
                 }
-                FolderIconView(
-                    name: node.name,
-                    path: node.path,
-                    open: open,
-                    fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
-                )
-                Text(node.name)
-                    .font(scale.body.font)
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    HStack(spacing: scale.space[1]) {
+                        Icon(
+                            name: open ? "chev-down" : "chev-right",
+                            size: scale.glyph.size,
+                            color: theme.color("fg-faint")
+                        )
+                        .frame(width: scale.glyph.size)
+                        .accessibilityHidden(true)
+                        FolderIconView(
+                            name: node.name,
+                            path: node.path,
+                            open: open,
+                            fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
+                        )
+                    }
+                    Text(node.name)
+                        .font(scale.body.font)
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.leading, WorkingTreeSectionView.treeIndent(depth: row.depth))
                 Spacer()
             }
-            .padding(.leading, WorkingTreeSectionView.directoryRowLeadingPadding(depth: row.depth))
+            .padding(.leading, WorkingTreeSectionView.rowLeadingInset(showsStageChip: actions.showsStageState))
             .padding(.trailing, scale.space[3])
             .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)

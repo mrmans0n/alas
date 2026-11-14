@@ -35,9 +35,7 @@ struct ChangedRow: View {
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
 
-    nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
-        12 + CGFloat(depth * 14)
-    }
+    private var showsStageChip: Bool { onStage != nil || stageState != nil }
 
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
@@ -46,31 +44,38 @@ struct ChangedRow: View {
         let resolvedStageState = stageState ?? (file.stage == .staged ? .staged : .unstaged)
         return Button(action: onSelect) {
             HStack(spacing: 6) {
-                if onStage != nil || stageState != nil {
+                if showsStageChip {
                     StageChip(state: resolvedStageState, action: onStage)
                 }
                 HStack(spacing: 6) {
-                    FileTypeIconView(filename: basename, size: 18)
+                    // Holds the place of a folder's chevron, so file icons
+                    // line up with their folder's icon one level in.
+                    HStack(spacing: scale.space[1]) {
+                        Color.clear.frame(width: scale.glyph.size)
+                        FileTypeIconView(filename: basename, size: 18)
+                    }
                     Text(basename)
                         .font(scale.body.font)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
                 }
+                .padding(.leading, WorkingTreeSectionView.treeIndent(depth: depth))
                 .contentShape(Rectangle())
                 Spacer()
                 // A fixed gutter keeps the status letter from reading as part
                 // of the counts.
                 HStack(spacing: scale.space[2]) {
                     HStack(spacing: scale.space[1]) {
-                        if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
-                        if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
+                        if add > 0 { Text("+" + WorktreeRowPresentation.compactCount(add)).foregroundColor(theme.color("add")) }
+                        if del > 0 { Text("−" + WorktreeRowPresentation.compactCount(del)).foregroundColor(theme.color("del")) }
                     }
+                    .help(add > 0 || del > 0 ? "\(add) lines added, \(del) lines deleted" : "")
                     StatusBadge(status: file.status)
                 }
             }
             .font(scale.meta.font(design: .monospaced))
-            .padding(.leading, Self.rowLeadingPadding(depth: depth))
+            .padding(.leading, WorkingTreeSectionView.rowLeadingInset(showsStageChip: showsStageChip))
             .padding(.trailing, scale.space[3])
             .padding(.vertical, scale.space[1])
             .frame(maxWidth: .infinity, alignment: .leading)
