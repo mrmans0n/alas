@@ -64,11 +64,11 @@ struct ACPSelectChip: View {
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .fill(accent.opacity(0.18))
+                    .fill(accent.opacity(Self.fillOpacity(darkMode: theme.darkMode)))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .strokeBorder(accent.opacity(0.45), lineWidth: 0.75)
+                    .strokeBorder(accent.opacity(theme.darkMode ? 0.45 : 0.30), lineWidth: 0.75)
             )
         }
         .buttonStyle(.plain)
@@ -123,12 +123,18 @@ struct ACPSelectChip: View {
         }
     }
 
+    /// On a light page a strong tint of a dark accent reads as mud, so the
+    /// fill is lighter there; the hue stays.
+    static func fillOpacity(darkMode: Bool) -> Double {
+        darkMode ? 0.18 : 0.10
+    }
+
     static func labelForeground(accent: Color, theme: Theme) -> Color {
         if theme.darkMode {
             return Color.blend(accent, .white, t: 0.55)
         }
 
-        let chipBackground = Color.composited(accent, alpha: 0.18, over: theme.color("bg-1"))
+        let chipBackground = Color.composited(accent, alpha: fillOpacity(darkMode: false), over: theme.color("bg-1"))
         let minimumContrast = 4.5
         let preferredBlend = Color.blend(accent, .black, t: 0.30)
         if Color.contrastRatio(preferredBlend, chipBackground) >= minimumContrast {

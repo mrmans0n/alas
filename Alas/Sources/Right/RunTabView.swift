@@ -498,10 +498,8 @@ struct RunScopeHeader: View {
 
     var body: some View {
         HStack(spacing: scale.space[2]) {
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
+            Text(title)
+                .paneSectionTitle()
             Text("\(count)")
                 .font(scale.caption.font(weight: .semibold))
                 .padding(.horizontal, scale.space[1]).padding(.vertical, scale.space[0])

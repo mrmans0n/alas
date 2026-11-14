@@ -52,9 +52,7 @@ struct ConflictsSection: View {
     private var header: some View {
         HStack(spacing: 6) {
             Text("Conflicts (\(conflicts.count))")
-                .font(scale.caption.font(weight: .semibold))
-                .textCase(.uppercase)
-                .foregroundColor(.secondary)
+                .paneSectionTitle()
             Spacer()
             if showsBulkResolve {
                 bulkResolveButton

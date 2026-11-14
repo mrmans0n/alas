@@ -87,7 +87,25 @@ private struct PaneBandModifier: ViewModifier {
     }
 }
 
+/// The title of a right-pane section ("Working tree", "Commits"). Sentence
+/// case at the title role, so a header reads as a header, not a tag.
+private struct PaneSectionTitleModifier: ViewModifier {
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+
+    func body(content: Content) -> some View {
+        content
+            .font(scale.titleFont)
+            .foregroundColor(theme.color("fg"))
+            .lineLimit(1)
+    }
+}
+
 extension View {
+    func paneSectionTitle() -> some View {
+        modifier(PaneSectionTitleModifier())
+    }
+
     /// Pads and fills a header-style band. `horizontal` is the content inset
     /// measured from the column edge, which the band preserves by giving back
     /// whatever the outer gap takes.

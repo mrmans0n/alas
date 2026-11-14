@@ -49,9 +49,8 @@ struct AgentSidebarSectionHeader: View {
 
     var body: some View {
         HStack(spacing: scale.space[2]) {
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.4)
+            Text(title)
+                .paneSectionTitle()
             Text("\(count)")
                 .font(scale.caption.font(weight: .semibold))
                 .monospacedDigit()

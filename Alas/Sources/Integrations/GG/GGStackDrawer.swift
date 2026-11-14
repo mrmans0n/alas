@@ -148,7 +148,7 @@ struct GGStackDrawer: View {
         expandableCollapsedRow(
             title: model.title,
             summaryChip: model.summaryChip,
-            isPaused: model.isPaused || rps.ggStackRemoteError != nil,
+            needsAttention: model.isPaused || rps.ggStackRemoteError != nil,
             showsLoading: false
         )
     }
@@ -159,7 +159,7 @@ struct GGStackDrawer: View {
             expandableCollapsedRow(
                 title: model.title,
                 summaryChip: model.summaryChip,
-                isPaused: false,
+                needsAttention: model.canRetry,
                 showsLoading: model.isLoading
             )
         } else {
@@ -174,13 +174,13 @@ struct GGStackDrawer: View {
     private func expandableCollapsedRow(
         title: String,
         summaryChip: String,
-        isPaused: Bool,
+        needsAttention: Bool,
         showsLoading: Bool
     ) -> some View {
         collapsedRowContent(
             title: title,
             summaryChip: summaryChip,
-            isPaused: isPaused,
+            needsAttention: needsAttention,
             showsLoading: showsLoading,
             showsChevron: true
         )
@@ -213,7 +213,7 @@ struct GGStackDrawer: View {
         collapsedRowContent(
             title: title,
             summaryChip: summaryChip,
-            isPaused: false,
+            needsAttention: false,
             showsLoading: showsLoading,
             showsChevron: false
         )
@@ -224,24 +224,24 @@ struct GGStackDrawer: View {
     private func collapsedRowContent(
         title: String,
         summaryChip: String,
-        isPaused: Bool,
+        needsAttention: Bool,
         showsLoading: Bool,
         showsChevron: Bool
     ) -> some View {
         PaneDrawerRow(
             leading: {
-                Circle().fill(theme.color(isPaused ? "warn" : "accent")).frame(width: 6, height: 6)
+                Circle().fill(theme.color(needsAttention ? "warn" : "accent")).frame(width: 6, height: 6)
                 Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
             },
             identity: {
-                Text(title.uppercased())
-                    .font(scale.caption.font(weight: .semibold)).tracking(0.5)
+                Text(title)
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
                     .help(title)
             },
             chips: { _ in
                 Text(summaryChip)
-                    .font(scale.meta.font(weight: .medium)).foregroundColor(theme.color("fg-dim"))
+                    .font(scale.meta.font(weight: .medium)).foregroundColor(theme.color(needsAttention ? "warn" : "fg-dim"))
                     .lineLimit(1)
                     .help(summaryChip)
             },
