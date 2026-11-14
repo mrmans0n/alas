@@ -40,12 +40,20 @@ final class NewSessionModel {
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var recoveredWorktreeId: String?
     @ObservationIgnored private var modeChosen = false
+    @ObservationIgnored private var started = false
     @ObservationIgnored private var watchGeneration = 0
     @ObservationIgnored private var hostWasOnline = false
 
     init(hub: HostHub, onCreated: @escaping (SessionRoute) -> Void) {
         self.hub = hub
         self.onCreated = onCreated
+    }
+
+    /// Joins the first online host and loads its lists. Kept out of `init` because SwiftUI may
+    /// construct a throwaway model each time the presenting view re-evaluates.
+    func start() {
+        guard !started else { return }
+        started = true
         select(host: onlineHosts.first?.id)
     }
 

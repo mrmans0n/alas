@@ -52,6 +52,7 @@ struct NewSessionSheet: View {
             }
         }
         .interactiveDismissDisabled(model.isLocked)
+        .task { model.start() }
     }
 
     private var form: some View {
