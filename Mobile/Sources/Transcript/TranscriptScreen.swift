@@ -7,6 +7,9 @@ struct TranscriptScreen: View {
     let hostID: UUID
     let sessionId: String
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
+    @State private var showSettings = false
+    @State private var renaming = false
+    @State private var newTitle = ""
 
     var body: some View {
         Group {
@@ -31,7 +34,7 @@ struct TranscriptScreen: View {
                 if !session.hasEnded {
                     VStack(spacing: 0) {
                         RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
-                        ComposerBar(session: session)
+                        ComposerBar(session: session, onOpenSettings: { showSettings = true })
                     }
                 } else {
                     Text("This session has ended.")
@@ -46,6 +49,21 @@ struct TranscriptScreen: View {
             .navigationTitle(session.summary?.title ?? "Session")
             .navigationSubtitle(subtitle(session))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarTitleMenu {
+                if !session.hasEnded {
+                    Button("Rename…", systemImage: "pencil") {
+                        newTitle = session.summary?.title ?? ""
+                        renaming = true
+                    }
+                    Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                }
+            }
+            .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
+            .alert("Rename Session", isPresented: $renaming) {
+                TextField("Title", text: $newTitle)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") { session.rename(newTitle) }
+            }
     }
 
     private func subtitle(_ session: TranscriptSession) -> String {

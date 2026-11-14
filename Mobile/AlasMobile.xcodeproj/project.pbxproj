@@ -10,6 +10,7 @@
 		0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */; };
 		06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */; };
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
+		071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
@@ -71,6 +72,7 @@
 		EEB4C7CE3F100F5656449A2C /* InboxModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModel.swift; sourceTree = "<group>"; };
 		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSettingsSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -158,6 +160,7 @@
 			children = (
 				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
 				21408E08006F4C64E22701EE /* SessionRegistry.swift */,
+				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
 				1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */,
 				18514DE5113754F3401217CA /* TranscriptRowView.swift */,
 				372565FA395364953D615BC3 /* TranscriptScreen.swift */,
@@ -304,6 +307,7 @@
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
 				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
 				CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */,
+				071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,
