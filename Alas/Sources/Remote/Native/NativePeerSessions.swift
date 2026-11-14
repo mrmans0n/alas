@@ -1040,7 +1040,7 @@ final class NativePeerSessions {
     func sendPrompt(intent: ACPSubmitIntent = .auto) {
         guard pendingPrompt == nil else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mentions = NativePeerComposerState.liveMentions(mentions, in: text)
+        let mentions = RemoteComposerText.liveMentions(mentions, in: text)
         guard !text.isEmpty || !attachments.isEmpty else { return }
         let pending = PendingPrompt(
             text: text, attachments: attachments,
@@ -1203,10 +1203,10 @@ final class NativePeerSessions {
     /// was refused, or nil once it is staged.
     @discardableResult
     func addMention(_ mention: RemoteMention, in text: String) -> String? {
-        mentions = NativePeerComposerState.liveMentions(mentions, in: text)
+        mentions = RemoteComposerText.liveMentions(mentions, in: text)
         guard !mentions.contains(where: { $0.kind == mention.kind && $0.value == mention.value }) else { return nil }
         // The host refuses a prompt over its cap; say so before the send.
-        guard mentions.count < RemoteSessionGateway.maxMentionCount else {
+        guard mentions.count < RemoteAttachmentLimits.maxMentionCount else {
             return NativePeerComposerState.tooManyMentions
         }
         mentions.append(mention)
@@ -2242,7 +2242,7 @@ final class NativePeerSessions {
         if unchanged, let selectedSessionId { composerState(for: selectedSessionId).replaceDraft(.empty) }
         if unchanged, draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
         if attachments == sent.attachments { attachments = [] }
-        mentions = NativePeerComposerState.liveMentions(mentions, in: draft)
+        mentions = RemoteComposerText.liveMentions(mentions, in: draft)
         pendingPrompt = nil
         promptCompletion = nil
         pendingPromptExpectedIndex = nil

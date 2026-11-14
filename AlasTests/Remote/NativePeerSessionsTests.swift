@@ -1841,26 +1841,6 @@ struct NativePeerSessionsTests {
         #expect(client.draft == "fix this")
     }
 
-    private func queued(canRemove: Bool? = nil, images: Int = 0, resources: Int = 0) -> RemoteQueuedPrompt {
-        RemoteQueuedPrompt(id: UUID().uuidString, text: "t", imageCount: images, resourceCount: resources,
-                           status: "pending", lastError: nil, scheduledAt: nil, canRemove: canRemove)
-    }
-
-    @Test(arguments: [
-        (true, 0, 0, true), (nil, 0, 0, true), (false, 0, 0, false), (true, 1, 0, false), (true, 0, 2, false),
-    ] as [(Bool?, Int, Int, Bool)])
-    func queuedItemIsEditableOnlyWhenRemovableAndAttachmentFree(
-        canRemove: Bool?, images: Int, resources: Int, expected: Bool
-    ) {
-        let item = queued(canRemove: canRemove, images: images, resources: resources)
-        #expect(NativePeerComposerState.canEdit(item) == expected)
-    }
-
-    @Test func clearIsOfferedOnlyWhenSomeQueuedItemIsRemovable() {
-        #expect(!NativePeerComposerState.canClear([queued(canRemove: false), queued(canRemove: false)]))
-        #expect(NativePeerComposerState.canClear([queued(canRemove: false), queued(canRemove: nil)]))
-    }
-
     /// The smallest bytes that sniff as a PNG.
     private let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 
@@ -1887,28 +1867,9 @@ struct NativePeerSessionsTests {
     @Test func attachmentsTheHostWouldRefuseAreNeverStaged() {
         let (_, client) = drivenClient(canDrive: true)
         #expect(client.addAttachment(Data("not an image".utf8), name: "notes.txt") != nil)
-        for _ in 0..<RemoteSessionGateway.maxAttachmentCount { client.addAttachment(png, name: nil) }
+        for _ in 0..<RemoteAttachmentLimits.maxCount { client.addAttachment(png, name: nil) }
         #expect(client.addAttachment(png, name: nil) != nil)
-        #expect(client.attachments.count == RemoteSessionGateway.maxAttachmentCount)
-    }
-
-    @Test(arguments: [
-        (1, [], true), (10_000_000, [], true), (10_000_001, [], false), (1, [9_999_999], true),
-        (2, [9_999_999], false), (1, Array(repeating: 1, count: 10), false),
-    ] as [(Int, [Int], Bool)])
-    func fileSizeIsJudgedAgainstTheRemainingBatchBudgetBeforeReading(size: Int, staged: [Int], fits: Bool) {
-        #expect((NativePeerComposerState.attachmentSizeRefusal(size, stagedSizes: staged) == nil) == fits)
-    }
-
-    @Test(arguments: [
-        ("@", 1, 0, ""), ("see @Alas/Sources/App.swift", 27, 4, "Alas/Sources/App.swift"),
-        ("@App.swift#run", 14, 0, "App.swift#run"), ("mail a@b", 8, nil, nil), ("@done next", 10, nil, nil),
-        ("x\n@a", 4, 2, "a"),
-    ] as [(String, Int, Int?, String?)])
-    func mentionTokenIsTheAtWordAtTheCaret(text: String, caret: Int, start: Int?, query: String?) {
-        let token = NativePeerComposerState.activeMentionToken(in: text as NSString, caret: caret)
-        #expect(token?.start == start)
-        #expect(token?.query == query)
+        #expect(client.attachments.count == RemoteAttachmentLimits.maxCount)
     }
 
     @Test func promptsCarryOnlyTheMentionsStillInTheDraftAndDropStaleCandidates() {
@@ -1931,7 +1892,7 @@ struct NativePeerSessionsTests {
         #expect(client.mentionCandidatesQuery == "app")
 
         // Past the host's cap a pick is refused up front.
-        let many = (0..<RemoteSessionGateway.maxMentionCount).map {
+        let many = (0..<RemoteAttachmentLimits.maxMentionCount).map {
             RemoteMention(kind: RemoteMention.file, value: "f\($0)", name: "f\($0)")
         }
         client.draft = many.map { "@" + $0.name }.joined(separator: " ")
@@ -1982,18 +1943,6 @@ struct NativePeerSessionsTests {
             .queueMove(sessionId: "s", itemId: b.uuidString, targetItemId: a.uuidString),
             .queuePromote(sessionId: "s", itemId: b.uuidString),
         ])
-    }
-
-    @Test(arguments: [
-        ("hello", 0, 0, "hello"),
-        ("", 2, 0, "🖼 ×2"),
-        ("", 0, 1, "📎 ×1"),
-        ("see", 1, 3, "see\n🖼 ×1 📎 ×3"),
-    ])
-    func queuedItemsWithAttachmentsShowCountMarkers(text: String, images: Int, resources: Int, expected: String) {
-        let item = RemoteQueuedPrompt(id: UUID().uuidString, text: text, imageCount: images,
-                                      resourceCount: resources, status: "pending", lastError: nil, scheduledAt: nil)
-        #expect(NativePeerComposerState.displayText(for: item) == expected)
     }
 
     @Test func selectedSessionResubscribesWhenPeerReturns() {

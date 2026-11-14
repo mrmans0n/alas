@@ -605,12 +605,12 @@ public final class RemoteSessionGateway {
 
     // MARK: attachment materialization
 
-    public nonisolated static let maxAttachmentsBytes = 10_000_000
+    public nonisolated static let maxAttachmentsBytes = RemoteAttachmentLimits.maxTotalBytes
     /// Max images per prompt — parity with the native composer's limit.
-    public nonisolated static let maxAttachmentCount = 10
+    public nonisolated static let maxAttachmentCount = RemoteAttachmentLimits.maxCount
     /// Caps the mentions one prompt resolves, as the image cap does.
-    public nonisolated static let maxMentionCount = 50
-    public nonisolated static let maxMentionQueryLength = 256
+    public nonisolated static let maxMentionCount = RemoteAttachmentLimits.maxMentionCount
+    public nonisolated static let maxMentionQueryLength = RemoteAttachmentLimits.maxMentionQueryLength
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
     /// batch violates the size cap or any entry isn't a real image (caller rejects
