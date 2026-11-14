@@ -10,17 +10,19 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     let canLoadOlder: Bool
     let loadOlder: () -> Void
     var image: (String) -> UIImage? = { _ in nil }
+    var session: TranscriptSession?
     var onFirstLayout: () -> Void = {}
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
-         onFirstLayout: @escaping () -> Void = {})
+         session: TranscriptSession? = nil, onFirstLayout: @escaping () -> Void = {})
     {
         self.items = items
         _expanded = expanded
         self.canLoadOlder = canLoadOlder
         self.loadOlder = loadOlder
         self.image = image
+        self.session = session
         self.onFirstLayout = onFirstLayout
     }
 
@@ -35,7 +37,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
 
     private var input: TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
-              image: image, onFirstLayout: onFirstLayout)
+              image: image, session: session, onFirstLayout: onFirstLayout)
     }
 }
 
@@ -46,6 +48,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var canLoadOlder: Bool
         var loadOlder: () -> Void
         var image: (String) -> UIImage?
+        var session: TranscriptSession?
         var onFirstLayout: () -> Void
     }
 
@@ -82,7 +85,8 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [unowned self] cell, _, id in
             guard let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
-                TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image) { [unowned self] in
+                TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image,
+                                  session: input.session) { [unowned self] in
                     input.expanded.wrappedValue.formSymmetricDifference([id])
                     sync()
                 }

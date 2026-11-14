@@ -6,6 +6,8 @@ struct TranscriptRowView: View {
     let isExpanded: Bool
     /// A user image's bytes by its uri; nil shows the image's label instead.
     var image: (String) -> UIImage? = { _ in nil }
+    /// Visual aids render live only with a session to answer through.
+    var session: TranscriptSession?
     let toggle: () -> Void
 
     var body: some View {
@@ -64,7 +66,12 @@ struct TranscriptRowView: View {
         case .planDocument(let doc):
             titleCaption("Plan", doc.markdown ?? doc.planId)
         case .visualAid(let aid):
-            titleCaption(aid.title, "Visual")
+            if let session {
+                // Keyed by visual, so a reused cell never hands one visual's page or state to another.
+                VisualAidCard(aid: aid, session: session).id(aid.id)
+            } else {
+                titleCaption(aid.title, "Visual")
+            }
         case .systemNotice(let text):
             Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }

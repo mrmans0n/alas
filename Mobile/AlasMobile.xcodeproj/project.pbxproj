@@ -12,6 +12,7 @@
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
+		1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
@@ -27,8 +28,10 @@
 		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
+		99BA0157FACF4F34F7E0E7F6 /* VisualAidWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67165C95A555833F59448D9E /* VisualAidWebView.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
 		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
+		B43121A298365C510EF57149 /* frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B7A9014AA3A262509E8B3DB3 /* frame.html */; };
 		B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03FA6AEA78D99344CAAD8095 /* DiffView.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
 		C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */; };
@@ -64,11 +67,14 @@
 		5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElicitationFormView.swift; sourceTree = "<group>"; };
 		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
 		62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostHub.swift; sourceTree = "<group>"; };
+		67165C95A555833F59448D9E /* VisualAidWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidWebView.swift; sourceTree = "<group>"; };
 		69BE14FB4617210C8AB913F2 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		836FA1B810A2D04B52F5C3BD /* QueueTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTray.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
+		B7A9014AA3A262509E8B3DB3 /* frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = frame.html; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
+		C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidCard.swift; sourceTree = "<group>"; };
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
 		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
@@ -138,6 +144,15 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
+		6D718A3BCDCFDAC212416D09 /* VisualAid */ = {
+			isa = PBXGroup;
+			children = (
+				B7A9014AA3A262509E8B3DB3 /* frame.html */,
+			);
+			name = VisualAid;
+			path = ../Alas/Resources/VisualAid;
+			sourceTree = "<group>";
+		};
 		86D2285A87658206EB81FAF0 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -161,6 +176,7 @@
 				E8BE68B7690E4EB8C3B0DE9F /* Config */,
 				5DCBB4F5E953BC7D6DCB2D6C /* Packages */,
 				F615C7A44BB3004E95410496 /* Sources */,
+				6D718A3BCDCFDAC212416D09 /* VisualAid */,
 				D95E4E9B0E600B48EF875905 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -187,6 +203,8 @@
 				18514DE5113754F3401217CA /* TranscriptRowView.swift */,
 				372565FA395364953D615BC3 /* TranscriptScreen.swift */,
 				E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */,
+				C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */,
+				67165C95A555833F59448D9E /* VisualAidWebView.swift */,
 			);
 			path = Transcript;
 			sourceTree = "<group>";
@@ -255,6 +273,7 @@
 			buildConfigurationList = F452CEC9DEF1A90F68F71159 /* Build configuration list for PBXNativeTarget "AlasMobile" */;
 			buildPhases = (
 				F2004AFA10DDE701AC8ABDA7 /* Sources */,
+				774DCBB851809F6F902A0A26 /* Resources */,
 				4FB8E1D7D0E5989F88C8FBDF /* Frameworks */,
 			);
 			buildRules = (
@@ -307,6 +326,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		774DCBB851809F6F902A0A26 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B43121A298365C510EF57149 /* frame.html in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		F2004AFA10DDE701AC8ABDA7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -343,6 +373,8 @@
 				FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */,
 				271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */,
 				3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */,
+				1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */,
+				99BA0157FACF4F34F7E0E7F6 /* VisualAidWebView.swift in Sources */,
 				06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */,
 				90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */,
 			);

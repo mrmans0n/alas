@@ -30,6 +30,22 @@ struct ComposerDraft {
     var mentions: [RemoteMention] = []
 }
 
+/// What this phone holds for one visual aid's card. Kept on the session by visual id, so a draft and a
+/// measured height survive cell reuse and resubscribes.
+struct VisualAidCardState {
+    var selected: [String] = []
+    var note = ""
+    /// The `requestId` of the send awaiting the host; nil when idle.
+    var pendingRequestId: String?
+    /// This phone sent an answer the host has not reported as failed; the host can still roll it back.
+    var submitted = false
+    var error: String?
+    /// The frame height the page last reported, already clamped.
+    var height: Double?
+    /// The page tried to leave its document; it never loads again.
+    var blocked = false
+}
+
 enum RequestKind {
     case permission, question, plan, elicitation
 }
@@ -78,6 +94,7 @@ final class TranscriptSession {
     /// The query `mentionCandidates` answers; nil while a new query is in flight.
     private(set) var mentionCandidatesQuery: String?
     var draft = ComposerDraft()
+    var visualAids: [UUID: VisualAidCardState] = [:]
 
     let hostID: UUID
     let sessionId: String
@@ -235,6 +252,37 @@ final class TranscriptSession {
         }
     }
 
+    /// Answers a visual aid's question. Unlike the other requests no deferral is needed: the answer is keyed
+    /// by visual id, which survives the take-over's re-follow, and the host reads the two frames in order.
+    func answerVisualAid(_ id: UUID, action: String, selectedOptionIds: [String], note: String?) {
+        guard visualAids[id]?.pendingRequestId == nil,
+              let aid = items.lazy.compactMap({ if case .visualAid(let aid) = $0.row, aid.id == id { aid } else { nil } }).first,
+              let question = aid.question, aid.answer == nil,
+              let answer = RemoteVisualAidAnswer.answer(to: question, action: action, selectedOptionIds: selectedOptionIds, note: note)
+        else { return }
+        let (ids, sentNote): ([String], String?) = if case .answered(let ids, let note, _) = answer { (ids, note) } else { ([], nil) }
+        let requestId = UUID().uuidString
+        guard drive(.visualAidResponse(sessionId: sessionId, visualId: id.uuidString, action: action,
+                                       selectedOptionIds: ids, note: sentNote, requestId: requestId))
+        else { return }
+        visualAids[id, default: .init()].pendingRequestId = requestId
+        visualAids[id]?.submitted = true
+        visualAids[id]?.error = nil
+    }
+
+    /// A single choice replaces the selection; a multiple one toggles.
+    func toggleVisualAidChoice(_ id: UUID, option: String, allowMultiple: Bool) {
+        var selected = visualAids[id]?.selected ?? []
+        if !allowMultiple {
+            selected = [option]
+        } else if let index = selected.firstIndex(of: option) {
+            selected.remove(at: index)
+        } else {
+            selected.append(option)
+        }
+        visualAids[id, default: .init()].selected = selected
+    }
+
     /// Sends the answer now when this phone drives; otherwise takes over and defers it until
     /// the same request (same content, any id) is pending again under the new lease.
     private func answer<P: Encodable>(_ kind: RequestKind, _ shown: P, current: @escaping () -> P?,
@@ -378,7 +426,46 @@ final class TranscriptSession {
         isStopping = false
         mentionCandidates = []
         mentionCandidatesQuery = nil
+        // A send's reply died with the old subscription; the snapshot shows its outcome.
+        for id in visualAids.keys where visualAids[id]?.pendingRequestId != nil {
+            visualAids[id]?.pendingRequestId = nil
+        }
         publish()
+    }
+
+    /// How a card's send state moves when a row for it arrives (`visual-aid.js` nextCardState and
+    /// restoreSubmitted). An unanswered row after this phone's send means the host rolled the answer back,
+    /// except in a snapshot: a take-over's re-follow replays the row before the host reads the answer behind it.
+    private func applyVisualAidRows(_ rows: [RemoteWireMessage], snapshot: Bool) {
+        for row in rows where row.kind == "visualAid" {
+            guard case .visualAid(let aid) = RemoteTranscriptRow(message: row), var card = visualAids[aid.id] else { continue }
+            if aid.answer != nil {
+                card.pendingRequestId = nil
+                card.error = nil
+            } else if snapshot {
+                guard card.pendingRequestId == nil else { continue }
+                card.submitted = false
+            } else if card.submitted {
+                card.pendingRequestId = nil
+                card.submitted = false
+                card.error = Self.visualAidFailedText
+            } else {
+                continue
+            }
+            visualAids[aid.id] = card
+        }
+    }
+
+    private static let visualAidFailedText = "Couldn't send your answer. Try again."
+
+    private static func visualAidRejectionText(_ reason: String) -> String {
+        switch reason {
+        case "notWriter": "Take over this session to answer."
+        case "notFound": "This visual is no longer available."
+        case "alreadyAnswered": "This question was already answered."
+        case "invalid": "That answer wasn't accepted. Check your choice and try again."
+        default: visualAidFailedText
+        }
     }
 
     /// Drops each unsettled draft the host now shows in a row or queue item added since its send.
@@ -420,9 +507,22 @@ final class TranscriptSession {
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
-            if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message { settle(rows: rows) }
+            if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message {
+                settle(rows: rows)
+                applyVisualAidRows(rows, snapshot: true)
+            }
         case .transcriptDelta(let id, _, _, let rows, _, _, _) where id == sessionId:
             settle(rows: rows)
+            applyVisualAidRows(rows, snapshot: false)
+        case .visualAidRejected(let id, let visualId, let reason, let requestId) where id == sessionId:
+            // Session-scoped, so every phone gets it: only the card waiting on this request applies it.
+            if let visual = UUID(uuidString: visualId), let pending = visualAids[visual]?.pendingRequestId,
+               requestId == nil || requestId == pending
+            {
+                visualAids[visual]?.pendingRequestId = nil
+                visualAids[visual]?.submitted = false
+                visualAids[visual]?.error = Self.visualAidRejectionText(reason)
+            }
         case .stopPending(let id) where id == sessionId:
             isStopping = true
             stopGeneration += 1
