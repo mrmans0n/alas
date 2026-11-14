@@ -1,0 +1,63 @@
+name: AlasMobile
+options:
+  bundleIdPrefix: io.nlopez
+  deploymentTarget:
+    iOS: "26.0"
+  developmentLanguage: en
+  createIntermediateGroups: false
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    GENERATE_INFOPLIST_FILE: NO
+
+packages:
+  AlasCore:
+    path: ../Packages/AlasCore
+  Markdown:
+    url: https://github.com/apple/swift-markdown
+    from: 0.9.0
+
+targets:
+  AlasMobile:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: ../Config/AlasMobile-Debug.xcconfig
+      Release: ../Config/AlasMobile-Release.xcconfig
+    sources:
+      - path: Sources
+    dependencies:
+      - package: AlasCore
+        product: AlasRemoteKit
+      - package: Markdown
+        product: Markdown
+    settings:
+      base:
+        PRODUCT_NAME: Alas
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: $(ALAS_DISPLAY_NAME)
+        UILaunchScreen: {}
+        CADisableMinimumFrameDurationOnPhone: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+
+schemes:
+  AlasMobile:
+    build:
+      targets:
+        AlasMobile: all
+    run:
+      config: Debug
+      # Scenario drivers for the transcript spike; enable per scenario in the scheme editor.
+      # Profile inherits these.
+      commandLineArguments:
+        "-spikePreloadPages 23": false
+        "-spikeWindowSize 20": false
