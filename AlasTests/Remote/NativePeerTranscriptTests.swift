@@ -67,6 +67,24 @@ struct NativePeerTranscriptTests {
         #expect(transcript.totalCount == 12)
     }
 
+    /// A reconnect's snapshot in the same epoch keeps the pages already read, unless rows
+    /// arrived in between that the snapshot window no longer reaches.
+    @Test(arguments: [(11, true), (13, false)])
+    func sameEpochResnapshotKeepsContiguousOlderPages(resnapshotFirst: Int, keepsHistory: Bool) {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [row("j", index: 10, text: "j"), row("k", index: 11, text: "k")],
+                                              firstIndex: 10, totalCount: 12, epoch: 1, revision: 0))
+        transcript.apply(.transcriptPage(sessionId: "B:s", epoch: 1, firstIndex: 8,
+                                          messages: [row("h", index: 8, text: "h"), row("i", index: 9, text: "i")]))
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [row("tail", index: resnapshotFirst, text: "tail")],
+                                              firstIndex: resnapshotFirst, totalCount: resnapshotFirst + 1,
+                                              epoch: 1, revision: 0))
+        #expect(transcript.messages.map(\.stableId) == (keepsHistory ? ["h", "i", "j", "tail"] : ["tail"]))
+        #expect(transcript.olderPageBeforeIndex == (keepsHistory ? 8 : resnapshotFirst))
+    }
+
     @Test func pendingPermissionAndClosure() {
         var transcript = NativePeerTranscript(sessionId: "B:s")
         transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
