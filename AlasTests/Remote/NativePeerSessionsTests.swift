@@ -94,6 +94,25 @@ struct NativePeerSessionsTests {
               isSecret: isSecret, options: options, defaultValue: defaultValue)
     }
 
+    @Test func shepherdCandidatesAreTheWorktreesDrivenSessionsUntilOneShepherdsTheRequest() {
+        func row(_ id: String, worktree: String = "w1", canDrive: Bool = true, updatedAt: Int64) -> (sessionID: String, summary: RemoteSessionSummary) {
+            (id, RemoteSessionSummary(id: "host:\(id)", title: id, agentId: "a", status: "idle", canDrive: canDrive,
+                                      worktreeId: worktree, updatedAt: updatedAt))
+        }
+        let sessions = [
+            row("old", updatedAt: 1), row("new", updatedAt: 3),
+            row("history", canDrive: false, updatedAt: 4), row("elsewhere", worktree: "w2", updatedAt: 5),
+        ]
+        let candidates = NativePeerSessions.shepherdCandidates(sessions, shepherds: [:], worktreeID: "w1", number: "#7")
+        #expect(candidates?.map(\.sessionID) == ["new", "old"])
+
+        let shepherd = HostSessionShepherd(badge: "watching", number: "#7", tooltip: "")
+        #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["history": shepherd], worktreeID: "w1", number: "#7") == nil)
+        // Another worktree's shepherd, or one of an older request, leaves it unbound.
+        #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["elsewhere": shepherd], worktreeID: "w1", number: "#7") != nil)
+        #expect(NativePeerSessions.shepherdCandidates(sessions, shepherds: ["old": shepherd], worktreeID: "w1", number: "#8") != nil)
+    }
+
     @Test func remotePermissionMapsOntoTheNativeCard() {
         let described = RemotePermissionOption(
             optionId: "allow-once", name: "Allow", kind: "allow_once", description: "For this request only."
