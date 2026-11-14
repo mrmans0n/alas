@@ -18,7 +18,7 @@ struct TranscriptRowView: View {
     @ViewBuilder
     private var content: some View {
         switch item.row {
-        case .user(let text, _, let images):
+        case .user(let text, _, let images, _):
             VStack(alignment: .trailing, spacing: 6) {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
