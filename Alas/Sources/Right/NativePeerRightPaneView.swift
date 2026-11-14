@@ -459,6 +459,7 @@ struct NativePeerRightPaneView: View {
                         state: reviewLoop,
                         canOpenAgentHandoff: false,
                         onAction: { handleReviewAction($0) },
+                        shepherd: shepherdDrawerModel(gitTarget),
                         servedActions: client.hosts?.servesProviderReviews(serverId: gitTarget.serverId) == true
                             ? ReviewReadinessActionKind.peerServed.union([.inspectReviewEvidence])
                             : ReviewReadinessActionKind.peerServed
@@ -733,6 +734,39 @@ struct NativePeerRightPaneView: View {
                 gitError = error.message
             }
         }
+    }
+
+    /// "Shepherd with…" for the open request no session of the worktree
+    /// shepherds: the picked session's Ship on the host binds it.
+    private func shepherdDrawerModel(_ target: (serverId: String, worktree: PeerHostWorktree)) -> ReviewShepherdDrawerModel? {
+        guard let snapshot = reviewLoop.snapshot, let request = snapshot.reviewRequest, request.state == .open,
+              let candidates = client.shepherdCandidates(
+                  serverId: target.serverId, worktreeID: target.worktree.snapshot.worktree.id,
+                  number: "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
+              ),
+              !candidates.isEmpty,
+              let hosts = client.hosts
+        else { return nil }
+        return ReviewShepherdDrawerModel(
+            record: nil,
+            presentation: ShepherdPresentation.make(
+                record: nil, request: request,
+                mergeGatePasses: ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+            ),
+            ownerTitle: nil,
+            ownerAgent: nil,
+            candidates: candidates.map {
+                .init(id: $0.sessionID, title: $0.summary.title, agentName: state.agent(id: $0.summary.agentId)?.displayName)
+            },
+            setAutoFix: { _ in },
+            setAutoMerge: { _ in },
+            jump: {},
+            stop: {},
+            resume: {},
+            shepherdWith: { hosts.shepherd($0, action: .ship, serverId: target.serverId) },
+            shepherdWithNewSession: nil,
+            refreshSessions: {}
+        )
     }
 
     /// The git target's pull or merge request, while the host serves its

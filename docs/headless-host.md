@@ -345,6 +345,12 @@ Ship prompt, so the agent opens the pull request or ships the gg stack and the
 host shepherds it. It also offers **Resume** for a shepherd that needs
 attention and **Stop shepherding**.
 
+When no session shepherds a worktree's open pull request, the review drawer
+in the Mac's Changes tab offers **Shepherd with…**, listing the worktree's
+sessions the host drives. Picking one runs that session's Ship on the host,
+which binds the pull request to it. Starting a new session for it, and the
+auto-fix and auto-merge switches, stay in the app.
+
 Whether a project's worktrees are gg stacks follows the host's settings, not
 the Mac's: the master switch, the project's mode, and gg on the host's `PATH`
 when it starts. A paired Mac sets the project's mode from the project's

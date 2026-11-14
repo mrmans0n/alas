@@ -27,7 +27,8 @@ struct ReviewShepherdDrawerModel {
     let stop: @MainActor () -> Void
     let resume: @MainActor () -> Void
     let shepherdWith: @MainActor (_ sessionID: String) -> Void
-    let shepherdWithNewSession: @MainActor () -> Void
+    /// Nil leaves "New session" out, as on a host the Mac can't start one for.
+    let shepherdWithNewSession: (@MainActor () -> Void)?
     /// Reloads the worktree's recent sessions so the menus offer current ones.
     let refreshSessions: @MainActor () -> Void
 }
@@ -236,11 +237,11 @@ struct ReviewShepherdSessionMenu: View {
                     model.shepherdWith(candidate.id)
                 }
             }
-            if !model.candidates.isEmpty {
-                Divider()
-            }
-            Button("New session") {
-                model.shepherdWithNewSession()
+            if let newSession = model.shepherdWithNewSession {
+                if !model.candidates.isEmpty {
+                    Divider()
+                }
+                Button("New session", action: newSession)
             }
         } label: {
             Label(title, systemImage: "pawprint")
@@ -318,10 +319,12 @@ struct ReviewShepherdChip: View {
                         ForEach(model.candidates) { candidate in
                             Button(candidate.menuTitle) { model.shepherdWith(candidate.id) }
                         }
-                        if !model.candidates.isEmpty {
-                            Divider()
+                        if let newSession = model.shepherdWithNewSession {
+                            if !model.candidates.isEmpty {
+                                Divider()
+                            }
+                            Button("New session", action: newSession)
                         }
-                        Button("New session") { model.shepherdWithNewSession() }
                     }
                 } label: {
                     chip(title: "Owner missing", color: theme.color("warn"), textColor: theme.color("warn")) {
