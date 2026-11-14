@@ -91,7 +91,15 @@ final class TranscriptSession {
     /// Sent drafts the host has neither shown nor refused, oldest first. The host settles prompts
     /// in the order they arrive, so a rejection belongs to the oldest; once a prompt shows up in the
     /// queue or transcript, a later rejection (its turn failed) has no draft to restore.
-    @ObservationIgnored private var unsettled: [ComposerDraft] = []
+    @ObservationIgnored private var unsettled: [Unsettled] = []
+
+    /// Only rows and queue items the host adds after the send can show it: a take-over replays
+    /// the whole transcript first, and older prompts may share the text.
+    private struct Unsettled {
+        let draft: ComposerDraft
+        let rowFloor: Int
+        let priorQueue: Set<String>
+    }
     @ObservationIgnored private var lastMentionQuery: String?
     @ObservationIgnored private var lastSummary: RemoteSessionSummary?
 
@@ -166,7 +174,7 @@ final class TranscriptSession {
         let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
                          offline: "Your message wasn't sent.")
         guard sent else { return }
-        unsettled.append(draft)
+        unsettled.append(Unsettled(draft: draft, rowFloor: state.totalCount, priorQueue: Set(state.queue.map(\.id))))
         draft = ComposerDraft()
     }
 
@@ -312,17 +320,14 @@ final class TranscriptSession {
         publish()
     }
 
-    private func settleRows(_ rows: [RemoteWireMessage]) {
-        settle(shown: rows.compactMap { $0.kind == "user" ? $0.text : nil })
-    }
-
-    /// Drops each unsettled draft the host now shows. A user row appends attachment labels after
-    /// the text, and the host trims what it records, so match on a prefix of the trimmed text.
-    private func settle(shown texts: [String]) {
-        guard !unsettled.isEmpty, !texts.isEmpty else { return }
+    /// Drops each unsettled draft the host now shows in a row or queue item added since its send.
+    /// A user row appends attachment labels after the text, and the host trims what it records.
+    private func settle(rows: [RemoteWireMessage] = [], queued: [RemoteQueuedPrompt] = []) {
         unsettled.removeAll { sent in
-            let text = sent.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return texts.contains { $0.hasPrefix(text) }
+            let text = sent.draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let images = sent.draft.images.count
+            return rows.contains { $0.kind == "user" && $0.index >= sent.rowFloor && ($0.text ?? "").hasPrefix(text) }
+                || queued.contains { !sent.priorQueue.contains($0.id) && $0.text == text && $0.imageCount == images }
         }
     }
 
@@ -350,9 +355,9 @@ final class TranscriptSession {
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
-            if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message { settleRows(rows) }
+            if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message { settle(rows: rows) }
         case .transcriptDelta(let id, _, _, let rows, _, _, _) where id == sessionId:
-            settleRows(rows)
+            settle(rows: rows)
         case .stopPending(let id) where id == sessionId:
             isStopping = true
             stopGeneration += 1
@@ -363,7 +368,7 @@ final class TranscriptSession {
             }
         case .promptRejected(let id, let reason) where id == sessionId:
             if !unsettled.isEmpty {
-                let rejected = unsettled.removeFirst()
+                let rejected = unsettled.removeFirst().draft
                 if draft.text.isEmpty, draft.images.isEmpty { draft = rejected }
             }
             rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
@@ -378,7 +383,7 @@ final class TranscriptSession {
         case .error(let message, let id) where id == sessionId:
             rejection = message
         case .queueState(let id, let queued) where id == sessionId:
-            settle(shown: queued.map(\.text))
+            settle(queued: queued)
         default:
             break
         }
