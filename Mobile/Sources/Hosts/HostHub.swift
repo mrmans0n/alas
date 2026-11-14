@@ -37,12 +37,16 @@ final class HostHub {
     /// only the last holder's release may unsubscribe.
     @ObservationIgnored private var subscriptions: [UUID: [String: Int]] = [:]
     @ObservationIgnored private let store: HostStore
+    @ObservationIgnored private let listCache = SessionListCache()
     /// One client for the app's life: each default client owns a URLSession.
     @ObservationIgnored private let pairingClient = RemotePairingClient()
 
     init(store: HostStore = HostStore()) {
         self.store = store
         hosts = store.load()
+        for host in hosts {
+            sessionLists[host.id] = listCache.load(host.id)
+        }
         attachConnections()
     }
 
@@ -94,6 +98,8 @@ final class HostHub {
         subscriptions[id] = nil
         store.save(hosts)
         store.deleteToken(for: id)
+        let cache = listCache
+        Task.detached { await cache.delete(id) }
     }
 
     func connectAll() {
@@ -177,6 +183,8 @@ final class HostHub {
             switch message {
             case .sessionList(let sessions):
                 sessionLists[id] = sessions
+                let cache = listCache
+                Task.detached { await cache.save(sessions, for: id) }
             case .hello:
                 // A re-broadcast hello on a live socket: the host's state changed.
                 send(.listSessions, to: id)
