@@ -309,4 +309,46 @@ struct VMComputerUseRouteTests {
         let expected = #"{"exit_code":null,"stdout":"a","stderr":"b","truncated":true,"timed_out":true}"#
         #expect(try Self.object(VMComputerUseRoute.runReply(result)) == Self.object(expected))
     }
+
+    // MARK: Held calls
+
+    /// Drives `VMTakeOvers.held` with the driver read before each check and the hold outcomes in order.
+    @MainActor
+    private func held(
+        action: ComputerUseCommand.Action? = .click, drivers: [VMDriver], outcomes: [HeldCalls.Outcome]
+    ) async -> (refusal: String?, holds: Int) {
+        var drivers = drivers
+        var outcomes = outcomes
+        var holds = 0
+        let refusal = await VMTakeOvers.held(
+            action: action,
+            driver: { drivers.count > 1 ? drivers.removeFirst() : drivers[0] },
+            hold: {
+                holds += 1
+                return outcomes.removeFirst()
+            }
+        )
+        return (refusal, holds)
+    }
+
+    @Test @MainActor func aCallWaitsForHandBackThenGoesOn() async {
+        let result = await held(drivers: [.user, .idle], outcomes: [.released])
+        #expect(result.refusal == nil && result.holds == 1)
+    }
+
+    @Test @MainActor func aCallHeldAgainAfterAnotherTakeOverTimesOutAsBefore() async {
+        let result = await held(drivers: [.user], outcomes: [.released, .released, .timedOut])
+        #expect(result.refusal == VMAutoStartMessages.userDriving && result.holds == 3)
+    }
+
+    @Test @MainActor func aCancelledWaitAnswersCancelled() async {
+        let result = await held(drivers: [.user], outcomes: [.cancelled])
+        #expect(result.refusal == ComputerUseCoordinator.cancelledMessage)
+    }
+
+    @Test(arguments: [(ComputerUseCommand.Action?.some(.cancel), VMDriver.user), (.some(.click), .idle)])
+    @MainActor func cancelsAndFreeVMsNeverWait(action: ComputerUseCommand.Action?, driver: VMDriver) async {
+        let result = await held(action: action, drivers: [driver], outcomes: [])
+        #expect(result.refusal == nil && result.holds == 0)
+    }
 }

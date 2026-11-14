@@ -291,6 +291,24 @@ struct VMTakeOvers: Equatable {
         action != .cancel && takenOver ? .error(VMAutoStartMessages.userDriving) : response
     }
 
+    /// Holds an agent call while the user drives the VM: nil once it may go on (the user handed
+    /// back, or nobody drives), else the error. Released calls check again, since the user may
+    /// have taken the VM over again. `action` is nil for `vm_run`; a cancel never waits.
+    @MainActor
+    static func held(
+        action: ComputerUseCommand.Action?, driver: () -> VMDriver, hold: () async -> HeldCalls.Outcome
+    ) async -> String? {
+        guard action != .cancel else { return nil }
+        while VMDriver.decision(for: driver()) == .userDriving {
+            switch await hold() {
+            case .released: continue
+            case .timedOut: return VMAutoStartMessages.userDriving
+            case .cancelled: return ComputerUseCoordinator.cancelledMessage
+            }
+        }
+        return nil
+    }
+
     /// The error an agent call to a VM gets from the driver gate, or nil to forward it. `action` is
     /// nil for `vm_run`. A cancel always passes: it only stops the agent's own call. While the VM
     /// runs its first-boot setup (`setupRunning`), calls wait like a VM still starting; the setup

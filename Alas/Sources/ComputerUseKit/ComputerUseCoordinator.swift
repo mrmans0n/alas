@@ -640,6 +640,8 @@ public final class ComputerUseCoordinator {
 
     /// The error a stopped session's calls answer, for sessions whose calls run elsewhere.
     public static var stoppedMessage: String { Message.stopped }
+    /// The error a cancelled call answers, for calls that run elsewhere.
+    public static var cancelledMessage: String { Message.cancelled }
 
     public func isStopped(sessionID: String) -> Bool { stoppedSessions.contains(sessionID) }
 

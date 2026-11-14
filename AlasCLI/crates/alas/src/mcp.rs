@@ -702,7 +702,7 @@ fn workspace_tool_definitions() -> Vec<Value> {
 }
 
 /// What agents need to know about a stopped or user-driven worktree VM.
-const VM_DRIVING_NOTE: &str = "A stopped VM starts by itself on the first call. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly (an auto-started vm_run usually answers `computer_vm_starting` first). `computer_user_active` means the user took over the VM: wait for them to hand it back.";
+const VM_DRIVING_NOTE: &str = "A stopped VM starts by itself on the first call. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly (an auto-started vm_run usually answers `computer_vm_starting` first). While the user drives the VM, a call waits up to 50 seconds for them to hand it back; `computer_user_active` means it is still theirs: try again later.";
 
 fn computer_tool_definitions() -> Vec<Value> {
     let description = format!(
@@ -884,7 +884,7 @@ fn vm_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "vm_run",
-            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead. A stopped VM starts by itself, and an auto-started run usually answers `computer_vm_starting` first. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly; `computer_user_active` means the user took over the VM, so wait for them to hand it back.",
+            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead. A stopped VM starts by itself, and an auto-started run usually answers `computer_vm_starting` first. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly; while the user drives the VM, a call waits up to 50 seconds for them to hand it back, and `computer_user_active` means it is still theirs: try again later.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
