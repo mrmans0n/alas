@@ -65,28 +65,16 @@ public struct RemoteTranscriptState<ServerHost: Codable & Equatable & Sendable, 
         case .transcriptSnapshot(_, let state, let drive, let rows,
                                  let first, let total, let incomingEpoch, let incomingRevision, let backgroundWork):
             guard epoch == nil || incomingEpoch >= epoch! else { return false }
-            // A resubscribe in the same epoch keeps the older pages already
-            // loaded, so a reconnect does not drop the history being read.
-            // Only when they reach the snapshot's window: a gap would never
-            // be paged in.
-            var updated = Dictionary(rows.map { ($0.stableId, $0) }, uniquingKeysWith: { _, newer in newer })
-            var kept = first
-            if incomingEpoch == epoch, firstIndex < first, totalCount >= first {
-                for row in messagesByStableID.values where row.index < first && updated[row.stableId] == nil {
-                    updated[row.stableId] = row
-                }
-                kept = firstIndex
-            }
             epoch = incomingEpoch
             revision = incomingRevision
             streamingState = state
             hasCancellableBackgroundWork = backgroundWork
             driveAllowed = drive
-            firstIndex = kept
+            firstIndex = first
             totalCount = total
             isClosed = false
             needsResubscribe = false
-            messagesByStableID = updated
+            messagesByStableID = Dictionary(rows.map { ($0.stableId, $0) }, uniquingKeysWith: { _, newer in newer })
             return false
 
         case .transcriptDelta(_, let state, let drive, let upserts, let incomingEpoch, let incomingRevision, let backgroundWork):
