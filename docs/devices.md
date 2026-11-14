@@ -92,7 +92,9 @@ says simulators need Xcode.
 A VM's screen opens in a center tab. In the Devices tab, its card says
 whether it is running, paused or stopped, who drives it, and opens it, or
 sets it up when the worktree has none yet. A VM another Alas runs is shown
-but can't be opened here.
+but can't be opened here. While you drive a VM, an agent's call to it waits up
+to 50 seconds for you to hand it back, and the status names the agent
+waiting.
 
 ## Agents
 

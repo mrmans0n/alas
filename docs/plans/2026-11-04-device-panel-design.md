@@ -190,8 +190,8 @@ Agents (phase 2 and after):
   Expo integration, and profiling. Alas would not install or manage it.
 - [x] Pause the agent on takeover instead of only refusing its calls. Built as
   held calls for simulators: a call waits up to 50 s for hand back
-  (`2026-11-08-devices-agent-loop-design.md`). VM takeover still refuses
-  calls; it never paused the agent's turn either.
+  (`2026-11-08-devices-agent-loop-design.md`). VM calls are held the
+  same way (`2026-11-14-devices-vm-held-calls-design.md`).
 - [x] Hide `device_*` from `tools/list` while the setting is off, for
   sessions started then (`ALAS_MCP_DEVICES=0`).
 - [x] Type non-ASCII text: `device_type` pastes words the US layout lacks.
