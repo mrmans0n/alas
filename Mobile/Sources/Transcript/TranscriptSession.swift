@@ -66,7 +66,7 @@ final class TranscriptSession {
     private(set) var answered: Set<RequestKind> = []
     @ObservationIgnored private var replacedAt: [RequestKind: ContinuousClock.Instant] = [:]
     private(set) var isStopping = false
-    @ObservationIgnored private var clearPending = false
+    @ObservationIgnored private var holdTask: Task<Void, Never>?
     private(set) var hasCancellableBackgroundWork = false
     var rejection: String?
     /// Candidates for `mentionCandidatesQuery`, or for an earlier query while a new one is in flight.
@@ -297,6 +297,12 @@ final class TranscriptSession {
     /// The hold in `publish()` keeps a card through the host's re-send, so nothing flashes.
     private func forgetTransientState() {
         state.clearPendingRequests()
+        // A request answered but refused comes back identical; show it again. The hold restarts so
+        // the re-send gets the full grace period.
+        answered = []
+        replacedAt = [:]
+        holdTask?.cancel()
+        holdTask = nil
         isStopping = false
         mentionCandidates = []
         mentionCandidatesQuery = nil
@@ -389,12 +395,11 @@ final class TranscriptSession {
         holding = settle(\.question, state.pendingQuestion, .question) || holding
         holding = settle(\.plan, state.pendingPlan, .plan) || holding
         holding = settle(\.elicitation, state.pendingElicitation, .elicitation) || holding
-        if holding, !clearPending {
-            clearPending = true
-            Task { @MainActor [weak self] in
+        if holding, holdTask == nil {
+            holdTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(500))
-                guard let self else { return }
-                clearPending = false
+                guard !Task.isCancelled, let self else { return }
+                holdTask = nil
                 permission = state.pendingPermission
                 question = state.pendingQuestion
                 plan = state.pendingPlan
