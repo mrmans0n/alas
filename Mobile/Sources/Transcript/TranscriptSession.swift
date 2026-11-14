@@ -146,9 +146,11 @@ final class TranscriptSession {
     }
 
     func open() {
-        guard listener == nil else { return }
-        listener = hub.addListener(hostID) { [weak self] message in
-            self?.receive(message)
+        guard subscription == nil else { return }
+        if listener == nil {
+            listener = hub.addListener(hostID) { [weak self] message in
+                self?.receive(message)
+            }
         }
         forgetTransientState()
         subscription = hub.subscribe(sessionId, on: hostID)
@@ -158,9 +160,11 @@ final class TranscriptSession {
     }
 
     func close() {
-        guard listener != nil else { return }
+        guard subscription != nil else { return }
         subscription = nil
-        listener = nil
+        // The host refuses a prompt over the connection, subscribed or not: keep listening
+        // until every sent draft has an outcome, so a refusal still lands in the draft.
+        if unsettled.isEmpty { listener = nil }
         watchGeneration += 1
         MarkdownBlockCache.shared.remove(ids: items.map(\.id))
         // Unanswered reads die with the subscription; a reopened row asks again.
@@ -402,6 +406,10 @@ final class TranscriptSession {
     }
 
     private func receive(_ message: PhoneServerMessage) {
+        // Closed, the listener stays only for the outcome of sent prompts.
+        if subscription == nil {
+            guard case .promptRejected(let id, _) = message, id == sessionId else { return }
+        }
         switch message {
         case .transcriptImage(let id, let path, let data) where id == sessionId:
             Task { [weak self] in
@@ -433,6 +441,7 @@ final class TranscriptSession {
                     mentions: rejected.mentions + draft.mentions)
             }
             rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
+            if subscription == nil, unsettled.isEmpty { listener = nil }
         case .queueEditRestored(let id, _, let text) where id == sessionId:
             draft.text += draft.text.isEmpty ? text : "\n" + text
         case .mentionCandidates(let id, let query, let candidates) where id == sessionId:
