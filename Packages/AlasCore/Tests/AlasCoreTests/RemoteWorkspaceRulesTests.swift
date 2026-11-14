@@ -45,13 +45,14 @@ struct RemoteWorkspaceRulesTests {
     }
 
     @Test(arguments: [
-        ("main", 1, 0, "vs main · 1 file · +3 −1"),
-        (nil, 2, 0, "2 files · +3 −1"),
-        ("main", 2, 1, "vs main · 2 files · +3 −1 · 1 commit"),
-        ("main", 2, 4, "vs main · 2 files · +3 −1 · 4 commits"),
-    ] as [(String?, Int, Int, String)])
-    func summaryFormat(ref: String?, files: Int, commits: Int, expected: String) {
-        #expect(RemoteChangesRules.summary(comparisonRef: ref, fileCount: files, add: 3, del: 1, commitCount: commits) == expected)
+        ("main", 1, 0, false, "vs main · 1 file · +3 −1"),
+        (nil, 2, 0, false, "2 files · +3 −1"),
+        ("main", 2, 1, false, "vs main · 2 files · +3 −1 · 1 commit"),
+        ("main", 2, 4, false, "vs main · 2 files · +3 −1 · 4 commits"),
+        ("main", 2, 100, true, "vs main · 2 files · +3 −1 · 100+ commits"),
+    ] as [(String?, Int, Int, Bool, String)])
+    func summaryFormat(ref: String?, files: Int, commits: Int, truncated: Bool, expected: String) {
+        #expect(RemoteChangesRules.summary(comparisonRef: ref, fileCount: files, add: 3, del: 1, commitCount: commits, commitsTruncated: truncated) == expected)
     }
 
     @Test func badgePrefersLoadedCountAndMarksTruncation() {

@@ -17,6 +17,7 @@
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
 		3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */; };
 		3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
+		422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1547D85F76565F3FE516B06A /* SessionWorkspace.swift */; };
 		44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */; };
 		468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836FA1B810A2D04B52F5C3BD /* QueueTray.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
@@ -27,6 +28,8 @@
 		90AE44675FE782B711960528 /* RequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06499964301D8FB5B30EB8B6 /* RequestCard.swift */; };
 		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
+		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
+		B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03FA6AEA78D99344CAAD8095 /* DiffView.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
 		C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */; };
 		CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21408E08006F4C64E22701EE /* SessionRegistry.swift */; };
@@ -40,10 +43,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		03FA6AEA78D99344CAAD8095 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
 		12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeScreen.swift; sourceTree = "<group>"; };
+		1547D85F76565F3FE516B06A /* SessionWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspace.swift; sourceTree = "<group>"; };
 		18514DE5113754F3401217CA /* TranscriptRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRowView.swift; sourceTree = "<group>"; };
 		1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCollectionView.swift; sourceTree = "<group>"; };
 		21408E08006F4C64E22701EE /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
@@ -69,6 +74,7 @@
 		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EB8F788F5756229A6125FB0A /* ComposerPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerPickers.swift; sourceTree = "<group>"; };
+		ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesView.swift; sourceTree = "<group>"; };
 		EEB4C7CE3F100F5656449A2C /* InboxModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModel.swift; sourceTree = "<group>"; };
 		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -88,6 +94,16 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		213C22D640776C6B97AA598C /* Workspace */ = {
+			isa = PBXGroup;
+			children = (
+				ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */,
+				03FA6AEA78D99344CAAD8095 /* DiffView.swift */,
+				1547D85F76565F3FE516B06A /* SessionWorkspace.swift */,
+			);
+			path = Workspace;
+			sourceTree = "<group>";
+		};
 		30FFFD63A2837F752463B155 /* Spike */ = {
 			isa = PBXGroup;
 			children = (
@@ -220,6 +236,7 @@
 				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
 				D4974DEDF2DA5907B0A209CC /* Transcript */,
+				213C22D640776C6B97AA598C /* Workspace */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -290,8 +307,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
+				B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */,
 				E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */,
 				A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */,
+				B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */,
 				44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */,
 				73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */,
 				E77139BEB6A5145597C12214 /* HostHub.swift in Sources */,
@@ -308,6 +327,7 @@
 				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
 				CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */,
 				071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */,
+				422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
 				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,

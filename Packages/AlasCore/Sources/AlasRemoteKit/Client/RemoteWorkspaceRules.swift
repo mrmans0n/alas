@@ -62,10 +62,10 @@ public struct RemoteFileTree: Equatable {
 
 /// Pure labels and grouping for the Changes tab (`changes-view.js`, `app.js`).
 public enum RemoteChangesRules {
-    public static func summary(comparisonRef: String?, fileCount: Int, add: Int, del: Int, commitCount: Int) -> String {
+    public static func summary(comparisonRef: String?, fileCount: Int, add: Int, del: Int, commitCount: Int, commitsTruncated: Bool = false) -> String {
         let ref = comparisonRef.map { "vs \($0) · " } ?? ""
         let files = "\(fileCount) \(fileCount == 1 ? "file" : "files") · +\(add) −\(del)"
-        let commits = commitCount > 0 ? " · \(commitCount) \(commitCount == 1 ? "commit" : "commits")" : ""
+        let commits = commitCount > 0 ? " · \(commitCount)\(commitsTruncated ? "+" : "") \(commitCount == 1 ? "commit" : "commits")" : ""
         return ref + files + commits
     }
 

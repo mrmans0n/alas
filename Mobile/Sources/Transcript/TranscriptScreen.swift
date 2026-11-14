@@ -7,31 +7,72 @@ struct TranscriptScreen: View {
     let hostID: UUID
     let sessionId: String
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
+    @State private var workspace: SessionWorkspace?
+    @State private var mode = SessionMode.transcript
     @State private var showSettings = false
     @State private var renaming = false
     @State private var newTitle = ""
 
     var body: some View {
         Group {
-            if let session = held?.session {
-                content(session)
+            if let session = held?.session, let workspace {
+                content(session, workspace)
             } else {
                 Color(.systemBackground)
             }
         }
         .onAppear { acquire() }
-        .onDisappear { held = nil }
+        .onDisappear {
+            held = nil
+            workspace?.deactivate()
+        }
+    }
+
+    private enum SessionMode: String, CaseIterable {
+        case transcript = "Transcript", changes = "Changes", files = "Files"
+    }
+
+    private func modes(_ session: TranscriptSession) -> [SessionMode] {
+        session.summary?.worktree?.isFolder == true ? [.transcript, .files] : SessionMode.allCases
     }
 
     private func acquire() {
         let (session, token) = registry.acquire(hostID: hostID, sessionId: sessionId)
         held = (session, token)
+        let workspace = registry.workspace(hostID: hostID, sessionId: sessionId)
+        workspace.activate()
+        self.workspace = workspace
     }
 
-    private func content(_ session: TranscriptSession) -> some View {
-        TranscriptContent(session: session)
+    private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
+        let available = modes(session)
+        return TranscriptContent(session: session)
+            // Kept alive under the other tabs so the scroll position survives a switch.
+            .opacity(mode == .transcript ? 1 : 0)
+            .allowsHitTesting(mode == .transcript)
+            .accessibilityHidden(mode != .transcript)
+            .overlay {
+                switch mode {
+                case .transcript: EmptyView()
+                case .changes: ChangesView(workspace: workspace).background(Color(.systemBackground))
+                case .files: ContentUnavailableView("Files", systemImage: "folder").background(Color(.systemBackground))
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                Picker("View", selection: $mode) {
+                    ForEach(available, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+            }
+            .onChange(of: session.streamingState, initial: true) { workspace.noteStreaming(session.streamingState) }
+            .onChange(of: available) { if !available.contains(mode) { mode = .transcript } }
             .safeAreaInset(edge: .bottom) {
-                if !session.hasEnded {
+                if mode != .transcript {
+                    EmptyView()
+                } else if !session.hasEnded {
                     // One container, so the floating glass layers composite together over the stream.
                     GlassEffectContainer {
                         VStack(spacing: 0) {
