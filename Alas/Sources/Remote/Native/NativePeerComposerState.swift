@@ -89,33 +89,10 @@ enum NativePeerComposerState {
     static func queuedPrompt(_ item: RemoteQueuedPrompt) -> QueuedPrompt? {
         guard let id = UUID(uuidString: item.id) else { return nil }
         return QueuedPrompt(
-            id: id, blocks: [.text(displayText(for: item))],
+            id: id, blocks: [.text(RemoteQueueRules.displayText(for: item))],
             scheduledAt: item.scheduledAt.map { Date(timeIntervalSince1970: $0 / 1_000) },
             status: item.status == "sending" ? .sending : .pending,
             lastError: item.lastError)
-    }
-
-    /// The wire carries attachments only as counts. Without a marker an
-    /// image-only or resource-only item would render as "(empty prompt)".
-    static func displayText(for item: RemoteQueuedPrompt) -> String {
-        var markers: [String] = []
-        if item.imageCount > 0 { markers.append("🖼 ×\(item.imageCount)") }
-        if item.resourceCount > 0 { markers.append("📎 ×\(item.resourceCount)") }
-        guard !markers.isEmpty else { return item.text }
-        let summary = markers.joined(separator: " ")
-        return item.text.isEmpty ? summary : item.text + "\n" + summary
-    }
-
-    /// The host refuses to edit an item holding images or mentions, so the
-    /// row hides Edit for them, as the web queue does.
-    static func canEdit(_ item: RemoteQueuedPrompt) -> Bool {
-        item.canRemove != false && item.imageCount == 0 && item.resourceCount == 0
-    }
-
-    /// Clear only helps when it can remove something: host-protected entries
-    /// (`canRemove == false`) survive it.
-    static func canClear(_ items: [RemoteQueuedPrompt]) -> Bool {
-        items.contains { $0.canRemove != false }
     }
 
     static func slashSuggestions(from config: RemoteSessionConfig?) -> [ACPPromptSuggestion] {
@@ -124,81 +101,11 @@ enum NativePeerComposerState {
         }
     }
 
-    /// The `@` token the caret is in: an `@` at the start or after
-    /// whitespace, then no whitespace up to the caret. Paths and
-    /// `File.swift#name` drill-downs are single tokens.
-    static func activeMentionToken(in text: NSString, caret: Int) -> (start: Int, query: String)? {
-        guard caret <= text.length else { return nil }
-        func isSpace(_ unit: unichar) -> Bool {
-            unit == 0x20 || unit == 0x0A || unit == 0x09 || unit == 0x0D
-        }
-        var index = caret
-        while index > 0 {
-            let unit = text.character(at: index - 1)
-            if unit == 0x40 {
-                guard index == 1 || isSpace(text.character(at: index - 2)) else { return nil }
-                return (index - 1, text.substring(with: NSRange(location: index, length: caret - index)))
-            }
-            if isSpace(unit) { return nil }
-            index -= 1
-        }
-        return nil
-    }
-
     static func mentionIconName(_ mention: RemoteMention) -> String {
         switch mention.kind {
         case RemoteMention.session: "bubble.left.and.text.bubble.right"
         case RemoteMention.symbol: "curlybraces"
         default: mention.value.hasSuffix("/") ? "folder" : "doc"
-        }
-    }
-
-    /// The picked mentions whose `@name` is still in `text` as a whole
-    /// token. Each marker counts for one mention: longer names claim theirs
-    /// first, so `@App.` stays `App.` rather than also keeping `App`, and
-    /// mentions sharing a name take markers in pick order.
-    static func liveMentions(_ mentions: [RemoteMention], in text: String) -> [RemoteMention] {
-        let text = text as NSString
-        let claimOrder = mentions.indices.sorted {
-            let (a, b) = ((mentions[$0].name as NSString).length, (mentions[$1].name as NSString).length)
-            return a != b ? a > b : $0 < $1
-        }
-        var claimed: [NSRange] = []
-        var live = Set<Int>()
-        for index in claimOrder {
-            let free = markerRanges(mentions[index].name, in: text).first { range in
-                !claimed.contains { NSIntersectionRange($0, range).length > 0 }
-            }
-            if let free {
-                claimed.append(free)
-                live.insert(index)
-            }
-        }
-        return mentions.indices.filter(live.contains).map { mentions[$0] }
-    }
-
-    /// `@name` occurrences that start a token and end it, allowing trailing
-    /// punctuation before whitespace or the end: `@App.swift.` matches
-    /// `App.swift`, while `@App` matches neither `@Apple` nor `@App.swift`.
-    private static func markerRanges(_ name: String, in text: NSString) -> [NSRange] {
-        let marker = "@" + name
-        let punctuation = CharacterSet(charactersIn: ".,;:!?)]}\"'")
-        func scalar(at index: Int) -> UnicodeScalar { UnicodeScalar(text.character(at: index)) ?? "a" }
-        func endsToken(at start: Int) -> Bool {
-            var index = start
-            while index < text.length, punctuation.contains(scalar(at: index)) { index += 1 }
-            return index == text.length || CharacterSet.whitespacesAndNewlines.contains(scalar(at: index))
-        }
-        var ranges: [NSRange] = []
-        var search = NSRange(location: 0, length: text.length)
-        while true {
-            let found = text.range(of: marker, options: [], range: search)
-            guard found.location != NSNotFound else { return ranges }
-            let end = NSMaxRange(found)
-            let starts = found.location == 0
-                || CharacterSet.whitespacesAndNewlines.contains(scalar(at: found.location - 1))
-            if starts && endsToken(at: end) { ranges.append(found) }
-            search = NSRange(location: end, length: text.length - end)
         }
     }
 
@@ -247,26 +154,13 @@ enum NativePeerComposerState {
         return targets
     }
 
-    static let attachmentTooLarge = "Attachments can total at most 10 MB."
-    static let tooManyMentions = "A message can mention at most \(RemoteSessionGateway.maxMentionCount) items."
-
-    /// Why a file of `size` bytes can't join the staged attachments, judged
-    /// from sizes alone so it can be checked before the file is read.
-    static func attachmentSizeRefusal(_ size: Int, stagedSizes: [Int]) -> String? {
-        guard stagedSizes.count < RemoteSessionGateway.maxAttachmentCount else {
-            return "A message can carry at most \(RemoteSessionGateway.maxAttachmentCount) images."
-        }
-        guard stagedSizes.reduce(size, +) <= RemoteSessionGateway.maxAttachmentsBytes else {
-            return attachmentTooLarge
-        }
-        return nil
-    }
+    static let tooManyMentions = "A message can mention at most \(RemoteAttachmentLimits.maxMentionCount) items."
 
     /// Why an image can't join the staged attachments, or nil when it can.
     /// Mirrors the host's checks so a send is never refused for them.
     static func attachmentRefusal(_ data: Data, staged: [Data]) -> String? {
         guard ACPImageStaging.sniffMIME(data) != nil else { return "Only PNG, JPEG, GIF and WebP images can be attached." }
-        return attachmentSizeRefusal(data.count, stagedSizes: staged.map(\.count))
+        return RemoteAttachmentLimits.refusal(adding: data.count, to: staged.map(\.count))
     }
 
     private static func spec(_ chip: RemoteChip) -> ChipSpec? {

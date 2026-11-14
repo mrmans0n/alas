@@ -86,7 +86,7 @@ struct WorktreesView: View {
             .navigationTitle(title)
             .searchable(text: $model.query, isPresented: $searchPresented)
             .navigationDestination(for: SessionRoute.self) { route in
-                TranscriptScreen(hub: hub, hostID: route.hostID, sessionId: route.sessionId)
+                TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: searchActive) { _, active in searchPresented = active }
             // A forgotten Mac's transcripts pop instead of reading as ended.

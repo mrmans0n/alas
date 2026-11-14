@@ -119,7 +119,7 @@ struct NativePeerSessionView: View {
         let wireById = Dictionary(
             transcript.queue.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let canClear = online
-            && NativePeerComposerState.canClear(items.compactMap { wireById[$0.id.uuidString] })
+            && RemoteQueueRules.canClear(items.compactMap { wireById[$0.id.uuidString] })
         let reorder = transcript.config?.supportsQueueReorder == true
         let moveTargets = reorder ? NativePeerComposerState.moveTargets(transcript.queue) : [:]
         var rows: [NativePeerTranscriptExtraRow] = [NativePeerTranscriptExtraRow(
@@ -132,7 +132,7 @@ struct NativePeerSessionView: View {
             let id = item.id.uuidString
             let wire = wireById[id]
             let canRemove = wire?.canRemove ?? true
-            let canEdit = wire.map(NativePeerComposerState.canEdit) ?? true
+            let canEdit = wire.map(RemoteQueueRules.canEdit) ?? true
             let targets = moveTargets[id]
             rows.append(NativePeerTranscriptExtraRow(
                 id: "__peer_queue_\(id)",
@@ -656,7 +656,7 @@ private struct NativePeerComposer: View {
                     showNotice("This image is unavailable. Remove it or attach it again.")
                     return false
                 }
-                if let refusal = NativePeerComposerState.attachmentSizeRefusal(size, stagedSizes: images.map { $0.data.count }) {
+                if let refusal = RemoteAttachmentLimits.refusal(adding: size, to: images.map { $0.data.count }) {
                     showNotice(refusal)
                     return false
                 }
@@ -676,7 +676,7 @@ private struct NativePeerComposer: View {
                 }
             }
         }
-        guard mentions.count <= RemoteSessionGateway.maxMentionCount else {
+        guard mentions.count <= RemoteAttachmentLimits.maxMentionCount else {
             showNotice(NativePeerComposerState.tooManyMentions)
             return false
         }
@@ -777,7 +777,7 @@ private struct NativePeerComposer: View {
     /// Opens, re-queries or closes the picker for the `@` token at the caret.
     private func reconcileMentionPicker() {
         guard sessionOpen, composerFocused, config?.supportsMentions == true, let caret,
-              let token = NativePeerComposerState.activeMentionToken(in: (actions.selectionSnapshot?()?.text ?? "") as NSString, caret: caret)
+              let token = RemoteComposerText.activeMentionToken(in: (actions.selectionSnapshot?()?.text ?? "") as NSString, caret: caret)
         else { return closeMentionPicker() }
         // Opening asks at once with the bare query, which refreshes the
         // host's file listing; the typed query follows after the debounce.
@@ -825,7 +825,7 @@ private struct NativePeerComposer: View {
         guard mentionRowsAreCurrent, let start = mentionTokenStart,
               let peerId = client.selectedPeer?.serverId else { return }
         let count = composer.draft.segments.filter { if case .mention = $0 { true } else { false } }.count
-        guard count < RemoteSessionGateway.maxMentionCount else {
+        guard count < RemoteAttachmentLimits.maxMentionCount else {
             showNotice(NativePeerComposerState.tooManyMentions)
             return
         }

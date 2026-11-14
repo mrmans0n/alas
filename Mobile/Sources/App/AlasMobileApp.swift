@@ -5,9 +5,16 @@ private enum AppTab { case worktrees, inbox, peers, search }
 @main
 struct AlasMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var hub = HostHub()
+    @State private var hub: HostHub
+    @State private var registry: SessionRegistry
     @State private var worktrees = WorktreesModel()
     @State private var selection = AppTab.worktrees
+
+    init() {
+        let hub = HostHub()
+        _hub = State(initialValue: hub)
+        _registry = State(initialValue: SessionRegistry(hub: hub))
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -16,12 +23,9 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees) { selection = .peers }
                 }
                 Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
-                    NavigationStack {
-                        ContentUnavailableView("Nothing needs you", systemImage: "tray",
-                                               description: Text("Permission requests and questions from your agents arrive here in a later build."))
-                            .navigationTitle("Inbox")
-                    }
+                    InboxView(hub: hub)
                 }
+                .badge(InboxModel.entries(in: hub).count)
                 Tab("Peers", systemImage: "laptopcomputer", value: AppTab.peers) {
                     PeersView(hub: hub)
                 }
@@ -29,6 +33,7 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees, title: "Search", searchActive: selection == .search) { selection = .peers }
                 }
             }
+            .environment(registry)
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {
                 case .active: hub.connectAll()

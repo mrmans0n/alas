@@ -824,7 +824,7 @@ struct RemoteWebAssetTests {
     @Test(arguments: [("@", 1), ("see @Alas/App.swift", 18), ("mail a@b", 8), ("@done next", 10), ("x\n@a#b", 6)])
     func mentionPickerOpensOnTheSameTokenAsTheNativeComposer(text: String, caret: Int) throws {
         let token = try javascriptFunction("mentionToken").call(withArguments: [text, caret])
-        let native = NativePeerComposerState.activeMentionToken(in: text as NSString, caret: caret)
+        let native = RemoteComposerText.activeMentionToken(in: text as NSString, caret: caret)
         #expect(token?.isNull == (native == nil))
         #expect(native.map { token?.objectForKeyedSubscript("start")?.toInt32() == Int32($0.start) } ?? true)
         #expect(native.map { token?.objectForKeyedSubscript("query")?.toString() == $0.query } ?? true)
@@ -842,7 +842,7 @@ struct RemoteWebAssetTests {
         let mentions = [("a", "App"), ("b", secondName)].map {
             RemoteMention(kind: RemoteMention.file, value: $0.0, name: $0.1)
         }
-        #expect(NativePeerComposerState.liveMentions(mentions, in: text).map(\.value) == expected)
+        #expect(RemoteComposerText.liveMentions(mentions, in: text).map(\.value) == expected)
         let live = try javascriptFunction("liveMentions")
         live.context.setObject(mentions.map { ["kind": $0.kind, "value": $0.value, "name": $0.name] },
                                forKeyedSubscript: "pendingMentions" as NSString)
