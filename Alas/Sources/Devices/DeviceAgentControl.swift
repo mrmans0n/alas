@@ -55,23 +55,15 @@ final class DeviceAgentControl {
     @ObservationIgnored private let leaseWindow: Duration
     /// How long a call waits for the user to hand a simulator back; under
     /// Codex's 60-second limit on a tool call.
-    @ObservationIgnored private let holdLimit: Duration
+    /// Calls waiting for the user to hand a simulator back.
+    @ObservationIgnored private let holds: HeldCalls
 
     /// A released call carries its input turn when it needs one.
     private enum Hold: Sendable { case go(inputTurn: UUID?), timedOut, cancelled }
-    private struct HeldCall {
-        let id: UUID
-        let sessionID: String
-        let isInput: Bool
-        let resume: CheckedContinuation<Hold, Never>
-        let timer: Task<Void, Never>
-    }
 
     private var lastCalls: [String: AgentCall] = [:]
     private var inFlight: [String: Int] = [:]
     private var takenOver: Set<String> = []
-    /// Calls waiting for the user to hand each simulator back, in arrival order.
-    private var held: [String: [HeldCall]] = [:]
     @ObservationIgnored private var snapshots: [String: DeviceSnapshot] = [:]
     /// The session that last received each device's screen: diffs are against
     /// what the calling session saw, not another session's view.
@@ -111,7 +103,7 @@ final class DeviceAgentControl {
         self.now = now
         self.sleep = sleep
         self.leaseWindow = leaseWindow
-        self.holdLimit = holdLimit
+        holds = HeldCalls(limit: holdLimit, sleep: sleep)
     }
 
     // MARK: Driver
@@ -131,17 +123,12 @@ final class DeviceAgentControl {
 
     func handBack(udid: String) {
         takenOver.remove(udid)
-        // Input turns are taken here, in arrival order: a released call still
-        // lists devices before it runs, and those listings can finish in any order.
-        for call in held.removeValue(forKey: udid) ?? [] {
-            call.timer.cancel()
-            call.resume.resume(returning: .go(inputTurn: call.isInput ? takeInputTurn(udid) : nil))
-        }
+        holds.releaseAll(udid)
     }
 
     /// Sessions whose calls wait for the user to hand `udid` back, first to arrive first.
     func waitingSessions(udid: String) -> [String] {
-        held[udid]?.map(\.sessionID) ?? []
+        holds.waiting(udid)
     }
 
     /// Waits while the user drives `udid`: until they hand it back, the hold
@@ -149,30 +136,17 @@ final class DeviceAgentControl {
     private func holdWhileTakenOver(_ udid: String, sessionID: String, isInput: Bool) async -> Hold {
         guard takenOver.contains(udid) else { return .go(inputTurn: nil) }
         guard !Task.isCancelled else { return .cancelled }
-        let id = UUID()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                let limit = holdLimit
-                let timer = Task { [weak self] in
-                    await self?.sleep(limit)
-                    guard !Task.isCancelled else { return }
-                    self?.release(udid, id: id, as: .timedOut)
-                }
-                held[udid, default: []].append(HeldCall(
-                    id: id, sessionID: sessionID, isInput: isInput, resume: continuation, timer: timer
-                ))
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in self?.release(udid, id: id, as: .cancelled) }
+        // Input turns are taken at release, in arrival order: a released call still
+        // lists devices before it runs, and those listings can finish in any order.
+        var turn: UUID?
+        let outcome = await holds.hold(udid, sessionID: sessionID) { [weak self] in
+            if isInput { turn = self?.takeInputTurn(udid) }
         }
-    }
-
-    private func release(_ udid: String, id: UUID, as outcome: Hold) {
-        guard var calls = held[udid], let index = calls.firstIndex(where: { $0.id == id }) else { return }
-        let call = calls.remove(at: index)
-        held[udid] = calls.isEmpty ? nil : calls
-        call.timer.cancel()
-        call.resume.resume(returning: outcome)
+        switch outcome {
+        case .released: return .go(inputTurn: turn)
+        case .timedOut: return .timedOut
+        case .cancelled: return .cancelled
+        }
     }
 
     private func userDriving(_ udid: String) -> Bool {
