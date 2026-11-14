@@ -152,6 +152,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// A listed worktree's gg stack by the host's gg settings, its pull
     /// requests read again with `refresh` (`host.worktrees.ggStack.v1`).
     case ggStack(worktree: WorktreeRef, refresh: Bool)
+    /// Runs `action` on a listed worktree's gg stack, named `stackName` as the
+    /// client last saw it (`host.worktrees.ggStackActions.v1`).
+    case ggStackAction(worktree: WorktreeRef, stackName: String, action: HostGGStackAction)
     /// A listed worktree's draft reviews, newest first (`host.reviews.v1`).
     case listReviews(worktree: WorktreeRef)
     /// One of them, `sessionID` as listed, with every comment (`host.reviews.v1`).
@@ -778,9 +781,23 @@ public struct HostGGStackRead: Codable, Equatable, Sendable {
     /// Why a worktree meant to be a stack shows none: gg is missing or
     /// unconfigured on the host, or could not read it.
     public var problem: String?
+    /// Whether a gg operation Alas ran is paused on a conflict, waiting for
+    /// Continue or Abort; nil from a host before `ggStackAction`.
+    public var isPaused: Bool?
 
-    public init(stack: GGStack?, problem: String?) {
+    public init(stack: GGStack?, problem: String?, isPaused: Bool? = nil) {
         self.stack = stack
         self.problem = problem
+        self.isPaused = isPaused
     }
+}
+
+/// What a Mac runs on a host worktree's gg stack.
+public enum HostGGStackAction: String, Codable, Sendable {
+    /// `gg sync`: pushes the stack and opens or updates its pull requests.
+    case sync
+    /// `gg rebase` onto the stack's base.
+    case rebase
+    /// Resumes or rolls back the paused gg operation.
+    case continueOperation, abortOperation
 }

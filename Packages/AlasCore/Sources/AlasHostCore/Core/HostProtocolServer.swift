@@ -445,6 +445,11 @@ public final class HostProtocolConnection {
         case .ggStack(let ref, let refresh):
             let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesGGStackV1)
             return .ggStack(read: await host.core.ggStackRead(of: listed, refresh: refresh))
+        case .ggStackAction(let ref, let stackName, let action):
+            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesGGStackActionsV1)
+            caller.log("worktrees.ggStackAction", "\(listed.id) \(action.rawValue)")
+            try await host.core.runGGStackAction(action, stackName: stackName, in: listed)
+            return .done
         case .listReviews(let ref):
             return .reviews(reviews: try host.reviews.list(in: try reviewWorktree(ref)))
         case .readReview(let ref, let sessionID):

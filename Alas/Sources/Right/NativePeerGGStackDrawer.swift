@@ -1,11 +1,34 @@
 import SwiftUI
 
-/// A host worktree's gg stack, read-only: the host's settings make it a
-/// stack, and its gg actions run only on the host.
+/// A host worktree's gg stack, by the host's settings, with the actions the
+/// host runs on it.
 struct NativePeerGGStackDrawer: View {
     let read: HostGGStackRead
     let isRefreshing: Bool
     let onRefresh: () -> Void
+    /// What the host offers now; empty from a host that runs none.
+    var actions: [HostGGStackAction] = []
+    var runningAction: HostGGStackAction?
+    var onAction: (HostGGStackAction) -> Void = { _ in }
+
+    private var isPaused: Bool { read.isPaused == true }
+
+    /// The actions a host runs on `read`: Continue and Abort while an
+    /// operation is paused, else Sync, and Rebase when behind its base.
+    static func offeredActions(for read: HostGGStackRead) -> [HostGGStackAction] {
+        if read.isPaused == true { return [.continueOperation, .abortOperation] }
+        guard let stack = read.stack else { return [] }
+        return (stack.behindBase ?? 0) > 0 ? [.sync, .rebase] : [.sync]
+    }
+
+    static func title(of action: HostGGStackAction) -> String {
+        switch action {
+        case .sync: "Sync"
+        case .rebase: "Rebase"
+        case .continueOperation: "Continue"
+        case .abortOperation: "Abort"
+        }
+    }
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -32,6 +55,7 @@ struct NativePeerGGStackDrawer: View {
     private var title: String { read.stack.map { "Stack \($0.name)" } ?? "gg stack" }
 
     private var summaryChip: String {
+        if isPaused { return "paused" }
         guard let stack = read.stack else { return "unavailable" }
         let summary = stack.summary
         return "\(summary.merged)/\(summary.total) merged"
@@ -40,7 +64,7 @@ struct NativePeerGGStackDrawer: View {
     private var collapsedRow: some View {
         PaneDrawerRow(
             leading: {
-                Circle().fill(theme.color(read.problem == nil ? "accent" : "warn")).frame(width: 6, height: 6)
+                Circle().fill(theme.color(read.problem == nil && !isPaused ? "accent" : "warn")).frame(width: 6, height: 6)
                 Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
             },
             identity: {
@@ -74,6 +98,11 @@ struct NativePeerGGStackDrawer: View {
 
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: scale.space[1]) {
+            if isPaused {
+                Text("A gg operation is paused on conflicts. Resolve them in the changes list, then Continue, or Abort to roll back.")
+                    .font(scale.meta.font).foregroundColor(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let problem = read.problem {
                 Text(problem)
                     .font(scale.meta.font).foregroundStyle(theme.color("warn"))
@@ -101,9 +130,27 @@ struct NativePeerGGStackDrawer: View {
                     }
                     .help(entry.title)
                 }
-                Text("Sync, land and reorder this stack on the host.")
-                    .font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
             }
+            if !actions.isEmpty {
+                HStack(spacing: scale.space[2]) {
+                    ForEach(actions, id: \.self) { action in
+                        Button {
+                            onAction(action)
+                        } label: {
+                            HStack(spacing: scale.space[1]) {
+                                if runningAction == action { Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 10, height: 10) }
+                                Text(Self.title(of: action))
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(runningAction != nil)
+                    }
+                }
+                .padding(.top, scale.space[1])
+            }
+            Text("Land and reorder this stack on the host.")
+                .font(scale.meta.font).foregroundColor(theme.color("fg-faint"))
         }
         .padding(.horizontal, layout.innerHorizontal(scale.space[3])).padding(.bottom, scale.space[3])
     }

@@ -466,6 +466,24 @@ struct HostProtocolServerTests {
         #expect((AlasCoreContext.ggStackProblem(context, meantAsStack: meantAsStack) != nil) == shows)
     }
 
+    /// A stack action needs what the Mac saw to still hold: Sync and Rebase
+    /// the stack it named, Continue and Abort a paused operation.
+    @Test(arguments: [
+        (HostGGStackAction.sync, "The stack changed on the host. Review it and try again."),
+        (.rebase, "The stack changed on the host. Review it and try again."),
+        (.continueOperation, "No gg operation is paused on the host."),
+        (.abortOperation, "No gg operation is paused on the host."),
+    ])
+    func aStackActionRefusesWhatNoLongerHolds(_ action: HostGGStackAction, refusal: String) async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment(servesWorktreeGit: true))
+        defer { fixture.tearDown() }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let ref = WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)
+
+        #expect(try await fixture.request(.ggStackAction(worktree: ref, stackName: "auth", action: action))
+            == .failure(error: .failed(message: refusal)))
+    }
+
     /// A removed project leaves the host and the persisted list.
     @Test func removeProjectForgetsIt() async throws {
         let fixture = try await RepoFixture()

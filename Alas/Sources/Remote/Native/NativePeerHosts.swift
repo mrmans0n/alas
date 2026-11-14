@@ -454,6 +454,35 @@ final class NativePeerHosts {
         return read
     }
 
+    /// Whether `serverId` runs Sync, Rebase, Continue and Abort on its worktrees' gg stacks.
+    func servesGGStackActions(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesGGStackActionsV1)
+    }
+
+    /// Runs `action` on the stack named `stackName`. False once a refusal was shown.
+    func runGGStackAction(
+        _ action: HostGGStackAction, stackName: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Bool {
+        guard servesGGStackActions(serverId: serverId), let channel = channels.channel(for: serverId) else { return false }
+        let title = switch action {
+        case .sync: "Sync Failed"
+        case .rebase: "Rebase Failed"
+        case .continueOperation: "Continue Failed"
+        case .abortOperation: "Abort Failed"
+        }
+        // gg sync pushes every entry and talks to the code host: far longer than a read.
+        let request = HostRequest.ggStackAction(worktree: Self.ref(worktree), stackName: stackName, action: action)
+        switch await channel.request(request, timeout: .seconds(600)) {
+        case .done:
+            return true
+        case .failure(let error):
+            showError(title, PeerWorktreeRemoval.message(for: error))
+        default:
+            showError(title, "The host sent an unexpected reply.")
+        }
+        return false
+    }
+
     /// Whether `serverId` lists, shows and changes its worktrees' stashes.
     func servesStash(serverId: String) -> Bool {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesStashV1)
