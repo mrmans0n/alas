@@ -3,7 +3,18 @@ import SwiftUI
 
 extension TranscriptSession {
     var hasPendingRequest: Bool {
-        permission != nil || question != nil || plan != nil || elicitation != nil
+        shows(permission, .permission) || shows(question, .question) || shows(plan, .plan) || shows(elicitation, .elicitation)
+    }
+
+    /// A request is shown until this phone answers it.
+    func shows(_ request: (some Any)?, _ kind: RequestKind) -> Bool {
+        request != nil && !answered.contains(kind)
+    }
+
+    /// Keys a card's state on the request itself: an identical re-send keeps it, a different
+    /// request (even one reusing the wire id) resets it.
+    func cardID(_ kind: RequestKind) -> String {
+        "\(kind)-\(requestRevisions[kind] ?? 0)"
     }
 }
 
@@ -13,21 +24,21 @@ extension EnvironmentValues {
 }
 
 /// The pending request of a session, one card per kind. Shown above the composer and in the
-/// Inbox. Per-card state lives in the kind's view and is keyed by request id, so a request the
+/// Inbox. Per-card state lives in the kind's view and is keyed by `cardID`, so a request the
 /// host re-sends right after resolving it (resubscribe, take-over) keeps what was typed.
 struct RequestCard: View {
     let session: TranscriptSession
 
     var body: some View {
         Group {
-            if let permission = session.permission {
-                PermissionCard(session: session, payload: permission).id("perm-\(permission.requestId)")
-            } else if let question = session.question {
-                QuestionCard(session: session, payload: question).id("question-\(question.requestId)")
-            } else if let plan = session.plan {
-                PlanCard(session: session, payload: plan).id("plan-\(plan.toolCallId)")
-            } else if let elicitation = session.elicitation {
-                ElicitationCard(session: session, payload: elicitation).id("elicit-\(elicitation.requestId)")
+            if let permission = session.permission, session.shows(permission, .permission) {
+                PermissionCard(session: session, payload: permission).id(session.cardID(.permission))
+            } else if let question = session.question, session.shows(question, .question) {
+                QuestionCard(session: session, payload: question).id(session.cardID(.question))
+            } else if let plan = session.plan, session.shows(plan, .plan) {
+                PlanCard(session: session, payload: plan).id(session.cardID(.plan))
+            } else if let elicitation = session.elicitation, session.shows(elicitation, .elicitation) {
+                ElicitationCard(session: session, payload: elicitation).id(session.cardID(.elicitation))
             }
         }
         // A resolve-then-resend burst must not flash.
@@ -53,6 +64,7 @@ struct CardChrome<Content: View>: View {
                     .foregroundStyle(tint)
                     .frame(width: 38, height: 38)
                     .background(tint.opacity(0.16), in: Circle())
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(kind).font(.caption2.weight(.bold)).textCase(.uppercase).tracking(0.6).foregroundStyle(tint)
                     Text(title).font(.headline).fixedSize(horizontal: false, vertical: true)
@@ -200,6 +212,7 @@ private struct QuestionCard: View {
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

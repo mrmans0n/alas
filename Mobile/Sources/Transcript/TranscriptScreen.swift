@@ -32,9 +32,12 @@ struct TranscriptScreen: View {
         TranscriptContent(session: session)
             .safeAreaInset(edge: .bottom) {
                 if !session.hasEnded {
-                    VStack(spacing: 0) {
-                        RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
-                        ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                    // One container, so the floating glass layers composite together over the stream.
+                    GlassEffectContainer {
+                        VStack(spacing: 0) {
+                            RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
+                            ComposerBar(session: session, onOpenSettings: { showSettings = true })
+                        }
                     }
                 } else {
                     Text("This session has ended.")

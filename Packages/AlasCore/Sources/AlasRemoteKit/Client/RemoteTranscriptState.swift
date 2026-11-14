@@ -172,7 +172,9 @@ public struct RemoteTranscriptState<ServerHost: Codable & Equatable & Sendable, 
         messagesGeneration &+= 1
     }
 
-    private mutating func clearPendingRequests() {
+    /// The host re-sends only the requests still outstanding when a client subscribes, so a
+    /// client drops what it holds before subscribing again.
+    public mutating func clearPendingRequests() {
         pendingPermission = nil
         pendingQuestion = nil
         pendingPlan = nil

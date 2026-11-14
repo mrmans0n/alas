@@ -82,6 +82,7 @@ struct ElicitationFormView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
         case "string" where !field.options.isEmpty:
@@ -107,7 +108,7 @@ struct ElicitationFormView: View {
                     SecureField(field.title, text: binding)
                 } else {
                     TextField(field.title, text: binding)
-                        .keyboardType(field.type == "integer" ? .numberPad : field.type == "number" ? .decimalPad : keyboard(field))
+                        .keyboardType(field.type == "integer" || field.type == "number" ? .numbersAndPunctuation : keyboard(field))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(field.format == "email" || field.format == "uri")
                 }

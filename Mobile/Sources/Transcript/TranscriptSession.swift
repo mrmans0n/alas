@@ -30,6 +30,10 @@ struct ComposerDraft {
     var mentions: [RemoteMention] = []
 }
 
+enum RequestKind {
+    case permission, question, plan, elicitation
+}
+
 enum QueueAction {
     case forceSend(String), remove(String), retry(String), edit(String), clear
     case move(String, to: String)
@@ -55,11 +59,17 @@ final class TranscriptSession {
     private(set) var question: RemoteQuestionPayload?
     private(set) var plan: RemotePlanPayload?
     private(set) var elicitation: RemoteElicitationPayload?
+    /// Bumped per kind when the shown request is replaced by a different one, so a card keys its
+    /// state on the request rather than its wire id, which can repeat.
+    private(set) var requestRevisions: [RequestKind: Int] = [:]
+    /// Kinds whose shown request was answered here; their cards hide until a different one arrives.
+    private(set) var answered: Set<RequestKind> = []
+    @ObservationIgnored private var replacedAt: [RequestKind: ContinuousClock.Instant] = [:]
     private(set) var isStopping = false
     @ObservationIgnored private var clearPending = false
     private(set) var hasCancellableBackgroundWork = false
     var rejection: String?
-    /// Candidates for the latest query only.
+    /// Candidates for `mentionCandidatesQuery`, or for an earlier query while a new one is in flight.
     private(set) var mentionCandidates: [RemoteMention] = []
     /// The query `mentionCandidates` answers; nil while a new query is in flight.
     private(set) var mentionCandidatesQuery: String?
@@ -125,6 +135,7 @@ final class TranscriptSession {
         listener = hub.addListener(hostID) { [weak self] message in
             self?.receive(message)
         }
+        forgetTransientState()
         subscription = hub.subscribe(sessionId, on: hostID)
         hostWasOnline = hub.state(of: hostID) == .online
         watchGeneration += 1
@@ -149,7 +160,8 @@ final class TranscriptSession {
         let mentions = Array(RemoteComposerText.liveMentions(draft.mentions, in: text)
             .prefix(RemoteAttachmentLimits.maxMentionCount))
         rejection = nil
-        let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions))
+        let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
+                         offline: "Your message wasn't sent.")
         guard sent else { return }
         lastSent = draft
         draft = ComposerDraft()
@@ -173,23 +185,30 @@ final class TranscriptSession {
     }
 
     func answerPermission(optionId: String) {
-        guard let permission else { return }
-        drive(.permissionDecision(sessionId: sessionId, requestId: permission.requestId, optionId: optionId, persistScope: nil))
+        guard let permission, accepts(.permission) else { return }
+        if drive(.permissionDecision(sessionId: sessionId, requestId: permission.requestId, optionId: optionId, persistScope: nil)) { answered.insert(.permission) }
     }
 
     func answerQuestion(_ answers: [RemoteQuestionAnswer]) {
-        guard let question else { return }
-        drive(.questionAnswer(sessionId: sessionId, requestId: question.requestId, answers: answers))
+        guard let question, accepts(.question) else { return }
+        if drive(.questionAnswer(sessionId: sessionId, requestId: question.requestId, answers: answers)) { answered.insert(.question) }
     }
 
     func answerPlan(action: String, reason: String?) {
-        guard let plan else { return }
-        drive(.planResponse(sessionId: sessionId, requestId: plan.requestId, action: action, reason: reason))
+        guard let plan, accepts(.plan) else { return }
+        if drive(.planResponse(sessionId: sessionId, requestId: plan.requestId, action: action, reason: reason)) { answered.insert(.plan) }
     }
 
     func answerElicitation(action: String, content: [String: ACPElicitationValue]?) {
-        guard let elicitation else { return }
-        drive(.elicitationResponse(sessionId: sessionId, requestId: elicitation.requestId, action: action, content: content))
+        guard let elicitation, accepts(.elicitation) else { return }
+        if drive(.elicitationResponse(sessionId: sessionId, requestId: elicitation.requestId, action: action, content: content)) { answered.insert(.elicitation) }
+    }
+
+    /// False once answered, and briefly after the request changed under the user's finger.
+    private func accepts(_ kind: RequestKind) -> Bool {
+        guard !answered.contains(kind) else { return false }
+        guard let replaced = replacedAt[kind] else { return true }
+        return replaced.duration(to: .now) >= .milliseconds(500)
     }
 
     func setModel(_ modelId: String) { drive(.setModel(sessionId: sessionId, modelId: modelId)) }
@@ -197,17 +216,17 @@ final class TranscriptSession {
     func setMode(_ modeId: String) { drive(.setMode(sessionId: sessionId, modeId: modeId)) }
 
     func setAutoRun(_ enabled: Bool) {
+        guard drive(.setAutoRun(sessionId: sessionId, enabled: enabled)) else { return }
         state.applyOptimisticAutoRun(enabled)
         publish()
-        drive(.setAutoRun(sessionId: sessionId, enabled: enabled))
     }
 
     func setConfigOption(_ configId: String, value: ACPConfigValue) {
+        guard drive(.setConfigOption(sessionId: sessionId, configId: configId, value: value)) else { return }
         if case .boolean(let on) = value {
             state.applyOptimistic(configId: configId, value: on)
             publish()
         }
-        drive(.setConfigOption(sessionId: sessionId, configId: configId, value: value))
     }
 
     /// Not a lease verb: the host lets any follower rename.
@@ -220,7 +239,7 @@ final class TranscriptSession {
     /// The caller debounces.
     func searchMentions(_ query: String) {
         lastMentionQuery = query
-        mentionCandidates = []
+        // The previous rows stay up, dimmed, until the answer arrives.
         mentionCandidatesQuery = nil
         hub.send(.searchMentions(sessionId: sessionId, query: query), to: hostID)
     }
@@ -228,9 +247,9 @@ final class TranscriptSession {
     /// Verbs that need the writer lease ask for it first when this phone does not hold it.
     /// False, with `rejection` set, when the host is offline and nothing was sent.
     @discardableResult
-    private func drive(_ message: PhoneClientMessage) -> Bool {
+    private func drive(_ message: PhoneClientMessage, offline: String = "Nothing was sent.") -> Bool {
         guard hub.state(of: hostID) == .online else {
-            rejection = "\(hostName) is offline. Your message wasn't sent."
+            rejection = "\(hostName) is offline. \(offline)"
             return false
         }
         if !state.canDrive { takeOver() }
@@ -273,11 +292,23 @@ final class TranscriptSession {
         if online, !hostWasOnline { resubscribe() }
     }
 
+    /// The host re-sends on subscribe only the requests it still has outstanding, and resolves
+    /// only those its connection remembers, so anything held from before could be stale for good.
+    /// The hold in `publish()` keeps a card through the host's re-send, so nothing flashes.
+    private func forgetTransientState() {
+        state.clearPendingRequests()
+        isStopping = false
+        mentionCandidates = []
+        mentionCandidatesQuery = nil
+        publish()
+    }
+
     private func resubscribe() {
         state.resetResubscribeRequest()
         // A page request or image read sent before a reconnect has no reply coming, and
         // rows whose messages are unchanged won't ask again, so resend the unanswered reads.
         fetchingOlder = false
+        forgetTransientState()
         hub.send(.subscribe(sessionId: sessionId), to: hostID)
         for path in requestedImages where images[path] == nil {
             hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
@@ -354,10 +385,10 @@ final class TranscriptSession {
         if config != state.config { config = state.config }
         if queue != state.queue { queue = state.queue }
         if canDrive != state.canDrive { canDrive = state.canDrive }
-        var holding = settle(\.permission, state.pendingPermission)
-        holding = settle(\.question, state.pendingQuestion) || holding
-        holding = settle(\.plan, state.pendingPlan) || holding
-        holding = settle(\.elicitation, state.pendingElicitation) || holding
+        var holding = settle(\.permission, state.pendingPermission, .permission)
+        holding = settle(\.question, state.pendingQuestion, .question) || holding
+        holding = settle(\.plan, state.pendingPlan, .plan) || holding
+        holding = settle(\.elicitation, state.pendingElicitation, .elicitation) || holding
         if holding, !clearPending {
             clearPending = true
             Task { @MainActor [weak self] in
@@ -368,6 +399,10 @@ final class TranscriptSession {
                 question = state.pendingQuestion
                 plan = state.pendingPlan
                 elicitation = state.pendingElicitation
+                if permission == nil { answered.remove(.permission) }
+                if question == nil { answered.remove(.question) }
+                if plan == nil { answered.remove(.plan) }
+                if elicitation == nil { answered.remove(.elicitation) }
             }
         }
         refreshCanLoadOlder()
@@ -376,9 +411,16 @@ final class TranscriptSession {
     /// A request that resolves is kept briefly: on a resubscribe or take-over the host resolves
     /// it and re-sends it in separate frames, and a card that vanished between them would lose
     /// what the user typed. Returns true while a resolved request is still being held.
-    private func settle<T: Equatable>(_ shown: ReferenceWritableKeyPath<TranscriptSession, T?>, _ new: T?) -> Bool {
+    private func settle<T: Equatable>(_ shown: ReferenceWritableKeyPath<TranscriptSession, T?>, _ new: T?,
+                                      _ kind: RequestKind) -> Bool {
         if let new {
-            if self[keyPath: shown] != new { self[keyPath: shown] = new }
+            let old = self[keyPath: shown]
+            if old != new {
+                self[keyPath: shown] = new
+                requestRevisions[kind, default: 0] += 1
+                answered.remove(kind)
+                if old != nil { replacedAt[kind] = .now }
+            }
             return false
         }
         return self[keyPath: shown] != nil

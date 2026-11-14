@@ -6,6 +6,8 @@ struct InboxView: View {
     @Environment(SessionRegistry.self) private var registry
     @State private var model = InboxModel()
     @State private var path: [SessionRoute] = []
+    /// A hidden tab keeps its view alive; it must not hold sessions then.
+    @State private var visible = false
 
     var body: some View {
         let entries = InboxModel.entries(in: hub)
@@ -33,9 +35,15 @@ struct InboxView: View {
             }
             .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
         }
-        .onAppear { model.sync(entries, registry: registry) }
-        .onChange(of: entries) { _, new in model.sync(new, registry: registry) }
-        .onDisappear { model.releaseAll() }
+        .onAppear {
+            visible = true
+            model.sync(entries, registry: registry)
+        }
+        .onChange(of: entries) { _, new in if visible { model.sync(new, registry: registry) } }
+        .onDisappear {
+            visible = false
+            model.releaseAll()
+        }
     }
 
     private func section(_ entry: InboxModel.Entry) -> some View {
