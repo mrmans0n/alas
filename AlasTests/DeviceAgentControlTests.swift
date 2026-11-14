@@ -376,6 +376,25 @@ struct DeviceAgentControlTests {
         #expect(reply["screen_changed"] as? Bool == true)
     }
 
+    @Test func aFilteredSnapshotIsNoBaselineForTheNextDiff() async throws {
+        let control = control(FakeInput())
+        _ = await control.perform(.snapshot(udid: "on", query: "Maps", limit: 200), sessionID: "s")
+        let reply = try Self.reply(await control.perform(
+            .button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s"
+        ))
+        #expect(reply["screen_changed"] as? Bool == true)
+    }
+
+    @Test func aSlowFadeIsNotSettled() async throws {
+        let input = FakeInput()
+        // Each frame 2 brighter than the one before: neighbours look alike, the fade does not.
+        input.frames = (0..<70).compactMap { Self.filledFrame(UInt8(40 + 2 * $0)) }
+        let reply = try Self.reply(await control(input).perform(
+            .button(udid: "on", name: .home, includeScreenshot: false), sessionID: "s"
+        ))
+        #expect(reply["settled"] as? Bool == false)
+    }
+
     @Test func withoutDiffAnActionAnswersAsBefore() async {
         let response = await control(FakeInput()).perform(
             .button(udid: "on", name: .home, includeScreenshot: false, diff: false), sessionID: "s"

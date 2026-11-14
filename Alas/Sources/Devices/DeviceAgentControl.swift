@@ -271,7 +271,10 @@ final class DeviceAgentControl {
                 // One that finishes after a newer snapshot doesn't replace it.
                 if (snapshots[udid]?.generation ?? 0) < snapshot.generation {
                     snapshots[udid] = snapshot
-                    snapshotSessions[udid] = sessionID
+                    // Only a whole screen is a baseline: a filtered one left elements out.
+                    let whole = (query ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                        && !snapshot.filtered(query: query, limit: limit).truncated
+                    snapshotSessions[udid] = whole ? sessionID : nil
                 }
                 return .text([snapshot.json(query: query, limit: limit)])
             } catch {
@@ -648,11 +651,13 @@ final class DeviceAgentControl {
             let next = try await takeSnapshot(udid)
             let previous = snapshotSessions[udid] == sessionID ? snapshots[udid] : nil
             let diff = DeviceSnapshotDiff(previous: previous, next: next)
+            let reply = diff.json()
             if (snapshots[udid]?.generation ?? 0) < next.generation {
                 snapshots[udid] = diff.snapshot
-                snapshotSessions[udid] = sessionID
+                // A truncated reply left elements out, so it is no baseline.
+                snapshotSessions[udid] = reply["truncated"] == nil ? sessionID : nil
             }
-            return diff.json().merging(["settled": settled]) { current, _ in current }
+            return reply.merging(["settled": settled]) { current, _ in current }
         } catch {
             return ["settled": settled, "diff_error": Self.snapshotError(error)]
         }
@@ -661,20 +666,22 @@ final class DeviceAgentControl {
     /// Polls frames every 50 ms until 6 in a row look the same (300 ms);
     /// gives up after 60 polls (3 s). Counting polls keeps tests deterministic.
     private func settle(_ udid: String) async -> Bool {
-        var last: DeviceFrameFingerprint?
+        // Frames are compared with the first of the window, not the one before,
+        // so a slow fade's small steps don't add up to "settled".
+        var reference: DeviceFrameFingerprint?
         var same = 0
         for _ in 0..<60 {
             await sleep(.milliseconds(50))
             if userDriving(udid) || Task.isCancelled { return false }
             guard let surface = input.lastFrame(udid: udid)?.surface,
                   let print = DeviceFrameFingerprint(surface) else { continue }
-            if let last, last.matches(print) {
+            if let reference, reference.matches(print) {
                 same += 1
                 if same >= 6 { return true }
             } else {
+                reference = print
                 same = 0
             }
-            last = print
         }
         return false
     }
