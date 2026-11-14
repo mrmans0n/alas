@@ -12,7 +12,7 @@ actor SessionListCache {
     /// arriving after `delete`) is dropped.
     private var newest: [UUID: Int] = [:]
 
-    init(directory: URL = URL.applicationSupportDirectory.appending(path: "session-lists")) {
+    init(directory: URL = URL.cachesDirectory.appending(path: "session-lists")) {
         self.directory = directory
     }
 
