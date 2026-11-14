@@ -547,6 +547,7 @@ public final class AlasCoreContext {
                 onChipsObserved: onChipsObserved
             )
             manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            manager.remoteServerIdProvider = { config().remote.serverId }
             if let delegationPeerNames { manager.delegationPeerNamesProvider = delegationPeerNames }
             if let alasTools {
                 manager.alasCLIEnvProvider = { await alasTools.environment(worktreePath: $0, sessionId: $1) }
