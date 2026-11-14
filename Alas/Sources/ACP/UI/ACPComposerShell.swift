@@ -683,22 +683,26 @@ struct ACPComposer: View {
         .layoutPriority(1)
     }
 
-    /// Tools, then the configuration cluster, then the action, each group
-    /// with a wider gap around it than inside it.
+    /// Split by job: what goes into the prompt on the left, what configures
+    /// the next turn in one tray on the right, then the action on its own.
     private func expandedToolbar(showPasteHint: Bool, showShortcuts: Bool) -> some View {
         HStack(spacing: scale.space[3]) {
+            inputTools
             if showPasteHint { pasteImageHint }
             if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
             sessionInfo
-            HStack(spacing: scale.space[2]) {
-                contextUsageButton
-                if dictation.state != .unavailable { micButton }
-                attachButton
-                toolToggles
-            }
             configurationCluster
             actionButton
+        }
+    }
+
+    /// What adds to the prompt, and how much room the session has left.
+    private var inputTools: some View {
+        HStack(spacing: scale.space[2]) {
+            if dictation.state != .unavailable { micButton }
+            attachButton
+            contextUsageButton
         }
     }
 
@@ -709,14 +713,10 @@ struct ACPComposer: View {
         VStack(spacing: scale.space[1]) {
             HStack(spacing: scale.space[2]) {
                 Spacer(minLength: 0)
-                toolToggles
                 configurationCluster
-                    .padding(.leading, scale.space[1])
             }
             HStack(spacing: scale.space[2]) {
-                contextUsageButton
-                if dictation.state != .unavailable { micButton }
-                attachButton
+                inputTools
                 sessionInfo
                     .padding(.leading, scale.space[1])
                 Spacer(minLength: 0)
@@ -743,27 +743,25 @@ struct ACPComposer: View {
         }
     }
 
-    /// On/off switches, which sit with the other tool buttons.
-    @ViewBuilder
-    private var toolToggles: some View {
-        chips.fastModeToggle()
-        autoRunToggle
-    }
-
-    /// The pickers that configure the next turn, close together on one tray
-    /// so they read as a single group apart from the tools and the action.
-    @ViewBuilder
+    /// Everything that configures the next turn, close together on one tray
+    /// so it reads as a single group apart from the input tools and the
+    /// action: the fast and auto-run switches, then the pickers.
     private var configurationCluster: some View {
-        if hasConfigurationChips {
-            HStack(spacing: scale.space[0]) {
+        HStack(spacing: scale.space[0]) {
+            HStack(spacing: scale.space[1]) {
+                chips.fastModeToggle()
+                autoRunToggle
+            }
+            .padding(.horizontal, scale.space[0])
+            if hasConfigurationChips {
                 configurationChips
             }
-            .padding(scale.space[0])
-            .background(
-                RoundedRectangle(cornerRadius: scale.radius.medium + scale.space[0])
-                    .fill(theme.color("bg-3").opacity(0.35))
-            )
         }
+        .padding(scale.space[0])
+        .background(
+            RoundedRectangle(cornerRadius: scale.radius.medium + scale.space[0])
+                .fill(theme.color("bg-3").opacity(0.35))
+        )
     }
 
     private var hasConfigurationChips: Bool {
