@@ -44,6 +44,8 @@ extension SessionsAPI {
                   let worktreeID = manager.liveSession(for: sessionID)?.worktreeId else {
                 throw SessionRefusal.notFound
             }
+            // Adopting rebinds the shepherd, which only the session's driver may do.
+            guard manager.isWriter(for: sessionID) else { throw SessionRefusal.notWriter }
             guard let context = core.reviewShepherd.effects?.worktreeContext(worktreeID), context.isEligible else {
                 throw HostError.failed(message: "The shepherd works on git worktrees only.")
             }

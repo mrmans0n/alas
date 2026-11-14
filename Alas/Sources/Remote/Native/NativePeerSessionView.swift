@@ -571,7 +571,7 @@ private struct NativePeerComposer: View {
                 onStopDictation: { dictation.stop() },
                 onSubmit: { text, attachments, intent, _, completion in
                     if offersShip, case .ship(let arguments)? = ACPAlasSlashCommand.parse(text) {
-                        return ship(arguments: arguments, attachments: attachments, intent: intent, completion: completion)
+                        return ship(text, arguments: arguments, attachments: attachments, intent: intent, completion: completion)
                     }
                     return submit(attachments: attachments, intent: intent, completion: completion)
                 },
@@ -612,7 +612,7 @@ private struct NativePeerComposer: View {
     /// `/ship` asks the host for the session's Ship instead of reaching the
     /// agent, as it does in a local session.
     private func ship(
-        arguments: String, attachments: [ACPMessage.Attachment], intent: ACPSubmitIntent,
+        _ text: String, arguments: String, attachments: [ACPMessage.Attachment], intent: ACPSubmitIntent,
         completion: @escaping ACPComposerSubmitCompletion
     ) -> Bool {
         let refusal: String? = if !arguments.isEmpty {
@@ -632,6 +632,7 @@ private struct NativePeerComposer: View {
             return false
         }
         client.shepherdSelected(.ship)
+        client.clearSentDraft(text)
         // Completed like a sent prompt so `/ship` doesn't stay in the draft.
         Task { @MainActor in completion(true) }
         return true
