@@ -3,7 +3,8 @@ import Observation
 
 /// One `TranscriptSession` per open transcript, shared by every screen showing it so the
 /// draft and pending requests are the same everywhere. Opened by the first holder, closed
-/// when the last token is released.
+/// when the last token is released; a closed session stays so its draft survives a tab switch.
+/// ponytail: closed sessions live for the app's life; evict idle ones if memory ever matters.
 @MainActor @Observable
 final class SessionRegistry {
     @ObservationIgnored private let hub: HostHub
@@ -27,12 +28,8 @@ final class SessionRegistry {
         let session = entry.session
         return (session, ListenerToken { [weak self] in
             guard let self, let current = entries[key] else { return }
-            if current.holders > 1 {
-                entries[key]?.holders -= 1
-            } else {
-                entries[key] = nil
-                current.session.close()
-            }
+            entries[key]?.holders -= 1
+            if current.holders == 1 { current.session.close() }
         })
     }
 

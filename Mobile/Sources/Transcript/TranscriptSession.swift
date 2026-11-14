@@ -145,7 +145,8 @@ final class TranscriptSession {
         let mentions = Array(RemoteComposerText.liveMentions(draft.mentions, in: text)
             .prefix(RemoteAttachmentLimits.maxMentionCount))
         rejection = nil
-        drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions))
+        let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions))
+        guard sent else { return }
         lastSent = draft
         draft = ComposerDraft()
     }
@@ -219,9 +220,16 @@ final class TranscriptSession {
     }
 
     /// Verbs that need the writer lease ask for it first when this phone does not hold it.
-    private func drive(_ message: PhoneClientMessage) {
+    /// False, with `rejection` set, when the host is offline and nothing was sent.
+    @discardableResult
+    private func drive(_ message: PhoneClientMessage) -> Bool {
+        guard hub.state(of: hostID) == .online else {
+            rejection = "\(hostName) is offline. Your message wasn't sent."
+            return false
+        }
         if !state.canDrive { takeOver() }
         hub.send(message, to: hostID)
+        return true
     }
 
     func loadOlder() {
