@@ -51,13 +51,24 @@ public struct RemotePairingClient: Sendable {
         let serverId: String?
         let name: String?
         let publicKey: String?
+        let signature: String?
     }
 
     /// Stops at the first 401 to protect the host's redemption budget; a 403
     /// moves on to the next origin. Loopback origins are the phone itself.
+    ///
+    /// `publicKey` is set only when the host signed this attempt's challenge
+    /// with it, so the phone never pins a key nobody proved. A reply without
+    /// a key pairs unpinned, as on the Mac. A reply claiming a key it cannot
+    /// back disqualifies its origin and the next one is tried, as on the Mac;
+    /// but its code is spent, so when no later origin proves a key the phone
+    /// keeps that token unpinned rather than failing: that is the trust a
+    /// keyless reply already gets, and an existing pin is never dropped.
     public func pair(origins: [String], code: String, deviceName: String) async throws(RemotePairingError) -> RemotePairingResult {
-        let body = try? JSONEncoder().encode(["code": code, "deviceName": deviceName])
+        let challenge = RemoteIdentityCrypto.randomChallenge()
+        let body = try? JSONEncoder().encode(["code": code, "deviceName": deviceName, "challenge": challenge])
         var denied = false
+        var unproven: RemotePairingResult?
         for origin in origins where !Self.isLoopback(origin) {
             if Task.isCancelled { throw .unreachable }
             guard let url = URL(string: origin + "/pair") else { continue }
@@ -70,18 +81,34 @@ public struct RemotePairingClient: Sendable {
                 continue
             }
             switch response.statusCode {
-            case 401: throw .codeRejected
+            case 401:
+                // An unproven origin already spent the code, so this 401 is expected.
+                if let unproven { return unproven }
+                throw .codeRejected
             case 403: denied = true
             case 200..<300:
-                if let reply = try? JSONDecoder().decode(Reply.self, from: data), !reply.token.isEmpty {
-                    return RemotePairingResult(
-                        origin: origin, token: reply.token, serverId: reply.serverId,
-                        name: reply.name, publicKey: reply.publicKey)
-                }
+                guard let reply = try? JSONDecoder().decode(Reply.self, from: data), !reply.token.isEmpty else { continue }
+                let proven = Self.provenKey(reply, challenge: challenge)
+                let result = RemotePairingResult(
+                    origin: origin, token: reply.token, serverId: reply.serverId,
+                    name: reply.name, publicKey: proven)
+                if reply.publicKey == nil || proven != nil { return result }
+                if unproven == nil { unproven = result }
             default: continue
             }
         }
+        if let unproven { return unproven }
         throw denied ? .originNotAllowed : .unreachable
+    }
+
+    private static func provenKey(_ reply: Reply, challenge: String) -> String? {
+        guard let key = reply.publicKey, let serverId = reply.serverId, !serverId.isEmpty,
+              let signature = reply.signature,
+              RemoteIdentityCrypto.verify(
+                  RemoteIdentityProof(challenge: challenge, publicKey: key, signature: signature),
+                  serverId: serverId, expectedPublicKey: key, challenge: challenge)
+        else { return nil }
+        return key
     }
 
     static func isLoopback(_ origin: String) -> Bool {

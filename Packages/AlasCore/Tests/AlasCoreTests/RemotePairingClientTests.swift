@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import AlasCore
@@ -33,7 +34,6 @@ import Testing
         let result = try await pair(fake, [a, b])
         #expect(result.origin == b)
         #expect(result.token == "t")
-        #expect(result.publicKey == "k")
     }
 
     @Test func stopsAtTheFirstRejectedCode() async {
@@ -72,7 +72,31 @@ import Testing
         let request = try #require(fake.requests.first)
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString == a + "/pair")
-        let body = try JSONDecoder().decode([String: String].self, from: try #require(request.httpBody))
+        var body = try JSONDecoder().decode([String: String].self, from: try #require(request.httpBody))
+        let challenge = body.removeValue(forKey: "challenge")
+        #expect(challenge.map(RemoteIdentityCrypto.isPlausibleChallenge) == true)
         #expect(body == ["code": "123456", "deviceName": "Phone"])
+    }
+
+    enum Proof: CaseIterable { case valid, missing, otherChallenge }
+
+    /// Only a key that signed this attempt's challenge is pinned; an unproven
+    /// one still pairs, unpinned, once no other origin proves it.
+    @Test(arguments: Proof.allCases)
+    func pinsOnlyAKeyThatSignedTheChallenge(_ proof: Proof) async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let transport: RemotePairingClient.Transport = { request in
+            let sent = try JSONDecoder().decode([String: String].self, from: request.httpBody!)
+            let challenge = proof == .otherChallenge ? RemoteIdentityCrypto.randomChallenge() : sent["challenge"]!
+            let signed = RemoteIdentityCrypto.sign(serverId: "s", challenge: challenge, with: key)!
+            var reply = ["token": "t", "serverId": "s", "publicKey": signed.publicKey]
+            if proof != .missing { reply["signature"] = signed.signature }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (try JSONEncoder().encode(reply), response)
+        }
+        let result = try await RemotePairingClient(transport: transport)
+            .pair(origins: [a], code: "123456", deviceName: "Phone")
+        #expect(result.token == "t")
+        #expect(result.publicKey == (proof == .valid ? RemoteIdentityCrypto.publicKeyString(key.publicKey) : nil))
     }
 }
