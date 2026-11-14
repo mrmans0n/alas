@@ -359,6 +359,31 @@ final class NativePeerHosts {
         }
     }
 
+    /// Project `projectId`'s gg mode on a host that lets a Mac change it; nil
+    /// for a folder or SSH project, whose worktrees are never stacks.
+    func ggMode(projectId: String, serverId: String) -> GGProjectMode? {
+        guard channels.channel(for: serverId) != nil, supports(serverId, HostProtocolCapability.projectsGGModeV1),
+              let project = worktrees[serverId]?.first(where: { $0.project.id == projectId })?.project,
+              project.kind != .folder, project.host == nil else { return nil }
+        return project.ggMode ?? .auto
+    }
+
+    /// The host's next project event then updates the menu; only a refusal is shown here.
+    func setGGMode(_ mode: GGProjectMode, projectId: String, serverId: String) {
+        guard let channel = channels.channel(for: serverId) else { return }
+        let showError = showError
+        Task {
+            switch await channel.request(.setProjectGGMode(projectID: projectId, mode: mode)) {
+            case .done:
+                break
+            case .failure(let error):
+                showError("Stacked Diffs Mode Not Changed", PeerWorktreeRemoval.message(for: error))
+            default:
+                showError("Stacked Diffs Mode Not Changed", "The host sent an unexpected reply.")
+            }
+        }
+    }
+
     /// Whether `worktree`'s branch can be renamed, on a host that serves it.
     func canRenameBranch(_ worktree: PeerHostWorktree, serverId: String) -> Bool {
         channels.channel(for: serverId) != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)

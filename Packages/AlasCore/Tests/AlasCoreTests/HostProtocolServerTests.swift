@@ -482,6 +482,26 @@ struct HostProtocolServerTests {
         #expect(persisted.projects.isEmpty)
     }
 
+    /// A gg mode set from a Mac is saved and listed; a host that serves no
+    /// worktree Git refuses it and keeps the mode it had.
+    @Test(arguments: [true, false])
+    func setProjectGGModeSavesAndListsIt(served: Bool) async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment(servesWorktreeGit: served))
+        defer { fixture.tearDown() }
+
+        let response = try await fixture.request(.setProjectGGMode(projectID: fixture.projectID, mode: .on))
+
+        let expected: GGProjectMode = served ? .on : .auto
+        if served { #expect(response == .done) } else { #expect(response != .done) }
+        guard case .snapshot(let snapshot) = try await fixture.request(.snapshot) else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        #expect(snapshot.projects.map(\.ggMode) == [expected])
+        let persisted = try #require(try PersistenceStore().readIfExists(ProjectsFile.self, from: fixture.projectsFile))
+        #expect(persisted.projects.map(\.ggMode) == [expected])
+    }
+
     /// A project with a session in one of its worktrees stays, whether its
     /// agent runs or is still starting.
     @Test(arguments: [false, true])

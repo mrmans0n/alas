@@ -168,6 +168,9 @@ public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
     public var host: String?
     public var kind: ProjectKind
     public var addedAt: Date
+    /// Whether its worktrees are gg stacks; nil from a host before
+    /// `host.projects.ggMode.v1`.
+    public var ggMode: GGProjectMode?
 
     public init(_ project: ProjectConfig) {
         id = project.id
@@ -176,6 +179,7 @@ public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
         host = project.host
         kind = project.kind
         addedAt = project.addedAt
+        ggMode = project.ggMode
     }
 }
 
@@ -251,6 +255,13 @@ public struct ProjectsAPI {
     public func remove(projectID: String, caller: HostCaller) async throws {
         caller.log("projects.remove", projectID)
         try await core.removeProject(id: projectID)
+    }
+
+    /// Sets whether the project's worktrees are gg stacks, for the host's
+    /// shepherds and the Changes tab of the Macs reading them.
+    public func setGGMode(projectID: String, mode: GGProjectMode, caller: HostCaller) throws {
+        caller.log("projects.setGGMode", "\(projectID) \(mode.rawValue)")
+        try core.setProjectGGMode(id: projectID, mode: mode)
     }
 }
 

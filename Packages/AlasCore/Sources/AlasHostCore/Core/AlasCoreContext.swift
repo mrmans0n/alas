@@ -328,6 +328,17 @@ public final class AlasCoreContext {
         try store.write(ProjectsFile(projects: projects.projects), to: projectsFile)
     }
 
+    /// Sets and saves project `id`'s gg mode. Saved before it is set, so a
+    /// failed save changes nothing.
+    public func setProjectGGMode(id: String, mode: GGProjectMode) throws {
+        guard var project = projects.projects.first(where: { $0.id == id }) else {
+            throw HostError.notFound(what: "project \(id)")
+        }
+        project.ggMode = mode
+        try store.write(ProjectsFile(projects: projects.projects.map { $0.id == id ? project : $0 }), to: projectsFile)
+        projects.setGGMode(projectId: id, mode: mode)
+    }
+
     /// Lists every project's worktrees from what `projects.json` cached, then
     /// reads them from git and saves what changed, as the app does at launch.
     /// A host that serves starts with this; until then its projects have none.

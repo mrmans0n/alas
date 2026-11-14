@@ -143,6 +143,7 @@ struct NativePeerSidebarView: View {
             }
         )
         .equatable()
+        .contextMenu { repoMenu(repo, peer: peer) }
         .padding(.leading, repoIndent)
         if !collapsed {
             ForEach(Array(repo.worktrees.enumerated()), id: \.element.id) { index, worktree in
@@ -171,6 +172,22 @@ struct NativePeerSidebarView: View {
                         .padding(.leading, repoIndent + RepoGroupView.worktreeIndent)
                         .padding(.trailing, scale.space[1])
                 }
+            }
+        }
+    }
+
+    /// The project's gg mode, as Settings sets a local one's.
+    @ViewBuilder
+    private func repoMenu(_ repo: NativePeerRepoGroup, peer: NativePeerGroup) -> some View {
+        if let hosts = client.hosts, let projectId = repo.projectId,
+           let mode = hosts.ggMode(projectId: projectId, serverId: peer.serverId) {
+            Picker(WorktreeRowView.ggModeMenuTitle, selection: Binding(
+                get: { mode },
+                set: { hosts.setGGMode($0, projectId: projectId, serverId: peer.serverId) }
+            )) {
+                Text("Off").tag(GGProjectMode.off)
+                Text("Auto").tag(GGProjectMode.auto)
+                Text("On").tag(GGProjectMode.on)
             }
         }
     }

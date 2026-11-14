@@ -53,6 +53,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case addProject(path: String, displayName: String, host: String?, kind: ProjectKind)
     /// Forgets a project. A host before it answers `invalidRequest`.
     case removeProject(projectID: String)
+    /// Sets whether a project's worktrees are gg stacks
+    /// (`host.projects.ggMode.v1`).
+    case setProjectGGMode(projectID: String, mode: GGProjectMode)
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
