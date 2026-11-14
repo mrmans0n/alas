@@ -70,6 +70,8 @@ private struct DiffContent: View {
                 .font(.system(.footnote, design: .monospaced))
                 .padding(.vertical, 8)
             }
+            // Content smaller than the viewport sits top-left, not centred.
+            .defaultScrollAnchor(.topLeading, for: .alignment)
         }
     }
 

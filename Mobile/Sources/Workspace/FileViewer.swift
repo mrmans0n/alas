@@ -65,5 +65,7 @@ private struct FileContent: View {
             .padding(.vertical, 8)
             .padding(.horizontal, 8)
         }
+        // Content smaller than the viewport sits top-left, not centred.
+        .defaultScrollAnchor(.topLeading, for: .alignment)
     }
 }
