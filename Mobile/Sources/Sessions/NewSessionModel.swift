@@ -146,6 +146,7 @@ final class NewSessionModel {
     }
 
     func selectWorktree(_ id: String) {
+        recoveredWorktreeId = nil
         selectedWorktreeId = id
         reconcileAgent()
     }
@@ -238,8 +239,10 @@ final class NewSessionModel {
                 mode = RemoteNewSession.defaultWorktreeMode(for: all)
                 if mode == .new, projects == nil { send(.listProjects) }
             }
+            // Applied once: a later list must not pull the selection back from the user's own choice.
             if let recovered = recoveredWorktreeId, all.contains(where: { $0.id == recovered }) {
                 selectedWorktreeId = recovered
+                recoveredWorktreeId = nil
             } else {
                 selectedWorktreeId = RemoteNewSession.preselectedWorktreeId(in: all, selectedWorktreeId: selectedWorktreeId)
             }
