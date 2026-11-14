@@ -86,7 +86,7 @@ private struct PeerRow: View {
                 Text(host.name).font(.headline)
                 HStack(spacing: 6) {
                     Circle().fill(dotColor).frame(width: 7, height: 7)
-                    Text(stateLabel)
+                    Text(state.label)
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -123,8 +123,20 @@ private struct PeerRow: View {
         return (address, tailnet ? "globe" : "wifi")
     }
 
-    private var stateLabel: String {
+    private var dotColor: Color {
         switch state {
+        case .online: .green
+        case .connecting: .orange
+        case .idle, .offline: .gray
+        case .unauthorized, .incompatible, .identityMismatch, .identityUnproven: .red
+        }
+    }
+}
+
+extension PhoneConnection.State {
+    /// How a host's connection reads in a status line.
+    var label: String {
+        switch self {
         case .idle: "Not connected"
         case .connecting: "Connecting…"
         case .online: "Online"
@@ -133,15 +145,6 @@ private struct PeerRow: View {
         case .incompatible: "Needs a newer Alas"
         case .identityMismatch: "A different Mac answered"
         case .identityUnproven: "Couldn't verify this Mac"
-        }
-    }
-
-    private var dotColor: Color {
-        switch state {
-        case .online: .green
-        case .connecting: .orange
-        case .idle, .offline: .gray
-        case .unauthorized, .incompatible, .identityMismatch, .identityUnproven: .red
         }
     }
 }

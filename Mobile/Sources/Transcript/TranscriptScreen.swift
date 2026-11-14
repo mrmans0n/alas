@@ -52,6 +52,9 @@ private struct TranscriptContent: View {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {
                     ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right")
+                } else if session.hostState != .online {
+                    ContentUnavailableView("Waiting for \(session.hostName) to come online…", systemImage: "wifi.slash",
+                                           description: Text(session.hostState.label))
                 } else {
                     ProgressView()
                 }

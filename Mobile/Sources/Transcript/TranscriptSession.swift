@@ -64,6 +64,14 @@ final class TranscriptSession {
         return lastSummary
     }
 
+    var hostName: String {
+        hub.hosts.first { $0.id == hostID }?.name ?? "your Mac"
+    }
+
+    var hostState: PhoneConnection.State {
+        hub.state(of: hostID)
+    }
+
     /// Closed by the host, or gone from its session list.
     var hasEnded: Bool {
         isClosed || !hub.sessions(of: hostID).contains { $0.id == sessionId }
@@ -86,6 +94,8 @@ final class TranscriptSession {
         guard listener != nil else { return }
         hub.send(.unsubscribe(sessionId: sessionId), to: hostID)
         listener = nil
+        // Unanswered reads die with the subscription; a reopened row asks again.
+        requestedImages = requestedImages.filter { images[$0] != nil }
         hostWatch?.cancel()
         hostWatch = nil
     }
@@ -141,7 +151,10 @@ final class TranscriptSession {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .transcriptImage(let id, let path, let data) where id == sessionId:
-            images[path] = data.flatMap(UIImage.init(data:)).map { .image(Self.thumbnail($0)) } ?? .unavailable
+            Task { [weak self] in
+                let image = await Self.thumbnail(data)
+                self?.images[path] = image.map(LoadedImage.image) ?? .unavailable
+            }
             return
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
@@ -149,9 +162,14 @@ final class TranscriptSession {
         default:
             break
         }
+        // The latch stays set until the fresh snapshot clears it, so the out-of-order deltas
+        // still in flight do not each ask again. Released only when the ask could not go out.
         if state.apply(message) {
-            state.resetResubscribeRequest()
-            hub.send(.subscribe(sessionId: sessionId), to: hostID)
+            if hub.state(of: hostID) == .online {
+                hub.send(.subscribe(sessionId: sessionId), to: hostID)
+            } else {
+                state.resetResubscribeRequest()
+            }
         }
         publish()
     }
@@ -173,13 +191,14 @@ final class TranscriptSession {
         refreshCanLoadOlder()
     }
 
-    /// Downscaled once on arrival, so a cell never decodes a full-size photo while scrolling.
-    /// 288 px fills the row's 96 pt square at 3x.
-    private static func thumbnail(_ image: UIImage) -> UIImage {
+    /// Decoded and downscaled off the main actor, once on arrival, so neither the frame handler
+    /// nor a cell decodes a full-size photo. 288 px fills the row's 96 pt square at 3x.
+    @concurrent
+    private nonisolated static func thumbnail(_ data: Data?) async -> UIImage? {
+        guard let data, let image = UIImage(data: data) else { return nil }
         let scale = 288 / min(image.size.width, image.size.height)
-        guard scale < 1 else { return image }
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        return image.preparingThumbnail(of: size) ?? image
+        let size = scale < 1 ? CGSize(width: image.size.width * scale, height: image.size.height * scale) : image.size
+        return await image.byPreparingThumbnail(ofSize: size) ?? image
     }
 
     private func refreshCanLoadOlder() {

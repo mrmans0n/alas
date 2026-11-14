@@ -20,6 +20,9 @@ struct PairHostView: View {
     @State private var code = ""
     @State private var error: String?
     @State private var pairing: Task<Void, Never>?
+    /// Set once a code is redeemed: codes are single-use, so nothing may submit again while the
+    /// sheet animates away.
+    @State private var paired = false
     @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
 
     init(hub: HostHub, prefilledOrigins: [String] = []) {
@@ -74,7 +77,7 @@ struct PairHostView: View {
                 }
                 if method != .scan {
                     ToolbarItem(placement: .confirmationAction) {
-                        if pairing != nil {
+                        if pairing != nil || paired {
                             ProgressView()
                         } else {
                             Button("Pair", action: submit).disabled(!canSubmit)
@@ -92,7 +95,6 @@ struct PairHostView: View {
             Group {
                 if camera == .authorized {
                     QRScannerView { scanned in
-                        guard pairing == nil else { return }
                         pair(link: scanned)
                     }
                 } else {
@@ -174,7 +176,7 @@ struct PairHostView: View {
     }
 
     private func submit() {
-        guard pairing == nil, canSubmit else { return }
+        guard canSubmit else { return }
         switch method {
         case .scan: break
         case .link: pair(link: link)
@@ -186,6 +188,7 @@ struct PairHostView: View {
     }
 
     private func pair(link: String) {
+        guard pairing == nil, !paired else { return }
         guard let parts = RemotePairingLink.parse(link) else {
             error = "That isn't an Alas pairing link."
             return
@@ -193,12 +196,15 @@ struct PairHostView: View {
         pair(origins: parts.origins, code: parts.code)
     }
 
+    /// Single-flight: every path (Pair, Return, Paste, a scan) funnels through here.
     private func pair(origins: [String], code: String) {
+        guard pairing == nil, !paired else { return }
         error = nil
         pairing = Task {
             defer { pairing = nil }
             do throws(RemotePairingError) {
                 try await hub.pair(origins: origins, code: code)
+                paired = true
                 dismiss()
             } catch {
                 guard !Task.isCancelled else { return }
