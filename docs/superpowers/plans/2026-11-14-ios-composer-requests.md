@@ -19,7 +19,7 @@ The Mac's Foundation-only helpers for the same things move there, and the Mac ca
 ## Global Constraints
 
 - Everything in plan 3a's Global Constraints still applies: kit imports, the `Phone*` typealiases, no wire change (`RemoteProtocolVersion` stays 1), the design guide, xcodegen, Conventional Commits with no agent attribution, and no pairing with the owner's running Alas.app.
-- Add PhotosUI to the app's allowed imports.
+- Add PhotosUI and ImageIO to the app's allowed imports (ImageIO decodes picked photos straight to the downscaled size).
 - CI builds the app with Xcode 26.6 (Swift 6.3.3). Its compiler crashes on `Observations { … }` closures, so use `withObservationTracking` (see `TranscriptSession.watchHost`). Local builds use Xcode 27, so a construct that only Xcode 27 accepts gets caught only in CI.
 - Wire facts the phone must honour:
   - Host limits: at most 10 attachments, at most 10,000,000 decoded bytes in total, at most 50 mentions, and a mention query of at most 256 characters.

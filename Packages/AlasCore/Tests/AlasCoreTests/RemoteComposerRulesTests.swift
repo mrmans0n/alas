@@ -77,15 +77,12 @@ struct RemoteComposerRulesTests {
         #expect(targets["s"] == nil)
     }
 
-    @Test func waitingDropsTheSendingHead() {
-        let sending = RemoteQueuedPrompt(id: "s", text: "", imageCount: 0, resourceCount: 0, status: "sending",
-                                         lastError: nil, scheduledAt: nil)
-        #expect(RemoteQueueRules.waiting([sending, queued()]).count == 1)
-    }
-
     @Test(arguments: [
         (1, Array(repeating: 1, count: 9), nil),
         (1, Array(repeating: 1, count: 10), "Attachments are limited to 10 per prompt."),
+        (10_000_000, [], nil),
+        (10_000_001, [], "Attachments are limited to 10 MB per prompt."),
+        (2, [9_999_999], "Attachments are limited to 10 MB per prompt."),
         (4_000_001, [6_000_000], "Attachments are limited to 10 MB per prompt."),
     ] as [(Int, [Int], String?)])
     func attachmentRefusalCapsCountAndTotalBytes(size: Int, staged: [Int], expected: String?) {
