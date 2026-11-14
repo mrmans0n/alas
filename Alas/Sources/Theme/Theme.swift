@@ -110,7 +110,7 @@ struct Theme: Codable, Equatable, Hashable {
             }
             if token == "accent-soft" {
                 // Matches the bundled `accent-soft` alpha of each theme.
-                return accent.opacity(darkMode ? 0.18 : 0.30)
+                return accent.opacity(0.18)
             }
         }
         if let resolved = resolvedColors[token] {

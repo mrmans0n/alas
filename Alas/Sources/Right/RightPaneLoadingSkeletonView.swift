@@ -180,10 +180,8 @@ private struct AgentSkeletonSectionHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.4)
-                .foregroundStyle(theme.color("fg-muted"))
+            Text(title)
+                .paneSectionTitle()
             Capsule()
                 .fill(theme.color("fg-faint").opacity(0.3))
                 .frame(width: 16, height: 12)
@@ -248,10 +246,8 @@ private struct RunSkeletonSectionHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
+            Text(title)
+                .paneSectionTitle()
             Capsule()
                 .fill(theme.color("fg-faint").opacity(0.3))
                 .frame(width: 16, height: 12)
@@ -301,10 +297,8 @@ private struct SkeletonSectionHeader: View {
             )
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
+            Text(title)
+                .paneSectionTitle()
             Spacer(minLength: 8)
         }
         .paneBand(fill: theme.color("section-head-bg"))

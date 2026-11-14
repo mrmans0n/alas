@@ -88,8 +88,8 @@ struct NativePeerGGStackDrawer: View {
                 Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
             },
             identity: {
-                Text(title.uppercased())
-                    .font(scale.caption.font(weight: .semibold)).tracking(0.5)
+                Text(title)
+                    .font(scale.caption.font(weight: .semibold))
                     .foregroundColor(theme.color("fg-muted")).lineLimit(1).truncationMode(.middle)
                     .help(title)
             },

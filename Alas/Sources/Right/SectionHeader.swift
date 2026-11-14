@@ -73,11 +73,8 @@ struct SectionHeader<Trailing: View>: View {
                     )
                         .frame(width: scale.space[4], height: scale.space[4])
                         .accessibilityHidden(true)
-                    Text(title.uppercased())
-                        .font(scale.caption.font(weight: .semibold))
-                        .tracking(0.5)
-                        .foregroundColor(theme.color("fg-muted"))
-                        .lineLimit(1)
+                    Text(title)
+                        .paneSectionTitle()
                         .truncationMode(.middle)
                     if let count {
                         Text("\(count)")

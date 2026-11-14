@@ -141,10 +141,8 @@ private struct SkeletonSectionHeader: View {
             )
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
-            Text(title.uppercased())
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
+            Text(title)
+                .paneSectionTitle()
             Spacer(minLength: 8)
         }
         .paneBand(fill: theme.color("section-head-bg"))

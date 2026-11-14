@@ -267,7 +267,8 @@ struct ACPPermissionCard: View {
         .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))
         .overlay(
             RoundedRectangle(cornerRadius: scale.radius.medium)
-                .strokeBorder(theme.color("accent").opacity(0.8), lineWidth: 1)
+                // Heavier than any other transcript outline: this card blocks the agent.
+                .strokeBorder(theme.color("accent"), lineWidth: 1.5)
         )
         // On the light page the outline carries the card; a shadow only made it heavy.
         .modifier(PermissionCardDarkElevation(theme: theme))
@@ -314,7 +315,7 @@ struct ACPPermissionCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
-        .background(theme.color("accent").opacity(0.08))
+        .background(theme.color("accent").opacity(0.14))
     }
 
     /// The actual `Allow … ?` body. Title (e.g. the command) sits on its
@@ -464,8 +465,8 @@ struct ACPPermissionOptionButton: View {
                 Text(option.name)
                     .font(scale.meta.font(weight: isDefaultStyled ? .semibold : .medium))
             }
-            .padding(.horizontal, scale.space[2])
-            .frame(height: 26)
+            .padding(.horizontal, isDefaultStyled ? scale.space[3] : scale.space[2])
+            .frame(height: 28)
             .background(isDefaultStyled ? theme.color("accent") : theme.color("bg-3"))
             .foregroundStyle(isDefaultStyled ? theme.color("bg-0") : theme.color("fg"))
             .clipShape(RoundedRectangle(cornerRadius: scale.radius.medium))

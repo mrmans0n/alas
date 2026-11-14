@@ -264,10 +264,7 @@ struct ChangesPreparationCard: View {
         HStack(spacing: 6) {
             Icon(name: "diff", size: 11, color: theme.color("fg-faint"))
             Text("Prepare")
-                .font(scale.caption.font(weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
-                .textCase(.uppercase)
+                .paneSectionTitle()
             Spacer(minLength: 0)
             if model.canDismissSyncFailure {
                 Button(action: onDismissSyncFailure) {
@@ -508,11 +505,21 @@ struct ChangesPreparationCard: View {
             )
             Text(notice.text)
                 .font(scale.metaFont)
-                .foregroundStyle(theme.color("fg-dim"))
+                .foregroundStyle(theme.color(notice.offersRetry ? "fg" : "fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: scale.space[1])
             if notice.offersRetry, let onRetryGGStack {
                 AlasButton(title: "Retry", style: .normal, action: onRetryGGStack)
+            }
+        }
+        // A failure gets its own tinted box so it reads as a state, not stray text.
+        .padding(notice.offersRetry ? scale.space[2] : 0)
+        .background {
+            if notice.offersRetry {
+                RoundedRectangle(cornerRadius: scale.radius.small)
+                    .fill(theme.color("warn").opacity(0.10))
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.small)
+                        .strokeBorder(theme.color("warn").opacity(0.35), lineWidth: 1))
             }
         }
         .accessibilityIdentifier("changes-preparation-gg-blocked")

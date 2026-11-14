@@ -16,7 +16,7 @@
     "fg-faint": "oklch(0.555 0.012 220)",
     "accent": "oklch(0.49 0.10 195)",
     "accent-2": "oklch(0.55 0.10 165)",
-    "accent-soft": "oklch(0.49 0.10 195 / 0.30)",
+    "accent-soft": "oklch(0.49 0.10 195 / 0.18)",
     "add": "oklch(0.48 0.14 155)",
     "del": "oklch(0.50 0.18 25)",
     "mod": "oklch(0.51 0.14 85)",
