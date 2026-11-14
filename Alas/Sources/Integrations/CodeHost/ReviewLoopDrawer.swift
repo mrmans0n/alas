@@ -52,7 +52,7 @@ struct ReviewLoopDrawer: View {
             },
             identity: { headerTitle(model: model) },
             chips: { compact in
-                if let shepherd, shepherd.record != nil {
+                if let shepherd, shepherd.bound != nil {
                     ReviewShepherdChip(model: shepherd)
                 }
                 ForEach(model.chips) { chip in

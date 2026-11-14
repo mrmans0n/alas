@@ -275,7 +275,7 @@ struct ChangesTabView: View {
         let ownerSessionID = record?.sessionID
 
         return ReviewShepherdDrawerModel(
-            record: record,
+            bound: record.map(ReviewShepherdDrawerModel.Bound.init),
             presentation: ShepherdPresentation.make(record: record, request: request, mergeGatePasses: gatePasses),
             ownerTitle: owner?.title,
             ownerAgent: owner.flatMap { appState.agent(id: $0.agentId) },

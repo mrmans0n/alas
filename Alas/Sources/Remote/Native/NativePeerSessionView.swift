@@ -420,6 +420,10 @@ private struct NativePeerShepherdPill: View {
         case .ship: "Ship with agent"
         case .resume: "Resume"
         case .stop: "Stop shepherding"
+        case .enableAutoFix: "Turn on auto-fix"
+        case .disableAutoFix: "Turn off auto-fix"
+        case .enableAutoMerge: "Turn on auto-merge"
+        case .disableAutoMerge: "Turn off auto-merge"
         }
     }
 }

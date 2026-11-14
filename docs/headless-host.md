@@ -348,8 +348,15 @@ attention and **Stop shepherding**.
 When no session shepherds a worktree's open pull request, the review drawer
 in the Mac's Changes tab offers **Shepherd with…**, listing the worktree's
 sessions the host drives. Picking one runs that session's Ship on the host,
-which binds the pull request to it. Starting a new session for it, and the
-auto-fix and auto-merge switches, stay in the app.
+which binds the pull request to it. Starting a new session for it stays in
+the app.
+
+While a session shepherds the pull request, the drawer shows its phase and
+the **Auto-fix** and **Auto-merge** switches, which the host applies to that
+shepherd, with **Resume**, **Stop shepherding** and **Move to…**, which hands
+the pull request to another of the worktree's sessions. This needs a host
+that serves `host.shepherds.toggles.v1`; an older one leaves the drawer to
+the session's toolbar pill.
 
 Whether a project's worktrees are gg stacks follows the host's settings, not
 the Mac's: the master switch, the project's mode, and gg on the host's `PATH`
