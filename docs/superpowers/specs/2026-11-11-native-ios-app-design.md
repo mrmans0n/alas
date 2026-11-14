@@ -252,6 +252,13 @@ Key rules it sets:
   build for iOS (new targets vs. adding iOS to existing ones).
 - Where the iOS target lives (same `project.yml` is the default) and its name.
 - Transcript rendering technology, provided it meets the performance bar.
+  Decided (2026-11-14): `UICollectionView` with `UIHostingConfiguration`
+  cells, restoring absolute scroll positions after layout for tail-follow,
+  prepends and expansion (`Mobile/Sources/Spike/CollectionTranscriptView.swift`).
+  In the simulator spike it passed every scenario except a ~0.5 s first
+  layout of a 2,000-line row; SwiftUI `LazyVStack` blanked on every append
+  and around huge rows. Not yet measured on a phone; benchmark once real
+  rows exist.
 - Markdown rendering and syntax highlighting approach on iOS.
 - Visual aid host (WKWebView with the same sandbox/CSP as `visual-aid.js`).
 - Relay implementation details, storage (KV/D1), and rate limits.

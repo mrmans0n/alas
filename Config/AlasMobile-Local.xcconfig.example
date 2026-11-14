@@ -1,0 +1,2 @@
+// Copy this file to Config/AlasMobile-Local.xcconfig (gitignored) to run the iOS app on a device.
+DEVELOPMENT_TEAM = YOURTEAMID

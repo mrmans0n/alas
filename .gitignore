@@ -39,3 +39,4 @@ default.profraw
 
 # Per-developer signing overrides for Debug builds.
 Config/Local.xcconfig
+Config/AlasMobile-Local.xcconfig
