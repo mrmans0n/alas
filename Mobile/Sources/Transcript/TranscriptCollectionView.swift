@@ -1,32 +1,59 @@
 import SwiftUI
 import UIKit
 
-/// Candidate A: a UICollectionView whose cells host SwiftUI rows.
-struct CollectionTranscriptView: UIViewControllerRepresentable {
-    let model: SpikeTranscriptModel
-    let onFirstLayout: () -> Void
+/// A UICollectionView whose cells host SwiftUI rows. It follows the tail while the reader is at
+/// the bottom, keeps the top visible row in place when older rows are prepended, and keeps a
+/// tapped row in place when it expands or collapses.
+struct TranscriptCollectionView: UIViewControllerRepresentable {
+    let items: [TranscriptItem]
+    @Binding var expanded: Set<String>
+    let canLoadOlder: Bool
+    let loadOlder: () -> Void
+    var image: (String) -> UIImage? = { _ in nil }
+    var onFirstLayout: () -> Void = {}
 
-    init(model: SpikeTranscriptModel, onFirstLayout: @escaping () -> Void) {
-        self.model = model
+    init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
+         loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
+         onFirstLayout: @escaping () -> Void = {})
+    {
+        self.items = items
+        _expanded = expanded
+        self.canLoadOlder = canLoadOlder
+        self.loadOlder = loadOlder
+        self.image = image
         self.onFirstLayout = onFirstLayout
     }
 
     func makeUIViewController(context: Context) -> TranscriptCollectionController {
-        TranscriptCollectionController(model: model, onFirstLayout: onFirstLayout)
+        TranscriptCollectionController(input: input)
     }
 
-    /// Reading the model in `sync` registers the observation that calls this again on change.
     func updateUIViewController(_ controller: TranscriptCollectionController, context: Context) {
+        controller.input = input
         controller.sync()
+    }
+
+    private var input: TranscriptCollectionController.Input {
+        .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
+              image: image, onFirstLayout: onFirstLayout)
     }
 }
 
 final class TranscriptCollectionController: UIViewController, UICollectionViewDelegate {
-    private let model: SpikeTranscriptModel
-    private let onFirstLayout: () -> Void
+    struct Input {
+        var items: [TranscriptItem]
+        var expanded: Binding<Set<String>>
+        var canLoadOlder: Bool
+        var loadOlder: () -> Void
+        var image: (String) -> UIImage?
+        var onFirstLayout: () -> Void
+    }
+
+    /// The latest values from SwiftUI; `sync()` brings the collection view in line with them.
+    var input: Input
     private var collectionView: PinningCollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
-    private var rowsByID: [String: SpikeRow] = [:]
+    private var itemsByID: [String: TranscriptItem] = [:]
     private var ids: [String] = []
     private var shownExpanded: Set<String> = []
     private var pinned = false
@@ -37,9 +64,8 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     /// A row held at a fixed distance from the top of the viewport until the reader scrolls.
     private var anchor: (id: String, screenY: CGFloat)?
 
-    init(model: SpikeTranscriptModel, onFirstLayout: @escaping () -> Void) {
-        self.model = model
-        self.onFirstLayout = onFirstLayout
+    init(input: Input) {
+        self.input = input
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -54,10 +80,10 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         collectionView.backgroundColor = .systemBackground
         collectionView.delegate = self
         let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [unowned self] cell, _, id in
-            guard let row = rowsByID[id] else { return }
+            guard let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
-                SpikeRowView(row: row, isExpanded: shownExpanded.contains(id)) { [unowned self] in
-                    model.expanded.formSymmetricDifference([id])
+                TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image) { [unowned self] in
+                    input.expanded.wrappedValue.formSymmetricDifference([id])
                     sync()
                 }
             }
@@ -75,25 +101,25 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         guard !pinned, collectionView.bounds.height > 0, !ids.isEmpty else { return }
         pinned = true
         scrollToBottom()
-        onFirstLayout()
+        input.onFirstLayout()
     }
 
-    /// Brings the collection view in line with the model. Paging and toggles call it directly so
-    /// their offset compensation lands in the same layout pass as the change; the later SwiftUI
-    /// update then finds nothing to do.
+    /// Brings the collection view in line with `input`. Toggles call it directly so their offset
+    /// compensation lands in the same layout pass as the change; the later SwiftUI update then
+    /// finds nothing to do. Only items whose message changed are reconfigured.
     func sync() {
-        let rows = model.rows
-        let expanded = model.expanded
-        let newIDs = rows.map(\.id)
+        let items = input.items
+        let expanded = input.expanded.wrappedValue
+        let newIDs = items.map(\.id)
         var reconfigure: [String] = []
-        for row in rows {
-            guard let old = rowsByID[row.id] else {
-                rowsByID[row.id] = row
+        for item in items {
+            guard let old = itemsByID[item.id] else {
+                itemsByID[item.id] = item
                 continue
             }
-            if old.revision != row.revision {
-                rowsByID[row.id] = row
-                reconfigure.append(row.id)
+            if old.message != item.message {
+                itemsByID[item.id] = item
+                reconfigure.append(item.id)
             }
         }
         let toggled = expanded.symmetricDifference(shownExpanded)
@@ -113,13 +139,16 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         }
 
         shownExpanded = expanded
-        reconfigure += toggled.filter { rowsByID[$0] != nil }
+        reconfigure += toggled.filter { itemsByID[$0] != nil }
         var snapshot = dataSource.snapshot()
         if newIDs != ids {
             snapshot = NSDiffableDataSourceSnapshot()
             snapshot.appendSections([0])
             snapshot.appendItems(newIDs)
             ids = newIDs
+            // Rows a snapshot replaced must not keep their old items for a later reuse of the id.
+            let live = Set(newIDs)
+            itemsByID = itemsByID.filter { live.contains($0.key) }
         }
         snapshot.reconfigureItems(reconfigure)
         applying = true
@@ -171,10 +200,9 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard pinned, scrollView.isTracking || scrollView.isDecelerating else { return }
         followsTail = distanceFromBottom <= 8
-        guard !applying, model.canLoadOlder,
+        guard !applying, input.canLoadOlder,
               scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 600 else { return }
-        model.loadOlder()
-        sync()
+        input.loadOlder()
     }
 
     private var distanceFromBottom: CGFloat {

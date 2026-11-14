@@ -8,30 +8,48 @@
 
 /* Begin PBXBuildFile section */
 		0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */; };
+		06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */; };
+		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
+		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
+		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
+		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
+		3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
+		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
 		73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD039065974B934F0D88642 /* FrameMeter.swift */; };
-		7650BED35947C8E4EFB25A34 /* CollectionTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */; };
-		9DEA36562A5134739052EBC3 /* MarkdownBlocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8250C9560021C379E369398E /* MarkdownBlocks.swift */; };
+		90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFC88463B7E1083C886AC282 /* WorktreesView.swift */; };
+		914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
 		C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */; };
-		D3DB8E846E8D84254E305E74 /* SpikeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36A12D26A237EF3A236956B /* SpikeRowView.swift */; };
 		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
+		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
 		EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */; };
+		FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8C41B3901C2155F0CB451B1 /* PairHostView.swift */; };
 		FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A0D3457CA4F83043146752 /* SpikeTranscript.swift */; };
+		FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372565FA395364953D615BC3 /* TranscriptScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
 		12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeScreen.swift; sourceTree = "<group>"; };
+		18514DE5113754F3401217CA /* TranscriptRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRowView.swift; sourceTree = "<group>"; };
+		1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptCollectionView.swift; sourceTree = "<group>"; };
 		27A0D3457CA4F83043146752 /* SpikeTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeTranscript.swift; sourceTree = "<group>"; };
 		36D78CAEBBC48223A4AB713D /* AlasMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasMobileApp.swift; sourceTree = "<group>"; };
+		372565FA395364953D615BC3 /* TranscriptScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptScreen.swift; sourceTree = "<group>"; };
 		4AEC4569F211161953B0F178 /* AlasMobile-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Release.xcconfig"; sourceTree = "<group>"; };
 		61BA32ECEBF540DADC9AC4A3 /* AlasMobile-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasMobile-Debug.xcconfig"; sourceTree = "<group>"; };
+		62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostHub.swift; sourceTree = "<group>"; };
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
-		8250C9560021C379E369398E /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
-		9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionTranscriptView.swift; sourceTree = "<group>"; };
-		D36A12D26A237EF3A236956B /* SpikeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRowView.swift; sourceTree = "<group>"; };
+		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
+		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
+		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
+		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
+		E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSession.swift; sourceTree = "<group>"; };
+		E827B4E05449D23196D8F673 /* WorktreeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRow.swift; sourceTree = "<group>"; };
 		E8A21515D98FB4756AD79B19 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneProtocol.swift; sourceTree = "<group>"; };
 		F555B239BFDC686B6F661BF3 /* AlasMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AlasMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -51,11 +69,8 @@
 		30FFFD63A2837F752463B155 /* Spike */ = {
 			isa = PBXGroup;
 			children = (
-				9AE6E3E3A312E8E9DBA49BC0 /* CollectionTranscriptView.swift */,
 				8AD039065974B934F0D88642 /* FrameMeter.swift */,
 				74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */,
-				8250C9560021C379E369398E /* MarkdownBlocks.swift */,
-				D36A12D26A237EF3A236956B /* SpikeRowView.swift */,
 				12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */,
 				27A0D3457CA4F83043146752 /* SpikeTranscript.swift */,
 			);
@@ -88,6 +103,18 @@
 			);
 			sourceTree = "<group>";
 		};
+		D4974DEDF2DA5907B0A209CC /* Transcript */ = {
+			isa = PBXGroup;
+			children = (
+				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
+				1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */,
+				18514DE5113754F3401217CA /* TranscriptRowView.swift */,
+				372565FA395364953D615BC3 /* TranscriptScreen.swift */,
+				E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */,
+			);
+			path = Transcript;
+			sourceTree = "<group>";
+		};
 		D95E4E9B0E600B48EF875905 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -106,12 +133,36 @@
 			path = ../Config;
 			sourceTree = "<group>";
 		};
+		E8C2655B49BA1922799A4F7E /* Hosts */ = {
+			isa = PBXGroup;
+			children = (
+				62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */,
+				C0E84291A6AA43082A7F684D /* HostStore.swift */,
+				D8C41B3901C2155F0CB451B1 /* PairHostView.swift */,
+				C859167B848F3A5C43EEE3D7 /* PeersView.swift */,
+				EF0D5EC4A60376B39CA4A885 /* PhoneProtocol.swift */,
+			);
+			path = Hosts;
+			sourceTree = "<group>";
+		};
+		ED52D1A93EE737EF94C55636 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				E827B4E05449D23196D8F673 /* WorktreeRow.swift */,
+				CFC88463B7E1083C886AC282 /* WorktreesView.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
 		F615C7A44BB3004E95410496 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				E8A21515D98FB4756AD79B19 /* Info.plist */,
 				86D2285A87658206EB81FAF0 /* App */,
+				E8C2655B49BA1922799A4F7E /* Hosts */,
+				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
+				D4974DEDF2DA5907B0A209CC /* Transcript */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -182,13 +233,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
-				7650BED35947C8E4EFB25A34 /* CollectionTranscriptView.swift in Sources */,
 				73EBA862C5723051512FE382 /* FrameMeter.swift in Sources */,
+				E77139BEB6A5145597C12214 /* HostHub.swift in Sources */,
+				3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */,
 				EC970213412064871D907E2A /* LazyStackTranscriptView.swift in Sources */,
-				9DEA36562A5134739052EBC3 /* MarkdownBlocks.swift in Sources */,
-				D3DB8E846E8D84254E305E74 /* SpikeRowView.swift in Sources */,
+				06C1EDC0F3ABD15E11DA59DD /* MarkdownBlocks.swift in Sources */,
+				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
+				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
+				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
+				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,
+				5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */,
+				FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */,
+				271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */,
+				06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */,
+				90418683B56D8FDCE540EB72 /* WorktreesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

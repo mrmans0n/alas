@@ -2,12 +2,6 @@ import AlasRemoteKit
 import Foundation
 import Observation
 
-struct SpikeRow: Identifiable, Equatable {
-    let id: String
-    var row: RemoteTranscriptRow
-    var revision: Int
-}
-
 /// Seeded so every run renders the same transcript.
 private struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
@@ -36,6 +30,11 @@ private func codeLines(_ count: Int, _ rng: inout SplitMix64) -> String {
     (0 ..< count).map { i in
         "    let value\(i) = \(words.randomElement(using: &rng)!)(\(Int.random(in: 0 ... 999, using: &rng)))"
     }.joined(separator: "\n")
+}
+
+private func encode(_ value: some Encodable) -> String {
+    // Encoding these plain value types cannot fail.
+    String(decoding: try! JSONEncoder().encode(value), as: UTF8.self)
 }
 
 enum SpikeTranscriptGenerator {
@@ -83,11 +82,6 @@ enum SpikeTranscriptGenerator {
         }
     }
 
-    private static func encode(_ value: some Encodable) -> String {
-        // Encoding these plain value types cannot fail.
-        String(decoding: try! JSONEncoder().encode(value), as: UTF8.self)
-    }
-
     private static func hugeCodeBlock(_ rng: inout SplitMix64) -> String {
         "A very long listing:\n\n```swift\n\(codeLines(2000, &rng))\n```"
     }
@@ -107,7 +101,7 @@ enum SpikeTranscriptGenerator {
 
 @MainActor @Observable
 final class SpikeTranscriptModel {
-    private(set) var rows: [SpikeRow]
+    private(set) var rows: [TranscriptItem]
     var expanded: Set<String> = []
     var isStreaming = false {
         didSet {
@@ -116,7 +110,7 @@ final class SpikeTranscriptModel {
         }
     }
 
-    @ObservationIgnored private var older: [SpikeRow]
+    @ObservationIgnored private var older: [TranscriptItem]
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var rng = SplitMix64(state: 42)
     @ObservationIgnored private var tickCount = 0
@@ -126,9 +120,7 @@ final class SpikeTranscriptModel {
     var canLoadOlder: Bool { !older.isEmpty }
 
     init(totalCount: Int, windowSize: Int = 200) {
-        let all = SpikeTranscriptGenerator.messages(count: totalCount, seed: 1).map {
-            SpikeRow(id: $0.stableId, row: RemoteTranscriptRow(message: $0), revision: 0)
-        }
+        let all = SpikeTranscriptGenerator.messages(count: totalCount, seed: 1).map(TranscriptItem.init(message:))
         let split = max(0, all.count - windowSize)
         older = Array(all[..<split])
         rows = Array(all[split...])
@@ -162,21 +154,23 @@ final class SpikeTranscriptModel {
             let call = ACPToolCall(
                 toolCallId: "stream\(streamed)", title: "Run stream", kind: "execute", status: "completed",
                 content: codeLines(Int.random(in: 5 ... 80, using: &rng), &rng))
-            if inFence, let last = rows.lastIndex(where: { if case .agent = $0.row { true } else { false } }),
-               case .agent(let text) = rows[last].row
-            {
-                rows[last].row = .agent(text + "\n```\n")
-                rows[last].revision += 1
-            }
+            if inFence { appendToLastAgent("\n```\n") }
             inFence = false
-            rows.append(SpikeRow(id: "s\(streamed)t", row: .toolCall(call), revision: 0))
-            rows.append(SpikeRow(id: "s\(streamed)a", row: .agent(""), revision: 0))
+            let index = (rows.last?.message.index ?? -1) + 1
+            rows.append(TranscriptItem(message: RemoteWireMessage(
+                stableId: "s\(streamed)t", kind: "toolCall", text: nil, json: encode(call), index: index)))
+            rows.append(TranscriptItem(message: RemoteWireMessage(
+                stableId: "s\(streamed)a", kind: "agent", text: "", json: nil, index: index + 1)))
             return
         }
-        guard let last = rows.lastIndex(where: { if case .agent = $0.row { true } else { false } }),
-              case .agent(let text) = rows[last].row else { return }
-        rows[last].row = .agent(text + nextChunk())
-        rows[last].revision += 1
+        appendToLastAgent(nextChunk())
+    }
+
+    private func appendToLastAgent(_ chunk: String) {
+        guard let last = rows.lastIndex(where: { $0.message.kind == "agent" }) else { return }
+        let old = rows[last].message
+        rows[last] = TranscriptItem(message: RemoteWireMessage(
+            stableId: old.stableId, kind: "agent", text: (old.text ?? "") + chunk, json: nil, index: old.index))
     }
 
     /// 6-40 characters; sometimes ends a line, sometimes opens or closes a code fence.

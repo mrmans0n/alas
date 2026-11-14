@@ -25,7 +25,7 @@ struct LazyStackTranscriptView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(model.rows) { row in
-                    SpikeRowView(row: row, isExpanded: model.expanded.contains(row.id)) {
+                    TranscriptRowView(item: row, isExpanded: model.expanded.contains(row.id)) {
                         model.expanded.formSymmetricDifference([row.id])
                     }
                 }
