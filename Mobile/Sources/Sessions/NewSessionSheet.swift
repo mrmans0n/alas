@@ -53,6 +53,10 @@ struct NewSessionSheet: View {
         }
         .interactiveDismissDisabled(model.isLocked)
         .task { model.start() }
+        // Opened with no Mac online: take the first one that connects.
+        .onChange(of: model.onlineHosts.map(\.id)) { _, ids in
+            if model.hostID == nil, let first = ids.first { model.select(host: first) }
+        }
     }
 
     private var form: some View {
@@ -118,10 +122,11 @@ struct NewSessionSheet: View {
                             }
                             Spacer()
                             if worktree.id == model.selectedWorktreeId {
-                                Image(systemName: "checkmark").foregroundStyle(.tint)
+                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
                             }
                         }
                     }
+                    .tint(.primary)
                 }
             }
         }
@@ -213,9 +218,10 @@ struct NewSessionSheet: View {
                             if agent.isDefault { Text("Default agent").font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer()
-                        if agent.id == model.agentId { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                        if agent.id == model.agentId { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                     }
                 }
+                .tint(.primary)
             }
         }
         if let agent = model.selectedAgent, let chips = model.chips {
