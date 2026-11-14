@@ -27,8 +27,9 @@ struct PairHostView: View {
         _method = State(initialValue: !prefilledOrigins.isEmpty ? .address : Self.canScan ? .scan : .link)
     }
 
+    /// Hidden when the camera is denied or restricted, where the scanner would be blank.
     private static var canScan: Bool {
-        DataScannerViewController.isSupported
+        DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     }
 
     var body: some View {

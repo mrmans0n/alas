@@ -2,12 +2,23 @@ import AlasRemoteKit
 import Foundation
 import Observation
 
-/// Removes a listener added with `HostHub.addListener`.
-struct ListenerToken {
-    fileprivate let onCancel: @MainActor () -> Void
+/// Removes a listener added with `HostHub.addListener`, on `cancel()` or
+/// when released, so a forgotten token cannot keep its handler alive.
+@MainActor
+final class ListenerToken {
+    private var onCancel: (@MainActor () -> Void)?
 
-    @MainActor func cancel() {
-        onCancel()
+    fileprivate init(onCancel: @escaping @MainActor () -> Void) {
+        self.onCancel = onCancel
+    }
+
+    func cancel() {
+        onCancel?()
+        onCancel = nil
+    }
+
+    isolated deinit {
+        cancel()
     }
 }
 
@@ -29,13 +40,7 @@ final class HostHub {
     init(store: HostStore = HostStore()) {
         self.store = store
         hosts = store.load()
-        for host in hosts {
-            // A host whose token is gone has no connection; it reads as
-            // unauthorized, which offers "Pair again".
-            if let token = store.token(for: host.id) {
-                connections[host.id] = makeConnection(for: host, token: token)
-            }
-        }
+        attachConnections()
     }
 
     func state(of id: UUID) -> PhoneConnection.State {
@@ -60,7 +65,8 @@ final class HostHub {
             hosts[index].name = name
             hosts[index].origins = allOrigins
             hosts[index].lastOrigin = result.origin
-            hosts[index].publicKey = result.publicKey
+            // A reply without a key must not drop an existing pin.
+            hosts[index].publicKey = result.publicKey ?? hosts[index].publicKey
             host = hosts[index]
             connections[host.id]?.disconnect()
         } else {
@@ -87,6 +93,7 @@ final class HostHub {
     }
 
     func connectAll() {
+        attachConnections()
         for connection in connections.values {
             connection.connect()
         }
@@ -107,6 +114,18 @@ final class HostHub {
         listeners[id, default: [:]][key] = handler
         return ListenerToken { [weak self] in
             self?.listeners[id]?[key] = nil
+        }
+    }
+
+    /// Creates the connection of any host that lacks one. Retried on every
+    /// `connectAll()`, so a token the Keychain could not read earlier (before
+    /// first unlock) is picked up. A host whose token stays unreadable reads
+    /// as unauthorized, which offers "Pair again".
+    private func attachConnections() {
+        for host in hosts where connections[host.id] == nil {
+            if let token = store.token(for: host.id) {
+                connections[host.id] = makeConnection(for: host, token: token)
+            }
         }
     }
 

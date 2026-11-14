@@ -27,7 +27,16 @@ struct HostStore {
 
     func load() -> [PairedHost] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([PairedHost].self, from: data)) ?? []
+        do {
+            return try JSONDecoder().decode([PairedHost].self, from: data)
+        } catch {
+            // Set the file aside so the next save cannot wipe hosts a later
+            // build (or a fix) could still read.
+            let aside = fileURL.appendingPathExtension("unreadable")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: fileURL, to: aside)
+            return []
+        }
     }
 
     func save(_ hosts: [PairedHost]) {
