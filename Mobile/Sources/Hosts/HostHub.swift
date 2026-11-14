@@ -8,7 +8,7 @@ import Observation
 final class ListenerToken {
     private var onCancel: (@MainActor () -> Void)?
 
-    fileprivate init(onCancel: @escaping @MainActor () -> Void) {
+    init(onCancel: @escaping @MainActor () -> Void) {
         self.onCancel = onCancel
     }
 

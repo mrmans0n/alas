@@ -16,6 +16,26 @@ struct TranscriptItem: Identifiable, Equatable {
     }
 }
 
+struct StagedImage: Identifiable {
+    let id: UUID
+    let data: Data
+    let mimeType: String
+    let thumbnail: UIImage
+}
+
+/// What the user is composing. Lives on the session so it outlives the screen and reconnects.
+struct ComposerDraft {
+    var text = ""
+    var images: [StagedImage] = []
+    var mentions: [RemoteMention] = []
+}
+
+enum QueueAction {
+    case forceSend(String), remove(String), retry(String), edit(String), clear
+    case move(String, to: String)
+    case promote(String)
+}
+
 /// A live subscription to one session's transcript on one host. Frames for the session go
 /// through the shared sync state machine; the scroller reads `items`.
 @MainActor @Observable
@@ -27,6 +47,19 @@ final class TranscriptSession {
     private(set) var hasSnapshot = false
     private(set) var isClosed = false
     private(set) var streamingState = "idle"
+    private(set) var config: RemoteSessionConfig?
+    /// Every queued item; views apply `RemoteQueueRules`.
+    private(set) var queue: [RemoteQueuedPrompt] = []
+    private(set) var canDrive = false
+    private(set) var permission: RemotePermissionPayload?
+    private(set) var question: RemoteQuestionPayload?
+    private(set) var plan: RemotePlanPayload?
+    private(set) var elicitation: RemoteElicitationPayload?
+    private(set) var isStopping = false
+    var rejection: String?
+    /// Candidates for the latest query only.
+    private(set) var mentionCandidates: [RemoteMention] = []
+    var draft = ComposerDraft()
 
     let hostID: UUID
     let sessionId: String
@@ -40,6 +73,9 @@ final class TranscriptSession {
     @ObservationIgnored private var hostWasOnline = false
     /// Bumped on open and close, so a watch left over from an earlier open stops.
     @ObservationIgnored private var watchGeneration = 0
+    @ObservationIgnored private var stopGeneration = 0
+    @ObservationIgnored private var lastSent: ComposerDraft?
+    @ObservationIgnored private var lastMentionQuery: String?
     @ObservationIgnored private var lastSummary: RemoteSessionSummary?
 
     private enum LoadedImage {
@@ -101,6 +137,93 @@ final class TranscriptSession {
         requestedImages = requestedImages.filter { images[$0] != nil }
     }
 
+    func send(intent: String) {
+        let text = draft.text
+        let attachments = draft.images.map {
+            RemoteAttachment(name: nil, mimeType: $0.mimeType, dataBase64: $0.data.base64EncodedString())
+        }
+        let mentions = Array(RemoteComposerText.liveMentions(draft.mentions, in: text)
+            .prefix(RemoteAttachmentLimits.maxMentionCount))
+        rejection = nil
+        drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions))
+        lastSent = draft
+        draft = ComposerDraft()
+    }
+
+    func stop() { hub.send(.stop(sessionId: sessionId), to: hostID) }
+
+    func takeOver() { hub.send(.takeOver(sessionId: sessionId), to: hostID) }
+
+    func queue(_ action: QueueAction) {
+        let id = sessionId
+        switch action {
+        case .forceSend(let item): drive(.queueForceSend(sessionId: id, itemId: item))
+        case .remove(let item): drive(.queueRemove(sessionId: id, itemId: item))
+        case .retry(let item): drive(.queueRetry(sessionId: id, itemId: item))
+        case .edit(let item): drive(.queueEdit(sessionId: id, itemId: item))
+        case .clear: drive(.queueClear(sessionId: id))
+        case .move(let item, let target): drive(.queueMove(sessionId: id, itemId: item, targetItemId: target))
+        case .promote(let item): drive(.queuePromote(sessionId: id, itemId: item))
+        }
+    }
+
+    func answerPermission(optionId: String) {
+        guard let permission else { return }
+        drive(.permissionDecision(sessionId: sessionId, requestId: permission.requestId, optionId: optionId, persistScope: nil))
+    }
+
+    func answerQuestion(_ answers: [RemoteQuestionAnswer]) {
+        guard let question else { return }
+        drive(.questionAnswer(sessionId: sessionId, requestId: question.requestId, answers: answers))
+    }
+
+    func answerPlan(action: String, reason: String?) {
+        guard let plan else { return }
+        drive(.planResponse(sessionId: sessionId, requestId: plan.requestId, action: action, reason: reason))
+    }
+
+    func answerElicitation(action: String, content: [String: ACPElicitationValue]?) {
+        guard let elicitation else { return }
+        drive(.elicitationResponse(sessionId: sessionId, requestId: elicitation.requestId, action: action, content: content))
+    }
+
+    func setModel(_ modelId: String) { drive(.setModel(sessionId: sessionId, modelId: modelId)) }
+
+    func setMode(_ modeId: String) { drive(.setMode(sessionId: sessionId, modeId: modeId)) }
+
+    func setAutoRun(_ enabled: Bool) {
+        state.applyOptimisticAutoRun(enabled)
+        publish()
+        drive(.setAutoRun(sessionId: sessionId, enabled: enabled))
+    }
+
+    func setConfigOption(_ configId: String, value: ACPConfigValue) {
+        if case .boolean(let on) = value {
+            state.applyOptimistic(configId: configId, value: on)
+            publish()
+        }
+        drive(.setConfigOption(sessionId: sessionId, configId: configId, value: value))
+    }
+
+    /// Not a lease verb: the host lets any follower rename.
+    func rename(_ title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        hub.send(.renameSession(sessionId: sessionId, title: title), to: hostID)
+    }
+
+    /// The caller debounces.
+    func searchMentions(_ query: String) {
+        lastMentionQuery = query
+        hub.send(.searchMentions(sessionId: sessionId, query: query), to: hostID)
+    }
+
+    /// Verbs that need the writer lease ask for it first when this phone does not hold it.
+    private func drive(_ message: PhoneClientMessage) {
+        if !state.canDrive { takeOver() }
+        hub.send(message, to: hostID)
+    }
+
     func loadOlder() {
         guard !fetchingOlder, let before = state.olderPageBeforeIndex,
               hub.state(of: hostID) == .online else { return }
@@ -159,6 +282,25 @@ final class TranscriptSession {
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
+        case .stopPending(let id) where id == sessionId:
+            isStopping = true
+            stopGeneration += 1
+            let generation = stopGeneration
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                if let self, generation == stopGeneration { isStopping = false }
+            }
+        case .promptRejected(let id, let reason) where id == sessionId:
+            if draft.text.isEmpty, draft.images.isEmpty, let lastSent { draft = lastSent }
+            lastSent = nil
+            rejection = reason ?? state.config?.agentIssue?.message ?? "The host refused this prompt."
+        case .queueEditRestored(let id, _, let text) where id == sessionId:
+            draft.text += draft.text.isEmpty ? text : "\n" + text
+        case .mentionCandidates(let id, let query, let candidates) where id == sessionId:
+            if query == lastMentionQuery { mentionCandidates = candidates }
+            return
+        case .error(let message, let id) where id == sessionId:
+            rejection = message
         default:
             break
         }
@@ -188,6 +330,14 @@ final class TranscriptSession {
         if hasSnapshot != (state.epoch != nil) { hasSnapshot = state.epoch != nil }
         if isClosed != state.isClosed { isClosed = state.isClosed }
         if streamingState != state.streamingState { streamingState = state.streamingState }
+        if streamingState == "idle", isStopping { isStopping = false }
+        if config != state.config { config = state.config }
+        if queue != state.queue { queue = state.queue }
+        if canDrive != state.canDrive { canDrive = state.canDrive }
+        if permission != state.pendingPermission { permission = state.pendingPermission }
+        if question != state.pendingQuestion { question = state.pendingQuestion }
+        if plan != state.pendingPlan { plan = state.pendingPlan }
+        if elicitation != state.pendingElicitation { elicitation = state.pendingElicitation }
         refreshCanLoadOlder()
     }
 

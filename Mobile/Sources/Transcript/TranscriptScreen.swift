@@ -3,13 +3,29 @@ import SwiftUI
 
 /// One session's live transcript.
 struct TranscriptScreen: View {
-    @State private var session: TranscriptSession
-
-    init(hub: HostHub, hostID: UUID, sessionId: String) {
-        _session = State(initialValue: TranscriptSession(hub: hub, hostID: hostID, sessionId: sessionId))
-    }
+    @Environment(SessionRegistry.self) private var registry
+    let hostID: UUID
+    let sessionId: String
+    @State private var held: (session: TranscriptSession, token: ListenerToken)?
 
     var body: some View {
+        Group {
+            if let session = held?.session {
+                content(session)
+            } else {
+                Color(.systemBackground)
+            }
+        }
+        .onAppear { acquire() }
+        .onDisappear { held = nil }
+    }
+
+    private func acquire() {
+        let (session, token) = registry.acquire(hostID: hostID, sessionId: sessionId)
+        held = (session, token)
+    }
+
+    private func content(_ session: TranscriptSession) -> some View {
         TranscriptContent(session: session)
             .safeAreaInset(edge: .bottom) {
                 if session.hasEnded {
@@ -23,13 +39,11 @@ struct TranscriptScreen: View {
             }
             .background(Color(.systemBackground))
             .navigationTitle(session.summary?.title ?? "Session")
-            .navigationSubtitle(subtitle)
+            .navigationSubtitle(subtitle(session))
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { session.open() }
-            .onDisappear { session.close() }
     }
 
-    private var subtitle: String {
+    private func subtitle(_ session: TranscriptSession) -> String {
         let status: String? = switch session.streamingState {
         case "streaming": "Working"
         case "awaitingPermission": "Needs permission"
