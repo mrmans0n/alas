@@ -23,14 +23,55 @@ extension AlasCoreContext {
         }
         // A branch off the naming scheme can still be a stack; gg answers.
         guard context.permitsCurrentStackQuery else { return HostGGStackRead(stack: nil, problem: nil) }
+        let isPaused = Self.ggOperationPaused(worktree)
         do {
             // Older gg builds lack `--no-refresh`; they read remote state too.
             let localOnly = !refresh && GGAvailability.shared.capabilities.localStackSnapshot
             let stack = try await GGService().currentStack(worktreePath: worktree.path.path, refreshRemote: !localOnly)
-            return HostGGStackRead(stack: stack, problem: nil)
+            return HostGGStackRead(stack: stack, problem: nil, isPaused: isPaused)
         } catch {
-            return HostGGStackRead(stack: nil, problem: (error as? GGServiceError)?.userMessage ?? error.localizedDescription)
+            let problem = (error as? GGServiceError)?.userMessage ?? error.localizedDescription
+            return HostGGStackRead(stack: nil, problem: problem, isPaused: isPaused)
         }
+    }
+
+    /// Runs `action` on `worktree`'s stack, in turn with the host's other gg
+    /// work on it. Sync and Rebase need the stack the Mac saw; Continue and
+    /// Abort, a paused operation.
+    func runGGStackAction(_ action: HostGGStackAction, stackName: String, in worktree: Worktree) async throws {
+        let request: GGMutationRequest = switch action {
+        case .sync: .sync
+        case .rebase: .rebase(target: nil)
+        case .continueOperation: .continueOperation
+        case .abortOperation: .abortOperation
+        }
+        switch action {
+        case .sync, .rebase:
+            let read = await ggStackRead(of: worktree, refresh: false)
+            guard read.stack?.name == stackName else {
+                throw HostError.failed(message: "The stack changed on the host. Review it and try again.")
+            }
+        case .continueOperation, .abortOperation:
+            guard Self.ggOperationPaused(worktree) else {
+                throw HostError.failed(message: "No gg operation is paused on the host.")
+            }
+        }
+        let response = await serializedPublish(worktreeID: worktree.id) {
+            let state = GGStackActionState()
+            try await self.runShepherdGGMutation(request, confirmedAgainst: nil, worktreeID: worktree.id, actionState: state)
+            if action == .sync, state.syncHasTerminalFailure {
+                throw GGMutationError.syncTerminalFailure(message: state.lastError ?? "GG sync failed.")
+            }
+            return ""
+        }
+        if case .error(let message) = response { throw HostError.failed(message: message) }
+    }
+
+    /// A gg operation Alas started is paused on a conflict, as the app's
+    /// stack drawer tells it.
+    static func ggOperationPaused(_ worktree: Worktree) -> Bool {
+        GGStackGate.operationInProgress(repoPath: worktree.path.path)
+            && GGStackGate.alasGGOperationInProgress(repoPath: worktree.path.path)
     }
 
     /// Why a worktree the project means as a stack shows none; nil when it

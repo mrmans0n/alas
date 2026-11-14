@@ -263,7 +263,7 @@ extension AlasCoreContext {
     /// it, minus the drawer's refreshes. Refused while a checkpoint restore
     /// is pending recovery.
     // ponytail: one coordinator per call; stack_ship already serializes per worktree
-    private func runShepherdGGMutation(
+    func runShepherdGGMutation(
         _ request: GGMutationRequest,
         confirmedAgainst expected: GGStackIdentity?,
         worktreeID: String,

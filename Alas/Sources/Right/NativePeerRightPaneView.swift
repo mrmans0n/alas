@@ -24,6 +24,7 @@ struct NativePeerRightPaneView: View {
     /// The selected worktree's gg stack on the host; nil when it isn't one.
     @State private var ggStack: HostGGStackRead?
     @State private var ggStackRefreshing = false
+    @State private var ggStackAction: HostGGStackAction?
     @State private var gitError: String?
     @State private var pendingDiscard: PendingDiscard?
     @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
@@ -141,6 +142,7 @@ struct NativePeerRightPaneView: View {
             creatingCheckpoint = false
             checkpointRestorePreview = nil
             ggStack = nil
+            ggStackAction = nil
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -399,14 +401,22 @@ struct NativePeerRightPaneView: View {
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
                 .frame(maxHeight: .infinity, alignment: .top)
-                if let ggStack, ggStack.stack != nil || ggStack.problem != nil {
-                    NativePeerGGStackDrawer(read: ggStack, isRefreshing: ggStackRefreshing) {
-                        Task { @MainActor in
-                            ggStackRefreshing = true
-                            await readGGStack(refresh: true)
-                            ggStackRefreshing = false
-                        }
-                    }
+                if let ggStack, ggStack.stack != nil || ggStack.problem != nil || ggStack.isPaused == true {
+                    NativePeerGGStackDrawer(
+                        read: ggStack,
+                        isRefreshing: ggStackRefreshing,
+                        onRefresh: {
+                            Task { @MainActor in
+                                ggStackRefreshing = true
+                                await readGGStack(refresh: true)
+                                ggStackRefreshing = false
+                            }
+                        },
+                        actions: gitTarget.flatMap { client.hosts?.servesGGStackActions(serverId: $0.serverId) } == true
+                            ? NativePeerGGStackDrawer.offeredActions(for: ggStack) : [],
+                        runningAction: ggStackAction,
+                        onAction: { runGGStackAction($0, stackName: ggStack.stack?.name ?? "") }
+                    )
                 } else if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
@@ -781,6 +791,18 @@ struct NativePeerRightPaneView: View {
 
     /// The git target's review status, read again on the host. A refusal
     /// reads as no status.
+    private func runGGStackAction(_ action: HostGGStackAction, stackName: String) {
+        guard ggStackAction == nil, let gitTarget, let hosts = client.hosts else { return }
+        ggStackAction = action
+        Task { @MainActor in
+            _ = await hosts.runGGStackAction(action, stackName: stackName, in: gitTarget.worktree, serverId: gitTarget.serverId)
+            ggStackAction = nil
+            // A pause, a pushed stack or a rebase all show in both.
+            client.pollChanges()
+            await readGGStack(refresh: true)
+        }
+    }
+
     private func readGGStack(refresh: Bool) async {
         guard let gitTarget, let hosts = client.hosts, hosts.gitFollowKey != nil else { return }
         let key = gitTargetKey

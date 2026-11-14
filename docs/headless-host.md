@@ -355,7 +355,10 @@ A host worktree whose branch is a gg stack by the host's settings shows the
 stack in the Mac's Changes tab instead of the pull request drawer: its entries
 with their pull requests, CI and approvals, read again when you refresh. When
 gg is missing on the host, or has no branch username, the drawer says so.
-Syncing, landing and reordering the stack still happen on the host, through an
+Its **Sync** pushes the stack and opens or updates its pull requests, and
+**Rebase** moves it onto its base when it is behind. An operation paused on
+conflicts offers **Continue** and **Abort** once they are resolved in the
+changes list. Landing and reordering still happen on the host, through an
 agent or a shell.
 
 ## Start at login
