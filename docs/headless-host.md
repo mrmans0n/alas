@@ -343,6 +343,12 @@ the session the same prompt the app's Ship does, so the agent opens the pull
 request or ships the gg stack and the host shepherds it. It also offers
 **Resume** for a shepherd that needs attention and **Stop shepherding**.
 
+Whether a project's worktrees are gg stacks follows the host's settings, not
+the Mac's: the master switch, the project's mode, and gg on the host's `PATH`
+when it starts. A paired Mac sets the project's mode from the project's
+context menu in the sidebar, under **Stacked Diffs Mode**: Off, Auto (when the
+repository has `.git/gg/config.json`) or On.
+
 ## Start at login
 
 ```bash
