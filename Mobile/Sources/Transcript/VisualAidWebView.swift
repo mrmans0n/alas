@@ -199,7 +199,11 @@ final class VisualAidPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
 
     func start() {
-        guard peerConnectionDisabled else { return fail(.sandbox) }
+        guard peerConnectionDisabled else {
+            // A turn later: this runs inside `makeUIView`, where the failure must not update SwiftUI state.
+            Task { fail(.sandbox) }
+            return
+        }
         Task { await load() }
     }
 

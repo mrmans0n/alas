@@ -11,6 +11,25 @@ struct VisualAidCard: View {
     /// Sandbox and crash failures are this cell's; a blocked page is remembered on the session.
     @State private var failure: VisualAidPage.Failure?
     @State private var generation = 0
+    /// Crashes reloaded without asking; iOS often ends a page's process while the app is away.
+    @State private var autoReloads = 0
+    /// The answer draft, held here so a pick redraws the card at once and a keystroke redraws only
+    /// this card; written through to the session so it survives cell reuse.
+    @State private var selected: [String]
+    @State private var note: String
+
+    /// As the Mac's visual-aid page.
+    private static let maxAutoReloads = 3
+    /// Theme variables per appearance; resolving every color on each body pass is wasted work.
+    @MainActor private static var themes: [String: [String: String]] = [:]
+
+    init(aid: ACPVisualAid, session: TranscriptSession) {
+        self.aid = aid
+        self.session = session
+        let saved = session.visualAids[aid.id]
+        _selected = State(initialValue: saved?.selected ?? [])
+        _note = State(initialValue: saved?.note ?? "")
+    }
 
     private var state: VisualAidCardState { session.visualAids[aid.id] ?? .init() }
 
@@ -42,10 +61,7 @@ struct VisualAidCard: View {
             let id = aid.id
             VisualAidWebView(
                 visual: aid,
-                themeVariables: VisualAidWebView.themeVariables(UITraitCollection { traits in
-                    traits.userInterfaceStyle = colorScheme == .dark ? .dark : .light
-                    traits.preferredContentSizeCategory = UIContentSizeCategory(dynamicTypeSize)
-                }),
+                themeVariables: themeVariables,
                 selected: shownSelection,
                 linksEnabled: RemoteVisualAidWebPolicy.allowsExternalLinks(hasQuestion: aid.question != nil, answer: aid.answer),
                 onHeight: { [session] height in
@@ -58,11 +74,14 @@ struct VisualAidCard: View {
                     guard let question = aid.question, aid.answer == nil, session.visualAids[id]?.pendingRequestId == nil,
                           question.options.contains(where: { $0.id == option })
                     else { return }
-                    session.toggleVisualAidChoice(id, option: option, allowMultiple: question.allowMultiple)
+                    toggle(option, allowMultiple: question.allowMultiple)
                 },
                 onFailure: { [session] failure in
                     if failure == .blocked {
                         session.visualAids[id, default: .init()].blocked = true
+                    } else if failure == .stopped, autoReloads < Self.maxAutoReloads {
+                        autoReloads += 1
+                        generation += 1
                     } else {
                         self.failure = failure
                     }
@@ -75,7 +94,23 @@ struct VisualAidCard: View {
 
     private var shownSelection: [String] {
         if case .answered(let ids, _, _) = aid.answer { return ids }
-        return state.selected
+        return selected
+    }
+
+    private var themeVariables: [String: String] {
+        let key = "\(colorScheme)-\(dynamicTypeSize)"
+        if let cached = Self.themes[key] { return cached }
+        let made = VisualAidWebView.themeVariables(UITraitCollection { traits in
+            traits.userInterfaceStyle = colorScheme == .dark ? .dark : .light
+            traits.preferredContentSizeCategory = UIContentSizeCategory(dynamicTypeSize)
+        })
+        Self.themes[key] = made
+        return made
+    }
+
+    private func toggle(_ option: String, allowMultiple: Bool) {
+        session.toggleVisualAidChoice(aid.id, option: option, allowMultiple: allowMultiple)
+        selected = session.visualAids[aid.id]?.selected ?? []
     }
 
     private func notice(_ text: String, reload: Bool = false) -> some View {
@@ -112,21 +147,19 @@ struct VisualAidCard: View {
         let state = state
         let pending = state.pendingRequestId != nil
         let canSubmit = !pending && RemoteVisualAidAnswer.answer(
-            to: question, action: "answer", selectedOptionIds: state.selected, note: state.note) != nil
+            to: question, action: "answer", selectedOptionIds: selected, note: note) != nil
         return VStack(alignment: .leading, spacing: 10) {
             Text(question.prompt).font(.subheadline.weight(.semibold))
             ForEach(question.options, id: \.id) { option in
-                optionRow(question, option, on: state.selected.contains(option.id))
+                optionRow(question, option, on: selected.contains(option.id))
             }
-            TextField("Add a note (optional)", text: Binding(
-                get: { session.visualAids[aid.id]?.note ?? "" },
-                set: { session.visualAids[aid.id, default: .init()].note = $0 }), axis: .vertical)
+            TextField("Add a note (optional)", text: $note, axis: .vertical)
                 .lineLimit(1...4)
                 .padding(10)
                 .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
             HStack(spacing: 8) {
                 Button(pending ? "Sending…" : "Submit") {
-                    session.answerVisualAid(aid.id, action: "answer", selectedOptionIds: state.selected, note: state.note)
+                    session.answerVisualAid(aid.id, action: "answer", selectedOptionIds: selected, note: note)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canSubmit)
@@ -140,12 +173,13 @@ struct VisualAidCard: View {
             }
         }
         .disabled(pending)
+        .onChange(of: note) { session.visualAids[aid.id, default: .init()].note = note }
     }
 
     private func optionRow(_ question: ACPVisualAid.Question, _ option: ACPVisualAid.Option, on: Bool) -> some View {
         let symbol = question.allowMultiple ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle")
         return Button {
-            session.toggleVisualAidChoice(aid.id, option: option.id, allowMultiple: question.allowMultiple)
+            toggle(option.id, allowMultiple: question.allowMultiple)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: symbol).foregroundStyle(on ? Color.accentColor : .secondary)
