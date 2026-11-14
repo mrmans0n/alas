@@ -49,8 +49,13 @@ import Testing
         await #expect(throws: RemotePairingError.originNotAllowed) { try await pair(denied, [a]) }
     }
 
-    @Test func reportsUnreachableWhenNothingAnswers() async {
-        let fake = Fake([a: .failure(URLError(.cannotConnectToHost))])
+    @Test(arguments: [
+        Result<(Int, String), URLError>.failure(URLError(.cannotConnectToHost)),
+        .success((200, "{\"token\":\"\"}")),
+        .success((200, "not json")),
+    ])
+    func reportsUnreachableWhenNothingUsableAnswers(_ answer: Result<(Int, String), URLError>) async {
+        let fake = Fake([a: answer])
         await #expect(throws: RemotePairingError.unreachable) { try await pair(fake, [a]) }
     }
 

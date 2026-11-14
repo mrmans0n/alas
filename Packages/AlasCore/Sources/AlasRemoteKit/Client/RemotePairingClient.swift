@@ -37,6 +37,7 @@ public struct RemotePairingClient: Sendable {
     public static func urlSession(timeout: TimeInterval) -> Transport {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout * 2
         let session = URLSession(configuration: configuration)
         return { request in
             let (data, response) = try await session.data(for: request)
@@ -58,17 +59,21 @@ public struct RemotePairingClient: Sendable {
         let body = try? JSONEncoder().encode(["code": code, "deviceName": deviceName])
         var denied = false
         for origin in origins where !Self.isLoopback(origin) {
+            if Task.isCancelled { throw .unreachable }
             guard let url = URL(string: origin + "/pair") else { continue }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
-            guard let (data, response) = try? await transport(request) else { continue }
+            guard let (data, response) = try? await transport(request) else {
+                if Task.isCancelled { throw .unreachable }
+                continue
+            }
             switch response.statusCode {
             case 401: throw .codeRejected
             case 403: denied = true
             case 200..<300:
-                if let reply = try? JSONDecoder().decode(Reply.self, from: data) {
+                if let reply = try? JSONDecoder().decode(Reply.self, from: data), !reply.token.isEmpty {
                     return RemotePairingResult(
                         origin: origin, token: reply.token, serverId: reply.serverId,
                         name: reply.name, publicKey: reply.publicKey)
