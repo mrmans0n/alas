@@ -56,6 +56,7 @@ final class TranscriptSession {
     private(set) var plan: RemotePlanPayload?
     private(set) var elicitation: RemoteElicitationPayload?
     private(set) var isStopping = false
+    @ObservationIgnored private var clearPending = false
     private(set) var hasCancellableBackgroundWork = false
     var rejection: String?
     /// Candidates for the latest query only.
@@ -353,11 +354,34 @@ final class TranscriptSession {
         if config != state.config { config = state.config }
         if queue != state.queue { queue = state.queue }
         if canDrive != state.canDrive { canDrive = state.canDrive }
-        if permission != state.pendingPermission { permission = state.pendingPermission }
-        if question != state.pendingQuestion { question = state.pendingQuestion }
-        if plan != state.pendingPlan { plan = state.pendingPlan }
-        if elicitation != state.pendingElicitation { elicitation = state.pendingElicitation }
+        var holding = settle(\.permission, state.pendingPermission)
+        holding = settle(\.question, state.pendingQuestion) || holding
+        holding = settle(\.plan, state.pendingPlan) || holding
+        holding = settle(\.elicitation, state.pendingElicitation) || holding
+        if holding, !clearPending {
+            clearPending = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                clearPending = false
+                permission = state.pendingPermission
+                question = state.pendingQuestion
+                plan = state.pendingPlan
+                elicitation = state.pendingElicitation
+            }
+        }
         refreshCanLoadOlder()
+    }
+
+    /// A request that resolves is kept briefly: on a resubscribe or take-over the host resolves
+    /// it and re-sends it in separate frames, and a card that vanished between them would lose
+    /// what the user typed. Returns true while a resolved request is still being held.
+    private func settle<T: Equatable>(_ shown: ReferenceWritableKeyPath<TranscriptSession, T?>, _ new: T?) -> Bool {
+        if let new {
+            if self[keyPath: shown] != new { self[keyPath: shown] = new }
+            return false
+        }
+        return self[keyPath: shown] != nil
     }
 
     /// Decoded and downscaled off the main actor, once on arrival, so neither the frame handler

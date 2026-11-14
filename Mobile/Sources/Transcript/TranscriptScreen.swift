@@ -30,7 +30,7 @@ struct TranscriptScreen: View {
             .safeAreaInset(edge: .bottom) {
                 if !session.hasEnded {
                     VStack(spacing: 0) {
-                        RequestCard(session: session).padding(.horizontal, 12).padding(.bottom, 4)
+                        RequestCard(session: session).environment(\.cardFloats, true).padding(.horizontal, 12).padding(.bottom, 4)
                         ComposerBar(session: session)
                     }
                 } else {

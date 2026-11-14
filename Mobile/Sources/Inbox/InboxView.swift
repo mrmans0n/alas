@@ -9,14 +9,19 @@ struct InboxView: View {
 
     var body: some View {
         let entries = InboxModel.entries(in: hub)
+        // An answered request leaves at once; the summary only catches up with the next list.
+        let shown = entries.filter { entry in
+            guard let session = model.sessions[entry.route], session.hasSnapshot else { return true }
+            return session.hasPendingRequest
+        }
         NavigationStack(path: $path) {
             Group {
-                if entries.isEmpty {
+                if shown.isEmpty {
                     ContentUnavailableView("Nothing needs you right now.", systemImage: "tray")
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 20) {
-                            ForEach(entries) { entry in section(entry) }
+                            ForEach(shown) { entry in section(entry) }
                         }
                         .padding(16)
                     }
@@ -53,7 +58,7 @@ struct InboxView: View {
                 Text("Waiting for the request…")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 64)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .modifier(CardSurface(floats: false))
             }
         }
     }

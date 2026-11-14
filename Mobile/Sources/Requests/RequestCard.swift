@@ -7,6 +7,11 @@ extension TranscriptSession {
     }
 }
 
+extension EnvironmentValues {
+    /// True when the card floats above the composer (glass); false inside a list (flat).
+    @Entry var cardFloats = false
+}
+
 /// The pending request of a session, one card per kind. Shown above the composer and in the
 /// Inbox. Per-card state lives in the kind's view and is keyed by request id, so a request the
 /// host re-sends right after resolving it (resubscribe, take-over) keeps what was typed.
@@ -38,6 +43,7 @@ struct CardChrome<Content: View>: View {
     let kind: String
     let title: String
     @ViewBuilder var content: Content
+    @Environment(\.cardFloats) private var floats
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -57,7 +63,20 @@ struct CardChrome<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .modifier(CardSurface(floats: floats))
+    }
+}
+
+struct CardSurface: ViewModifier {
+    let floats: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        if floats {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(Color(.secondarySystemBackground), in: shape)
+        }
     }
 }
 
@@ -101,13 +120,18 @@ private struct PermissionCard: View {
                     .background(.quaternary, in: Capsule())
             }
             if let command = payload.commandSummary, !command.isEmpty {
-                Text(command)
+                // Never truncated: a long command scrolls instead.
+                let text = Text(command)
                     .font(.system(.footnote, design: .monospaced))
-                    .lineLimit(8)
                     .textSelection(.enabled)
-                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemBackground).opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                ViewThatFits(in: .vertical) {
+                    text
+                    ScrollView { text }.frame(height: 170)
+                }
+                .frame(maxHeight: 170)
+                .padding(12)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             if let reason = payload.reason, !reason.isEmpty {
                 Text(reason).font(.subheadline).foregroundStyle(.secondary)
