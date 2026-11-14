@@ -221,3 +221,13 @@ struct AppConfigDecodingTests {
         #expect(Set(saved.agents.registry.map(\.registryID)) == Set((0 ..< writers).map { "agent-\($0)" }))
     }
 }
+
+extension AppConfigDecodingTests {
+    @Test func machinesSurviveConfigRoundTrip() throws {
+        var config = AppConfig.defaults
+        config.machines = [Machine(destination: "mini", label: "Mac mini", projectsFolder: "~/src")]
+        let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(reloaded.machines == config.machines)
+        #expect(try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8)).machines.isEmpty)
+    }
+}

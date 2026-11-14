@@ -111,6 +111,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var contentMaterialOverrides: [String: ContentMaterialOverride] = [:]
     public var shortcutOverrides: [String: ShortcutBinding?] = [:]
     public var repositoryCloneRootPath: String = ""
+    /// SSH machines offered as places to run new worktrees.
+    public var machines: [Machine] = []
 
     public struct Remote: Codable, Equatable, Sendable {
         public var enabled: Bool = false
@@ -808,7 +810,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, density: UIDensity = .comfortable, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, deviceAgentsEnabled: Bool = false) {
+    public init(themeId: String, accent: String, density: UIDensity = .comfortable, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "", experimentalACP2Enabled: Bool = false, deviceAgentsEnabled: Bool = false, machines: [Machine] = []) {
         self.themeId = themeId
         self.accent = accent
         self.density = density
@@ -846,6 +848,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.contentMaterialOverrides = contentMaterialOverrides
         self.shortcutOverrides = shortcutOverrides
         self.repositoryCloneRootPath = repositoryCloneRootPath
+        self.machines = machines
     }
 }
 
@@ -949,7 +952,8 @@ extension AppConfig {
              sidebarChromeOverrides,
              contentMaterialOverrides,
              shortcutOverrides,
-             repositoryCloneRootPath
+             repositoryCloneRootPath,
+             machines
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -1237,6 +1241,7 @@ extension AppConfig {
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
         repositoryCloneRootPath =
             (try? c.decode(String.self, forKey: .repositoryCloneRootPath)) ?? ""
+        machines = (try? c.decode([Machine].self, forKey: .machines)) ?? []
         migrateLegacyFindAndReplaceShortcutOverride()
         migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
