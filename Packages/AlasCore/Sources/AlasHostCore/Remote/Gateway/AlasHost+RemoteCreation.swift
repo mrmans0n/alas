@@ -100,7 +100,16 @@ extension AlasHost {
         }
         guard !project.isFolder else { return refused(AlasCoreContext.folderWorktreeCreationMessage) }
         guard core.environment.admitsAgent(request.agentID, remoteHost: project.host) else { return refused() }
-        guard case .valid = GitNameValidator.validateBranchName(request.branch) else { return refused() }
+        // Clients send the typed name; the branch follows this Mac's naming
+        // settings, as it does in its own New Worktree dialog.
+        let worktreeSettings = core.environment.configuration().worktrees
+        let branch = WorktreeBranchName.compose(
+            name: request.branch,
+            prefix: worktreeSettings.branchPrefix,
+            globalTemplate: worktreeSettings.branchTemplate,
+            projectTemplate: project.worktreeBranchTemplate
+        )
+        guard case .valid = GitNameValidator.validateBranchName(branch) else { return refused() }
         let branches: [String]
         do {
             branches = try await core.branches(of: project)
@@ -112,7 +121,7 @@ extension AlasHost {
 
         let destination: URL
         do {
-            let prepared = try await core.preparedCreationDestination(project: project, branch: request.branch)
+            let prepared = try await core.preparedCreationDestination(project: project, branch: branch)
             destination = prepared.destination
             if prepared.exists { return refused("A worktree already exists at this path.") }
         } catch {
@@ -131,7 +140,7 @@ extension AlasHost {
             // The worktree checks out the local branch when it exists
             // (`WorktreeService.add`), and is otherwise created from base.
             let ref = try await AlasCoreContext.firstExistingRef(
-                ["refs/heads/\(request.branch)", "refs/heads/\(request.base)", "refs/remotes/\(request.base)"], repoPath: repoPath
+                ["refs/heads/\(branch)", "refs/heads/\(request.base)", "refs/remotes/\(request.base)"], repoPath: repoPath
             ) ?? request.base
             gate = try await core.gateRepoHook(event: .worktreeCreate, project: project, consent: request.repoHook) {
                 await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: ref, repoPath: repoPath, host: project.host)
@@ -141,7 +150,7 @@ extension AlasHost {
         }
         if case .needsApproval(let hook) = gate { return .needsRepoHookApproval(hook) }
 
-        var creation = WorktreeCreateRequest(projectID: project.id, base: request.base, branch: request.branch, destination: destination)
+        var creation = WorktreeCreateRequest(projectID: project.id, base: request.base, branch: branch, destination: destination)
         creation.destinationAlreadyPrepared = true
         creation.launchSurface = .delegated
         creation.asksAboutRepoHooks = false

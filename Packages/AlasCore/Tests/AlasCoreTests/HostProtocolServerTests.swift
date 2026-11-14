@@ -2360,7 +2360,7 @@ struct HostProtocolServerTests {
             Issue.record("\(result)")
             return
         }
-        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature" })
+        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature/topic" })
         #expect(environment.asks == 0)
         #expect(!FileManager.default.fileExists(atPath: created.path.appendingPathComponent("hook-ran").path))
         let worktreeNotices = await fixture.worktreeNotices(of: subscription)
@@ -2375,7 +2375,7 @@ struct HostProtocolServerTests {
 
         #expect(await fixture.createForPeer(.ask)
             == .needsRepoHookApproval(PeerRepoHook(event: .worktreeCreate, text: "touch hook-ran\n", hash: hash)))
-        #expect(!fixture.core.projects.worktrees(projectId: fixture.projectID).contains { $0.branch == "feature" })
+        #expect(!fixture.core.projects.worktrees(projectId: fixture.projectID).contains { $0.branch == "feature/topic" })
     }
 
     /// Only the script now on disk can be approved; a stale hash is asked again.
@@ -2393,7 +2393,7 @@ struct HostProtocolServerTests {
                 Issue.record("\(result)")
                 return
             }
-            let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature" })
+            let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature/topic" })
             #expect(FileManager.default.fileExists(atPath: created.path.appendingPathComponent("hook-ran").path))
             #expect(try String(contentsOf: fixture.projectsFile, encoding: .utf8).contains(hash))
         } else {
@@ -2409,7 +2409,9 @@ struct HostProtocolServerTests {
     /// what the worktree checks out: it is created from base, so the peer
     /// is shown base's hook.
     @Test func aRemoteTrackingBranchNameIsShownTheBasesHook() async throws {
-        let fixture = try await RepoFixture(environment: AskingEnvironment())
+        let environment = AskingEnvironment()
+        environment.config.worktrees.branchPrefix = ""
+        let fixture = try await RepoFixture(environment: environment)
         defer { fixture.tearDown() }
         let hash = try await fixture.commitHook(.worktreeCreate, "touch main-ran\n")
         let (repo, _) = try await fixture.mainWorktree()
@@ -2419,6 +2421,33 @@ struct HostProtocolServerTests {
 
         #expect(await fixture.createForPeer(.ask, branch: "origin/topic")
             == .needsRepoHookApproval(PeerRepoHook(event: .worktreeCreate, text: "touch main-ran\n", hash: hash)))
+    }
+
+    /// A peer sends the typed name; the branch follows this host's naming
+    /// settings, as its own New Worktree dialog does.
+    @Test(arguments: [
+        (nil, nil, "feature/topic"),
+        ("team/{name}", nil, "team/topic"),
+        ("team/{name}", "repo/{name}", "repo/topic"),
+    ] as [(String?, String?, String)])
+    func aPeersBranchFollowsTheHostsNaming(globalTemplate: String?, projectTemplate: String?, expected: String) async throws {
+        let environment = AskingEnvironment()
+        environment.config.worktrees.branchTemplate = globalTemplate
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        if let projectTemplate {
+            fixture.core.projects.updateProject(id: fixture.projectID, update: ProjectUpdate(
+                name: "repo", icon: .default(), startupScripts: .defaults, worktreeBranchTemplate: projectTemplate
+            ))
+        }
+
+        let result = await fixture.createForPeer(nil)
+
+        guard case .success = result else {
+            Issue.record("\(result)")
+            return
+        }
+        #expect(fixture.core.projects.worktrees(projectId: fixture.projectID).contains { $0.branch == expected })
     }
 
     /// With fetch-before-create, the hook is read after the base is fetched:
@@ -2460,7 +2489,7 @@ struct HostProtocolServerTests {
             Issue.record("\(result)")
             return
         }
-        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature" })
+        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature/topic" })
         #expect(environment.asks == 0)
         for file in ["hook-ran", "other-ran"] {
             #expect(!FileManager.default.fileExists(atPath: created.path.appendingPathComponent(file).path))
@@ -3118,10 +3147,11 @@ struct HostProtocolServerTests {
             return RepoHookTrust.hash(event: event, bytes: Data(script.utf8))
         }
 
-        /// Creates `feature` from `main` for a paired Mac, inside the fixture
-        /// rather than under the real home, with a stub session.
+        /// Creates `topic` from `main` for a paired Mac, inside the fixture
+        /// rather than under the real home, with a stub session. The branch
+        /// gets the host's naming, `feature/topic` by default.
         func createForPeer(
-            _ consent: RepoHookConsent?, base: String = "main", branch: String = "feature"
+            _ consent: RepoHookConsent?, base: String = "main", branch: String = "topic"
         ) async -> RemoteCreateWorktreeSessionResult {
             core.worktreeDestinationPreparer = { [root] _, destination in
                 root.appendingPathComponent(destination.lastPathComponent)

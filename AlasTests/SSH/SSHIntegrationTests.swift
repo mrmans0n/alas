@@ -92,6 +92,8 @@ struct SSHIntegrationTests {
         let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.config.worktrees.branchPrefix = ""
+        state.config.worktrees.branchTemplate = nil
         state.agentRegistry = AgentRegistry(
             builtinState: [
                 "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),

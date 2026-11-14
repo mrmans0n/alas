@@ -1290,8 +1290,8 @@ struct RemoteAppStateAccessTests {
         state.core.sessionAttachScheduler = { _, _ in }
 
         let result = await createRemoteWorktreeSession(
-            state, projectId: project.id, base: "main", branch: "feature/phone", agentId: "claude",
-            caller: .remotePeer(deviceID: "phone")
+            state, projectId: project.id, base: "main", branch: "phone", agentId: "claude",
+            caller: .remotePeer(deviceID: "phone"), branchPrefix: "feature/"
         )
 
         guard case let .success(summary) = result else {
@@ -2540,9 +2540,14 @@ struct RemoteAppStateAccessTests {
         return result
     }
 
+    /// `branch` is the name a client types; the host composes it with
+    /// `branchPrefix`, pinned so the user's own settings don't leak in.
     private func createRemoteWorktreeSession(
-        _ state: AppState, projectId: String, base: String, branch: String, agentId: String, caller: HostCaller = .app
+        _ state: AppState, projectId: String, base: String, branch: String, agentId: String, caller: HostCaller = .app,
+        branchPrefix: String = ""
     ) async -> RemoteCreateWorktreeSessionResult {
+        state.config.worktrees.branchPrefix = branchPrefix
+        state.config.worktrees.branchTemplate = nil
         let result = await RemoteGatewayHostCalls.host(state.host).createWorktreeSession(
             RemoteWorktreeSessionCreation(projectID: projectId, base: base, branch: branch, agentID: agentId), caller
         )
