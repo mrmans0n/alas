@@ -34,52 +34,15 @@ struct DeviceStage: View {
     /// Bumped by the user's input and rotations, so the overlay reads the screen again.
     @State private var overlayReadKey = 0
 
-    private static let margin: CGFloat = 12
-    private static let gutter: CGFloat = 44
-    private static let bezel: CGFloat = 4
-
     var body: some View {
         let driver = control.driver(udid: device.udid, at: now)
         let allowsInput = VMDriver.allowsViewInput(driver)
-        GeometryReader { geometry in
-            let area = CGSize(
-                width: max(0, geometry.size.width - Self.margin * 2 - Self.gutter - Self.bezel * 2),
-                height: max(0, geometry.size.height - Self.margin * 2 - Self.bezel * 2)
-            )
-            let landscape = (frameOrientation ?? client.lastFrame(udid: device.udid)?.orientation ?? .portrait).isLandscape
-            let size = Self.fit(shape, landscape: landscape, in: area)
-            // The radius scales with the device's short side, which is its width in portrait.
-            let radius = shape?.cornerRadius(forFittedWidth: landscape ? size.height : size.width) ?? 0
-            HStack(spacing: 0) {
-                screen(allowsInput: allowsInput, driver: driver, landscape: landscape)
-                    .frame(width: size.width, height: size.height)
-                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .strokeBorder(theme.color("accent"), lineWidth: 2)
-                            .opacity(dropTargeted ? 1 : 0)
-                    )
-                    .padding(Self.bezel)
-                    .background(
-                        RoundedRectangle(cornerRadius: radius + Self.bezel, style: .continuous)
-                            .fill(Color(white: 0.067))
-                            .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                controls(enabled: allowsInput)
-                    .frame(width: Self.gutter)
-            }
-            .padding(Self.margin)
+        let landscape = (frameOrientation ?? client.lastFrame(udid: device.udid)?.orientation ?? .portrait).isLandscape
+        DeviceStageFrame(shape: shape, landscape: landscape, dropTargeted: dropTargeted) {
+            screen(allowsInput: allowsInput, driver: driver, landscape: landscape)
+        } gutter: {
+            controls(enabled: allowsInput)
         }
-    }
-
-    /// The largest size of the screen's shape, turned for landscape, that
-    /// fits `area`; all of it without a shape.
-    private static func fit(_ shape: DeviceScreenShape?, landscape: Bool, in area: CGSize) -> CGSize {
-        guard let shape, shape.widthPoints > 0, shape.heightPoints > 0 else { return area }
-        let (width, height) = landscape ? (shape.heightPoints, shape.widthPoints) : (shape.widthPoints, shape.heightPoints)
-        let scale = min(area.width / width, area.height / height)
-        return CGSize(width: width * scale, height: height * scale)
     }
 
     private func screen(allowsInput: Bool, driver: VMDriver, landscape: Bool) -> some View {
@@ -119,48 +82,13 @@ struct DeviceStage: View {
         }
         .overlay(alignment: .bottom) {
             if let appInstall {
-                appInstallPill(appInstall)
+                DeviceAppInstallPill(install: appInstall, onDismiss: onDismissAppInstall)
                     .padding(.bottom, scale.space[3])
             } else if let notice {
-                pill { Text(notice).foregroundStyle(theme.color("fg")) }
+                DeviceStagePill { Text(notice).foregroundStyle(theme.color("fg")) }
                     .padding(.bottom, scale.space[3])
             }
         }
-    }
-
-    private func appInstallPill(_ install: DevicePaneModel.AppInstall) -> some View {
-        pill {
-            switch install {
-            case .installing(let name):
-                ProgressView().controlSize(.mini)
-                Text("Installing \(name)…")
-                    .foregroundStyle(theme.color("fg"))
-            case .launching(let name):
-                ProgressView().controlSize(.mini)
-                Text("Launching \(name)…")
-                    .foregroundStyle(theme.color("fg"))
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(theme.color("warn"))
-                Text(message)
-                    .foregroundStyle(theme.color("fg"))
-                Button("Dismiss", action: onDismissAppInstall)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(theme.color("accent"))
-            }
-        }
-    }
-
-    private func pill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 6, content: content)
-            .font(scale.caption.font)
-            .lineLimit(2)
-            .padding(.horizontal, scale.space[3])
-            .padding(.vertical, scale.space[1])
-            .background(.ultraThinMaterial, in: Capsule())
-            .background(theme.color("bg-2").opacity(0.6), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-            .padding(.horizontal, scale.space[3])
     }
 
     private func driverPill(_ driver: VMDriver) -> some View {
@@ -236,7 +164,7 @@ struct DeviceStage: View {
     }
 
     private func controls(enabled: Bool) -> some View {
-        VStack(spacing: 2) {
+        DeviceGutter(enabled: enabled) {
             hardwareButton("house", help: "Home", name: "home")
             hardwareButton("square.stack", help: "App switcher", name: "app_switcher")
             hardwareButton("lock", help: "Lock", name: "lock")
@@ -244,18 +172,10 @@ struct DeviceStage: View {
             rotateButton("rotate.left", help: "Rotate left") { $0.rotatedLeft }
             rotateButton("rotate.right", help: "Rotate right") { $0.rotatedRight }
         }
-        .padding(scale.space[1])
-        .background(theme.color("bg-2"), in: Capsule())
-        .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
-        .frame(maxHeight: .infinity)
     }
 
     private func hardwareButton(_ symbol: String, help: String, name: String) -> some View {
-        ToolbarBtn(
-            icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
-        ) {
+        DeviceGutterButton(icon: symbol, help: help) {
             client.button(udid: device.udid, name: name)
             overlayReadKey += 1
         }
@@ -264,9 +184,7 @@ struct DeviceStage: View {
     private func rotateButton(
         _ symbol: String, help: String, turn: @escaping (DeviceScreenOrientation) -> DeviceScreenOrientation
     ) -> some View {
-        ToolbarBtn(
-            icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
-        ) {
+        DeviceGutterButton(icon: symbol, help: help) {
             let udid = device.udid
             let next = turn(client.deviceOrientation(udid: udid))
             Task { try? await client.rotate(udid: udid, to: next) }

@@ -68,6 +68,8 @@ struct DevicesTabView: View {
             )
         case .vm(let guest, let status):
             vmCard(guest, status: status, now: now)
+        case .android:
+            DevicesEmptyState(title: "Android")
         }
     }
 

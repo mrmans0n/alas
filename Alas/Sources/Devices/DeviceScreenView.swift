@@ -9,7 +9,7 @@ import SwiftUI
 /// and turns clicks into touches and keys into HID usages.
 struct DeviceScreenView: NSViewRepresentable {
     let udid: String
-    let client: SimulatorStreamClient
+    let client: any DeviceScreenSource
     var onStopped: (String) -> Void
     /// False while an agent drives: clicks and keys stay off the simulator.
     var allowsInput = true
@@ -18,6 +18,8 @@ struct DeviceScreenView: NSViewRepresentable {
     var onDropApp: (URL) -> Void = { _ in }
     /// Whether such a drag is over the screen.
     var onDropTargeted: (Bool) -> Void = { _ in }
+    /// Whether a dropped file is one this device can run.
+    var canDrop: (URL) -> Bool = { (try? SimulatorAppBundle.read($0)) != nil }
     /// Edit › Paste (⌘V) while the screen has focus.
     var onPaste: () -> Void = {}
     /// Edit › Copy (⌘C) while the screen has focus.
@@ -35,6 +37,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onBlockedClick = onBlockedClick
         view.onDropApp = onDropApp
         view.onDropTargeted = onDropTargeted
+        view.canDrop = canDrop
         view.onPaste = onPaste
         view.onCopy = onCopy
         view.onOrientation = onOrientation
@@ -50,6 +53,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onBlockedClick = onBlockedClick
         view.onDropApp = onDropApp
         view.onDropTargeted = onDropTargeted
+        view.canDrop = canDrop
         view.onPaste = onPaste
         view.onCopy = onCopy
         view.onOrientation = onOrientation
@@ -67,7 +71,7 @@ struct DeviceScreenView: NSViewRepresentable {
 final class DeviceScreenNSView: NSView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     private(set) var udid: String?
-    private weak var client: SimulatorStreamClient?
+    private weak var client: (any DeviceScreenSource)?
     private var token: UUID?
     /// The portrait panel's size in pixels.
     private var screenSize = CGSize.zero
@@ -79,6 +83,7 @@ final class DeviceScreenNSView: NSView {
     var onBlockedClick: () -> Void = {}
     var onDropApp: (URL) -> Void = { _ in }
     var onDropTargeted: (Bool) -> Void = { _ in }
+    var canDrop: (URL) -> Bool = { _ in false }
     var onPaste: () -> Void = {}
     var onCopy: () -> Void = {}
     var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
@@ -107,12 +112,12 @@ final class DeviceScreenNSView: NSView {
     @objc func paste(_ sender: Any?) { onPaste() }
     @objc func copy(_ sender: Any?) { onCopy() }
 
-    /// One `.app` the simulator can run; anything else isn't offered a drop.
+    /// One file this device can run; anything else isn't offered a drop.
     private func droppedApp(_ info: NSDraggingInfo) -> URL? {
         let urls = info.draggingPasteboard.readObjects(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
         ) as? [URL]
-        guard let urls, urls.count == 1, (try? SimulatorAppBundle.read(urls[0])) != nil else { return nil }
+        guard let urls, urls.count == 1, canDrop(urls[0]) else { return nil }
         return urls[0]
     }
 
@@ -153,7 +158,7 @@ final class DeviceScreenNSView: NSView {
         CATransaction.commit()
     }
 
-    func attach(udid: String, client: SimulatorStreamClient) {
+    func attach(udid: String, client: any DeviceScreenSource) {
         detach()
         self.udid = udid
 #if DEBUG
@@ -259,6 +264,19 @@ final class DeviceScreenNSView: NSView {
         let point = location(event)
         send("end", geometry.clamped(x: point.x, y: point.y) ?? last)
         onUserInput()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let point = location(event)
+        guard allowsInput, let udid, let at = geometry.normalized(x: point.x, y: point.y) else {
+            super.scrollWheel(with: event)
+            return
+        }
+        // A trackpad's deltas are points; a wheel's are lines, one step each.
+        let scale = event.hasPreciseScrollingDeltas ? 0.1 : 1
+        client?.scroll(
+            udid: udid, point: at, dx: Double(event.scrollingDeltaX) * scale, dy: Double(event.scrollingDeltaY) * scale
+        )
     }
 
     override func updateTrackingAreas() {

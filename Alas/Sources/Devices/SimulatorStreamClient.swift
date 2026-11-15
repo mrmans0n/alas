@@ -195,7 +195,7 @@ final class SimulatorStreamClient {
 }
 
 /// Resumes a continuation at most once, from whichever XPC callback comes first.
-private final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
+final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value, any Error>?
 
