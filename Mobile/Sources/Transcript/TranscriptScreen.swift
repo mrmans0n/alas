@@ -121,6 +121,8 @@ struct TranscriptScreen: View {
             .navigationTitle(session.summary?.title ?? "Session")
             .navigationSubtitle(subtitle(session))
             .navigationBarTitleDisplayMode(.inline)
+            // A conversation gets the whole screen, as in Messages; the composer takes the tab bar's place.
+            .toolbar(.hidden, for: .tabBar)
             .toolbarTitleMenu {
                 if !session.hasEnded {
                     Button("Rename…", systemImage: "pencil") {

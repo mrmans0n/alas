@@ -39,7 +39,9 @@ struct WorktreesView: View {
     }
 
     private var filter: RemoteSessionFilter { model.filter }
-    private var query: String { model.query }
+    /// Only the Search tab searches; Worktrees always lists everything, under its filter.
+    private var isSearch: Bool { title == "Search" }
+    private var query: String { isSearch ? model.query : "" }
 
     private struct HostSection: Identifiable {
         let host: PairedHost
@@ -85,7 +87,7 @@ struct WorktreesView: View {
                 }
             }
             .navigationTitle(title)
-            .searchable(text: $model.query, isPresented: $searchPresented)
+            .modifier(SearchField(enabled: isSearch, text: $model.query, presented: $searchPresented))
             .toolbar {
                 if !hub.hosts.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
@@ -156,5 +158,20 @@ struct WorktreesView: View {
         .glassEffect(.regular, in: Capsule())
         .padding(.horizontal, 24)
         .padding(.bottom, 4)
+    }
+}
+
+/// `searchable` on the Search tab only: the tab is the app's one search field.
+private struct SearchField: ViewModifier {
+    let enabled: Bool
+    @Binding var text: String
+    @Binding var presented: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, isPresented: $presented)
+        } else {
+            content
+        }
     }
 }
