@@ -44,6 +44,8 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees, title: "Search", searchActive: selection == .search) { selection = .peers }
                 }
             }
+            // A sidebar on the iPad, the tab bar on the iPhone.
+            .tabViewStyle(.sidebarAdaptable)
             .environment(registry)
             .onAppear {
                 AppDelegate.open = { route in

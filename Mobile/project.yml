@@ -46,7 +46,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Alas
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: AlasMobile.entitlements
@@ -68,6 +68,12 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # The iPad turns freely, as split view and Stage Manager expect.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSAppTransportSecurity:
@@ -98,7 +104,7 @@ targets:
       base:
         PRODUCT_NAME: AlasNotificationService
         PRODUCT_BUNDLE_IDENTIFIER: $(ALAS_APP_BUNDLE_ID).NotificationService
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: YES
     # Reads the app's shared storage, so it carries the app's group ids.
     entitlements:
