@@ -1,7 +1,6 @@
 import Foundation
 import IOKit.pwr_mgt
 import IOKit.ps
-import OSLog
 import AlasFoundation
 import AlasModel
 import AlasPlatform

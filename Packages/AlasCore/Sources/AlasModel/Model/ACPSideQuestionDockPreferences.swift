@@ -1,5 +1,7 @@
-import CoreGraphics
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 import AlasFoundation
 
 /// The card's last dock and the size chosen for each dock, kept app-wide.

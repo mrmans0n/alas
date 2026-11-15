@@ -21,14 +21,6 @@ public enum ACPProcessLiveness: Sendable {
     }
 
     private static func processStartTime(pid: Int32) -> Date? {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        let result = mib.withUnsafeMutableBufferPointer { pointer in
-            sysctl(pointer.baseAddress, u_int(pointer.count), &info, &size, nil, 0)
-        }
-        guard result == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
-        let startTime = info.kp_proc.p_starttime
-        return Date(timeIntervalSince1970: TimeInterval(startTime.tv_sec) + TimeInterval(startTime.tv_usec) / 1_000_000)
+        ProcessTable.entry(of: pid)?.startTime.date
     }
 }

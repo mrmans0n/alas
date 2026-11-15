@@ -94,9 +94,8 @@ public struct AlasProfile: Equatable, Sendable {
         let fd = open(url.path, O_RDONLY | O_DIRECTORY)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
-        return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+        guard let path = pathOfOpenFile(fd) else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     /// Whether two paths name one directory, however they are spelled. Either

@@ -507,8 +507,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(clientFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        var noSigPipe: Int32 = 1
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        NoSigPipe.socket(clientFD)
     }
 
     private static func sendResponse(clientFD: Int32, ok: Bool, error: String? = nil) {
@@ -551,7 +550,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     private static let bindLock = NSLock()
 
     private static func createSocket(path: String) -> Int32 {
-        let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        let socketFD = socket(AF_UNIX, streamSocketType, 0)
         guard socketFD >= 0 else { return -1 }
 
         let bindResult = Self.bindSocket(socketFD, toPath: path)
@@ -636,7 +635,7 @@ private final class ClientTaskRegistry: @unchecked Sendable {
         lock.lock()
         if stopped, entries[token] != nil {
             entries[token]?.task = task
-            shutdown(fd, SHUT_RDWR)
+            shutdown(fd, Int32(SHUT_RDWR))
             lock.unlock()
             task.cancel()
             return true
@@ -665,7 +664,7 @@ private final class ClientTaskRegistry: @unchecked Sendable {
         stopped = true
         let active = Array(entries.values)
         for entry in active {
-            shutdown(entry.fd, SHUT_RDWR)
+            shutdown(entry.fd, Int32(SHUT_RDWR))
         }
         lock.unlock()
 

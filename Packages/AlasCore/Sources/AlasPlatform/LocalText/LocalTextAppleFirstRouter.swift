@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import AlasFoundation
 import AlasModel
 
@@ -124,6 +126,7 @@ public enum LocalTextAppleIntelligence: Sendable {
 
     @MainActor
     public static func generate(_ request: LocalTextGenerationRequest) async -> String? {
+        #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return nil }
         let model = SystemLanguageModel.default
         guard model.isAvailable, model.supportsLocale(Locale.current) else { return nil }
@@ -152,5 +155,8 @@ public enum LocalTextAppleIntelligence: Sendable {
         } catch {
             return nil
         }
+        #else
+        return nil
+        #endif
     }
 }

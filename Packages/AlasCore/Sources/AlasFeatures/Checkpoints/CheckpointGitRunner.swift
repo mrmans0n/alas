@@ -205,7 +205,7 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
         process.standardError = stderr
         // Git can exit before reading every request. Report that as a failed
         // write instead of letting SIGPIPE terminate the app.
-        guard fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
+        guard NoSigPipe.pipe(stdin.fileHandleForWriting.fileDescriptor) else {
             throw ProcessError.launchFailed(String(cString: strerror(errno)))
         }
 

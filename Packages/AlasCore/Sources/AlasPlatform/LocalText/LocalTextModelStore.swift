@@ -134,9 +134,15 @@ public actor LocalTextModelStore {
     }
 
     public static func availableCapacity(_ descriptor: Int32) throws -> Int64 {
+        #if canImport(Darwin)
         var info = statfs()
         guard fstatfs(descriptor, &info) == 0 else { throw LocalTextModelFiles.posix() }
         let capacity = UInt64(info.f_bavail).multipliedReportingOverflow(by: UInt64(info.f_bsize))
+        #else
+        var info = statvfs()
+        guard fstatvfs(descriptor, &info) == 0 else { throw LocalTextModelFiles.posix() }
+        let capacity = UInt64(info.f_bavail).multipliedReportingOverflow(by: UInt64(info.f_frsize))
+        #endif
         return capacity.overflow ? Int64.max : Int64(clamping: capacity.partialValue)
     }
 
@@ -192,11 +198,11 @@ public actor LocalTextModelStore {
             if !exists, errno != ENOENT { throw LocalTextModelFiles.posix() }
             if exists {
                 guard info.st_mode & S_IFMT == S_IFDIR else { throw LocalTextModelFailure.invalidPath }
-                guard renameatx_np(fd, stagingName, fd, manifest.revision, UInt32(RENAME_SWAP)) == 0 else {
+                guard AtomicRename.renameAt(fd, stagingName, fd, manifest.revision, mode: .swap) == 0 else {
                     throw LocalTextModelFiles.posix()
                 }
             } else {
-                guard renameatx_np(fd, stagingName, fd, manifest.revision, UInt32(RENAME_EXCL)) == 0 else {
+                guard AtomicRename.renameAt(fd, stagingName, fd, manifest.revision, mode: .exclusive) == 0 else {
                     throw LocalTextModelFiles.posix()
                 }
             }

@@ -2,7 +2,6 @@
 import AudioToolbox
 import Foundation
 import Speech
-import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform

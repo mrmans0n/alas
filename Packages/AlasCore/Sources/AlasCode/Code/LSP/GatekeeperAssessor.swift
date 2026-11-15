@@ -101,6 +101,9 @@ public final class GatekeeperAssessor {
         // any other errno means inaccessible — return .unknown so the
         // availability layer falls open to .allowed rather than hiding a
         // runnable LSP behind a banner.
+        #if !canImport(Darwin)
+        return .allowed // No Gatekeeper or quarantine outside macOS.
+        #else
         let size = realPath.withCString { cpath in
             getxattr(cpath, "com.apple.quarantine", nil, 0, 0, 0)
         }
@@ -116,6 +119,7 @@ public final class GatekeeperAssessor {
         if read < 0 { return .unknown }
         guard let value = String(bytes: buffer[0..<read], encoding: .utf8) else { return .unknown }
         return interpretQuarantineValue(value)
+        #endif
     }
 
     /// Parse the `com.apple.quarantine` xattr value. Format is

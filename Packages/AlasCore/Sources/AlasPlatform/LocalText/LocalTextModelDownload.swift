@@ -161,8 +161,13 @@ public struct LocalTextModelDownload: LocalTextModelTransport, Sendable {
 
         func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+            #if canImport(Security)
             completionHandler(challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
                               ? .performDefaultHandling : .rejectProtectionSpace, nil)
+            #else
+            // No server-trust challenges here; TLS is checked by the system's libcurl.
+            completionHandler(.rejectProtectionSpace, nil)
+            #endif
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,

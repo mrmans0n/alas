@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 import AlasModel
 
@@ -98,13 +97,7 @@ public final class ZmxClient: Sendable {
         case .unreachable: return nil
         }
         guard shellPID > 0 else { return nil }
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
-        guard proc_pidinfo(shellPID, PROC_PIDTBSDINFO, 0, &info, size) == size,
-              info.pbi_pid == UInt32(shellPID),
-              info.e_tdev != UInt32.max,
-              let pid = pid_t(exactly: info.e_tpgid), pid > 0 else { return nil }
-        return pid
+        return ProcessTable.entry(of: shellPID)?.terminalForegroundGroup
     }
 
     /// Best-effort `zmx kill <name>`. Never throws; logs and swallows

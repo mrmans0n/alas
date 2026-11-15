@@ -1,35 +1,20 @@
 import Foundation
-import CoreServices
 import AlasFoundation
 import AlasModel
-
-/// Box handed to FSEvents as the stream's `info` pointer. Deliberately a
-/// file-scope (non-nested) type so it is never inferred into
-/// `WorktreeWatcher`'s main-actor isolation: the FSEvents C callback reads
-/// `watcher` from the watcher's private event queue, not from the main
-/// thread.
-private final class WorktreeWatcherStreamContext {
-    weak var watcher: WorktreeWatcher?
-
-    init(watcher: WorktreeWatcher) {
-        self.watcher = watcher
-    }
-}
 
 /// Main-actor confined. Every stored property is created, read, and torn
 /// down on the main actor (`RightPaneState`, itself `@MainActor`, is the
 /// only owner). The two entry points that genuinely arrive off-main — the
-/// FSEvents C callback and `DebounceTimer`'s work item — are `nonisolated`
+/// file event stream's handler and `DebounceTimer`'s work item — are `nonisolated`
 /// and hop explicitly.
 @MainActor
 public final class WorktreeWatcher {
     public var onChange: (() -> Void)?
     private let path: URL
     private let watchesGitDir: Bool
-    private var stream: FSEventStreamRef?
-    private var gitDirStream: FSEventStreamRef?
+    private var stream: FileEventStream?
+    private var gitDirStream: FileEventStream?
     private var isRunning = false
-    private let eventQueueKey = DispatchSpecificKey<Void>()
     private let eventQueue = DispatchQueue(label: "io.nlopez.alas.worktree-watcher", qos: .utility)
     // `maxWait: 2.0` guarantees a refresh fires within 2s of the first event
     // in a burst, even when something (agent, build, LSP) keeps poking faster
@@ -41,7 +26,6 @@ public final class WorktreeWatcher {
     public init(path: URL, watchesGitDir: Bool = true) {
         self.path = path
         self.watchesGitDir = watchesGitDir
-        self.eventQueue.setSpecific(key: eventQueueKey, value: ())
         self.debouncer.onFire = { [weak self] in
             self?.onChange?()
         }
@@ -50,11 +34,7 @@ public final class WorktreeWatcher {
     public func start() {
         stop()
         isRunning = true
-        stream = makeStream(paths: [path.path], includeFileEvents: true)
-        if let stream {
-            FSEventStreamSetDispatchQueue(stream, eventQueue)
-            FSEventStreamStart(stream)
-        }
+        stream = makeStream(paths: [path.path])
         // Resolve git-dir asynchronously so a slow or hung git invocation
         // never blocks watcher startup. Worktree-file events still flow.
         // `Task` inherits the main actor here, so the continuation after the
@@ -64,99 +44,31 @@ public final class WorktreeWatcher {
             guard let self else { return }
             guard let gitDir = await Self.resolveGitDir(at: self.path) else { return }
             guard self.stream != nil else { return }  // already stopped
-            self.gitDirStream = self.makeStream(paths: [gitDir.path], includeFileEvents: true)
-            if let s = self.gitDirStream {
-                FSEventStreamSetDispatchQueue(s, self.eventQueue)
-                FSEventStreamStart(s)
-            }
+            self.gitDirStream = self.makeStream(paths: [gitDir.path])
         }
     }
 
     public func stop() {
         isRunning = false
-        if let stream {
-            self.stream = nil
-            releaseStream(stream)
-        }
-        if let gitDirStream {
-            self.gitDirStream = nil
-            releaseStream(gitDirStream)
-        }
+        stream?.stop()
+        stream = nil
+        gitDirStream?.stop()
+        gitDirStream = nil
         debouncer.cancel()
     }
 
     isolated deinit { stop() }
 
-    private func releaseStream(_ stream: FSEventStreamRef) {
-        let release = {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-        }
-        if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
-            release()
-        } else {
-            eventQueue.sync(execute: release)
+    private func makeStream(paths: [String]) -> FileEventStream? {
+        FileEventStream(paths: paths, fileEvents: true, queue: eventQueue) { [weak self] paths in
+            // Unreadable paths fall back to a refresh, so no real change is dropped.
+            if paths.map(WorktreeWatcher.shouldRefresh(forEventPaths:)) ?? true {
+                self?.pokeDebouncerFromStream()
+            }
         }
     }
 
-    private func makeStream(paths: [String], includeFileEvents: Bool) -> FSEventStreamRef? {
-        let streamContext = WorktreeWatcherStreamContext(watcher: self)
-        var context = FSEventStreamContext(
-            version: 0,
-            info: Unmanaged.passRetained(streamContext).toOpaque(),
-            retain: nil,
-            release: { @Sendable info in
-                guard let info else { return }
-                Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(info).release()
-            },
-            copyDescription: nil
-        )
-        let cb: FSEventStreamCallback = { @Sendable _, ctx, numEvents, eventPaths, _, _ in
-            guard let ctx else { return }
-            let streamContext = Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(ctx).takeUnretainedValue()
-            guard let watcher = streamContext.watcher else { return }
-
-            // With `kFSEventStreamCreateFlagUseCFTypes` set on the stream,
-            // `eventPaths` is a `CFArrayRef` of `CFStringRef`. Bridge to
-            // Swift `[String]`, then ask the filter whether anything in this
-            // batch is worth a refresh. If the bridge ever fails (unexpected
-            // — would only happen if the flag was lost), fall back to the
-            // previous always-poke behavior so we never silently drop real
-            // change events.
-            let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
-            guard let paths = cfArray as? [String], paths.count == numEvents else {
-                watcher.pokeDebouncerFromStream()
-                return
-            }
-
-            if WorktreeWatcher.shouldRefresh(forEventPaths: paths) {
-                watcher.pokeDebouncerFromStream()
-            }
-        }
-        var flags = FSEventStreamCreateFlags(
-            kFSEventStreamCreateFlagNoDefer
-            | kFSEventStreamCreateFlagUseCFTypes
-        )
-        if includeFileEvents {
-            flags |= FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)
-        }
-        guard let stream = FSEventStreamCreate(
-            kCFAllocatorDefault,
-            cb,
-            &context,
-            paths as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.5,
-            flags
-        ) else {
-            Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(context.info!).release()
-            return nil
-        }
-        return stream
-    }
-
-    /// Called from the FSEvents callback, which runs on `eventQueue`.
+    /// Called from the file event stream, which runs on `eventQueue`.
     /// `DispatchQueue.main` is the main actor's executor, so by the time the
     /// block runs the assumption below always holds.
     nonisolated private func pokeDebouncerFromStream() {

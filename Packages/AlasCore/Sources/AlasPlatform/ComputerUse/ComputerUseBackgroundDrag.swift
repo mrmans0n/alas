@@ -1,5 +1,7 @@
-import CoreGraphics
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Pure decisions for a drag that stays inside the app in the background, and falls back to the
 /// foreground drag once a native drag-and-drop session starts.

@@ -1,4 +1,6 @@
+#if canImport(CoreGraphics)
 import CoreGraphics
+#endif
 import Foundation
 
 /// Decides whether synthesized input may go ahead while the user may still be driving the Mac.
@@ -180,6 +182,7 @@ public enum ComputerUseEventRoute: Equatable, Sendable {
     }
 }
 
+#if canImport(CoreGraphics)
 /// Tells the user's input from what other processes post, for the input monitor. Alas's posts
 /// (its marker) never count. Hardware events carry source pid 0. A single pointer move another
 /// process posts (a window manager centring the cursor on the focused window, as AeroSpace does on
@@ -203,3 +206,4 @@ public struct ComputerUsePostedMoves: Sendable {
         return now - lastMove.at <= Self.followWindow
     }
 }
+#endif

@@ -7,7 +7,6 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
-import os
 
 /// What a gateway gets from its socket: who authenticated, and two ways to
 /// send. `sendTracked` reports when the frame has been written, which peer

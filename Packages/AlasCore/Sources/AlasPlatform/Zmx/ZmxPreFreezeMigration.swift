@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Stops session daemons started by a zmx that predates the frozen (v1) IPC.
 ///
@@ -191,10 +192,10 @@ public enum ZmxPreFreezeMigration {
     /// When the process `pid` names started; nil when there is none or its
     /// information cannot be read.
     public static func startTime(ofProcess pid: Int32) -> ProcessStart? {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size, Int32(info.pbi_pid) == pid else { return nil }
-        return ProcessStart(seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
+        guard let start = ProcessTable.entry(of: pid)?.startTime,
+              let seconds = UInt64(exactly: start.seconds),
+              let microseconds = UInt64(exactly: start.microseconds) else { return nil }
+        return ProcessStart(seconds: seconds, microseconds: microseconds)
     }
 
     private static func stop(
