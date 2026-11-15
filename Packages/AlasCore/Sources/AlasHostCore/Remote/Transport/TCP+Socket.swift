@@ -303,11 +303,20 @@ final class SocketTCPListener: TCPListener, @unchecked Sendable {
     }
 
     private func bind() throws -> (SocketHandle, UInt16) {
-        let address: SocketAddress = switch host {
-        case .any: .ipv6Any(port: port)
-        case .loopbackV4: .ipv4Loopback(port: port)
-        case .loopbackV6: .ipv6Loopback(port: port)
+        switch host {
+        case .any:
+            do {
+                return try bind(.ipv6Any(port: port))
+            } catch let error as POSIXError where error.code == .EAFNOSUPPORT || error.code == .EADDRNOTAVAIL {
+                // A host with IPv6 disabled still serves its IPv4 clients.
+                return try bind(.ipv4Any(port: port))
+            }
+        case .loopbackV4: return try bind(.ipv4Loopback(port: port))
+        case .loopbackV6: return try bind(.ipv6Loopback(port: port))
         }
+    }
+
+    private func bind(_ address: SocketAddress) throws -> (SocketHandle, UInt16) {
         let fd = socket(address.family, streamSocketType, 0)
         guard fd >= 0 else { throw Self.posixError() }
         let handle = SocketHandle(fd: fd)
@@ -360,6 +369,13 @@ private enum SocketAddress {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         address.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian
+        return .v4(address)
+    }
+
+    static func ipv4Any(port: UInt16) -> SocketAddress {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
         return .v4(address)
     }
 
