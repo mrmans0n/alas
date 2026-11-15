@@ -75,7 +75,11 @@ struct NewWorktreeDialog: View {
         let preset = state.projects.first { $0.id == presetProjectId }
         let presetProjectId = preset?.linkedProjectId ?? presetProjectId
         self.presetProjectId = presetProjectId
-        self._presetRunOnHost = State(initialValue: preset?.linkedProjectId == nil ? nil : preset?.host)
+        let presetHost = preset?.linkedProjectId == nil ? nil : preset?.host
+        self._presetRunOnHost = State(initialValue: presetHost)
+        // Target the machine from the start: Create must not fall back to This Mac
+        // while the origin lookup that confirms it is still running.
+        self._runOnHost = State(initialValue: presetHost)
         let initialSelection = Self.initialSelection(
             presetProjectId: presetProjectId,
             projects: state.worktreeProjects,
