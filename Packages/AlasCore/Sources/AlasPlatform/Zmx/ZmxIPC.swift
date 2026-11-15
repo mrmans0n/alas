@@ -335,8 +335,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
 
     public init(fd: Int32) {
         self.fd = fd
-        var on: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        NoSigPipe.socket(fd)
     }
 
     /// Connects to an existing socket only. A missing or stale socket fails
@@ -350,7 +349,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         withUnsafeMutableBytes(of: &address.sun_path) { raw in
             raw.copyBytes(from: pathBytes)
         }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0 else { throw ConnectError.unavailable(errno: errno) }
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -484,7 +483,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
 
     /// Unblocks a pending `read` and stops further I/O.
     public func shutdown() {
-        _ = Foundation.shutdown(fd, SHUT_RDWR)
+        _ = Foundation.shutdown(fd, Int32(SHUT_RDWR))
     }
 
     deinit {

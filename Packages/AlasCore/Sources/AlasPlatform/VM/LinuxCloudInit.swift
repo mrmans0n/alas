@@ -1,4 +1,4 @@
-import CommonCrypto
+import Crypto
 import Foundation
 
 /// The NoCloud seed (`meta-data`, `user-data`, `network-config`) for the first
@@ -242,13 +242,10 @@ public enum LinuxCloudInit {
     }
 
     private static func sha512(_ parts: [[UInt8]]) -> [UInt8] {
-        var context = CC_SHA512_CTX()
-        CC_SHA512_Init(&context)
+        var hash = SHA512()
         for part in parts {
-            part.withUnsafeBytes { _ = CC_SHA512_Update(&context, $0.baseAddress, CC_LONG($0.count)) }
+            hash.update(data: part)
         }
-        var digest = [UInt8](repeating: 0, count: Int(CC_SHA512_DIGEST_LENGTH))
-        CC_SHA512_Final(&digest, &context)
-        return digest
+        return Array(hash.finalize())
     }
 }

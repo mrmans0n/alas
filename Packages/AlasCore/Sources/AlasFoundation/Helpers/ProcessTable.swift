@@ -3,10 +3,9 @@ import Foundation
 /// The live process table: a process's parent and birth time, and its
 /// children. libproc on macOS, `/proc` on Linux.
 public enum ProcessTable {
-    /// When a process started. Stable for the life of the process, so a pid
-    /// plus its start time names one process even after the pid is reused.
-    /// On macOS it is wall-clock time; on Linux it is time since boot, so
-    /// compare it only with other start times.
+    /// When a process started, as wall-clock time since 1970. Stable for the
+    /// life of the process, so a pid plus its start time names one process
+    /// even after the pid is reused.
     public struct StartTime: Hashable, Sendable {
         public let seconds: Int64
         public let microseconds: Int64
@@ -15,11 +14,18 @@ public enum ProcessTable {
             self.seconds = seconds
             self.microseconds = microseconds
         }
+
+        public var date: Date {
+            Date(timeIntervalSince1970: TimeInterval(seconds) + TimeInterval(microseconds) / 1_000_000)
+        }
     }
 
     public struct Entry: Sendable {
         public let parentPID: pid_t
         public let startTime: StartTime
+        /// The foreground process group of the process's controlling
+        /// terminal; nil when it has none.
+        public let terminalForegroundGroup: pid_t?
     }
 
     public static func entry(of pid: pid_t) -> Entry? {
@@ -31,19 +37,26 @@ public enum ProcessTable {
                 proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, rebound, Int32(size))
             }
         }
-        guard result == Int32(size) else { return nil }
+        guard result == Int32(size), info.pbi_pid == UInt32(pid) else { return nil }
+        let group = info.e_tdev != UInt32.max ? pid_t(exactly: info.e_tpgid).flatMap { $0 > 0 ? $0 : nil } : nil
         return Entry(
             parentPID: pid_t(info.pbi_ppid),
-            startTime: StartTime(seconds: Int64(info.pbi_start_tvsec), microseconds: Int64(info.pbi_start_tvusec))
+            startTime: StartTime(seconds: Int64(info.pbi_start_tvsec), microseconds: Int64(info.pbi_start_tvusec)),
+            terminalForegroundGroup: group
         )
         #else
         guard let fields = statFields(of: pid), fields.count > 19,
-              let parent = pid_t(fields[1]), let ticks = Int64(fields[19]) else { return nil }
+              let parent = pid_t(fields[1]), let ticks = Int64(fields[19]),
+              let terminal = Int64(fields[4]), let group = pid_t(fields[5]) else { return nil }
         let perSecond = Int64(sysconf(Int32(_SC_CLK_TCK)))
-        guard perSecond > 0 else { return nil }
+        guard perSecond > 0, let bootTime else { return nil }
         return Entry(
             parentPID: parent,
-            startTime: StartTime(seconds: ticks / perSecond, microseconds: ticks % perSecond * 1_000_000 / perSecond)
+            startTime: StartTime(
+                seconds: bootTime + ticks / perSecond,
+                microseconds: ticks % perSecond * 1_000_000 / perSecond
+            ),
+            terminalForegroundGroup: terminal != 0 && group > 0 ? group : nil
         )
         #endif
     }
@@ -77,10 +90,32 @@ public enum ProcessTable {
         #endif
     }
 
+    /// Every process id in the system.
+    public static func allPIDs() -> [pid_t] {
+        #if canImport(Darwin)
+        let capacity = Int(proc_listallpids(nil, 0)) + 64
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
+        return pids.prefix(max(0, count)).filter { $0 > 0 }
+        #else
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: "/proc")) ?? []
+        return entries.compactMap { pid_t($0) }
+        #endif
+    }
+
     #if !canImport(Darwin)
+    /// When the system booted, in seconds since 1970: the `btime` line of
+    /// `/proc/stat`. Process start times there count from it.
+    private static let bootTime: Int64? = {
+        guard let text = try? String(contentsOfFile: "/proc/stat", encoding: .utf8) else { return nil }
+        let line = text.split(separator: "\n").first { $0.hasPrefix("btime ") }
+        return line.flatMap { Int64($0.dropFirst("btime ".count)) }
+    }()
+
     /// `/proc/<pid>/stat` after the command name, which is parenthesized and
     /// may itself contain spaces: index 0 is the state, 1 the parent pid,
-    /// 19 the start time in clock ticks since boot.
+    /// 4 the controlling terminal, 5 its foreground group, 19 the start time
+    /// in clock ticks since boot.
     static func statFields(of pid: pid_t) -> [Substring]? {
         guard let text = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
               let close = text.lastIndex(of: ")") else { return nil }

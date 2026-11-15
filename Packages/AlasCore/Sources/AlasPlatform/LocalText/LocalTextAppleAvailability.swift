@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import AlasFoundation
 import AlasModel
 
@@ -10,11 +12,16 @@ public enum LocalTextAppleAvailability: Equatable, Sendable {
     public var isAvailable: Bool { self == .available }
 
     public static func current(locale: Locale = .current) -> Self {
+        #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return .unsupportedOS }
         let model = SystemLanguageModel.default
         return resolve(model.availability, localeSupported: model.supportsLocale(locale))
+        #else
+        return .unsupportedOS
+        #endif
     }
 
+    #if canImport(FoundationModels)
     @available(macOS 26.0, *)
     public static func resolve(
         _ availability: SystemLanguageModel.Availability,
@@ -32,4 +39,5 @@ public enum LocalTextAppleAvailability: Equatable, Sendable {
             }
         }
     }
+    #endif
 }

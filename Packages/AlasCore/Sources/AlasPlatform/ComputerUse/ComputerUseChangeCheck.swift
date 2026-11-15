@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
 import CoreGraphics
+#endif
 
 /// What an action could have changed in the target window, read right before and after it.
 public struct ComputerUseWindowFingerprint: Equatable, Sendable {

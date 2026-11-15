@@ -1,4 +1,3 @@
-import OSLog
 import AlasFoundation
 import AlasModel
 import AlasPlatform

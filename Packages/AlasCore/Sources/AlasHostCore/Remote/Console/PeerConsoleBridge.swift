@@ -46,7 +46,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         let path = directory + "/s"
         self.directory = directory
         socketPath = path
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
@@ -100,9 +100,9 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         let fd = connection
         lock.unlock()
         guard first else { return }
-        Foundation.shutdown(listener, SHUT_RDWR)
+        Foundation.shutdown(listener, Int32(SHUT_RDWR))
         Foundation.close(listener)
-        if fd >= 0 { Foundation.shutdown(fd, SHUT_RDWR) }
+        if fd >= 0 { Foundation.shutdown(fd, Int32(SHUT_RDWR)) }
         try? FileManager.default.removeItem(atPath: directory)
     }
 
@@ -111,8 +111,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         // Single use: nothing else may connect once the surface has.
         unlink(socketPath)
         guard fd >= 0 else { return }
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        NoSigPipe.socket(fd)
         writes.sync {
             lock.lock()
             let closed = isClosed

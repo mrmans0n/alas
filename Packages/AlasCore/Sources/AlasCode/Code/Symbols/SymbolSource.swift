@@ -48,9 +48,7 @@ public enum SymbolSource: Sendable {
     }
 
     private static func openedPath(_ descriptor: Int32) -> String? {
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(descriptor, F_GETPATH, &buffer) != -1 else { return nil }
-        return String(cString: buffer)
+        pathOfOpenFile(descriptor)
     }
 
     /// The file's physical URL when it resolves, symlinks included, to a

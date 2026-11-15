@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 
 /// Picks the icon a project displays once the repo-local `.alas/` layer is

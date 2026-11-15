@@ -1,5 +1,7 @@
-import CoreGraphics
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Timing and path math for the drawn agent cursor.
 public enum ComputerUseCursorMotion {

@@ -86,15 +86,7 @@ public final class ACPTerminal: ChangeTracking {
         }
     }
 
-    public struct ProcessStartTime: Hashable, Sendable {
-        public let seconds: Int64
-        public let microseconds: Int64
-
-        public init(seconds: Int64, microseconds: Int64) {
-            self.seconds = seconds
-            self.microseconds = microseconds
-        }
-    }
+    public typealias ProcessStartTime = ProcessTable.StartTime
 
     private struct ProcessIdentity {
         let parentPid: pid_t
@@ -368,21 +360,7 @@ public final class ACPTerminal: ChangeTracking {
     }
 
     nonisolated private static func childPids(of parent: pid_t) -> [pid_t] {
-        var capacity = 16
-        while capacity <= 4096 {
-            var pids = [pid_t](repeating: 0, count: capacity)
-            let pidCount = pids.withUnsafeMutableBufferPointer { buffer in
-                proc_listchildpids(parent, buffer.baseAddress,
-                                   Int32(capacity * MemoryLayout<pid_t>.stride))
-            }
-            guard pidCount > 0 else { return [] }
-            let count = min(capacity, Int(pidCount))
-            if count < capacity {
-                return Array(pids.prefix(count)).filter { $0 > 0 }
-            }
-            capacity *= 2
-        }
-        return []
+        ProcessTable.children(of: parent)
     }
 
     /// Captures members of the root's process group after the cheap
@@ -443,19 +421,7 @@ public final class ACPTerminal: ChangeTracking {
     }
 
     nonisolated private static func processIdentity(of pid: pid_t) -> ProcessIdentity? {
-        var info = proc_bsdinfo()
-        let size = MemoryLayout<proc_bsdinfo>.stride
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            pointer.withMemoryRebound(to: UInt8.self, capacity: size) { rebound in
-                proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, rebound, Int32(size))
-            }
-        }
-        guard result == Int32(size) else { return nil }
-        return ProcessIdentity(
-            parentPid: pid_t(info.pbi_ppid),
-            startedAt: ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
-                                        microseconds: Int64(info.pbi_start_tvusec))
-        )
+        ProcessTable.entry(of: pid).map { ProcessIdentity(parentPid: $0.parentPID, startedAt: $0.startTime) }
     }
 
     /// Marks the terminal as released. Per the ACP spec the id can no

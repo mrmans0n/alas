@@ -4,6 +4,8 @@ import PackageDescription
 let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto")
 /// Apple's SDKs ship an `SQLite3` module; Linux gets the system library through `CSQLite`.
 let sqlite: Target.Dependency = .target(name: "CSQLite", condition: .when(platforms: [.linux]))
+/// Linux system calls Glibc doesn't expose to Swift.
+let linuxSupport: Target.Dependency = .target(name: "CAlasLinux", condition: .when(platforms: [.linux]))
 
 /// The modules below the agent ones, which each agent module depends on.
 let base: [Target.Dependency] = [
@@ -32,9 +34,10 @@ let package = Package(
         // the iOS app shares with the Mac. Must build for iOS.
         .target(name: "AlasRemoteKit", dependencies: [crypto]),
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
+        .target(name: "CAlasLinux"),
         .target(
             name: "AlasFoundation",
-            dependencies: ["AlasRemoteKit", crypto, sqlite],
+            dependencies: ["AlasRemoteKit", crypto, sqlite, linuxSupport],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(name: "AlasModel", dependencies: [crypto, "AlasFoundation"]),

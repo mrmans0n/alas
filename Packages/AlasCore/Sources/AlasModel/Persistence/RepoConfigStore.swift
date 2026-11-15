@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 
 /// Outcome of reading a worktree's `.alas/config.json`. A malformed file stays

@@ -1,4 +1,6 @@
+#if canImport(Compression)
 import Compression
+#endif
 import Foundation
 
 // The header layout, L1/L2 lookup, zero-cluster handling and compressed-cluster
@@ -175,6 +177,7 @@ public struct QCOW2Reader {
         // The last stream in the file may end before its last sector does.
         let compressed = try Self.read(source, count: size, at: hostOffset, allowShort: true)
         guard !compressed.isEmpty else { throw QCOW2ReaderError.invalidCompressedCluster(guestOffset: guestOffset) }
+        #if canImport(Compression)
         var cluster = Data(count: clusterSize)
         let decoded = cluster.withUnsafeMutableBytes { dst in
             compressed.withUnsafeBytes { src in
@@ -186,6 +189,10 @@ public struct QCOW2Reader {
         }
         guard decoded == clusterSize else { throw QCOW2ReaderError.invalidCompressedCluster(guestOffset: guestOffset) }
         return cluster
+        #else
+        // VM images are read only on macOS.
+        throw QCOW2ReaderError.invalidCompressedCluster(guestOffset: guestOffset)
+        #endif
     }
 
     private func checkAligned(_ hostOffset: UInt64) throws {

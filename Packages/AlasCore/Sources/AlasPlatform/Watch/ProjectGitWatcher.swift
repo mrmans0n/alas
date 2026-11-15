@@ -1,20 +1,6 @@
 import Foundation
-import CoreServices
-import os
 import AlasFoundation
 import AlasModel
-
-private final class ProjectGitWatcherStreamContext {
-    weak var watcher: ProjectGitWatcher?
-    let gitDir: URL
-    let worktreeRoot: URL
-
-    init(watcher: ProjectGitWatcher, gitDir: URL, worktreeRoot: URL) {
-        self.watcher = watcher
-        self.gitDir = gitDir
-        self.worktreeRoot = worktreeRoot
-    }
-}
 
 private struct ProjectGitWatcherStreamBatch {
     var headFiles: Set<URL> = []
@@ -46,12 +32,7 @@ private struct ProjectGitWatcherStreamBatch {
 public final class ProjectGitWatcher {
     public typealias GitInfo = (gitDir: URL, worktreeRoot: URL)
 
-    nonisolated private static let eventQueueKey = DispatchSpecificKey<Void>()
-    nonisolated private static let eventQueue: DispatchQueue = {
-        let queue = DispatchQueue(label: "io.nlopez.alas.project-git-watcher", qos: .utility)
-        queue.setSpecific(key: eventQueueKey, value: ())
-        return queue
-    }()
+    nonisolated private static let eventQueue = DispatchQueue(label: "io.nlopez.alas.project-git-watcher", qos: .utility)
 
     public var onHeadChanged: (([URL: String]) -> Void)?
     public var onRevisionChanged: (() -> Void)?
@@ -63,7 +44,7 @@ public final class ProjectGitWatcher {
     private let startStreamOverride: ((ProjectGitWatcher, URL) -> Void)?
     private var resolvedGitDir: URL?
     private var resolvedWorktreeRoot: URL?
-    private var stream: FSEventStreamRef?
+    private var stream: FileEventStream?
     private var isRunning = false
     private var startGeneration = 0
     private let headDebouncer: DebounceTimer
@@ -146,10 +127,8 @@ public final class ProjectGitWatcher {
     public func stop() {
         startGeneration += 1
         isRunning = false
-        if let stream {
-            self.stream = nil
-            Self.releaseStream(stream)
-        }
+        stream?.stop()
+        stream = nil
         headDebouncer.cancel()
         topologyDebouncer.cancel()
         pendingHeadFiles.removeAll()
@@ -218,70 +197,15 @@ public final class ProjectGitWatcher {
             return
         }
         guard let worktreeRoot = resolvedWorktreeRoot else { return }
-        let streamContext = ProjectGitWatcherStreamContext(
-            watcher: self,
-            gitDir: gitDir,
-            worktreeRoot: worktreeRoot
-        )
-        var context = FSEventStreamContext(
-            version: 0,
-            info: Unmanaged.passRetained(streamContext).toOpaque(),
-            retain: nil,
-            release: { @Sendable info in
-                guard let info else { return }
-                Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(info).release()
-            },
-            copyDescription: nil
-        )
-        let cb: FSEventStreamCallback = { @Sendable _, ctx, numEvents, eventPaths, _, _ in
-            guard let ctx else { return }
-            let streamContext = Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(ctx).takeUnretainedValue()
-            guard let watcher = streamContext.watcher else { return }
-            let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
-            guard let paths = cfArray as? [String], paths.count == numEvents else { return }
-            let batch = ProjectGitWatcher.classifyStreamEvents(
-                paths,
-                gitDir: streamContext.gitDir,
-                worktreeRoot: streamContext.worktreeRoot
-            )
+        stream = FileEventStream(paths: [gitDir.path], fileEvents: true, queue: Self.eventQueue) { [weak self] paths in
+            guard let paths else { return }
+            let batch = ProjectGitWatcher.classifyStreamEvents(paths, gitDir: gitDir, worktreeRoot: worktreeRoot)
             guard batch.hasChanges else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    watcher.processStreamBatch(batch, requireRunning: true)
+                    self?.processStreamBatch(batch, requireRunning: true)
                 }
             }
-        }
-        guard let stream = FSEventStreamCreate(
-            kCFAllocatorDefault,
-            cb,
-            &context,
-            [gitDir.path] as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.5,
-            FSEventStreamCreateFlags(
-                kFSEventStreamCreateFlagFileEvents
-                | kFSEventStreamCreateFlagNoDefer
-                | kFSEventStreamCreateFlagUseCFTypes
-            )
-        ) else {
-            Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(context.info!).release()
-            return
-        }
-        FSEventStreamSetDispatchQueue(stream, Self.eventQueue)
-        FSEventStreamStart(stream)
-        self.stream = stream
-    }
-
-    nonisolated private static func releaseStream(_ stream: FSEventStreamRef) {
-        let release = {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-        }
-        if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
-            release()
-        } else {
-            eventQueue.sync(execute: release)
         }
     }
 

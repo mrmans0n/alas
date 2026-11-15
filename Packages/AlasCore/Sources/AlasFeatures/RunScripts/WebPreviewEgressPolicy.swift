@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 import Synchronization
 
 /// Which addresses a remote-owned web preview may connect to. A remote page
@@ -102,7 +103,7 @@ public enum WebPreviewHostLookup {
     private static func lookupAddresses(_ host: String) -> [String]? {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
+        hints.ai_socktype = streamSocketType
         var result: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, nil, &hints, &result) == 0, let result else { return nil }
         defer { freeaddrinfo(result) }

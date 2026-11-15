@@ -283,9 +283,8 @@ public struct ProcessGGCommandRunner: GGCommandRunning, Sendable {
                         if Task.isCancelled { return }
                         if process.isRunning {
                             timeoutState.markTimedOut()
-                            fputs(
-                                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                                stderr
+                            writeStandardError(
+                                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n"
                             )
                             await BlockingWork.run { processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds) }
                         }

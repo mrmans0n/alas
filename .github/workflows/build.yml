@@ -850,7 +850,7 @@ jobs:
         run: >-
           scripts/retry-ci-acquisition.sh swift package resolve
           --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
-          && swift build --package-path Packages/AlasCore --target AlasFoundation
+          && swift build --package-path Packages/AlasCore --target AlasCode
 
   remote-web-tests:
     name: Remote web tests

@@ -458,7 +458,7 @@ public enum RemoteWorktreeFileAccess: Sendable {
                 return .success(status)
             }
             let status = try written.get()
-            guard renameatx_np(directory, temp, directory, name, creating ? UInt32(RENAME_EXCL) : 0) == 0 else { throw failure() }
+            guard AtomicRename.renameAt(directory, temp, directory, name, mode: creating ? .exclusive : .plain) == 0 else { throw failure() }
             renamed = true
             // The rename is durable once its folder is.
             fsync(directory)

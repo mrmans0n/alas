@@ -709,7 +709,7 @@ public struct CheckpointRestoreTransaction: Sendable {
         _ = try fileSystem.list(destination.deletingLastPathComponent())
         // Exclusive rename also refuses a new file that appeared after the last
         // fingerprint check. Both leaves remain recoverable on failure.
-        guard Foundation.renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw posix("rename leaf") }
+        guard AtomicRename.rename(source.path, destination.path, mode: .exclusive) == 0 else { throw posix("rename leaf") }
         try fileSystem.synchronizeDirectory(source.deletingLastPathComponent())
         try fileSystem.synchronizeDirectory(destination.deletingLastPathComponent())
     }

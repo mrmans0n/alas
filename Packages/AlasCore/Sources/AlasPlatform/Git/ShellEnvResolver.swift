@@ -128,10 +128,7 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// Kills every process in session `id`. A shell's background jobs get
     /// process groups of their own, but stay in its session.
     private static func killSession(_ id: pid_t) {
-        let capacity = Int(proc_listallpids(nil, 0)) + 64
-        var pids = [pid_t](repeating: 0, count: capacity)
-        let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
-        for pid in pids.prefix(max(0, count)) where pid > 0 && getsid(pid) == id {
+        for pid in ProcessTable.allPIDs() where getsid(pid) == id {
             kill(pid, SIGKILL)
         }
     }

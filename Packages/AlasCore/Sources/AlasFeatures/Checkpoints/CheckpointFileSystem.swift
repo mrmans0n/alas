@@ -132,13 +132,13 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
             throw posixError("lstat")
         }
         if isRegular(attributes) {
-            return .init(kind: .regular, executable: attributes.st_mode & 0o111 != 0, byteCount: attributes.st_size,
+            return .init(kind: .regular, executable: attributes.st_mode & 0o111 != 0, byteCount: Int64(attributes.st_size),
                          identity: .init(device: UInt64(attributes.st_dev), inode: UInt64(attributes.st_ino),
-                                         byteCount: attributes.st_size,
+                                         byteCount: Int64(attributes.st_size),
                                          modified: nanoseconds(attributes.st_mtimespec), changed: nanoseconds(attributes.st_ctimespec)))
         }
         if isSymlink(attributes) {
-            return .init(kind: .symlink, executable: false, byteCount: attributes.st_size)
+            return .init(kind: .symlink, executable: false, byteCount: Int64(attributes.st_size))
         }
         throw CheckpointFileSystemError.unsupportedLeaf
     }

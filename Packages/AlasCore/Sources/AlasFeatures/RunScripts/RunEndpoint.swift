@@ -134,11 +134,13 @@ public enum RunPortProbe: Sendable {
     }
 
     private static func isIPv4PortInUse(_ port: Int) -> Bool {
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        let descriptor = socket(AF_INET, streamSocketType, 0)
         guard descriptor >= 0 else { return false }
         defer { Foundation.close(descriptor) }
         var address = sockaddr_in()
+        #if canImport(Darwin)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = UInt16(port).bigEndian
         address.sin_addr.s_addr = INADDR_ANY
@@ -151,11 +153,13 @@ public enum RunPortProbe: Sendable {
     }
 
     private static func isIPv6PortInUse(_ port: Int) -> Bool {
-        let descriptor = socket(AF_INET6, SOCK_STREAM, 0)
+        let descriptor = socket(AF_INET6, streamSocketType, 0)
         guard descriptor >= 0 else { return false }
         defer { Foundation.close(descriptor) }
         var address = sockaddr_in6()
+        #if canImport(Darwin)
         address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        #endif
         address.sin6_family = sa_family_t(AF_INET6)
         address.sin6_port = UInt16(port).bigEndian
         address.sin6_addr = in6addr_any

@@ -5,7 +5,6 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasACP
-import os
 
 private let sessionFailureLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-session-failure")
 private let fileChangeReportLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-file-change-report")

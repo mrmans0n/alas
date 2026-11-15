@@ -497,15 +497,7 @@ public actor WorktreeCheckpointStore {
     }
 
     private func processStartTime(pid: Int32) -> Date? {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        let result = mib.withUnsafeMutableBufferPointer { pointer in
-            sysctl(pointer.baseAddress, u_int(pointer.count), &info, &size, nil, 0)
-        }
-        guard result == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
-        let startTime = info.kp_proc.p_starttime
-        return Date(timeIntervalSince1970: TimeInterval(startTime.tv_sec) + TimeInterval(startTime.tv_usec) / 1_000_000)
+        ProcessTable.entry(of: pid)?.startTime.date
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
@@ -671,7 +663,7 @@ public actor WorktreeCheckpointStore {
         return VerifiedBlobIdentity(
             device: UInt64(attributes.st_dev),
             inode: UInt64(attributes.st_ino),
-            byteCount: attributes.st_size,
+            byteCount: Int64(attributes.st_size),
             modifiedSeconds: Int64(attributes.st_mtimespec.tv_sec),
             modifiedNanoseconds: Int64(attributes.st_mtimespec.tv_nsec),
             changedSeconds: Int64(attributes.st_ctimespec.tv_sec),

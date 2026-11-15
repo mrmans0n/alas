@@ -77,11 +77,15 @@ public final class GatekeeperRemediator {
     }
 
     nonisolated private static func removeQuarantineAttribute(at path: String) -> Bool {
+        #if canImport(Darwin)
         let result = path.withCString { cpath in
             removexattr(cpath, "com.apple.quarantine", 0)
         }
         // 0 → removed. -1 with ENOATTR → wasn't there; treat as
         // success since the post-state matches the goal.
         return result == 0 || (result == -1 && errno == ENOATTR)
+        #else
+        return true // Nothing is quarantined outside macOS.
+        #endif
     }
 }

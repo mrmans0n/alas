@@ -1,6 +1,6 @@
 import Foundation
+import AlasFoundation
 import AlasModel
-import OSLog
 
 /// Times a `session/load`: its history (the replay's end event) apart from
 /// its runtime (the response).

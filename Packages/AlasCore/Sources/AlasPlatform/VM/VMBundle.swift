@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// On-disk layout of a VM: a directory of fixed-name files. Golden images are
 /// sealed once setup finishes; worktree VMs are copy-on-write clones of them.
@@ -57,7 +58,13 @@ public struct VMBundle: Sendable {
     /// Copies `src` to `dst` with `clonefile(2)`: copy-on-write on APFS, and
     /// an error across volumes.
     public static func cloneFile(_ src: URL, to dst: URL) throws {
-        if clonefile(src.path, dst.path, 0) != 0 {
+        #if canImport(Darwin)
+        let failed = clonefile(src.path, dst.path, 0) != 0
+        #else
+        let failed = true // VM bundles live only on macOS.
+        errno = ENOTSUP
+        #endif
+        if failed {
             let code = errno
             throw NSError(
                 domain: NSPOSIXErrorDomain, code: Int(code),
