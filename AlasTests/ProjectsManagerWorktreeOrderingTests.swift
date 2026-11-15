@@ -611,4 +611,50 @@ struct ProjectsManagerWorktreeOrderingTests {
         // Now ordering = lastUpdateDesc: [main, a (newer), b (older)].
         #expect(mgr.worktrees(projectId: "p1").map(\.branch) == ["main", "a", "b"])
     }
+
+    // MARK: - linked projects
+
+    private static let devbox = RemotePath.virtual(host: "devbox", realPath: "/srv/r")
+
+    private func linkedManager(order: [String]) -> ProjectsManager {
+        var primary = ProjectConfig(id: "p1", name: "p1", path: "/repo", color: "blue", addedAt: Date())
+        primary.worktreeOrder = order
+        primary.worktreeOrderIsManual = true
+        var remote = ProjectConfig(
+            id: "r1", name: "r1", path: Self.devbox, color: "blue", addedAt: Date(), host: "devbox"
+        )
+        remote.linkedProjectId = "p1"
+        return ProjectsManager(persistedProjects: [primary, remote])
+    }
+
+    @Test func mergedWorktreesFollowThePrimarysManualOrder() {
+        let main = wt(path: "/repo", branch: "main")
+        let feat = wt(path: "/repo/wts/feat", branch: "feat")
+        let remoteMain = wt(path: Self.devbox, branch: "main", projectId: "r1")
+        let remoteFeat = wt(path: Self.devbox + "-wts/b", branch: "b", projectId: "r1")
+        let mgr = linkedManager(order: [remoteFeat.id, feat.id])
+        // The local rows load first, before the remote ones are known.
+        seed(mgr, projectId: "p1", [main, feat])
+        seed(mgr, projectId: "r1", [remoteMain, remoteFeat])
+        #expect(mgr.visibleWorktrees(includingLinkedTo: "p1").map(\.id)
+            == [main.id, remoteFeat.id, feat.id, remoteMain.id])
+
+        mgr.reorderWorktree(projectId: "p1", movingId: feat.id, destinationId: remoteFeat.id)
+        #expect(mgr.visibleWorktrees(includingLinkedTo: "p1").map(\.id)
+            == [main.id, feat.id, remoteFeat.id, remoteMain.id])
+    }
+
+    @Test func reorderingBeforeRemoteRowsLoadKeepsTheirPlace() {
+        let main = wt(path: "/repo", branch: "main")
+        let first = wt(path: "/repo/wts/a", branch: "a")
+        let second = wt(path: "/repo/wts/b", branch: "b")
+        let remoteFeat = wt(path: Self.devbox + "-wts/r", branch: "r", projectId: "r1")
+        let mgr = linkedManager(order: [remoteFeat.id, first.id, second.id])
+        seed(mgr, projectId: "p1", [main, first, second])
+        mgr.reorderWorktree(projectId: "p1", movingId: second.id, destinationId: first.id)
+        seed(mgr, projectId: "r1", [remoteFeat])
+
+        #expect(mgr.visibleWorktrees(includingLinkedTo: "p1").map(\.id)
+            == [main.id, remoteFeat.id, second.id, first.id])
+    }
 }
