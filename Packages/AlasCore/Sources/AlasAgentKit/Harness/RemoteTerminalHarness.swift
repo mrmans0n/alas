@@ -1,4 +1,5 @@
 import Foundation
+import AlasModel
 import AlasPlatform
 
 /// Resolves foreground processes in the SSH host's PID namespace.
@@ -204,6 +205,8 @@ public final class RemoteTerminalHarnessMonitor {
 
     private var namesByHost: [String: [String: String]] = [:]
     private var lastHookByID: [String: AgentHookEvent] = [:]
+    /// Panes a poll has answered for. A mailbox already there on the first answer is restored state.
+    private var observedIDs: Set<String> = []
     private var tasks: [String: Task<Void, Never>] = [:]
 
     public func register(sessionID: String, host: String, name: String, harness: HarnessService) {
@@ -214,25 +217,56 @@ public final class RemoteTerminalHarnessMonitor {
                 guard let subscribed = self?.namesByHost[host] else { return }
                 let snapshot = try? await RemoteTerminalHarness.observeSnapshot(host: host, namesByID: subscribed)
                 guard !Task.isCancelled, let self, let names = self.namesByHost[host], let harness else { return }
-                for (sessionID, name) in names {
-                    let hook = snapshot?.hooks[sessionID]
-                    let prior = self.lastHookByID[sessionID]
-                    if hook == nil, prior != nil {
-                        harness.forgetSession(sessionID)
-                    }
-                    harness.recordHarnessDetection(sessionId: sessionID, kind: snapshot?.agents[name])
-                    if let hook, hook != prior {
-                        harness.socketServer.onEvent?(hook)
-                    }
-                    self.lastHookByID[sessionID] = hook
-                }
+                self.apply(snapshot, asked: subscribed, current: names, harness: harness)
                 try? await Task.sleep(for: .seconds(5))
             }
         }
     }
 
-    public func unregister(sessionID: String, host: String, harness: HarnessService) {
-        guard namesByHost[host]?.removeValue(forKey: sessionID) != nil else { return }
+    /// Applies one poll of the panes in `asked`; `snapshot` is nil when it failed.
+    func apply(
+        _ snapshot: RemoteTerminalHarness.Snapshot?, asked: [String: String], current: [String: String],
+        harness: HarnessService
+    ) {
+        // A failed poll says nothing about the panes, so they keep their last state.
+        guard let snapshot else { return }
+        // A pane registered during the poll waits for one that asked about it.
+        for (sessionID, name) in current where asked[sessionID] == name {
+            let hook = snapshot.hooks[sessionID]
+            let prior = lastHookByID[sessionID]
+            if hook == nil, prior != nil {
+                harness.forgetSession(sessionID)
+            }
+            harness.recordHarnessDetection(sessionId: sessionID, kind: snapshot.agents[name])
+            if let hook, hook != prior {
+                if observedIDs.contains(sessionID) {
+                    harness.socketServer.onEvent?(hook)
+                } else if let state = Self.restoredState(hook.event) {
+                    // Shown without notifying: the event happened before this app saw the pane.
+                    harness.setExternalActivity(
+                        sessionId: sessionID, agent: hook.agent, state: state, body: hook.body, isSnapshot: true
+                    )
+                }
+            }
+            lastHookByID[sessionID] = hook
+            observedIDs.insert(sessionID)
+        }
+    }
+
+    private static func restoredState(_ event: ActivityEvent) -> ActivityState? {
+        switch event {
+        case .attached, .busy: .busy
+        case .awaitingInput: .awaitingInput
+        case .permissionRequest: .permissionRequest
+        case .idle: .idle
+        case .backgroundStarted, .backgroundEnded, .detached: nil
+        }
+    }
+
+    public func unregister(sessionID: String, harness: HarnessService) {
+        guard let host = namesByHost.first(where: { $0.value[sessionID] != nil })?.key else { return }
+        namesByHost[host]?.removeValue(forKey: sessionID)
+        observedIDs.remove(sessionID)
         if lastHookByID.removeValue(forKey: sessionID) != nil {
             harness.forgetSession(sessionID)
         } else {
