@@ -173,6 +173,10 @@ extension Process {
         _ = await (outClosed, errClosed)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
+        // Nothing else closes the read ends on Linux: each call would keep two
+        // descriptors open for the life of the process.
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
 
         let timedOut = timeoutState.didTimeOut
         if timedOut {
@@ -418,6 +422,10 @@ extension Process {
         _ = await outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
+        // Nothing else closes the read ends on Linux: each call would keep two
+        // descriptors open for the life of the process.
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
 
         return outAccum.snapshot().prefix(maxBytes)
     }
@@ -554,6 +562,10 @@ extension Process {
         _ = await (outClosed, errClosed)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
+        // Nothing else closes the read ends on Linux: each call would keep two
+        // descriptors open for the life of the process.
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
 
         if timedOutFlag.value {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
@@ -698,6 +710,10 @@ extension Process {
         _ = await (outClosed, errClosed)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
+        // Nothing else closes the read ends on Linux: each call would keep two
+        // descriptors open for the life of the process.
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
 
         if timedOutFlag.value, let timeout {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)

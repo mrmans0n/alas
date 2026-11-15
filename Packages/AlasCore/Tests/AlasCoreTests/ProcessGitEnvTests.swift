@@ -92,3 +92,25 @@ private final class CapDuringLaunchProcess: Process, @unchecked Sendable {
     private enum FixtureError: Error { case capWasNotReachedDuringLaunch }
 }
 #endif
+
+#if os(Linux)
+import Foundation
+import Testing
+import AlasPlatform
+
+struct ProcessRunDescriptorTests {
+    /// Each call used to keep its stdout and stderr read ends open: two
+    /// descriptors per git call, until Foundation's spawn crashed on the count.
+    @Test func runningProcessesLeavesNoDescriptorsBehind() async throws {
+        func openDescriptors() throws -> Int {
+            try FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd").count
+        }
+        // Warm up the dispatch sources and threads the first calls create.
+        for _ in 0..<5 { _ = try await Process.run("/usr/bin/env", args: ["true"]) }
+        let before = try openDescriptors()
+        for _ in 0..<100 { _ = try await Process.run("/usr/bin/env", args: ["true"]) }
+        // A leak adds 200; other tests running alongside open a few of their own.
+        #expect(try openDescriptors() - before < 100)
+    }
+}
+#endif
