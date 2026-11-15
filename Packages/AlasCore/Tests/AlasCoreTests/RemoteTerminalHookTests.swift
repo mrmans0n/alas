@@ -65,5 +65,4 @@ struct RemoteTerminalHookTests {
         #expect(!direct.contains("ALAS_HOOK_EVENT_FILE"))
         #expect(RemoteTerminalScript.hookMailboxPath(sessionID: "../unsafe") == nil)
     }
-
 }
