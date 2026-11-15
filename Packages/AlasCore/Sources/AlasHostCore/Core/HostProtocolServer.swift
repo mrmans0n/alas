@@ -655,12 +655,19 @@ public final class HostProtocolConnection {
         return listed
     }
 
-    /// A visible worktree, on a host that serves git actions.
+    /// A visible worktree, on a host that serves git actions. An app host,
+    /// which keeps git to the user at it, still serves the user's own phone.
     private func gitWorktree(_ ref: WorktreeRef) throws -> Worktree {
-        guard host.servedCapabilities.contains(HostProtocolCapability.worktreesGitV1) else {
+        guard host.servedCapabilities.contains(HostProtocolCapability.worktreesGitV1) || callerIsPhone else {
             throw HostError.invalidRequest(reason: "This host does not serve git actions.")
         }
         return try visibleWorktree(ref)
+    }
+
+    /// A device paired as the native phone app; see `RemoteDeviceKind.phone`.
+    private var callerIsPhone: Bool {
+        guard case .remotePeer(let deviceID) = caller else { return false }
+        return delegationPairing()?.device(id: deviceID)?.kind == .phone
     }
 
     /// A visible worktree, on a host that serves `capability`.

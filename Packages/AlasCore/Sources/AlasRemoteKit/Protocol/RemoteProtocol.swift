@@ -1634,6 +1634,9 @@ public enum HostProtocolCapability: Sendable {
     /// `reviewStatus`: only a headless host, whose Mac has no one at it to
     /// do them there.
     public static let worktreesGitV1 = "host.worktrees.git.v1"
+    /// Hosts that serve those same verbs to a device paired as the native
+    /// phone app, an app host included: the phone is its user.
+    public static let worktreesGitPhoneV1 = "host.worktrees.git.phone.v1"
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"
