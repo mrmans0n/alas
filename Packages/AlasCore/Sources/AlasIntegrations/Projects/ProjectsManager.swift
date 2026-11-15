@@ -162,6 +162,61 @@ public final class ProjectsManager {
         var projectIDs = Set<String>()
         self.projects = persistedProjects.filter { projectIDs.insert($0.id).inserted }
         self.defaultOrderingSource = defaultOrdering
+        // Re-apply persisted links through `link` so a hand-edited or stale
+        // file cannot hide a project behind a missing or invalid primary.
+        let persistedLinks = projects.compactMap { project in project.linkedProjectId.map { (project.id, $0) } }
+        for index in projects.indices { projects[index].linkedProjectId = nil }
+        for (recordId, primaryId) in persistedLinks { link(recordId, to: primaryId) }
+    }
+
+    // MARK: - Linked projects
+
+    /// Projects with a sidebar group and settings of their own.
+    public var primaryProjects: [ProjectConfig] {
+        projects.filter { $0.linkedProjectId == nil }
+    }
+
+    public func linkedProjects(of primaryId: String) -> [ProjectConfig] {
+        projects.filter { $0.linkedProjectId == primaryId }
+    }
+
+    /// The project whose settings apply: the primary for a linked record.
+    public func settingsProject(for projectId: String) -> ProjectConfig? {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        guard let primaryId = project.linkedProjectId else { return project }
+        return projects.first { $0.id == primaryId }
+    }
+
+    /// Links an SSH git project to a local git project. Invalid pairs, and a
+    /// second record on a host the primary already has, are ignored.
+    public func link(_ projectId: String, to primaryId: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }),
+              let primary = projects.first(where: { $0.id == primaryId }),
+              let host = projects[index].host, !projects[index].isFolder,
+              primary.host == nil, !primary.isFolder, primary.linkedProjectId == nil,
+              !linkedProjects(of: primaryId).contains(where: { $0.host == host })
+        else { return }
+        projects[index].linkedProjectId = primaryId
+        applyWorktreeOrdering(projectId: primaryId)
+    }
+
+    /// Makes every record linked to `primaryId` a standalone project again.
+    public func unlinkAll(from primaryId: String) {
+        for index in projects.indices where projects[index].linkedProjectId == primaryId {
+            projects[index].linkedProjectId = nil
+        }
+    }
+
+    /// The primary's visible rows and its linked records', in the primary's order.
+    public func visibleWorktrees(includingLinkedTo primaryId: String) -> [Worktree] {
+        guard let primary = projects.first(where: { $0.id == primaryId }) else { return [] }
+        let rows = ([primaryId] + linkedProjects(of: primaryId).map(\.id)).flatMap { visibleWorktrees(projectId: $0) }
+        return sortedWorktrees(rows, project: primary)
+    }
+
+    /// Every row the primary's order ranks: its own and its linked records'.
+    private func orderingRows(_ projectId: String) -> [Worktree] {
+        ([projectId] + linkedProjects(of: projectId).map(\.id)).flatMap { worktreesByProject[$0, default: []] }
     }
 
     /// Replace the live source of the global default sort mode. The closure is
@@ -261,6 +316,7 @@ public final class ProjectsManager {
     /// the caller can refresh and persist them.
     @discardableResult
     public func removeProject(id: String) -> Set<String> {
+        unlinkAll(from: id)
         let released = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
@@ -856,22 +912,17 @@ public final class ProjectsManager {
     }
 
     public func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
-        guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
-              var rows = worktreesByProject[projectId],
-              rows.indices.contains(fromIndex)
-        else { return }
-
+        guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }) else { return }
         applyWorktreeOrdering(projectId: projectId)
-        rows = worktreesByProject[projectId, default: []]
+        var rows = sortedWorktrees(orderingRows(projectId), project: projects[projectIndex])
         guard rows.indices.contains(fromIndex),
-              !isMainWorktree(rows[fromIndex], project: projects[projectIndex])
+              !isPinnedMain(rows[fromIndex], project: projects[projectIndex])
         else { return }
 
         let moving = rows.remove(at: fromIndex)
         let clampedDestination = min(max(toIndex, 1), rows.count)
         rows.insert(moving, at: clampedDestination)
 
-        worktreesByProject[projectId] = rows
         projects[projectIndex].worktreeOrderIsManual = true
         projects[projectIndex].worktreeOrder = normalizedWorktreeOrder(
             rows.map(\.id),
@@ -881,9 +932,11 @@ public final class ProjectsManager {
         applyWorktreeOrdering(projectId: projectId)
     }
 
+    /// With linked records, the ids may be any of the primary's merged rows.
     public func reorderWorktree(projectId: String, movingId: String, destinationId: String) {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return }
         applyWorktreeOrdering(projectId: projectId)
-        let rows = worktreesByProject[projectId, default: []]
+        let rows = sortedWorktrees(orderingRows(projectId), project: project)
         guard let fromIndex = rows.firstIndex(where: { $0.id == movingId }),
               let toIndex = rows.firstIndex(where: { $0.id == destinationId })
         else { return }
@@ -1170,7 +1223,7 @@ public final class ProjectsManager {
         let ordered = sortedWorktrees(rows, project: project)
         worktreesByProject[projectId] = ordered
 
-        let normalized = normalizedWorktreeOrder(project.worktreeOrder, rows: ordered, project: project)
+        let normalized = normalizedWorktreeOrder(project.worktreeOrder, rows: orderingRows(projectId), project: project)
         if projects[projectIndex].worktreeOrder != normalized {
             projects[projectIndex].worktreeOrder = normalized
             return true
@@ -1186,7 +1239,7 @@ public final class ProjectsManager {
         var main: [Worktree] = []
         var others: [Worktree] = []
         for row in rows {
-            if isMainWorktree(row, project: project) { main.append(row) } else { others.append(row) }
+            if isPinnedMain(row, project: project) { main.append(row) } else { others.append(row) }
         }
 
         let sortedOthers: [Worktree]
@@ -1243,11 +1296,17 @@ public final class ProjectsManager {
         // distinguish manual-mode (non-empty) from auto-mode (empty).
         if order.isEmpty { return [] }
 
-        let nonMainIds = Set(rows.filter { !isMainWorktree($0, project: project) }.map(\.id))
+        let nonMainIds = Set(rows.filter { !isPinnedMain($0, project: project) }.map(\.id))
+        // A linked record whose rows have not loaded yet keeps its ids, so
+        // the merged order survives the local rows loading first.
+        let pendingHosts = Set(linkedProjects(of: project.id).filter { worktreesByProject[$0.id] == nil }.compactMap(\.host))
+        func isPending(_ id: String) -> Bool {
+            RemotePath.split(id).map { pendingHosts.contains($0.host) } ?? false
+        }
         var seen: Set<String> = []
         var normalized: [String] = []
 
-        for id in order where nonMainIds.contains(id) && !seen.contains(id) {
+        for id in order where (nonMainIds.contains(id) || isPending(id)) && !seen.contains(id) {
             normalized.append(id)
             seen.insert(id)
         }
@@ -1270,5 +1329,11 @@ public final class ProjectsManager {
     private func isMainWorktree(_ worktree: Worktree, project: ProjectConfig) -> Bool {
         worktree.isMainWorktree
             ?? (canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path)))
+    }
+
+    /// Only the project's own main checkout is pinned first; a linked
+    /// record's main checkout sorts with the rest of its primary's group.
+    private func isPinnedMain(_ worktree: Worktree, project: ProjectConfig) -> Bool {
+        worktree.projectId == project.id && isMainWorktree(worktree, project: project)
     }
 }
