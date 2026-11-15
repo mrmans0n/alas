@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// The APNs collapse id of a session's push, which the phone also uses as
