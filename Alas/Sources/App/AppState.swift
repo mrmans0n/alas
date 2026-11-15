@@ -1806,7 +1806,8 @@ final class AppState {
         // orphaned. The test host shares the user's app support dir, so it
         // skips the files.
         var projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
-        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
+        let storedConfig = Result { try store.readIfExists(AppConfig.self, from: Paths.appConfigFile) }
+        var config = (try? storedConfig.get()).flatMap { $0 } ?? AppConfig.defaults
         var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         // On any failure the pending maps stay and are saved with
         // projects.json whenever it is next written, so the next launch retries.
@@ -1818,6 +1819,11 @@ final class AppState {
             saving: unitTestHost ? nil : store,
             migrateStores: { unitTestHost ? false : RemotePathMigration.migrate(idMap: $0, defaults: AlasProfile.userDefaults) }
         )
+        // A config.json that failed to parse is never overwritten at launch.
+        if config.seedMachinesIfNeeded(projectHosts: projectsFile.projects.compactMap(\.host)),
+           !unitTestHost, case .success = storedConfig {
+            try? store.write(config, to: Paths.appConfigFile)
+        }
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
         self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
@@ -5580,6 +5586,9 @@ final class AppState {
         }
         let refreshedProject = projectsManager.projects.first { $0.id == project.id } ?? project
         startProjectGitWatcher(for: refreshedProject)
+        if let host, config.seedMachinesIfNeeded(projectHosts: [host]) {
+            _ = saveConfig()
+        }
     }
 
     func addProject(
