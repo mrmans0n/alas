@@ -19,8 +19,11 @@ struct WebPreviewAutomationBrowserTests {
         defer { browser.close() }
         let url = URL(string: "http://127.0.0.1:\(port.rawValue)/")!
 
-        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
+        // Start WebKit outside the command deadline; this test checks navigation and DOM actions,
+        // while cold WebContent process startup can exceed that deadline on CI.
+        browser.navigate(url)
         try await waitUntil("page load failed: \(String(describing: browser.error))") { browser.webView.url == url && !browser.loading }
+        _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: url.absoluteString))
 
         let messageInspect = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "#message", limit: 5))
         let messageElements = try #require(messageInspect["elements"] as? [[String: Any]])

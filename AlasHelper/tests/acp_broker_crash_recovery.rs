@@ -1943,8 +1943,11 @@ impl Fixture {
         json!({
             "brokerId": broker_id,
             "sessionId": format!("{broker_id}-session"),
-            "command": self.adapter,
-            "args": [],
+            // Read fixture scripts through the interpreter. A parallel fork
+            // can inherit a writable script descriptor until exec, making
+            // direct execution fail with ETXTBSY on Linux.
+            "command": "/bin/sh",
+            "args": [self.adapter],
             "cwd": self.root,
             "env": {
                 "FAKE_ACP_LOG": self.log,
@@ -2029,12 +2032,6 @@ done
 "#,
     )
     .expect("write fake adapter");
-    let status = Command::new("chmod")
-        .arg("+x")
-        .arg(path)
-        .status()
-        .expect("chmod fake adapter");
-    assert!(status.success());
 }
 
 #[test]

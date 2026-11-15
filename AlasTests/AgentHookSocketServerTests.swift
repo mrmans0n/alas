@@ -2,9 +2,24 @@ import Darwin
 import Foundation
 import Testing
 @testable import Alas
+@_spi(Testing) import AlasAgentKit
 
 @Suite(.serialized)
 struct AgentHookSocketServerTests {
+    @Test func idleListenersDoNotOccupyTheirDispatchQueue() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let queue = DispatchQueue(label: "agent-hook-test-shared-listener")
+        let first = AgentHookSocketServer(socketPath: "\(dir)/first", listenQueueForTesting: queue)
+        defer { first.shutdown() }
+        let path = "\(dir)/second"
+        let second = AgentHookSocketServer(socketPath: path, listenQueueForTesting: queue)
+        defer { second.shutdown() }
+
+        let response = try await sendToSocket(path: path, payload: "not json")
+        #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
+    }
+
     private func tmpSocketDir() -> (dir: String, cleanup: () -> Void) {
         // Use /tmp directly: NSTemporaryDirectory() on macOS returns a path that
         // exceeds the 104-byte sun_path limit when combined with a UUID and filename.
