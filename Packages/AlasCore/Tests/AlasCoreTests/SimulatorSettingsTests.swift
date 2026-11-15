@@ -43,6 +43,16 @@ struct SimulatorSettingsTests {
         #expect(try SimulatorAccessibility.parse(Data((status + "\n").utf8)) == expected)
     }
 
+    @Test(arguments: [
+        ("26.5", true), ("27.0", true), ("18.5", false), (nil, true),
+    ] as [(String?, Bool)])
+    func liquidGlassIsOnlyOnIOS26AndLater(runtimeVersion: String?, supported: Bool) throws {
+        let status = Data(#"{"liquid-glass":"clear"}"#.utf8)
+        #expect(SimulatorAccessibility.supportsLiquidGlass(runtimeVersion: runtimeVersion) == supported)
+        #expect(try SimulatorAccessibility.parse(status, runtimeVersion: runtimeVersion).liquidGlass
+            == (supported ? .value(.clear) : .unsupported))
+    }
+
     @Test func accessibilityStatusThatIsNotAnObjectIsUnreadable() {
         #expect(throws: SimulatorAccessibilityError.unreadable) {
             try SimulatorAccessibility.parse(Data("sim-ax-settings: missing symbol".utf8))

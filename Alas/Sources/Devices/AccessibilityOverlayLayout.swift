@@ -11,19 +11,24 @@ struct AccessibilityOverlayLayout {
         let unlabelled: Bool
     }
 
-    /// Snapshot frames are upright screen points, like the view, so they only
-    /// scale. A snapshot taken in the other orientation draws nothing until the
-    /// next read.
-    static func boxes(_ snapshot: DeviceSnapshot, in size: CGSize) -> [Box] {
+    /// Snapshot frames are upright screen points, like the view, so they scale
+    /// into the screen fitted and centered in the view, where the video and
+    /// touches put it (`DeviceScreenGeometry`). A snapshot taken in the other
+    /// orientation than `landscape` draws nothing until the next read.
+    static func boxes(_ snapshot: DeviceSnapshot, in size: CGSize, landscape: Bool) -> [Box] {
         guard snapshot.screenWidth > 0, snapshot.screenHeight > 0, size.width > 0, size.height > 0,
-              (snapshot.screenWidth > snapshot.screenHeight) == (size.width > size.height)
+              (snapshot.screenWidth > snapshot.screenHeight) == landscape
         else { return [] }
-        let sx = size.width / snapshot.screenWidth
-        let sy = size.height / snapshot.screenHeight
+        let scale = min(size.width / snapshot.screenWidth, size.height / snapshot.screenHeight)
+        let originX = (size.width - snapshot.screenWidth * scale) / 2
+        let originY = (size.height - snapshot.screenHeight * scale) / 2
         return snapshot.elements.map { element in
             Box(
                 element: element,
-                rect: CGRect(x: element.x * sx, y: element.y * sy, width: element.width * sx, height: element.height * sy),
+                rect: CGRect(
+                    x: originX + element.x * scale, y: originY + element.y * scale,
+                    width: element.width * scale, height: element.height * scale
+                ),
                 unlabelled: element.isControl && element.label == nil
             )
         }

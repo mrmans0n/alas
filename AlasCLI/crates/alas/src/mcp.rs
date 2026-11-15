@@ -1075,7 +1075,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_set_accessibility",
-            "description": format!("Turn the simulator's accessibility settings on or off: VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look (iOS 26); pass at least one. Running apps pick changes up live. Returns all six read back; a value is \"unknown\" when the runtime doesn't report it. With VoiceOver on, a tap selects an element and a double tap activates it; turn it off when done. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Turn the simulator's accessibility settings on or off: VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look (iOS 26); pass at least one. Running apps pick changes up live. Returns all six read back; a value is \"unsupported\" when the runtime lacks that setting (Liquid Glass before iOS 26) and \"unknown\" when it doesn't report it. With VoiceOver on, a tap selects an element and a double tap activates it; turn it off when done. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",

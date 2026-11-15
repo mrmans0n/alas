@@ -5,21 +5,26 @@ import SwiftUI
 /// pointer described. Reads the tree once per `readKey` change, a second after
 /// it, and on Refresh; never continuously, since a read takes up to 2 s.
 struct DeviceAccessibilityOverlay: View {
-    let udid: String
-    let client: SimulatorStreamClient
     /// Changes after the user's input or a rotation.
     let readKey: Int
+    /// Whether the screen shown is turned sideways.
+    let landscape: Bool
     /// The pointer, in top-left-origin view points.
     let hover: CGPoint?
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
-    @State private var snapshot: DeviceSnapshot?
-    @State private var reading = false
-    @State private var readError: String?
+    @State private var reader: AccessibilityOverlayReader
+
+    init(udid: String, client: SimulatorStreamClient, readKey: Int, landscape: Bool, hover: CGPoint?) {
+        self.readKey = readKey
+        self.landscape = landscape
+        self.hover = hover
+        _reader = State(initialValue: AccessibilityOverlayReader { try await client.describe(udid: udid) })
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            let boxes = snapshot.map { AccessibilityOverlayLayout.boxes($0, in: geometry.size) } ?? []
+            let boxes = reader.snapshot.map { AccessibilityOverlayLayout.boxes($0, in: geometry.size, landscape: landscape) } ?? []
             let hovered = hover.flatMap { AccessibilityOverlayLayout.hovered(boxes, at: $0) }
             ZStack(alignment: .topLeading) {
                 ForEach(boxes, id: \.element.ref) { box in
@@ -47,9 +52,9 @@ struct DeviceAccessibilityOverlay: View {
         }
         .task(id: readKey) {
             // The first read is immediate; later ones wait for the screen to settle.
-            if snapshot != nil { try? await Task.sleep(for: .seconds(1)) }
+            if reader.snapshot != nil { try? await Task.sleep(for: .seconds(1)) }
             guard !Task.isCancelled else { return }
-            await read()
+            await reader.read()
         }
     }
 
@@ -74,15 +79,15 @@ struct DeviceAccessibilityOverlay: View {
 
     private var refreshButton: some View {
         Button {
-            Task { await read() }
+            Task { await reader.read() }
         } label: {
             HStack(spacing: 4) {
-                if reading {
+                if reader.reading {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.clockwise")
                 }
-                Text(readError == nil ? "Refresh" : "Couldn't read: retry")
+                Text(reader.error == nil ? "Refresh" : "Couldn't read: retry")
             }
             .font(scale.caption.font)
             .foregroundStyle(theme.color("fg"))
@@ -91,18 +96,7 @@ struct DeviceAccessibilityOverlay: View {
             .background(.ultraThinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .help(readError ?? "Read the screen's accessibility elements again")
-        .disabled(reading)
-    }
-
-    private func read() async {
-        reading = true
-        defer { reading = false }
-        do {
-            snapshot = try DeviceSnapshot.parse(try await client.describe(udid: udid), generation: 0)
-            readError = nil
-        } catch {
-            readError = error.localizedDescription
-        }
+        .help(reader.error ?? "Read the screen's accessibility elements again")
+        .disabled(reader.reading)
     }
 }

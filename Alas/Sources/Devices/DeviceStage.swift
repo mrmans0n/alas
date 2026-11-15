@@ -51,7 +51,7 @@ struct DeviceStage: View {
             // The radius scales with the device's short side, which is its width in portrait.
             let radius = shape?.cornerRadius(forFittedWidth: landscape ? size.height : size.width) ?? 0
             HStack(spacing: 0) {
-                screen(allowsInput: allowsInput, driver: driver)
+                screen(allowsInput: allowsInput, driver: driver, landscape: landscape)
                     .frame(width: size.width, height: size.height)
                     .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                     .overlay(
@@ -82,7 +82,7 @@ struct DeviceStage: View {
         return CGSize(width: width * scale, height: height * scale)
     }
 
-    private func screen(allowsInput: Bool, driver: VMDriver) -> some View {
+    private func screen(allowsInput: Bool, driver: VMDriver, landscape: Bool) -> some View {
         ZStack(alignment: .top) {
             DeviceScreenView(
                 udid: device.udid, client: client, onStopped: { streamError = $0 },
@@ -99,7 +99,9 @@ struct DeviceStage: View {
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
             if accessibilityOverlay, streamError == nil {
-                DeviceAccessibilityOverlay(udid: device.udid, client: client, readKey: overlayReadKey, hover: hover)
+                DeviceAccessibilityOverlay(
+                    udid: device.udid, client: client, readKey: overlayReadKey, landscape: landscape, hover: hover
+                )
             }
             if let streamError {
                 theme.color("bg-2").opacity(0.92)

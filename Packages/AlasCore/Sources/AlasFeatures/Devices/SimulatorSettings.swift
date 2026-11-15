@@ -246,12 +246,21 @@ public struct LiveSimulatorSettings: SimulatorSettingsControl {
     }
 
     public func accessibility(udid: String) async throws -> SimulatorAccessibility {
-        try SimulatorAccessibility.parse(Data(try await runHelper(udid: udid, ["status"]).utf8))
+        try await readAccessibility(udid: udid, runtimeVersion: await SimulatorControl.runtimeVersion(udid: udid))
     }
 
     public func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+        let runtimeVersion = await SimulatorControl.runtimeVersion(udid: udid)
+        // Refused before setting anything, since the helper would write it and read it back.
+        if change.liquidGlass != nil, !SimulatorAccessibility.supportsLiquidGlass(runtimeVersion: runtimeVersion) {
+            throw SimulatorAccessibilityError.liquidGlassUnsupported
+        }
         for arguments in change.helperArguments { _ = try await runHelper(udid: udid, arguments) }
-        return try await accessibility(udid: udid)
+        return try await readAccessibility(udid: udid, runtimeVersion: runtimeVersion)
+    }
+
+    private func readAccessibility(udid: String, runtimeVersion: String?) async throws -> SimulatorAccessibility {
+        try SimulatorAccessibility.parse(Data(try await runHelper(udid: udid, ["status"]).utf8), runtimeVersion: runtimeVersion)
     }
 
     private func runHelper(udid: String, _ arguments: [String]) async throws -> String {

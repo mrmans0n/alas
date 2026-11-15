@@ -107,9 +107,13 @@ struct DeviceSettingsPopover: View {
         HStack {
             Text(title)
             Spacer()
-            if supported == .unsupported {
+            switch supported {
+            case .unsupported:
                 Text("Not on this runtime").foregroundStyle(theme.color("fg-faint"))
-            } else {
+            case .unknown:
+                // Not a control: it would show, and could overwrite, a value nobody read.
+                Text("Unknown").foregroundStyle(theme.color("fg-faint"))
+            case .value:
                 control()
             }
         }

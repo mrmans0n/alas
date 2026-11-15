@@ -101,6 +101,14 @@ public enum SimulatorControl {
         )
     }
 
+    /// The simulator's iOS version, such as "26.5"; nil when simctl can't tell.
+    static func runtimeVersion(udid: String) async -> String? {
+        guard let result = try? await Process.run(xcrun, args: ["simctl", "getenv", udid, "SIMULATOR_RUNTIME_VERSION"]),
+              result.exitCode == 0 else { return nil }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return version.isEmpty ? nil : version
+    }
+
     /// Runs serve-sim's accessibility settings helper inside the simulator and returns what it printed.
     static func accessibilityHelper(udid: String, helper: URL, _ arguments: [String]) async throws -> String {
         let result = try await Process.run(xcrun, args: ["simctl", "spawn", udid, helper.path] + arguments)

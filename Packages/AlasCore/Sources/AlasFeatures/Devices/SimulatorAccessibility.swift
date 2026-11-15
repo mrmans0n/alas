@@ -26,6 +26,7 @@ public struct SimulatorAccessibilityError: Error, Equatable, LocalizedError {
 
     public static let helperMissing = SimulatorAccessibilityError(message: "The accessibility helper is missing.")
     public static let unreadable = SimulatorAccessibilityError(message: "The accessibility helper's reply wasn't readable.")
+    public static let liquidGlassUnsupported = SimulatorAccessibilityError(message: "Liquid Glass needs iOS 26 or later.")
 }
 
 /// The accessibility settings `simctl ui` lacks, as serve-sim's
@@ -53,7 +54,9 @@ public struct SimulatorAccessibility: Equatable, Sendable {
 
     /// From `sim-ax-settings status`: one JSON object of helper keys to values.
     /// A key that is absent or holds a value this version doesn't know is unknown.
-    public static func parse(_ status: Data) throws -> SimulatorAccessibility {
+    /// The helper reports Liquid Glass on any runtime; before iOS 26
+    /// (`runtimeVersion`, e.g. "18.5") it is unsupported.
+    public static func parse(_ status: Data, runtimeVersion: String? = nil) throws -> SimulatorAccessibility {
         guard let object = (try? JSONSerialization.jsonObject(with: status)) as? [String: Any] else {
             throw SimulatorAccessibilityError.unreadable
         }
@@ -67,8 +70,15 @@ public struct SimulatorAccessibility: Equatable, Sendable {
             buttonShapes: read("show-borders", onOff),
             reduceTransparency: read("reduce-transparency", onOff),
             colorFilter: read("color-filter", SimulatorColorFilter.init(rawValue:)),
-            liquidGlass: read("liquid-glass", SimulatorLiquidGlass.init(rawValue:))
+            liquidGlass: supportsLiquidGlass(runtimeVersion: runtimeVersion)
+                ? read("liquid-glass", SimulatorLiquidGlass.init(rawValue:)) : .unsupported
         )
+    }
+
+    /// Liquid Glass is iOS 26's; an unknown version gets the benefit of the doubt.
+    public static func supportsLiquidGlass(runtimeVersion: String?) -> Bool {
+        guard let major = runtimeVersion?.split(separator: ".").first.flatMap({ Int($0) }) else { return true }
+        return major >= 26
     }
 
     /// What `device_set_accessibility` returns.
