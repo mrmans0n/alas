@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AlasAgentKit
 import AlasPlatform
@@ -62,5 +63,57 @@ struct RemoteTerminalHarnessTests {
         103 102 \(childGroup) 102 \(executable)
         """
         #expect(RemoteTerminalHarness.detect(sessions: sessions, processTable: processes)["devpod"] == expected)
+    }
+
+    /// Runs the remote host's selection step on a fixture, as the host's `sh` and `awk` would.
+    private func selectOnTheHost(names: Set<String>, sessions: String, processes: String) throws -> (sessions: String, rows: String) {
+        let script = RemoteTerminalHarness.selectSessionsScript(names: names)
+            + "\n" + RemoteTerminalHarness.selectRowsScript
+            + "\nprintf '%s\\n__ROWS__\\n%s\\n' \"$selected\" \"$rows\""
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        process.environment = ProcessInfo.processInfo.environment.merging(["sessions": sessions, "processes": processes]) { $1 }
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        let parts = text.components(separatedBy: "__ROWS__\n")
+        return (parts[0], parts.dropFirst().joined())
+    }
+
+    @Test func hostSendsBackOnlyTheMonitoredSessionsAndTheirForegroundRows() throws {
+        let sessions = [
+            "name=devpod\tpid=101\tclients=1\tstart_dir=/repo",
+            "name=wrapped\tpid=301\tclients=1\tstart_dir=/repo",
+            "name=other\tpid=201\tclients=1\tstart_dir=/other",
+        ].joined(separator: "\n")
+        let processes = """
+            1     0     1     -1 /sbin/init
+          500     1   500     -1 /usr/sbin/sshd
+          101     1   101    102 /bin/zsh
+          102   101   102    102 /usr/bin/aifx
+          103   102   102    102 /home/user/.local/bin/claude
+          104   101   104    102 /usr/bin/sleep
+          105   104   105    102 /usr/bin/git
+          201     1   201    202 /bin/bash
+          202   201   202    202 /opt/codex/bin/codex
+          203   202   202    202 /usr/bin/node
+          301     1   301    301 /bin/bash
+          302   301   301    301 /usr/bin/wrapper
+          303   302   301    301 /opt/codex/bin/codex
+          304   303   301    301 /usr/bin/rg
+          400     1   400     -1 /Applications/Some App/helper
+        """
+        let selected = try selectOnTheHost(names: ["devpod", "wrapped"], sessions: sessions, processes: processes)
+
+        #expect(selected.sessions == "name=devpod\tpid=101\tclients=1\tstart_dir=/repo\nname=wrapped\tpid=301\tclients=1\tstart_dir=/repo\n")
+        let rows = selected.rows.split(separator: "\n").map { $0.split(separator: " ").first.map(String.init) ?? "" }.sorted()
+        #expect(rows == ["101", "102", "103", "301", "302", "303"])
+        #expect(
+            RemoteTerminalHarness.detect(sessions: ZmxClient.parseSessionInfos(selected.sessions), processTable: selected.rows)
+                == ["devpod": .claudeCode, "wrapped": .codex]
+        )
     }
 }
