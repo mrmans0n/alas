@@ -10,6 +10,8 @@ final class SessionRegistry {
     @ObservationIgnored private let hub: HostHub
     @ObservationIgnored private var entries: [Key: (session: TranscriptSession, holders: Int)] = [:]
 
+    @ObservationIgnored private var workspaces: [Key: SessionWorkspace] = [:]
+
     private struct Key: Hashable {
         let hostID: UUID
         let sessionId: String
@@ -31,6 +33,15 @@ final class SessionRegistry {
             entries[key]?.holders -= 1
             if current.holders == 1 { current.session.close() }
         })
+    }
+
+    /// The Changes and Files state for a session; kept for the app's life like the session itself.
+    func workspace(hostID: UUID, sessionId: String) -> SessionWorkspace {
+        let key = Key(hostID: hostID, sessionId: sessionId)
+        if let existing = workspaces[key] { return existing }
+        let made = SessionWorkspace(hub: hub, hostID: hostID, sessionId: sessionId)
+        workspaces[key] = made
+        return made
     }
 
     func live(hostID: UUID, sessionId: String) -> TranscriptSession? {

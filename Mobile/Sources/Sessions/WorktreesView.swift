@@ -25,6 +25,7 @@ struct WorktreesView: View {
 
     @State private var path: [SessionRoute] = []
     @State private var searchPresented: Bool
+    @State private var newSessionPresented = false
 
     init(hub: HostHub, model: WorktreesModel, title: String = "Worktrees", searchActive: Bool = false,
          onPairMac: @escaping () -> Void = {}) {
@@ -85,6 +86,19 @@ struct WorktreesView: View {
             }
             .navigationTitle(title)
             .searchable(text: $model.query, isPresented: $searchPresented)
+            .toolbar {
+                if !hub.hosts.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New session", systemImage: "plus") { newSessionPresented = true }
+                    }
+                }
+            }
+            .sheet(isPresented: $newSessionPresented) {
+                NewSessionSheet(hub: hub) { route in
+                    newSessionPresented = false
+                    path.append(route)
+                }
+            }
             .navigationDestination(for: SessionRoute.self) { route in
                 TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
             }

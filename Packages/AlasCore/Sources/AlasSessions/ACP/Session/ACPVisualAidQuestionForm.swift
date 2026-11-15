@@ -12,7 +12,7 @@ import AlasACP
 public enum ACPVisualAidQuestionForm: Sendable {
     public static let choiceKey = "choice"
     public static let noteKey = "note"
-    public static let noteMaxLength = 2000
+    public static let noteMaxLength = RemoteVisualAidAnswer.noteMaxLength
 
     public static func request(for visual: ACPVisualAid) -> ACPUserInputRequest? {
         guard let question = visual.question else { return nil }

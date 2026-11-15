@@ -29,6 +29,9 @@ targets:
       Release: ../Config/AlasMobile-Release.xcconfig
     sources:
       - path: Sources
+      # Shared with the Mac: the frame visual aid fragments are wrapped in.
+      - path: ../Alas/Resources/VisualAid/frame.html
+        buildPhase: resources
     dependencies:
       - package: AlasCore
         product: AlasRemoteKit

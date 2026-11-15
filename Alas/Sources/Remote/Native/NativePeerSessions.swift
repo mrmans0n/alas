@@ -58,7 +58,7 @@ final class NativePeerSessions {
             ids = []
             note = nil
         }
-        guard RemoteSessionGateway.visualAidAnswer(to: question, action: action, selectedOptionIds: ids, note: note) != nil else {
+        guard RemoteVisualAidAnswer.answer(to: question, action: action, selectedOptionIds: ids, note: note) != nil else {
             return false
         }
         let requestId = UUID().uuidString

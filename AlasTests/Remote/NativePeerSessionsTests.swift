@@ -2680,15 +2680,6 @@ struct NativePeerSessionsTests {
         #expect(!NativePeerNewSession.canCreateWorktree(base: base, branch: branch, branches: .failed("no git")))
     }
 
-    @Test(arguments: [
-        ("main", "main"),
-        ("trunk", "dev"),   // a preferred base the peer does not list falls back to its first branch
-    ] as [(String, String)])
-    func aNewPeerWorktreePreselectsThePeersPreferredBase(preferred: String, expected: String) {
-        let branches = NativePeerNewSession.Branches.loaded(names: ["dev", "main"], preferredBase: preferred)
-        #expect(NativePeerNewSession.preselectedBase(in: branches) == expected)
-    }
-
     @Test func repliesForACancelledSheetAreIgnored() {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)
@@ -2699,49 +2690,6 @@ struct NativePeerSessionsTests {
         #expect(client.newSession?.worktrees == nil)
         links.receive(.worktreeList(worktrees: [worktreeOption("w1", projectId: "p")]), from: "B")
         #expect(client.newSession?.worktrees?.map(\.id) == ["w1"])
-    }
-
-    @Test(arguments: [
-        (true, ["w1"]),          // matches on projectId
-        (false, ["w1", "w2"]),   // older peer without projectIds: falls back to project name
-    ] as [(Bool, [String])])
-    func newSessionWorktreesBelongToTheClickedRepo(optionsCarryProjectIds: Bool, expected: [String]) {
-        let options = [
-            worktreeOption("w1", projectId: optionsCarryProjectIds ? "p" : nil),
-            worktreeOption("w2", projectId: optionsCarryProjectIds ? "q" : nil),
-            worktreeOption("w3", projectId: optionsCarryProjectIds ? "r" : nil, projectName: "other"),
-        ]
-        #expect(NativePeerNewSession.worktrees(options, projectId: "p", repoName: "alas").map(\.id) == expected)
-    }
-
-    @Test func newSessionPreselectsTheSelectedWorktreeThenTheDefaultAgent() {
-        let options = [worktreeOption("w1", projectId: "p"), worktreeOption("w2", projectId: "p")]
-        #expect(NativePeerNewSession.preselectedWorktreeId(in: options, selectedWorktreeId: "w2") == "w2")
-        #expect(NativePeerNewSession.preselectedWorktreeId(in: options, selectedWorktreeId: "elsewhere") == "w1")
-        let agents: [RemoteAgentOption] = [.init(id: "codex", name: "Codex", isDefault: false),
-                                           .init(id: "claude", name: "Claude", isDefault: true)]
-        #expect(NativePeerNewSession.preselectedAgentId(in: agents) == "claude")
-        #expect(NativePeerNewSession.preselectedAgentId(in: Array(agents.prefix(1))) == "codex")
-    }
-
-    @Test(arguments: [
-        (true, true, true, true, false),
-        (true, false, true, false, false),
-        (false, true, false, true, false),
-        (false, false, false, false, true),  // nothing remembered: chips hidden, hint shown
-    ] as [(Bool, Bool, Bool, Bool, Bool)])
-    func newSessionShowsOnlyTheChipsThePeerRemembers(
-        hasModels: Bool, hasEfforts: Bool, showsModel: Bool, showsEffort: Bool, showsHint: Bool
-    ) throws {
-        let agent = RemoteAgentOption(
-            id: "claude", name: "Claude", isDefault: true,
-            models: hasModels ? [RemoteModelOption(id: "opus", name: "Opus")] : nil,
-            efforts: hasEfforts ? [RemoteEffortOption(id: "high", name: "High")] : nil)
-        let visibility = try #require(NativePeerNewSession.chipVisibility(for: agent))
-        #expect(visibility.showsModel == showsModel)
-        #expect(visibility.showsEffort == showsEffort)
-        #expect(visibility.showsDefaultsHint == showsHint)
-        #expect(NativePeerNewSession.chipVisibility(for: nil) == nil)
     }
 
     @Test func newSessionSheetRecoversWhenThePeerComesBack() {

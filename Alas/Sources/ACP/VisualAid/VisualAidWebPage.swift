@@ -16,7 +16,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 
     static let maxCrashes = 3
-    @ObservationIgnored private static let bridgeWorld = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+    @ObservationIgnored private static let bridgeWorld = WKContentWorld.world(name: RemoteVisualAidWebPolicy.bridgeWorldName)
     @ObservationIgnored private static var compiledRules: Task<WKContentRuleList?, Never>?
     @ObservationIgnored private static var compiledLockedRules: Task<WKContentRuleList?, Never>?
 
@@ -52,17 +52,17 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         visualID: UUID, html: String, theme: Theme, layoutVariables: [String: String] = [:],
         locksNetworkAfterLoad: Bool,
         presentation: ACPVisualAid.Presentation = .card,
-        networkLockDeadline: Duration = VisualAidWebPolicy.networkLockDeadline
+        networkLockDeadline: Duration = RemoteVisualAidWebPolicy.networkLockDeadline
     ) {
         self.locksNetworkAfterLoad = locksNetworkAfterLoad
         self.networkLockDeadline = networkLockDeadline
         self.visualID = visualID
         let variables = Self.variables(theme: theme, layoutVariables: layoutVariables)
-        documentThemeVariables = VisualAidWebPolicy.isFullDocument(html) ? nil : variables
+        documentThemeVariables = RemoteVisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
         schemeHandler = VisualAidSchemeHandler(
             visualID: visualID,
-            document: VisualAidWebPolicy.document(
+            document: RemoteVisualAidWebPolicy.document(
                 html: html,
                 themeVariables: variables,
                 frameTemplate: VisualAidFrameTemplate.html,
@@ -71,7 +71,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         )
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        configuration.setURLSchemeHandler(schemeHandler, forURLScheme: VisualAidWebPolicy.scheme)
+        configuration.setURLSchemeHandler(schemeHandler, forURLScheme: RemoteVisualAidWebPolicy.scheme)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.preferences.isElementFullscreenEnabled = false
         configuration.preferences.isFraudulentWebsiteWarningEnabled = false
@@ -95,13 +95,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         super.init()
         let controller = configuration.userContentController
         controller.addUserScript(WKUserScript(
-            source: VisualAidWebPolicy.pageLockdownScript,
+            source: RemoteVisualAidWebPolicy.pageLockdownScript,
             injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
         controller.addUserScript(WKUserScript(
-            source: VisualAidWebPolicy.bridgeScript,
+            source: RemoteVisualAidWebPolicy.bridgeScript,
             injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Self.bridgeWorld))
         // Removed in `close`; the controller retains its handler.
-        controller.add(self, contentWorld: Self.bridgeWorld, name: VisualAidWebPolicy.bridgeHandlerName)
+        controller.add(self, contentWorld: Self.bridgeWorld, name: RemoteVisualAidWebPolicy.bridgeHandlerName)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.onPointerMoved = { [weak self] point in self?.reportPointer(point) }
@@ -138,7 +138,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         loadingRules = rules
         webView.configuration.userContentController.add(rules)
         if locksNetworkAfterLoad { startLockDeadline() }
-        webView.load(URLRequest(url: VisualAidWebPolicy.documentURL(visualID: visualID)))
+        webView.load(URLRequest(url: RemoteVisualAidWebPolicy.documentURL(visualID: visualID)))
     }
 
     private static func contentRuleList() async -> WKContentRuleList? {
@@ -146,8 +146,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         if let compiledRules { return await compiledRules.value }
         let task = Task { @MainActor in
             try? await WKContentRuleListStore.default().compileContentRuleList(
-                forIdentifier: VisualAidWebPolicy.contentRuleListIdentifier,
-                encodedContentRuleList: VisualAidWebPolicy.contentRules)
+                forIdentifier: RemoteVisualAidWebPolicy.contentRuleListIdentifier,
+                encodedContentRuleList: RemoteVisualAidWebPolicy.contentRules)
         }
         compiledRules = task
         return await task.value
@@ -157,8 +157,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         if let compiledLockedRules { return await compiledLockedRules.value }
         let task = Task { @MainActor in
             try? await WKContentRuleListStore.default().compileContentRuleList(
-                forIdentifier: VisualAidWebPolicy.lockedContentRuleListIdentifier,
-                encodedContentRuleList: VisualAidWebPolicy.lockedContentRules)
+                forIdentifier: RemoteVisualAidWebPolicy.lockedContentRuleListIdentifier,
+                encodedContentRuleList: RemoteVisualAidWebPolicy.lockedContentRules)
         }
         compiledLockedRules = task
         return await task.value
@@ -185,7 +185,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         }
         status = .loading
         hasCommitted = false
-        webView.load(URLRequest(url: VisualAidWebPolicy.documentURL(visualID: visualID)))
+        webView.load(URLRequest(url: RemoteVisualAidWebPolicy.documentURL(visualID: visualID)))
     }
 
     /// Shuts the network for a question visual: the locked rules go in before the loading rules come out,
@@ -295,7 +295,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        let allowed = !isClosed && !navigationAction.shouldPerformDownload && VisualAidWebPolicy.allowsNavigation(
+        let allowed = !isClosed && !navigationAction.shouldPerformDownload && RemoteVisualAidWebPolicy.allowsNavigation(
             to: navigationAction.request.url,
             mainFrame: navigationAction.targetFrame?.isMainFrame == true,
             visualID: visualID)
