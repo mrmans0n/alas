@@ -31,9 +31,16 @@ public enum RemoteTerminalHarness {
         }
     }
 
+    struct HookSample: Equatable, Sendable {
+        let pid: Int
+        let writeID: String
+        let event: AgentHookEvent
+    }
+
     struct Snapshot: Sendable {
         var agents: [String: HarnessKind] = [:]
-        var hooks: [String: AgentHookEvent] = [:]
+        /// Eligible samples for each leaf, newest first.
+        var hooks: [String: [HookSample]] = [:]
     }
 
     static func detect(sessions: [ZmxSessionInfo], processTable: String) -> [String: HarnessKind] {
@@ -75,18 +82,19 @@ public enum RemoteTerminalHarness {
             if candidates.count == 1 { result.agents[session.name] = candidates.first }
         }
         for line in hookOutput.split(separator: "\n") {
-            let fields = line.split(separator: "\t", maxSplits: 1)
-            guard fields.count == 2, fields[1].utf8.count <= 8192 else { continue }
+            let fields = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+            guard fields.count == 4, let producer = Int(fields[1]), fields[2].utf8.count == 16,
+                  fields[3].utf8.count <= 8192 else { continue }
             let id = String(fields[0])
             guard let name = namesByID[id], let group = groupsByName[name],
-                  let hook = try? AgentHookEvent.decode(from: Data(fields[1].utf8)),
+                  let hook = try? AgentHookEvent.decode(from: Data(fields[3].utf8)),
                   hook.version == 1, hook.sessionId == id,
-                  let pid = hook.pid, let process = byPID[Int(pid)],
+                  let pid = hook.pid, Int(pid) == producer, let process = byPID[producer],
                   process.group == group, process.foregroundGroup == group,
                   result.agents[name]?.asAgentKind == hook.agent else { continue }
             switch hook.event {
             case .attached, .busy, .awaitingInput, .permissionRequest, .idle:
-                result.hooks[id] = hook
+                result.hooks[id, default: []].append(HookSample(pid: producer, writeID: String(fields[2]), event: hook))
             case .backgroundStarted, .backgroundEnded, .detached:
                 break
             }
@@ -156,6 +164,26 @@ public enum RemoteTerminalHarness {
     ')
     """#
 
+    /// Read at most one bounded record per foreground process, newest first.
+    /// Enumerating the selected PIDs keeps old mailboxes out of the host poll.
+    static let mailboxReaderScript = #"""
+    mailbox_pids=$(printf '%s\n' "$rows" | LC_ALL=C awk '$1 ~ /^[0-9]+$/ && $3 == $4 { print $1 }')
+    read_mailboxes() (
+        leaf_id=$1
+        base=$2
+        shift 2
+        for pid in $mailbox_pids; do
+            path="$base.$pid"
+            if [ -f "$path" ]; then set -- "$@" "$path"; fi
+        done
+        [ "$#" -gt 0 ] || exit 0
+        LC_ALL=C ls -1t "$@" | while IFS= read -r path; do
+            record=$(head -c 8210 "$path") || continue
+            printf '%s\t%s\t%s\n' "$leaf_id" "${path##*.}" "$record"
+        done
+    )
+    """#
+
     /// One batch SSH request per host. The host takes a single process snapshot and
     /// returns only the monitored sessions, the rows their detection needs, and
     /// their hook mailboxes. On Linux, comm can truncate executable names, so
@@ -167,7 +195,7 @@ public enum RemoteTerminalHarness {
         let hookMarker = "__ALAS_REMOTE_HOOK_MAILBOXES__"
         let mailboxReads = namesByID.keys.sorted().compactMap { id -> String? in
             guard let path = RemoteTerminalScript.hookMailboxPath(sessionID: id) else { return nil }
-            return #"if [ -f "\#(path)" ]; then printf '%s\t' \#(SSHCommand.shellQuote(id)); head -c 8193 "\#(path)"; printf '\n'; fi"#
+            return #"read_mailboxes \#(SSHCommand.shellQuote(id)) "\#(path)""#
         }.joined(separator: "\n")
         let list = RemoteTerminalScript.zmxBatchCommand(["ls"])
         let command = #"""
@@ -187,6 +215,7 @@ public enum RemoteTerminalHarness {
             done
         }
         printf '%s\n' '\#(hookMarker)'
+        \#(mailboxReaderScript)
         \#(mailboxReads)
         """#
         let result = try await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 5)
@@ -210,9 +239,9 @@ public final class RemoteTerminalHarnessMonitor {
     public init() {}
 
     private var namesByHost: [String: [String: String]] = [:]
-    private var lastHookByID: [String: AgentHookEvent] = [:]
-    /// Panes whose mailbox the last answered poll accepted, i.e. their agent is in the foreground.
-    private var foregroundHookIDs: Set<String> = []
+    private var lastWriteByProducer: [String: [Int: String]] = [:]
+    /// The producer whose mailbox the last answered poll selected for each pane.
+    private var foregroundProducerByID: [String: Int] = [:]
     /// Panes a poll has answered for. A mailbox already there on the first answer is restored state.
     private var observedIDs: Set<String> = []
     private var tasks: [String: Task<Void, Never>] = [:]
@@ -240,24 +269,29 @@ public final class RemoteTerminalHarnessMonitor {
         guard let snapshot else { return }
         // A pane registered during the poll waits for one that asked about it.
         for (sessionID, name) in current where asked[sessionID] == name {
-            let hook = snapshot.hooks[sessionID]
-            let prior = lastHookByID[sessionID]
-            if hook == nil, foregroundHookIDs.remove(sessionID) != nil {
+            let samples = snapshot.hooks[sessionID] ?? []
+            let sample = samples.first
+            let priorProducer = foregroundProducerByID[sessionID]
+            if let priorProducer, priorProducer != sample?.pid {
                 harness.forgetSession(sessionID)
             }
+            foregroundProducerByID[sessionID] = sample?.pid
             harness.recordHarnessDetection(sessionId: sessionID, kind: snapshot.agents[name])
-            if let hook {
-                let returnedToForeground = foregroundHookIDs.insert(sessionID).inserted
-                if observedIDs.contains(sessionID), hook != prior {
+            if let sample {
+                let hook = sample.event
+                if observedIDs.contains(sessionID), sample.writeID != lastWriteByProducer[sessionID]?[sample.pid] {
                     harness.socketServer.onEvent?(hook)
-                } else if returnedToForeground, let state = Self.restoredState(hook.event) {
+                } else if priorProducer != sample.pid, let state = Self.restoredState(hook.event) {
                     // Restore an existing mailbox without replaying its side effects.
                     harness.setExternalActivity(
                         sessionId: sessionID, agent: hook.agent, state: state, body: hook.body, isSnapshot: true
                     )
                 }
-                // A temporary loss of foreground eligibility must not erase this event.
-                lastHookByID[sessionID] = hook
+            }
+            // Keep the write IDs when producers lose eligibility so an older
+            // sample returning to the foreground restores without replay.
+            for sample in samples {
+                lastWriteByProducer[sessionID, default: [:]][sample.pid] = sample.writeID
             }
             observedIDs.insert(sessionID)
         }
@@ -277,8 +311,8 @@ public final class RemoteTerminalHarnessMonitor {
         guard let host = namesByHost.first(where: { $0.value[sessionID] != nil })?.key else { return }
         namesByHost[host]?.removeValue(forKey: sessionID)
         observedIDs.remove(sessionID)
-        foregroundHookIDs.remove(sessionID)
-        if lastHookByID.removeValue(forKey: sessionID) != nil {
+        foregroundProducerByID.removeValue(forKey: sessionID)
+        if lastWriteByProducer.removeValue(forKey: sessionID) != nil {
             harness.forgetSession(sessionID)
         } else {
             harness.recordHarnessDetection(sessionId: sessionID, kind: nil)

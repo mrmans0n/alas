@@ -136,15 +136,17 @@ struct RemoteTerminalHarnessTests {
             """
             let snapshot = RemoteTerminalHarness.snapshot(
                 sessions: [session], processTable: processes,
-                hookOutput: "\(id)\t\(event)", namesByID: [id: "one"]
+                hookOutput: "\(id)\t\(pid)\t0123456789abcdef\t\(event)", namesByID: [id: "one"]
             )
             #expect(snapshot.agents["one"] == .claudeCode)
-            #expect((snapshot.hooks[id]?.event == .awaitingInput) == matches)
+            #expect((snapshot.hooks[id]?.first?.event.event == .awaitingInput) == matches)
         }
     }
 
-    private func hook(_ event: ActivityEvent, id: String) -> AgentHookEvent {
-        AgentHookEvent(version: 1, event: event, agent: .claude, sessionId: id, pid: 101, timestamp: nil, body: nil)
+    private func hook(_ event: ActivityEvent, id: String, pid: Int32 = 101, writeID: String = "first") -> RemoteTerminalHarness.HookSample {
+        .init(pid: Int(pid), writeID: writeID, event: .init(
+            version: 1, event: event, agent: .claude, sessionId: id, pid: pid, timestamp: nil, body: nil
+        ))
     }
 
     @MainActor // RemoteTerminalHarnessMonitor is main-actor isolated.
@@ -157,7 +159,7 @@ struct RemoteTerminalHarnessTests {
         harness.socketServer.onEvent = { delivered.append($0.event) }
         harness.onActivityTransition = { transitions.append($0) }
         let monitor = RemoteTerminalHarnessMonitor()
-        let idle = RemoteTerminalHarness.Snapshot(agents: ["alas-pane": .claudeCode], hooks: [id: hook(.idle, id: id)])
+        let idle = RemoteTerminalHarness.Snapshot(agents: ["alas-pane": .claudeCode], hooks: [id: [hook(.idle, id: id)]])
 
         // Registered while a poll was in flight: that poll did not ask about it.
         monitor.apply(idle, asked: [:], current: names, harness: harness)
@@ -169,10 +171,11 @@ struct RemoteTerminalHarnessTests {
         #expect(harness.activityBySession[id]?.state == .idle)
         #expect(transitions.map(\.isSnapshot) == [true])
 
-        var busy = idle
-        busy.hooks[id] = hook(.busy, id: id)
-        monitor.apply(busy, asked: names, current: names, harness: harness)
-        #expect(delivered == [.busy])
+        var anotherIdle = idle
+        anotherIdle.hooks[id] = [hook(.idle, id: id, writeID: "second")]
+        monitor.apply(anotherIdle, asked: names, current: names, harness: harness)
+        monitor.apply(anotherIdle, asked: names, current: names, harness: harness)
+        #expect(delivered == [.idle])
     }
 
     @MainActor // RemoteTerminalHarnessMonitor is main-actor isolated.
@@ -184,7 +187,7 @@ struct RemoteTerminalHarnessTests {
         harness.socketServer.onEvent = { delivered.append($0.event) }
         let monitor = RemoteTerminalHarnessMonitor()
         let snapshot = RemoteTerminalHarness.Snapshot(
-            agents: ["alas-pane": .claudeCode], hooks: [id: hook(.awaitingInput, id: id)]
+            agents: ["alas-pane": .claudeCode], hooks: [id: [hook(.awaitingInput, id: id)]]
         )
 
         monitor.apply(snapshot, asked: names, current: names, harness: harness)
@@ -212,7 +215,7 @@ struct RemoteTerminalHarnessTests {
         }
         let monitor = RemoteTerminalHarnessMonitor()
         let idle = RemoteTerminalHarness.Snapshot(
-            agents: ["alas-pane": .claudeCode], hooks: [id: hook(.idle, id: id)]
+            agents: ["alas-pane": .claudeCode], hooks: [id: [hook(.idle, id: id)]]
         )
 
         monitor.apply(idle, asked: names, current: names, harness: harness)
@@ -221,12 +224,61 @@ struct RemoteTerminalHarnessTests {
 
         var foreground = idle
         if changedWhileAway {
-            foreground.hooks[id] = hook(.awaitingInput, id: id)
+            foreground.hooks[id] = [hook(.awaitingInput, id: id, writeID: "second")]
         }
         monitor.apply(foreground, asked: names, current: names, harness: harness)
         monitor.apply(foreground, asked: names, current: names, harness: harness)
 
         #expect(delivered == (changedWhileAway ? [.awaitingInput] : []))
         #expect(restored == (changedWhileAway ? [.idle] : [.idle, .idle]))
+    }
+
+    @MainActor // RemoteTerminalHarnessMonitor is main-actor isolated.
+    @Test func olderKnownProducerRestoresWithoutReplayingWhenNewestLeaves() {
+        let id = UUID().uuidString
+        let names = [id: "alas-pane"]
+        let harness = HarnessService()
+        var delivered: [ActivityEvent] = []
+        harness.socketServer.onEvent = { delivered.append($0.event) }
+        let monitor = RemoteTerminalHarnessMonitor()
+        let older = hook(.awaitingInput, id: id)
+        let newer = hook(.idle, id: id, pid: 102, writeID: "second")
+        var snapshot = RemoteTerminalHarness.Snapshot(agents: ["alas-pane": .claudeCode], hooks: [id: [newer, older]])
+
+        monitor.apply(snapshot, asked: names, current: names, harness: harness)
+        #expect(harness.activityBySession[id]?.state == .idle)
+        snapshot.hooks[id] = [older]
+        monitor.apply(snapshot, asked: names, current: names, harness: harness)
+        #expect(harness.activityBySession[id]?.state == .awaitingInput)
+        #expect(delivered.isEmpty)
+    }
+
+    @Test func pollReadsOnlyCurrentForegroundProducerFilesNewestFirst() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = directory.appendingPathComponent("latest.json")
+        for pid in 101...103 {
+            let file = URL(fileURLWithPath: "\(base.path).\(pid)")
+            try "record-\(pid)\n".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: TimeInterval(pid))],
+                                                  ofItemAtPath: file.path)
+        }
+        let reader = Process()
+        reader.executableURL = URL(fileURLWithPath: "/bin/sh")
+        reader.arguments = ["-c", """
+        rows='101 100 101 101 claude
+        102 101 101 101 claude
+        103 100 103 101 claude'
+        \(RemoteTerminalHarness.mailboxReaderScript)
+        read_mailboxes leaf "$1"
+        """, "fixture", base.path]
+        let output = Pipe()
+        reader.standardOutput = output
+        try reader.run()
+        let result = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        reader.waitUntilExit()
+        #expect(reader.terminationStatus == 0)
+        #expect(result == "leaf\t102\trecord-102\nleaf\t101\trecord-101\n")
     }
 }
