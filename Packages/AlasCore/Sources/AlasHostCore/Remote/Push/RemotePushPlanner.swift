@@ -22,13 +22,18 @@ public struct RemotePushPlanner: Sendable {
     }
 
     public static let waitingStatuses: Set<String> = ["awaitingPermission", "awaitingInput"]
+    /// A session with no runner yet. One that goes from this straight to a
+    /// wait is reattaching to a wait from before (a restart), so it pages nobody.
+    public static let noRunnerStatus = "noRunner"
 
     /// The waiting sessions, by the status last pushed.
     private var waiting: [Key: String]
+    private var unattached: Set<Key>
 
     /// Waits already present in `current` push nothing.
     public init(current: [Key: String]) {
         waiting = current.filter { Self.waitingStatuses.contains($0.value) }
+        unattached = Set(current.filter { $0.value == Self.noRunnerStatus }.keys)
     }
 
     /// Adopts the waits in `statuses` without pushing them, for sessions
@@ -42,13 +47,14 @@ public struct RemotePushPlanner: Sendable {
     public mutating func update(_ statuses: [Key: String]) -> [Action] {
         let next = statuses.filter { Self.waitingStatuses.contains($0.value) }
         var actions: [Action] = []
-        for (key, status) in next where waiting[key] != status {
+        for (key, status) in next where waiting[key] != status && !unattached.contains(key) {
             actions.append(.attention(key, status: status))
         }
         for key in waiting.keys where next[key] == nil {
             actions.append(.clear(key))
         }
         waiting = next
+        unattached = Set(statuses.filter { $0.value == Self.noRunnerStatus }.keys)
         return actions
     }
 

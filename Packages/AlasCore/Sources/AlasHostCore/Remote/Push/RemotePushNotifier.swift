@@ -78,7 +78,7 @@ final class RemotePushNotifier {
         var statuses: [Key: String] = [:]
         for session in host?.sessions.list() ?? [] {
             let key = Key(originServerId: serverId, sessionId: session.id)
-            statuses[key] = session.streamingState.map(RemoteSessionGateway.stateString) ?? "idle"
+            statuses[key] = session.streamingState.map(RemoteSessionGateway.stateString) ?? RemotePushPlanner.noRunnerStatus
         }
         return statuses
     }

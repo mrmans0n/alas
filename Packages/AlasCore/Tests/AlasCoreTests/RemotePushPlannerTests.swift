@@ -14,6 +14,8 @@ struct RemotePushPlannerTests {
         // A session entering a wait pages once, with the status it entered.
         ("idle", "awaitingPermission", RemotePushPlanner.Action.attention(.init(originServerId: "srv-a", sessionId: "s1"), status: "awaitingPermission")),
         (nil, "awaitingInput", .attention(.init(originServerId: "srv-a", sessionId: "s1"), status: "awaitingInput")),
+        // A session with no runner reattaching straight into a wait (a restart) is not new.
+        ("noRunner", "awaitingPermission", nil),
         // Moving from one wait to the other is a new question.
         ("awaitingPermission", "awaitingInput", .attention(.init(originServerId: "srv-a", sessionId: "s1"), status: "awaitingInput")),
         // Leaving a wait, or disappearing while in one, clears it.
