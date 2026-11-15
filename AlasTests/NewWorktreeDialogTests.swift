@@ -650,6 +650,31 @@ struct NewWorktreeDialogTests {
         #expect(resolved == "none")
     }
 
+    @Test(arguments: [
+        (mode: AppConfig.LauncherMode.acp, agent: "claude", expected: AppConfig.LauncherMode.acp, expectedAgent: "claude"),
+        (mode: .terminal, agent: "none", expected: .terminal, expectedAgent: "none"),
+        (mode: .terminal, agent: "local-only", expected: .terminal, expectedAgent: "amp"),
+    ])
+    func runOnChangeKeepsTheLaunchSurfaceTheMachineCanRun(
+        mode: AppConfig.LauncherMode, agent: String, expected: AppConfig.LauncherMode, expectedAgent: String
+    ) {
+        let remote = [Self.agent(id: "claude", displayName: "Claude"), Self.agent(id: "amp", displayName: "Amp")]
+        let result = NewWorktreeDialog.launchAfterRunOnChange(
+            mode: mode, agentId: agent, fallbackAgentId: "amp", enabledAgents: remote
+        )
+        #expect(result.mode == expected)
+        #expect(result.agentId == expectedAgent)
+    }
+
+    @Test func runOnChangeFallsBackToTerminalWhereNoAgentSpeaksACP() {
+        let result = NewWorktreeDialog.launchAfterRunOnChange(
+            mode: .acp, agentId: "claude", fallbackAgentId: "amp",
+            enabledAgents: [Self.agent(id: "amp", displayName: "Amp")]
+        )
+        #expect(result.mode == .terminal)
+        #expect(result.agentId == "amp")
+    }
+
     // MARK: - Per-project launch defaults
 
     @Test func resolvedLaunchDefaultsUsesProjectPreference() {

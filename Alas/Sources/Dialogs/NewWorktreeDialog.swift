@@ -230,7 +230,14 @@ struct NewWorktreeDialog: View {
         .task(id: projectId) { await refreshRunOn() }
         .onChange(of: runOnHost) { _, _ in
             // The machine decides which agents can run there, and whether gg pins the base.
-            applyLaunchDefaults(for: projectId)
+            // Keep the chosen surface (an attached issue may have picked Chat); only
+            // swap an agent the new machine can't run.
+            (launchMode, launchAgentId) = Self.launchAfterRunOnChange(
+                mode: launchMode,
+                agentId: launchAgentId,
+                fallbackAgentId: effectiveAutoLaunchAgent?.id,
+                enabledAgents: launchEligibleAgents
+            )
             if let pinned = stackPinnedBase { base = pinned }
             refreshAutoNamePlaceholder()
         }
@@ -1269,6 +1276,20 @@ struct NewWorktreeDialog: View {
         case .overrideGlobal, .appendToGlobal:
             return enabled(projectAgentId)
         }
+    }
+
+    /// The launch surface after Run on moves to another machine: the current
+    /// choice stays while the machine can run it; an agent it can't run gives
+    /// way to the fallback, and Chat to Terminal when no agent there speaks ACP.
+    nonisolated static func launchAfterRunOnChange(
+        mode: AppConfig.LauncherMode,
+        agentId: String,
+        fallbackAgentId: String?,
+        enabledAgents: [AgentDefinition]
+    ) -> (mode: AppConfig.LauncherMode, agentId: String) {
+        let mode: AppConfig.LauncherMode = mode == .acp && !acpSegmentEnabled(enabledAgents: enabledAgents) ? .terminal : mode
+        let agent = agentId == "none" || enabledAgents.contains { $0.id == agentId } ? agentId : fallbackAgentId ?? "none"
+        return (mode, resolvedLaunchAgent(initialAgentId: agent, mode: mode, enabledAgents: enabledAgents))
     }
 
     nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {
