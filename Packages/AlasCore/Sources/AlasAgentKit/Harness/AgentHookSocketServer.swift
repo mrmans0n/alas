@@ -9,16 +9,14 @@ import AlasACP
 /// Unix-socket listener for agent hook events, the Alas CLI, and the MCP
 /// hello handshake.
 ///
-/// `@unchecked Sendable` is unavoidable here: the accept loop runs on its own
-/// serial dispatch queue, every client is served on its own detached `Task`,
-/// and `shutdown()` is driven from the main actor, so the object really is
-/// touched from several threads at once. It cannot be `@MainActor` — the
-/// blocking `poll`/`accept`/`read` loop must stay off the main thread.
+/// Readiness callbacks run on a serial dispatch queue, clients are served by
+/// detached tasks, and shutdown can run on the main actor. The listener uses
+/// nonblocking accept so idle servers never occupy dispatch worker threads.
 ///
 /// Soundness rests on two invariants, both enforced below:
 ///
 /// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
-///    `_listenActive` and the four handlers are private and are only read or
+///    listener sources and the handlers are private and are only read or
 ///    written inside `lock`. Nothing else in the class is mutable:
 ///    `clientTasks` does its own locking, everything else is `let` or
 ///    `static`.
@@ -42,14 +40,11 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     private let lock = NSLock()
     private var _socketPath: String?
     private var _bindPath: String?
-    /// Serial queue that owns the blocking accept loop. A forever-loop that
-    /// spends most of its life blocked in `poll` must not run on the Swift
-    /// cooperative pool: a blocked cooperative thread is unavailable to every
-    /// other Swift task in the process, and with one listener per live
-    /// `AppState` (tests create dozens concurrently) the pool — only as wide
-    /// as the machine's core count — saturates and starves all async work,
-    /// including the test bodies themselves.
-    private let listenQueue = DispatchQueue(label: "io.nlopez.alas.agent-hook-listen", qos: .utility)
+    /// Serializes readiness and rebind callbacks without retaining a worker
+    /// while idle; dispatch has a process-wide limit on blocked threads.
+    private let listenQueue: DispatchQueue
+    private var _listenSource: DispatchSourceRead?
+    private var _rebindTimer: DispatchSourceTimer?
     private var _listenActive = false
     private var _onRebind: RebindHandler?
     private var _onEvent: EventHandler?
@@ -97,7 +92,18 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     /// in, if any. A rebind recreates and revalidates it.
     private let runtimeRoot: String?
 
-    public init(socketPath: String, runtimeRoot: String? = nil) {
+    public convenience init(socketPath: String, runtimeRoot: String? = nil) {
+        self.init(socketPath: socketPath, runtimeRoot: runtimeRoot,
+                  listenQueue: DispatchQueue(label: "io.nlopez.alas.agent-hook-listen", qos: .utility))
+    }
+
+    @_spi(Testing)
+    public convenience init(socketPath: String, listenQueueForTesting: DispatchQueue) {
+        self.init(socketPath: socketPath, runtimeRoot: nil, listenQueue: listenQueueForTesting)
+    }
+
+    private init(socketPath: String, runtimeRoot: String?, listenQueue: DispatchQueue) {
+        self.listenQueue = listenQueue
         sessionLinkDirectory = (socketPath as NSString).deletingLastPathComponent
         self.runtimeRoot = runtimeRoot
         unlink(socketPath)
@@ -220,55 +226,52 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     }
 
     public func shutdown() {
-        let boundPath = lock.withLock { () -> String? in
-            let bindPath = _bindPath
-            // The loop notices `_listenActive == false` at its next `poll`
-            // timeout (≤200ms) and exits; no kernel wake-up is needed. The
-            // loop closure owns the socket fd and closes it on the way out,
-            // so this needs no coordination with it beyond the flag.
+        let stopped = lock.withLock { () -> (String?, DispatchSourceRead?, DispatchSourceTimer?) in
+            let stopped = (_bindPath, _listenSource, _rebindTimer)
             _listenActive = false
             _socketPath = nil
             _bindPath = nil
-            return bindPath
+            _listenSource = nil
+            _rebindTimer = nil
+            return stopped
         }
+        stopped.1?.cancel()
+        stopped.2?.cancel()
         clientTasks.cancelAll()
-        if let boundPath { unlink(boundPath) }
+        if let boundPath = stopped.0 { unlink(boundPath) }
     }
 
     private func startListening(path: String) -> Bool {
         let socketFD = Self.createSocket(path: path)
         guard socketFD >= 0 else { return false }
-
-        lock.withLock { _listenActive = true }
-        listenQueue.async { [weak self, socketFD] in
-            // The fd is owned by this closure: closed exactly once on the way
-            // out, whether the loop exits because of `shutdown()` or because
-            // `self` was deallocated while the block was still queued.
-            var socketFD = socketFD
-            defer { close(socketFD) }
-            var idlePolls = 0
-            while self?.listenState() == true {
-                var pollFD = pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0)
-                let ready = poll(&pollFD, 1, 200)
-                if ready < 0 {
-                    guard errno == EINTR else { break }
-                    continue
+        lock.withLock {
+            _listenActive = true
+            installListener(socketFD: socketFD)
+            let timer = DispatchSource.makeTimerSource(queue: listenQueue)
+            timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5))
+            timer.setEventHandler { [weak self] in
+                if self?.rebindIfUnlinked() != nil {
+                    DispatchQueue.main.async { [weak self] in self?.deliverRebind() }
                 }
-                guard ready > 0 else {
-                    // Every ~5s idle. A deleted socket file means no client
-                    // can connect, so the listener is idle exactly then.
-                    idlePolls += 1
-                    if idlePolls % 25 == 0, let rebound = self?.rebindIfUnlinked() {
-                        close(socketFD)
-                        socketFD = rebound
-                        DispatchQueue.main.async { [weak self] in self?.deliverRebind() }
-                    }
-                    continue
-                }
-                self?.acceptAndHandle(socketFD: socketFD)
             }
+            _rebindTimer = timer
+            timer.resume()
         }
         return true
+    }
+
+    /// Called under `lock`. Cancellation closes exactly this source's fd,
+    /// after its last callback, even if a replacement listener is installed.
+    private func installListener(socketFD: Int32) {
+        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: listenQueue)
+        source.setEventHandler { [weak self] in
+            guard self?.listenState() == true else { return }
+            self?.acceptAndHandle(socketFD: socketFD)
+        }
+        source.setCancelHandler { close(socketFD) }
+        _listenSource?.cancel()
+        _listenSource = source
+        source.resume()
     }
 
     /// Binds a fresh listener when the socket file was deleted while Alas
@@ -277,7 +280,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     /// with "could not reach Alas" until the path exists again. Rebinding the
     /// same path heals every client without a relaunch; `onRebind` lets the
     /// owner recreate the session links that went with it. Returns the new
-    /// fd, or nil when the path is intact or cannot be restored yet.
+    /// source-owned fd, or nil when the path is intact or cannot be restored.
     ///
     /// Runs entirely under `lock` so `shutdown()` lands either before it (no
     /// rebind) or after it (and unlinks the new path), never in between.
@@ -298,7 +301,9 @@ public final class AgentHookSocketServer: @unchecked Sendable {
             }
             guard Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid()) else { return nil }
             let socketFD = Self.createSocket(path: bindPath)
-            return socketFD >= 0 ? socketFD : nil
+            guard socketFD >= 0 else { return nil }
+            installListener(socketFD: socketFD)
+            return socketFD
         }
     }
 
@@ -310,6 +315,13 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         let clientFD = accept(socketFD, nil, nil)
         guard clientFD >= 0 else { return }
 
+        // Darwin may inherit the listening socket's nonblocking flag.
+        // Client framing uses blocking reads with its own bounded timeout.
+        let flags = fcntl(clientFD, F_GETFL)
+        guard flags >= 0, fcntl(clientFD, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+            close(clientFD)
+            return
+        }
         Self.configureClientSocket(clientFD)
 
         let registry = clientTasks
@@ -560,6 +572,11 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         let socketFD = socket(AF_UNIX, streamSocketType, 0)
         guard socketFD >= 0 else { return -1 }
 
+        let flags = fcntl(socketFD, F_GETFL)
+        guard flags >= 0, fcntl(socketFD, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            close(socketFD)
+            return -1
+        }
         let bindResult = Self.bindSocket(socketFD, toPath: path)
         guard bindResult == 0 else { close(socketFD)
         return -1 }

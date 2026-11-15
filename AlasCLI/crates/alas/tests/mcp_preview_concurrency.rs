@@ -272,9 +272,71 @@ fn http_post(port: u16, token: &str, body: Value) -> String {
     )
     .unwrap();
     stream.flush().unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
+    read_http_response(&mut stream).unwrap()
+}
+
+fn read_http_response(stream: &mut impl Read) -> std::io::Result<String> {
+    use std::io::{Error, ErrorKind};
+
+    // A rejected connection can reset after its complete 503 response because
+    // the server closes without reading the request. Content-Length, not EOF,
+    // frames the response; a reset before the complete body remains an error.
+    let mut reader = BufReader::new(stream);
+    let mut response = Vec::new();
+    let mut content_length = None;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(ErrorKind::UnexpectedEof.into());
+        }
+        response.extend_from_slice(line.as_bytes());
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = Some(
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .map_err(|error| Error::new(ErrorKind::InvalidData, error))?,
+                );
+            }
+        }
+    }
+    let length = content_length
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing Content-Length"))?;
+    let body_offset = response.len();
+    response.resize(body_offset + length, 0);
+    reader.read_exact(&mut response[body_offset..])?;
+    String::from_utf8(response).map_err(|error| Error::new(ErrorKind::InvalidData, error))
+}
+
+#[test]
+fn http_response_framing_accepts_reset_only_after_the_complete_body() {
+    struct ResetAfterBytes(std::io::Cursor<Vec<u8>>);
+    impl Read for ResetAfterBytes {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.read(buffer)? {
+                0 => Err(std::io::ErrorKind::ConnectionReset.into()),
+                count => Ok(count),
+            }
+        }
+    }
+    let complete =
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy";
+    for (bytes, complete_body) in [(complete, true), (&complete[..complete.len() - 1], false)] {
+        let mut peer = ResetAfterBytes(std::io::Cursor::new(bytes.as_bytes().to_vec()));
+        let response = read_http_response(&mut peer);
+        if complete_body {
+            assert_eq!(response.unwrap(), complete);
+        } else {
+            assert_eq!(
+                response.unwrap_err().kind(),
+                std::io::ErrorKind::ConnectionReset
+            );
+        }
+    }
 }
 
 fn poll_http_until_result(

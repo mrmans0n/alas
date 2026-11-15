@@ -75,7 +75,7 @@ struct HostSessionsTests {
             do { try await answer.value } catch SessionRefusal.notPending { refused += 1 }
         }
         #expect(refused == 1)
-        #expect(fixture.agent.permissionResponses[requestID] != nil)
+        try await eventually { await fixture.agent.permissionResponses[requestID] != nil }
 
         // A late reply to that request does not answer the next one, though
         // it offers the same option.

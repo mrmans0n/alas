@@ -220,6 +220,8 @@ struct WorktreeRowView: View {
     var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     /// Keyboard cursor from the sidebar filter; drawn like hover.
     var isHighlighted = false
+    var machineBadge: WorktreeRowPresentation.MachineBadge?
+    var onRemoveLinkedCheckout: () -> Void = {}
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
     @State private var hovering = false
@@ -488,6 +490,9 @@ struct WorktreeRowView: View {
             if worktree.isDetached {
                 DetachedTag()
             }
+            if let machineBadge {
+                machineBadgeView(machineBadge)
+            }
             // A pull action is waiting, so this stays through every state.
             ForEach(WorktreeRowPresentation.upstreamItemsAtRest(Self.upstreamStatusItems(upstreamStatus, isMain: isMain)), id: \.text) {
                 upstreamView($0)
@@ -523,6 +528,21 @@ struct WorktreeRowView: View {
         } else {
             Icon(name: "branch", size: Self.glyphSlotWidth, color: theme.color("fg-dim"))
         }
+    }
+
+    private func machineBadgeView(_ badge: WorktreeRowPresentation.MachineBadge) -> some View {
+        let stateText = switch badge.state {
+        case .online: "online"
+        case .offline: "offline"
+        case .unknown: "not checked yet"
+        }
+        return Text(badge.state == .offline ? "⌁ \(badge.label) ○" : "⌁ \(badge.label)")
+            .font(scale.captionFont)
+            .foregroundColor(theme.color(badge.state == .online ? "fg-dim" : "fg-faint"))
+            .lineLimit(1)
+            .fixedSize()
+            .help("Runs on \(badge.label) (\(stateText))")
+            .accessibilityLabel("On \(badge.label), \(stateText)")
     }
 
     private var timeLabel: some View {
@@ -917,6 +937,9 @@ struct WorktreeRowView: View {
         }
         if !worktree.path.isRemoteAlasPath {
             Button("Reveal in Finder", action: onRevealInFinder)
+        }
+        if let machineBadge {
+            Button("Remove \(machineBadge.label) Checkout from Alas…", action: onRemoveLinkedCheckout)
         }
         Divider()
         if ggMenuModel.isVisible {

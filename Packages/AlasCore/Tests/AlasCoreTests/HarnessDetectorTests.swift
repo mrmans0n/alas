@@ -52,6 +52,10 @@ struct HarnessDetectorTests {
             URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--sign", "-", launcher.path], [:], 5)
         try #require(signing.exitCode == 0, "Sign test launcher: \(signing.stderr)")
         try fm.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: executable)
+        // Re-sign the copy before bash execs it; macOS can reject the copied system signature.
+        let childSigning = SubprocessRunner.system.run(
+            URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--sign", "-", executable.path], [:], 5)
+        try #require(childSigning.exitCode == 0, "Sign test child: \(childSigning.stderr)")
 
         let process = Process()
         process.executableURL = launcher
