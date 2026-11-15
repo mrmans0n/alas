@@ -122,7 +122,7 @@ struct ChangesPane: View {
                     ) {
                         EmptyView()
                     }
-                    ForEach(state.projectsManager.projects) { project in
+                    ForEach(state.projectsManager.primaryProjects) { project in
                         SettingsRow(name: project.name, desc: "") {
                             Picker("", selection: ggModeBinding(project)) {
                                 Text("Off").tag(GGProjectMode.off)

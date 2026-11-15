@@ -331,11 +331,16 @@ public final class AlasCoreContext {
     /// Sets and saves project `id`'s gg mode. Saved before it is set, so a
     /// failed save changes nothing.
     public func setProjectGGMode(id: String, mode: GGProjectMode) throws {
-        guard var project = projects.projects.first(where: { $0.id == id }) else {
+        guard let requested = projects.projects.first(where: { $0.id == id }) else {
             throw HostError.notFound(what: "project \(id)")
         }
-        project.ggMode = mode
-        try store.write(ProjectsFile(projects: projects.projects.map { $0.id == id ? project : $0 }), to: projectsFile)
+        // A linked record's gg mode is its group's, which the primary holds.
+        let groupIds = Set([requested.linkedProjectId ?? id] + projects.linkedProjects(of: requested.linkedProjectId ?? id).map(\.id))
+        try store.write(ProjectsFile(projects: projects.projects.map {
+            var project = $0
+            if groupIds.contains(project.id) { project.ggMode = mode }
+            return project
+        }), to: projectsFile)
         projects.setGGMode(projectId: id, mode: mode)
     }
 

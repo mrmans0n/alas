@@ -110,6 +110,12 @@ final class RemoteProjectGitWatcher {
         }
     }
 
+    /// Polls now and from the fastest cadence; the poll reports whether the host answers.
+    func checkNow() {
+        restartPolling()
+        Task { _ = await runTick() }
+    }
+
     func stop() {
         pollTask?.cancel()
         pollTask = nil

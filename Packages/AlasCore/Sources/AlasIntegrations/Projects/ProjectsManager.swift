@@ -180,11 +180,23 @@ public final class ProjectsManager {
         projects.filter { $0.linkedProjectId == primaryId }
     }
 
-    /// The project whose settings apply: the primary for a linked record.
-    public func settingsProject(for projectId: String) -> ProjectConfig? {
-        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
-        guard let primaryId = project.linkedProjectId else { return project }
-        return projects.first { $0.id == primaryId }
+    /// One sidebar group has one set of settings, so a linked record carries a
+    /// copy of its primary's. Every write of these goes through this manager,
+    /// which refreshes the copies, so readers keyed by `worktree.projectId`
+    /// need no lookup. The name, icon, and anything describing the checkout or
+    /// approving repo hooks and MCP servers stay per record.
+    private func copySettings(toRecordsLinkedTo primaryId: String) {
+        guard let primary = projects.first(where: { $0.id == primaryId }) else { return }
+        for index in projects.indices where projects[index].linkedProjectId == primaryId {
+            projects[index].startupScripts = primary.startupScripts
+            projects[index].mcpServers = primary.mcpServers
+            projects[index].worktreeBranchTemplate = primary.worktreeBranchTemplate
+            projects[index].worktreeLaunchPreference = primary.worktreeLaunchPreference
+            projects[index].worktreeOpenAfterCreate = primary.worktreeOpenAfterCreate
+            projects[index].worktreeDefaultLauncherMode = primary.worktreeDefaultLauncherMode
+            projects[index].shepherd = primary.shepherd
+            projects[index].ggMode = primary.ggMode
+        }
     }
 
     /// Links an SSH git project to a local git project. Invalid pairs, and a
@@ -197,6 +209,7 @@ public final class ProjectsManager {
               !linkedProjects(of: primaryId).contains(where: { $0.host == host })
         else { return }
         projects[index].linkedProjectId = primaryId
+        copySettings(toRecordsLinkedTo: primaryId)
         applyWorktreeOrdering(projectId: primaryId)
     }
 
@@ -341,13 +354,19 @@ public final class ProjectsManager {
         if let shepherd = update.shepherd {
             projects[idx].shepherd = shepherd.isEmpty ? nil : shepherd
         }
+        // A linked record's settings are its primary's: put them back.
+        copySettings(toRecordsLinkedTo: projects[idx].linkedProjectId ?? id)
     }
 
     /// Sets the per-project stacked-diffs mode. Callers persist via
     /// `AppState.saveProjects()`.
     public func setGGMode(projectId: String, mode: GGProjectMode) {
-        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard let linked = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        // A linked record's gg mode is its group's, which the primary holds.
+        let primaryId = projects[linked].linkedProjectId ?? projectId
+        guard let idx = projects.firstIndex(where: { $0.id == primaryId }) else { return }
         projects[idx].ggMode = mode
+        copySettings(toRecordsLinkedTo: primaryId)
     }
 
     /// Sets the project's worktree VM settings. Off is stored as nil, and so is
@@ -958,11 +977,15 @@ public final class ProjectsManager {
     }
 
     public func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
-        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard let linked = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        // Remembered on either machine, they are the group's, which the primary holds.
+        let primaryId = projects[linked].linkedProjectId ?? projectId
+        guard let idx = projects.firstIndex(where: { $0.id == primaryId }) else { return }
         projects[idx].setWorktreeLaunchPreference(.init(
             openAfterCreate: openAfterCreate,
             launcherMode: launcherMode
         ))
+        copySettings(toRecordsLinkedTo: primaryId)
     }
 
     @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
