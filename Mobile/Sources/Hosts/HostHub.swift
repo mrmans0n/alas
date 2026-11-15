@@ -171,11 +171,11 @@ final class HostHub {
                 case .stateChanged(.online):
                     guard self.capabilities[id]?.contains(PushRelayCapability.v1) == true else { return dropPendingUnregister(id) }
                     unregisterConnections[id]?.send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: nil))
-                    // ponytail: `send` reports no completion; a second is ample for one small frame.
-                    Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: .seconds(1))
-                        self?.dropPendingUnregister(id)
-                    }
+                    // The host handles a connection's messages in order, so the reply to this one
+                    // proves it applied the unregister. Without it the entry stays for the next try.
+                    unregisterConnections[id]?.send(.listAgents)
+                case .message(.agentList):
+                    dropPendingUnregister(id)
                 case .stateChanged(.idle), .stateChanged(.connecting), .stateChanged(.offline):
                     break
                 case .stateChanged:
