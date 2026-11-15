@@ -103,10 +103,7 @@ struct SidebarView: View {
                                         selectedWorktreeId: state.nativePeerSessions?.coversCenterPane == true
                                             ? nil : state.selectedWorktreeId,
                                         // A linked record's row is main within its own record.
-                                        isMain: { wt in
-                                            state.projects.first { $0.id == wt.projectId }
-                                                .map { state.projectsManager.isMain(wt, in: $0) } ?? false
-                                        },
+                                        isMain: { wt in state.projectsManager.isMain(wt, in: rowProject(wt, in: project)) },
                                         upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
                                         onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
                                         isPullUpstreamInFlight: { wt in
@@ -138,7 +135,7 @@ struct SidebarView: View {
                                         onOpenGGLanding: { state.openGGLanding(projectId: project.id) },
                                         harnessSummary: { state.harnessSummary(forWorktree: $0) },
                                         ggMenuModel: { wt in
-                                            state.ggWorktreeMenuModel(project: project, worktree: wt)
+                                            state.ggWorktreeMenuModel(project: rowProject(wt, in: project), worktree: wt)
                                         },
                                         onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
                                         onNewWorktree: { onNewWorktree(project.id) },
@@ -170,7 +167,7 @@ struct SidebarView: View {
                                         },
                                         onOpenIssue: { wt in
                                             guard let attachment = state.projectsManager.issueAttachment(
-                                                projectId: project.id,
+                                                projectId: wt.projectId,
                                                 worktreeId: wt.id
                                             ) else { return nil }
                                             return { NSWorkspace.shared.open(attachment.canonicalURL) }
@@ -198,7 +195,7 @@ struct SidebarView: View {
                                         showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
                                         onActivateHarness: { wt, sessionId in
                                             state.activateHarnessSession(
-                                                projectId: project.id,
+                                                projectId: wt.projectId,
                                                 worktreeId: wt.id,
                                                 sessionId: sessionId
                                             )
@@ -218,7 +215,7 @@ struct SidebarView: View {
                                             )
                                             Task { @MainActor in
                                                 await state.createWorktree(
-                                                    projectId: project.id,
+                                                    projectId: wt.projectId,
                                                     base: retry.base,
                                                     branch: wt.branch,
                                                     destination: wt.path,
@@ -232,19 +229,19 @@ struct SidebarView: View {
                                         },
                                         onRetryLaunch: { wt in
                                             Task { @MainActor in
-                                                await state.retryWorktreeLaunch(wt, project: project)
+                                                await state.retryWorktreeLaunch(wt, project: rowProject(wt, in: project))
                                             }
                                         },
                                         onRetryDelete: { wt in state.deleteWorktree(wt) },
                                         onSetGGWorktreeMode: { wt, mode in
                                             state.setGGWorktreeMode(
-                                                projectId: project.id,
+                                                projectId: wt.projectId,
                                                 worktreeId: wt.id,
                                                 mode: mode
                                             )
                                         },
                                         onRemoveFailed: { wt in
-                                            state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
+                                            state.removeFailedOptimisticWorktree(id: wt.id, projectId: wt.projectId)
                                         },
                                         onDropWorktree: { draggedId, destinationId in
                                             state.projectsManager.reorderWorktree(
@@ -262,7 +259,7 @@ struct SidebarView: View {
                                             state.saveSpaces()
                                         },
                                         commitQuery: { wt in
-                                            guard !state.projectsManager.isMain(wt, in: project) else { return nil }
+                                            guard !state.projectsManager.isMain(wt, in: rowProject(wt, in: project)) else { return nil }
                                             let pane = state.rightPaneStore.activeState(worktreeId: wt.id)
                                             let override = pane.flatMap { pane in
                                                 pane.userOverrodeBaseBranch
@@ -280,7 +277,7 @@ struct SidebarView: View {
                                         worktreeExplanation: { wt in
                                             guard let evidence = state.worktreeExplainerEvidence(
                                                 for: wt,
-                                                in: project
+                                                in: rowProject(wt, in: project)
                                             ) else { return nil }
                                             return state.worktreeExplainerStore.explanation(
                                                 for: wt.id,
@@ -288,7 +285,7 @@ struct SidebarView: View {
                                             )
                                         },
                                         worktreeExplainerEvidence: { wt in
-                                            state.worktreeExplainerEvidence(for: wt, in: project)
+                                            state.worktreeExplainerEvidence(for: wt, in: rowProject(wt, in: project))
                                         },
                                         onPrepareWorktreeExplanation: { wt, evidence in
                                             await state.worktreeExplainerStore.prepare(
@@ -437,6 +434,12 @@ struct SidebarView: View {
                 onDismiss: { peerSidebarModel.renamingBranch = nil }
             )
         }
+    }
+
+    /// The project a row belongs to: a linked record's rows show in their
+    /// primary's group but act on their own record.
+    private func rowProject(_ worktree: Worktree, in group: ProjectConfig) -> ProjectConfig {
+        state.projects.first { $0.id == worktree.projectId } ?? group
     }
 
     /// Matched worktree ids of the active space, in sidebar display order.

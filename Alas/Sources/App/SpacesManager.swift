@@ -74,7 +74,10 @@ final class SpacesManager {
     func activeProjects(from projects: [ProjectConfig]) -> [ProjectConfig] {
         guard let activeSpace else { return [] }
         let projectsById = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
-        return activeSpace.projectIds.compactMap { projectsById[$0] }
+        // A linked record belongs wherever its primary does.
+        return activeSpace.projectIds.compactMap { projectsById[$0] }.flatMap { member in
+            [member] + projects.filter { $0.linkedProjectId == member.id }
+        }
     }
 
     func addSpace(name: String, emoji: String, now: Date = Date()) -> String {

@@ -4997,7 +4997,7 @@ final class AppState {
 
     func toggleProject(projectId: String, inSpace spaceId: String) {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
-            projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
+            projectsManager.visibleWorktrees(includingLinkedTo: projectId).contains { $0.id == selectedId }
         } ?? false
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
@@ -5015,7 +5015,8 @@ final class AppState {
     }
 
     func focusGlobalWorktree(id: String, projectId: String) {
-        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+        let groupId = projectsManager.projects.first { $0.id == projectId }?.linkedProjectId ?? projectId
+        if let containing = spacesManager.containingSpaceId(forProjectId: groupId),
            containing != spacesManager.activeSpaceId {
             spacesManager.switchToSpace(id: containing)
         }
@@ -10323,7 +10324,7 @@ final class AppState {
         if spacesManager.pruneMissingProjects(validProjectIds: validProjectIds) {
             changed = true
         }
-        for project in projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+        for project in projectsManager.primaryProjects where spacesManager.membershipCount(forProject: project.id) == 0 {
             spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
             changed = true
         }
