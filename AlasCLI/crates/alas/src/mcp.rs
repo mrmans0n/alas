@@ -1074,6 +1074,24 @@ fn device_tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "device_set_accessibility",
+            "description": format!("Turn the simulator's accessibility settings on or off: VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look (iOS 26); pass at least one. Running apps pick changes up live. Returns all six read back; a value is \"unknown\" when the runtime doesn't report it. With VoiceOver on, a tap selects an element and a double tap activates it; turn it off when done. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "voiceover": { "type": "boolean" },
+                    "reduce_motion": { "type": "boolean" },
+                    "button_shapes": { "type": "boolean" },
+                    "reduce_transparency": { "type": "boolean" },
+                    "color_filter": { "type": "string", "enum": DEVICE_COLOR_FILTERS },
+                    "liquid_glass": { "type": "string", "enum": DEVICE_LIQUID_GLASS }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
             "name": "device_set_permission",
             "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
@@ -1199,6 +1217,8 @@ const DEVICE_ORIENTATIONS: &[&str] = &["portrait", "landscape_left", "landscape_
 const DEVICE_TYPE_MAX_BYTES: usize = 4096;
 
 /// simctl's text sizes, smallest first.
+const DEVICE_COLOR_FILTERS: &[&str] = &["none", "grayscale", "red-green", "green-red", "blue-yellow"];
+const DEVICE_LIQUID_GLASS: &[&str] = &["clear", "tinted"];
 const DEVICE_TEXT_SIZES: &[&str] = &[
     "extra-small",
     "small",
@@ -2185,6 +2205,47 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 appearance,
                 text_size,
                 increase_contrast,
+            }))
+        }
+        "device_set_accessibility" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "udid",
+                    "voiceover",
+                    "reduce_motion",
+                    "button_shapes",
+                    "reduce_transparency",
+                    "color_filter",
+                    "liquid_glass",
+                ],
+            )?;
+            let voiceover = optional_bool(args, "voiceover")?;
+            let reduce_motion = optional_bool(args, "reduce_motion")?;
+            let button_shapes = optional_bool(args, "button_shapes")?;
+            let reduce_transparency = optional_bool(args, "reduce_transparency")?;
+            let color_filter =
+                optional_enum(args, "color_filter", DEVICE_COLOR_FILTERS)?.map(String::from);
+            let liquid_glass =
+                optional_enum(args, "liquid_glass", DEVICE_LIQUID_GLASS)?.map(String::from);
+            if voiceover.is_none()
+                && reduce_motion.is_none()
+                && button_shapes.is_none()
+                && reduce_transparency.is_none()
+                && color_filter.is_none()
+                && liquid_glass.is_none()
+            {
+                return Err("pass at least one of voiceover, reduce_motion, button_shapes, reduce_transparency, color_filter, liquid_glass".into());
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::SetAccessibility {
+                udid: required_limited_string(args, "udid", 64)?,
+                voiceover,
+                reduce_motion,
+                button_shapes,
+                reduce_transparency,
+                color_filter,
+                liquid_glass,
             }))
         }
         "device_set_permission" => {
@@ -4475,6 +4536,7 @@ mod tests {
                 "device_install",
                 "device_launch",
                 "device_set_appearance",
+                "device_set_accessibility",
                 "device_set_permission",
                 "device_set_location",
                 "device_push",
@@ -5348,6 +5410,22 @@ mod tests {
             })
         );
         assert_eq!(
+            map(
+                "device_set_accessibility",
+                json!({ "udid": "U", "voiceover": true, "color_filter": "grayscale" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::SetAccessibility {
+                udid: "U".into(),
+                voiceover: Some(true),
+                reduce_motion: None,
+                button_shapes: None,
+                reduce_transparency: None,
+                color_filter: Some("grayscale".into()),
+                liquid_glass: None,
+            })
+        );
+        assert_eq!(
             map("device_set_location", json!({ "udid": "U", "clear": true })).unwrap(),
             Command::Device(DeviceCommand::SetLocation {
                 udid: "U".into(),
@@ -5416,6 +5494,8 @@ mod tests {
             ("device_install", json!({ "udid": "U" }), "missing required argument 'app_path'"),
             ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
             ("device_set_appearance", json!({ "udid": "U" }), "pass at least one of appearance, text_size, increase_contrast"),
+            ("device_set_accessibility", json!({ "udid": "U" }), "pass at least one of voiceover, reduce_motion, button_shapes, reduce_transparency, color_filter, liquid_glass"),
+            ("device_set_accessibility", json!({ "udid": "U", "liquid_glass": "frosted" }), "liquid_glass must be one of clear, tinted"),
             ("device_set_permission", json!({ "udid": "U", "bundle_id": "b", "service": "camera", "action": "grant" }), "service must be one of all, calendar, contacts-limited, contacts, location, location-always, photos-add, photos, media-library, microphone, motion, reminders, siri"),
             ("device_set_location", json!({ "udid": "U", "latitude": 91, "longitude": 0 }), "latitude must be a number from -90 to 90"),
             ("device_set_location", json!({ "udid": "U" }), "pass latitude and longitude, or clear: true"),
@@ -5470,7 +5550,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot", "device_logs"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

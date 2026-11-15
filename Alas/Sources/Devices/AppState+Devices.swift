@@ -24,3 +24,11 @@ extension AppState {
         }
     }
 }
+
+extension LiveSimulatorSettings {
+    /// Settings with the app's bundled accessibility helper.
+    static var bundled: LiveSimulatorSettings {
+        LiveSimulatorSettings(accessibilityHelper: Bundle.main.resourceURL?
+            .appendingPathComponent("sim-ax-settings/alas-sim-ax-settings"))
+    }
+}

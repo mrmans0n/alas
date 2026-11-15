@@ -510,6 +510,16 @@ pub enum DeviceCommand {
         text_size: Option<String>,
         increase_contrast: Option<bool>,
     },
+    /// At least one is set.
+    SetAccessibility {
+        udid: String,
+        voiceover: Option<bool>,
+        reduce_motion: Option<bool>,
+        button_shapes: Option<bool>,
+        reduce_transparency: Option<bool>,
+        color_filter: Option<String>,
+        liquid_glass: Option<String>,
+    },
     SetPermission {
         udid: String,
         bundle_id: String,
@@ -618,6 +628,7 @@ impl DeviceCommand {
             | DeviceCommand::Install { .. }
             | DeviceCommand::Launch { .. }
             | DeviceCommand::SetAppearance { .. }
+            | DeviceCommand::SetAccessibility { .. }
             | DeviceCommand::SetPermission { .. }
             | DeviceCommand::SetLocation { .. }
             | DeviceCommand::Push { .. }
@@ -1325,6 +1336,33 @@ fn device_request(command: &DeviceCommand) -> Request {
                 params["increase_contrast"] = json!(value);
             }
             ("device_set_appearance", params)
+        }
+        DeviceCommand::SetAccessibility {
+            udid,
+            voiceover,
+            reduce_motion,
+            button_shapes,
+            reduce_transparency,
+            color_filter,
+            liquid_glass,
+        } => {
+            let mut params = json!({ "udid": udid });
+            for (key, value) in [
+                ("voiceover", voiceover),
+                ("reduce_motion", reduce_motion),
+                ("button_shapes", button_shapes),
+                ("reduce_transparency", reduce_transparency),
+            ] {
+                if let Some(value) = value {
+                    params[key] = json!(value);
+                }
+            }
+            for (key, value) in [("color_filter", color_filter), ("liquid_glass", liquid_glass)] {
+                if let Some(value) = value {
+                    params[key] = json!(value);
+                }
+            }
+            ("device_set_accessibility", params)
         }
         DeviceCommand::SetPermission {
             udid,

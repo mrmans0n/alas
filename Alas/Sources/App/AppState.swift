@@ -738,7 +738,7 @@ final class AppState {
         boot: { try await SimulatorControl.boot(udid: $0) },
         install: { try await SimulatorControl.install(udid: $0, app: $1) },
         launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
-        settings: LiveSimulatorSettings(),
+        settings: LiveSimulatorSettings.bundled,
         logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
         pasteboard: devicePasteboard,
         recorder: deviceRecorder
