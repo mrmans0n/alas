@@ -179,7 +179,7 @@ private extension String {
         guard let snapshot = range(of: "let liveDescendants = Set(Self.collectDescendants(of: pid))") else {
             return false
         }
-        return self[snapshot.upperBound...].contains("Darwin.kill(-pid, SIGTERM)")
+        return self[snapshot.upperBound...].contains("Foundation.kill(-pid, SIGTERM)")
     }
 
     func validatesCachedDescendantsBeforeKilling() -> Bool {
@@ -189,7 +189,7 @@ private extension String {
     func signalsProcessGroupFromTerminationHandler() -> Bool {
         guard let handler = range(of: "let process = try SpawnedProcess("),
               let rootExited = range(of: "self.rootHasExited = true"),
-              let groupSignal = range(of: "Darwin.kill(-pid, SIGTERM)") else {
+              let groupSignal = range(of: "Foundation.kill(-pid, SIGTERM)") else {
             return false
         }
         return handler.lowerBound < groupSignal.lowerBound && groupSignal.lowerBound < rootExited.lowerBound
@@ -212,7 +212,7 @@ private extension String {
     }
 
     func refreshesDescendantsOnFork() -> Bool {
-        contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
+        contains("ForkWatch.start(pid: pid") && contains("self?.refreshOrphanSet()")
     }
 
     func observesForksBeforeBlockingDescendantSnapshot() -> Bool {
@@ -270,11 +270,10 @@ private extension String {
     func validatesCachedDescendantsWithProcessStartTime() -> Bool {
         contains("let startedAt: ProcessStartTime") &&
             contains("private static func collectChildDescendants(of root: pid_t) -> [DescendantKey]") &&
-            contains("proc_listchildpids(parent") &&
+            contains("ProcessTable.children(of: parent)") &&
             contains("private static func processStartTime(of pid: pid_t) -> ProcessStartTime?") &&
             contains("private static func processIdentity(of pid: pid_t) -> ProcessIdentity?") &&
-            contains("proc_pidinfo(pid, PROC_PIDTBSDINFO") &&
-            contains("parentPid: pid_t(info.pbi_ppid)") &&
+            contains("ProcessTable.entry(of: pid).map { ProcessIdentity(parentPid: $0.parentPID") &&
             contains("identity.parentPid == p") &&
             contains("identity.parentPid == parent") &&
             contains(#""pid=,ppid=""#) &&
@@ -303,7 +302,7 @@ private extension String {
     }
 
     func tracksForksFromObservedDescendants() -> Bool {
-        contains("private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]") &&
+        contains("private var descendantForkSources: [pid_t: ForkWatch] = [:]") &&
             contains("private func startDescendantForkObserver(for pid: pid_t)") &&
             contains("for pid in descendants.map(\\.pid)") &&
             contains("startDescendantForkObserver(for: pid)")

@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -88,11 +87,11 @@ public final class GatekeeperAssessor {
     }
 
     private func currentStat(path: String) -> (mtime: TimeInterval, inode: UInt64)? {
-        var buf = Darwin.stat()
+        var buf = Foundation.stat()
         // Callers pass realPath (already symlink-resolved), so lstat and stat
         // are equivalent here; lstat also keeps the cache key stable if a caller
         // accidentally hands us an unresolved symlink.
-        guard Darwin.lstat(path, &buf) == 0 else { return nil }
+        guard Foundation.lstat(path, &buf) == 0 else { return nil }
         let mtime = TimeInterval(buf.st_mtimespec.tv_sec) + TimeInterval(buf.st_mtimespec.tv_nsec) / 1_000_000_000
         return (mtime: mtime, inode: UInt64(buf.st_ino))
     }
@@ -102,6 +101,9 @@ public final class GatekeeperAssessor {
         // any other errno means inaccessible — return .unknown so the
         // availability layer falls open to .allowed rather than hiding a
         // runnable LSP behind a banner.
+        #if !canImport(Darwin)
+        return .allowed // No Gatekeeper or quarantine outside macOS.
+        #else
         let size = realPath.withCString { cpath in
             getxattr(cpath, "com.apple.quarantine", nil, 0, 0, 0)
         }
@@ -117,6 +119,7 @@ public final class GatekeeperAssessor {
         if read < 0 { return .unknown }
         guard let value = String(bytes: buffer[0..<read], encoding: .utf8) else { return .unknown }
         return interpretQuarantineValue(value)
+        #endif
     }
 
     /// Parse the `com.apple.quarantine` xattr value. Format is

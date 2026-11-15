@@ -7141,6 +7141,9 @@ final class AppState {
         }
         terminal.onSessionUnregistered = { [weak self] session in
             guard let self else { return }
+            if let host = session.remoteHost {
+                self.remoteTerminalHarness.unregister(sessionID: session.id, host: host, harness: self.harness)
+            }
             self.checkpointWriterLeases.release(sessionID: session.id, instanceID: self.instanceId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in

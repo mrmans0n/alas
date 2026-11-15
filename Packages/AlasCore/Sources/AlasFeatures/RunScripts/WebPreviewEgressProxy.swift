@@ -1,3 +1,5 @@
+// The app's web preview only; Network.framework is Apple's.
+#if canImport(Network)
 import Foundation
 import Network
 import Synchronization
@@ -350,3 +352,4 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         return .success((String(host), port))
     }
 }
+#endif

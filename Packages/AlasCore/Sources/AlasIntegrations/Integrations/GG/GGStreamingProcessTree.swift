@@ -14,7 +14,7 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
     private var rootIdentity: ACPTerminal.DescendantKey?
     private var wrapperIdentity: ACPTerminal.DescendantKey?
     private var descendants: Set<ACPTerminal.DescendantKey> = []
-    private var forkSources: [pid_t: DispatchSourceProcess] = [:]
+    private var forkSources: [pid_t: ForkWatch] = [:]
     private var tracker: Task<Void, Never>?
 
     public init(process: Process, environmentMarker: String) {
@@ -152,8 +152,8 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
            rootIdentity.pid == pid,
            ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)
         {
-            _ = Darwin.kill(-pid, signal)
-            _ = Darwin.kill(pid, signal)
+            _ = Foundation.kill(-pid, signal)
+            _ = Foundation.kill(pid, signal)
         }
         condition.unlock()
     }
@@ -172,7 +172,7 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
 
     private func signal(_ descendants: Set<ACPTerminal.DescendantKey>, with signal: Int32) {
         for descendant in ACPTerminal.currentlyMatching(descendants) {
-            _ = Darwin.kill(descendant.pid, signal)
+            _ = Foundation.kill(descendant.pid, signal)
         }
     }
 
@@ -267,14 +267,12 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
             condition.unlock()
             guard shouldCreate else { continue }
 
-            let source = DispatchSource.makeProcessSource(
-                identifier: pid,
-                eventMask: [.fork, .exit],
-                queue: .global(qos: .utility)
-            )
-            source.setEventHandler { [weak self] in
-                self?.processEvent(for: pid)
-            }
+            guard let source = ForkWatch.start(
+                pid: pid,
+                watchExit: true,
+                queue: .global(qos: .utility),
+                handler: { [weak self] exited in self?.processEvent(for: pid, exited: exited) }
+            ) else { continue }
             condition.lock()
             if forkSources[pid] == nil, !terminationCompleted {
                 forkSources[pid] = source
@@ -288,13 +286,12 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
         }
     }
 
-    private func processEvent(for pid: pid_t) {
+    private func processEvent(for pid: pid_t, exited didExit: Bool) {
         condition.lock()
         guard let source = forkSources[pid] else {
             condition.unlock()
             return
         }
-        let didExit = source.data.contains(.exit)
         if didExit {
             forkSources.removeValue(forKey: pid)
         }

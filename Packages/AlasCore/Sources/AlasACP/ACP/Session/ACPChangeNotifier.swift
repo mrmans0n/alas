@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(notify)
 import notify
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -39,6 +41,7 @@ public final class DarwinChangeNotifier: ACPChangeNotifier {
         return channel.map { name + "." + $0 } ?? name
     }
 
+    #if canImport(notify)
     public func post() {
         notify_post(name)
     }
@@ -54,4 +57,48 @@ public final class DarwinChangeNotifier: ACPChangeNotifier {
     public func unsubscribe(_ token: Int32) {
         notify_cancel(token)
     }
+    #else
+    // No notify(3) here. A Linux host is one process, so delivering within
+    // it reaches every observer there is.
+    public func post() {
+        for handler in InProcessChannels.handlers(for: name) {
+            // As with notify(3), handlers run on the delivery queue and hop on their own.
+            nonisolated(unsafe) let handler = handler
+            deliveryQueue.async { handler() }
+        }
+    }
+
+    public func subscribe(_ handler: @escaping () -> Void) -> Int32 {
+        InProcessChannels.add(handler, for: name)
+    }
+
+    public func unsubscribe(_ token: Int32) {
+        InProcessChannels.remove(token)
+    }
+    #endif
 }
+
+#if !canImport(notify)
+private enum InProcessChannels {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var nextToken: Int32 = 1
+    nonisolated(unsafe) private static var subscribers: [Int32: (name: String, handler: () -> Void)] = [:]
+
+    static func add(_ handler: @escaping () -> Void, for name: String) -> Int32 {
+        lock.withLock {
+            let token = nextToken
+            nextToken += 1
+            subscribers[token] = (name, handler)
+            return token
+        }
+    }
+
+    static func remove(_ token: Int32) {
+        lock.withLock { subscribers[token] = nil }
+    }
+
+    static func handlers(for name: String) -> [() -> Void] {
+        lock.withLock { subscribers.values.filter { $0.name == name }.map(\.handler) }
+    }
+}
+#endif

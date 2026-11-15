@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 
 private let projectConfigLogger = Logger(subsystem: "io.nlopez.alas", category: "project-config")
@@ -171,6 +170,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     public var worktreeBranchTemplate: String?
     /// SSH destination when this project lives on another machine.
     public var host: String?
+    /// The local project this SSH project is a checkout of, by git origin.
+    /// A linked record has no sidebar group or settings of its own.
+    public var linkedProjectId: String?
     /// Omitted from disk for `.git`, so git projects encode exactly as before.
     public var kind: ProjectKind = .git
     public var isFolder: Bool { kind == .folder }
@@ -213,7 +215,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     public enum CodingKeys: String, CodingKey, Sendable {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, kind, ggMode,
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, linkedProjectId, kind, ggMode,
              ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs,
              shepherd, vmForNewWorktrees, vmGuestSetupScript
@@ -306,6 +308,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
             )
         }
         host = try? c.decode(String.self, forKey: .host)
+        linkedProjectId = try? c.decodeIfPresent(String.self, forKey: .linkedProjectId)
         kind = (try? c.decode(ProjectKind.self, forKey: .kind)) ?? .git
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
@@ -415,6 +418,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(worktreeLaunchPreference, forKey: .worktreeLaunchPreference)
         try c.encodeIfPresent(worktreeBranchTemplate, forKey: .worktreeBranchTemplate)
         try c.encodeIfPresent(host, forKey: .host)
+        try c.encodeIfPresent(linkedProjectId, forKey: .linkedProjectId)
         if kind != .git {
             try c.encode(kind, forKey: .kind)
         }

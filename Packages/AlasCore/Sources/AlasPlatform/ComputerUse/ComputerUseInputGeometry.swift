@@ -1,5 +1,7 @@
-import CoreGraphics
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Pure geometry for synthesized pointer input.
 public enum ComputerUseInputGeometry {

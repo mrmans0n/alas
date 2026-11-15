@@ -35,8 +35,16 @@ public final class PluginSettings {
         return PluginSettings(
             pluginID: pluginID, declared: declared,
             storage: PluginStorage.shared(file: folder.appending(path: "settings")),
-            secrets: RemoteKeychainSecretStore(
-                service: keychainService, fallback: RemoteFileSecretStore(root: folder.appending(path: "secrets"))))
+            secrets: secretStore(folder: folder))
+    }
+
+    private static func secretStore(folder: URL) -> any RemoteSecretStore {
+        let files = RemoteFileSecretStore(root: folder.appending(path: "secrets"))
+        #if canImport(Security)
+        return RemoteKeychainSecretStore(service: keychainService, fallback: files)
+        #else
+        return files
+        #endif
     }
 
     /// An isolated profile gets its own service, as for remote credentials.
