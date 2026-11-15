@@ -163,3 +163,12 @@ install_name_tool -id @rpath/libfff_c.dylib "${fff_destination}"
 # Sign with the app's identity so a Developer ID-signed Debug build (see
 # Config/Local.xcconfig) can load it under library validation; ad-hoc otherwise.
 codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "${fff_destination}" >/dev/null
+
+# Simulator accessibility settings helper; optional (needs the iOS Simulator SDK).
+sim_ax_source="${SRCROOT}/.build/sim-ax-settings/alas-sim-ax-settings"
+sim_ax_destination_dir="${destination_root}/sim-ax-settings"
+rm -rf "${sim_ax_destination_dir}"
+if [ -x "${sim_ax_source}" ]; then
+    mkdir -p "${sim_ax_destination_dir}"
+    rsync -a "${sim_ax_source}" "${sim_ax_destination_dir}/alas-sim-ax-settings"
+fi

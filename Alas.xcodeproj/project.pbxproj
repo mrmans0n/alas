@@ -7264,6 +7264,7 @@
 				E7133D66219548A98B3DF549 /* Build Alas CLI */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				A4E68D93681832810FDA0179 /* Build TreeSitter Pack */,
+				63DE37B56D4F181FDD38AB9F /* Build Simulator Accessibility Helper */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
 				AF4AF5D7242A7B87F7C9E278 /* CopyFiles */,
@@ -7523,6 +7524,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/build-fff.sh\"";
+		};
+		63DE37B56D4F181FDD38AB9F /* Build Simulator Accessibility Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Simulator Accessibility Helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-sim-ax-settings.sh\"";
 		};
 		A4E68D93681832810FDA0179 /* Build TreeSitter Pack */ = {
 			isa = PBXShellScriptBuildPhase;
