@@ -145,3 +145,28 @@ public final class DispatchSerialQueue: SerialExecutor, @unchecked Sendable {
     }
 }
 #endif
+
+/// The uid of the process at the other end of a Unix socket.
+public func peerUID(of socket: Int32) -> uid_t? {
+    #if canImport(Darwin)
+    var uid = uid_t(0)
+    var gid = gid_t(0)
+    return getpeereid(socket, &uid, &gid) == 0 ? uid : nil
+    #else
+    var uid: UInt32 = 0
+    return alas_peer_uid(socket, &uid) == 0 ? uid_t(uid) : nil
+    #endif
+}
+
+/// Whether two values from `JSONSerialization` (or a property list) hold
+/// the same thing. Apple platforms compare them as Foundation objects;
+/// elsewhere they are plain Swift values, compared by their sorted JSON.
+public func jsonValuesEqual(_ lhs: Any, _ rhs: Any) -> Bool {
+    #if canImport(ObjectiveC)
+    (lhs as AnyObject).isEqual(rhs)
+    #else
+    let encode = { (value: Any) in try? JSONSerialization.data(withJSONObject: [value], options: [.sortedKeys]) }
+    guard let left = encode(lhs), let right = encode(rhs) else { return String(describing: lhs) == String(describing: rhs) }
+    return left == right
+    #endif
+}

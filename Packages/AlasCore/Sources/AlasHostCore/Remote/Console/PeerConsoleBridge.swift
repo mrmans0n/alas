@@ -39,7 +39,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
     public init(maxPendingBytes: Int = 16 * 1024 * 1024, onInput: @escaping @Sendable (Data) -> Void) throws {
         self.maxPendingBytes = maxPendingBytes
         var template = Array("/tmp/alas-pc.XXXXXX".utf8CString)
-        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }) else {
+        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         let directory = String(cString: dir)

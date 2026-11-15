@@ -1,3 +1,5 @@
+// Fakes `Process` by subclassing it, which Linux's Foundation doesn't allow.
+#if canImport(Darwin)
 import Foundation
 import Testing
 @testable import AlasPlatform
@@ -89,3 +91,4 @@ private final class CapDuringLaunchProcess: Process, @unchecked Sendable {
 
     private enum FixtureError: Error { case capWasNotReachedDuringLaunch }
 }
+#endif

@@ -1,3 +1,5 @@
+// Covers a macOS-only feature.
+#if os(macOS)
 import Compression
 import Foundation
 import Testing
@@ -247,3 +249,4 @@ private struct TinyQCOW2 {
         return out.prefix(count)
     }
 }
+#endif

@@ -174,6 +174,10 @@ public enum RunScriptCommand {
               else
                 exit_code=$?
               fi
+              # util-linux writes its own start line, and a blank line and a done
+              # line, into the transcript even with -q.
+              sed -i -e '1{/^Script started on /d;}' -e '${/^Script done on /d;}' "$transcript" 2>/dev/null
+              sed -i -e '${/^$/d;}' "$transcript" 2>/dev/null
             else
               if \(commandLine); then
                 exit_code=0

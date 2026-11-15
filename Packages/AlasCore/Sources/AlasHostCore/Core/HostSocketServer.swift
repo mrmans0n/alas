@@ -103,9 +103,7 @@ public final class HostSocketServer: @unchecked Sendable {
                 }
                 continue
             }
-            var uid = uid_t(0)
-            var gid = gid_t(0)
-            guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else {
+            guard let uid = peerUID(of: client), uid == getuid() else {
                 close(client)
                 continue
             }
@@ -227,8 +225,8 @@ final class HostSocketConnection: @unchecked Sendable {
     /// Returns once the line is written, or the client is gone.
     @MainActor
     func write(_ message: HostServerMessage) async {
-        guard var data = try? JSONEncoder().encode(message) else { return }
-        data.append(UInt8(ascii: "\n"))
+        guard let encoded = try? JSONEncoder().encode(message) else { return }
+        let data = encoded + [UInt8(ascii: "\n")]
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             writes.async { [self] in
                 defer { done.resume() }

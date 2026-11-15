@@ -101,7 +101,7 @@ enum Terminal {
     /// cannot say.
     private static func size() -> (lines: Int, columns: Int) {
         var size = winsize()
-        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0, size.ws_col > 0 else { return (24, 80) }
+        guard ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &size) == 0, size.ws_row > 0, size.ws_col > 0 else { return (24, 80) }
         return (Int(size.ws_row), Int(size.ws_col))
     }
 

@@ -112,7 +112,8 @@ struct RepoHookLoaderTests {
         #expect(failed == .failed(source: .remote(host: "offline"), message: "connection failed"))
     }
 
-    @Test func reportsInaccessibleHooksAsReadFailures() async throws {
+    // Root reads a folder whatever its permissions, as in a CI container.
+    @Test(.enabled(if: getuid() != 0)) func reportsInaccessibleHooksAsReadFailures() async throws {
         let root = try makeRepository()
         defer { try? FileManager.default.removeItem(at: root) }
         let hooksDirectory = root.appendingPathComponent(".alas/hooks")

@@ -91,24 +91,42 @@ final class HostFileWatcher {
     private func reopenSources(_ key: HostEventKey, _ file: WatchedFile) {
         guard files[key] === file else { return }
         file.stop()
+        #if canImport(Darwin)
         file.fileSource = source(on: file.url, mask: [.write, .extend, .attrib, .rename, .delete], key: key, noFollow: true)
+        #endif
         // The nearest folder there, up to the root: a parent removed and made
         // again, as a branch switch does, is seen coming back.
         let rootDepth = file.url.pathComponents.count - file.path.split(separator: "/").count
         var folder = file.url.deletingLastPathComponent()
         while file.directorySource == nil, folder.pathComponents.count >= rootDepth {
+            #if canImport(Darwin)
             file.directorySource = source(on: folder, mask: [.write, .rename, .delete], key: key, noFollow: true)
+            #else
+            // inotify on the folder reports its files' writes too, so the file needs no watch of its own.
+            file.directorySource = folderWatch(on: folder, key: key)
+            #endif
             folder.deleteLastPathComponent()
         }
     }
 
+    #if !canImport(Darwin)
+    private func folderWatch(on folder: URL, key: HostEventKey) -> PathWatch? {
+        let stream = FileEventStream(paths: [folder.path], fileEvents: true, latency: 0.05, recursive: false, queue: queue) {
+            [weak self] _ in Task { @MainActor [weak self] in self?.changed(key) }
+        }
+        return stream.map { stream in PathWatch { stream.stop() } }
+    }
+    #endif
+
+    #if canImport(Darwin)
     /// A source on `url`, nil while there is nothing there to watch.
     private func source(
         on url: URL, mask: DispatchSource.FileSystemEvent, key: HostEventKey, noFollow: Bool = false
-    ) -> DispatchSourceFileSystemObject? {
-        Self.source(on: url, mask: mask, noFollow: noFollow, queue: queue) { [weak self] in
+    ) -> PathWatch? {
+        let source = Self.source(on: url, mask: mask, noFollow: noFollow, queue: queue) { [weak self] in
             Task { @MainActor [weak self] in self?.changed(key) }
         }
+        return source.map { source in PathWatch { source.cancel() } }
     }
 
     /// Nonisolated, so its handlers run on `queue` rather than claim the main actor.
@@ -124,6 +142,16 @@ final class HostFileWatcher {
         source.resume()
         return source
     }
+    #endif
+}
+
+/// A watch on one path; `cancel` ends it.
+private final class PathWatch {
+    let cancel: () -> Void
+
+    init(cancel: @escaping () -> Void) {
+        self.cancel = cancel
+    }
 }
 
 /// One watched file: its sources and the version last known.
@@ -133,8 +161,8 @@ private final class WatchedFile {
     let path: String
     let root: URL
     let url: URL
-    var fileSource: DispatchSourceFileSystemObject?
-    var directorySource: DispatchSourceFileSystemObject?
+    var fileSource: PathWatch?
+    var directorySource: PathWatch?
     /// The hash last published or read at follow time; nil when there is no file.
     var contentHash: String?
     var probing: Task<Void, Never>?

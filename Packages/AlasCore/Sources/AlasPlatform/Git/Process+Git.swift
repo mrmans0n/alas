@@ -939,8 +939,7 @@ private final class StdinPipeWriter: @unchecked Sendable {
             closed = true
             handle = nil
             lock.unlock()
-            writeHandle.writeabilityHandler = nil
-            try? writeHandle.close()
+            Self.finish(writeHandle)
             return
         }
         let end = min(offset + chunkSize, data.count)
@@ -957,9 +956,16 @@ private final class StdinPipeWriter: @unchecked Sendable {
             writeHandle.write(chunk)
         }
         if didFinish {
-            writeHandle.writeabilityHandler = nil
-            try? writeHandle.close()
+            Self.finish(writeHandle)
         }
+    }
+
+    /// Called from the writeability handler, which on Linux runs on the
+    /// handle's own queue: closing there waits on that queue and traps, so
+    /// the close happens elsewhere.
+    private static func finish(_ writeHandle: FileHandle) {
+        writeHandle.writeabilityHandler = nil
+        DispatchQueue.global(qos: .utility).async { try? writeHandle.close() }
     }
 }
 

@@ -816,13 +816,12 @@ jobs:
         run: rustup run ${{ matrix.toolchain }} cargo test --locked
 
   alas-host-linux:
-    # alas-host is being ported to Linux module by module; see
-    # docs/plans/2026-11-15-alas-host-linux-design.md. This builds the modules
-    # done so far, on both architectures, so they can't regress.
+    # alas-host on Linux; see docs/plans/2026-11-15-alas-host-linux-design.md.
+    # Builds the host and runs the AlasCore tests on both architectures.
     name: alas-host on Linux (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     container: swift:6.4
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -834,8 +833,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Install system libraries
-        run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev
+      - name: Install system libraries and test tools
+        # python3 runs the fixture agent; zsh is the shell the console tests launch.
+        run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev python3 zsh
+
+      - name: Configure git for tests
+        # Tests copy template repositories; background maintenance races the copy.
+        run: |
+          git config --global user.email "ci@alas.invalid"
+          git config --global user.name "Alas CI"
+          git config --global init.defaultBranch main
+          git config --global --add safe.directory '*'
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
 
       - name: Restore SwiftPM build cache
         uses: actions/cache@v6
@@ -845,12 +855,14 @@ jobs:
           restore-keys: |
             alas-host-linux-${{ matrix.arch }}-${{ hashFiles('Packages/AlasCore/Package.resolved') }}-
 
-      - name: Build the ported modules
-        # Grows a module at a time; ends at the alas-host product.
+      - name: Resolve AlasCore dependencies
         run: >-
           scripts/retry-ci-acquisition.sh swift package resolve
           --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
-          && swift build --package-path Packages/AlasCore --target AlasAgents
+
+      - name: Test AlasCore
+        # Two jobs: the largest sources need several GB each to compile.
+        run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update -j 2
 
   remote-web-tests:
     name: Remote web tests

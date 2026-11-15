@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 import Crypto
 import AlasFoundation
 import AlasModel
@@ -43,7 +45,7 @@ public struct RemoteGatewayChannel {
 /// the buffer. The class is `@unchecked Sendable` solely because of this strict
 /// queue confinement; it adds no locks because there is no cross-queue sharing.
 public final class RemoteConnection: @unchecked Sendable {
-    private let conn: NWConnection
+    private let conn: any TCPStream
     private let queue: DispatchQueue
     private let makeGateway: @MainActor (RemoteGatewayChannel) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
@@ -121,7 +123,7 @@ public final class RemoteConnection: @unchecked Sendable {
     /// A ping went out and nothing has come in since. Confined to `queue`.
     private var awaitingPong = false
 
-    public init(conn: NWConnection,
+    public init(conn: any TCPStream,
          queue: DispatchQueue,
          responder: @escaping @MainActor (HTTPRequest, Data) -> Data,
          authorize: @escaping @MainActor (String) -> String?,
@@ -160,7 +162,7 @@ public final class RemoteConnection: @unchecked Sendable {
     private static let stopDriveActionWaitNanos: UInt64 = 1_000_000_000
 
     public func start() {
-        conn.start(queue: queue)
+        conn.start(queue: queue) { _ in }
         receive()
     }
 
@@ -245,7 +247,7 @@ public final class RemoteConnection: @unchecked Sendable {
     }
 
     private func receive() {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        conn.receive(maximumLength: 64 * 1024) { [weak self] data, isComplete, error in
             guard let self else { return }
             guard !self.isClosing else { return }
             if let data, !data.isEmpty {
@@ -671,9 +673,9 @@ public final class RemoteConnection: @unchecked Sendable {
         // NWConnection delivers this completion on our serial queue. On a send
         // error, tear down rather than running the follow-up (which would touch
         // a dead connection).
-        conn.send(content: data, completion: .contentProcessed { [weak self] error in
+        conn.send(data) { [weak self] error in
             if error != nil { self?.teardown() } else { completion() }
-        })
+        }
     }
 
     private func teardown() {

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(SystemConfiguration)
 import SystemConfiguration
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -74,7 +76,7 @@ public enum RemoteNetwork: Sendable {
         while let ptr = cursor {
             defer { cursor = ptr.pointee.ifa_next }
             let flags = Int32(ptr.pointee.ifa_flags)
-            guard (flags & IFF_UP) == IFF_UP else { continue }
+            guard (flags & Int32(IFF_UP)) == Int32(IFF_UP) else { continue }
             guard let addr = ptr.pointee.ifa_addr else { continue }
             guard addr.pointee.sa_family == sa_family_t(AF_INET)
                     || addr.pointee.sa_family == sa_family_t(AF_INET6) else { continue }
@@ -83,7 +85,7 @@ public enum RemoteNetwork: Sendable {
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             let result = getnameinfo(
                 addr,
-                socklen_t(addr.pointee.sa_len),
+                Self.addressLength(addr.pointee),
                 &host,
                 socklen_t(host.count),
                 nil,
@@ -99,7 +101,7 @@ public enum RemoteNetwork: Sendable {
             output.append(RemoteNetworkInterface(
                 name: name,
                 host: value,
-                isLoopback: (flags & IFF_LOOPBACK) == IFF_LOOPBACK
+                isLoopback: (flags & Int32(IFF_LOOPBACK)) == Int32(IFF_LOOPBACK)
             ))
         }
         return output
@@ -108,8 +110,24 @@ public enum RemoteNetwork: Sendable {
     /// This Mac's Bonjour name, without `.local`. Not `ProcessInfo.hostName`:
     /// that is whatever a reverse lookup of an address returns, such as the
     /// tailnet's `mini.tail1234.ts.net`, which `.local` does not complete.
+    /// BSD sockets carry their length; Linux's go by family.
+    private static func addressLength(_ address: sockaddr) -> socklen_t {
+        #if canImport(Darwin)
+        socklen_t(address.sa_len)
+        #else
+        socklen_t(address.sa_family == sa_family_t(AF_INET6) ? MemoryLayout<sockaddr_in6>.size : MemoryLayout<sockaddr_in>.size)
+        #endif
+    }
+
     public static func machineHostName() -> String? {
+        #if canImport(SystemConfiguration)
         let raw = (SCDynamicStoreCopyLocalHostName(nil) as String?)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        #else
+        // The host name's first label, as mDNS (Avahi) publishes it.
+        var buffer = [CChar](repeating: 0, count: 256)
+        let name = gethostname(&buffer, buffer.count) == 0 ? String(cString: buffer) : ""
+        let raw: String? = name.split(separator: ".").first.map(String.init)
+        #endif
         return raw?.isEmpty == false ? raw : nil
     }
 

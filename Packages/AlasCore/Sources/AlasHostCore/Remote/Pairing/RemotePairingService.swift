@@ -273,11 +273,10 @@ public final class RemotePairingService {
 
     // MARK: helpers
     private static func randomToken(byteCount: Int) -> String {
-        var bytes = [UInt8](repeating: 0, count: byteCount)
-        let status = SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes)
-        // A CSPRNG failure would otherwise yield an all-zero, guessable secret.
-        // Fail hard rather than issue a weak token (precondition fires in release too).
-        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: cannot generate a secure token")
+        // The system generator is a CSPRNG on every platform (arc4random,
+        // getrandom) and traps rather than return weak bytes.
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<byteCount).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
     private static func hash(_ token: String) -> String {

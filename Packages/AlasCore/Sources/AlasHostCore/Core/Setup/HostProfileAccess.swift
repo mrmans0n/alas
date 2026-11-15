@@ -82,7 +82,7 @@ public enum HostProfileWrite {
         for (key, value) in after {
             if let nested = value as? [String: Any], let baseNested = base[key] as? [String: Any] {
                 result[key] = apply(from: before[key] as? [String: Any] ?? [:], to: nested, onto: baseNested)
-            } else if before[key].map({ ($0 as AnyObject).isEqual(value) }) != true {
+            } else if before[key].map({ jsonValuesEqual($0, value) }) != true {
                 result[key] = (value as? [Any]).flatMap { array in
                     (base[key] as? [Any]).flatMap { apply(from: before[key] as? [Any] ?? [], to: array, onto: $0) }
                 } ?? value

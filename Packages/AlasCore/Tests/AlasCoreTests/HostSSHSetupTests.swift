@@ -374,7 +374,7 @@ struct HostSSHSetupTests {
         let app = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)/Alas.app")
         defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
         try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
-        try (["CFBundleShortVersionString": "0.41.0"] as NSDictionary).write(to: app.appendingPathComponent("Contents/Info.plist"))
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleShortVersionString": "0.41.0"], format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
         #expect(HostSelfUpdate.cask(executablePath: "/Applications/Alas.app/Contents/Resources/alas-host/alas-host") == "alas")
         #expect(HostSelfUpdate.version(executablePath: app.path + "/Contents/Resources/alas-host/alas-host") == "0.41.0")
     }
