@@ -18,16 +18,33 @@ public enum AlasCLIWorktreeResolver {
     public static func rows(worktrees: [Worktree], currentWorktreeId: String) -> [String] {
         let labels = worktrees.map(\.branch)
         let width = max(labels.map(\.count).max() ?? 0, 1) + 4
+        // Paths on the caller's machine print as that machine sees them; others carry their
+        // host, or an empty one for this Mac (no SSH host is empty), so `resolve` can reach them.
+        let here = worktrees.first { $0.id == currentWorktreeId }.flatMap { RemotePath.split($0.path.path)?.host }
         return worktrees.map { worktree in
             let marker = worktree.id == currentWorktreeId ? "*" : " "
             let label = worktree.branch.padding(toLength: width, withPad: " ", startingAt: 0)
-            return "\(marker) \(label)\(RemotePath.realPath(worktree.path.path))"
+            let path = worktree.path.path
+            let host = RemotePath.split(path)?.host
+            let shown = host == here ? RemotePath.realPath(path) : "\(host ?? ""):\(RemotePath.realPath(path))"
+            return "\(marker) \(label)\(shown)"
         }
     }
 
     public static func resolve(target: String, worktrees: [Worktree]) -> Result {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
+        // `host:/path`, or `:/path` for this Mac, as `rows` prints another machine's worktree.
+        // Hosts never contain `/`, so the first `:/` splits even an IPv6 destination.
+        if let split = trimmed.range(of: ":/") {
+            let host = String(trimmed[..<split.lowerBound])
+            let path = String(trimmed[trimmed.index(after: split.lowerBound)...])
+            if host.isEmpty {
+                trimmed = path
+            } else if RemotePath.isValidHost(host) {
+                trimmed = RemotePath.virtual(host: host, realPath: path)
+            }
+        }
 
         // Absolute paths match a worktree root exactly, and never fall
         // through to branch/prefix matching.

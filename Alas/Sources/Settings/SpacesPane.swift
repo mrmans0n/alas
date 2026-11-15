@@ -38,7 +38,7 @@ struct SpacesPane: View {
                 }
 
                 SettingsGroup(title: "Membership") {
-                    ForEach(state.projects) { project in
+                    ForEach(state.projectsManager.primaryProjects) { project in
                         ProjectSpaceMembershipRow(state: state, project: project)
                     }
                 }
