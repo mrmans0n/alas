@@ -5626,6 +5626,14 @@ final class AppState {
         if linked {
             saveProjects()
             saveSpaces()
+            // The selected row now shows where its primary does, which may be
+            // another space; follow it there instead of leaving an empty pane.
+            if let selected = selectedWorktreeId,
+               let owner = projectsManager.projects.first(where: { project in
+                   project.linkedProjectId != nil && projectsManager.worktrees(projectId: project.id).contains { $0.id == selected }
+               }) {
+                focusGlobalWorktree(id: selected, projectId: owner.id)
+            }
         }
     }
 
