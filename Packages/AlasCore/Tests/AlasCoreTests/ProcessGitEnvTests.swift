@@ -102,15 +102,18 @@ struct ProcessRunDescriptorTests {
     /// Each call used to keep its stdout and stderr read ends open: two
     /// descriptors per git call, until Foundation's spawn crashed on the count.
     @Test func runningProcessesLeavesNoDescriptorsBehind() async throws {
-        func openDescriptors() throws -> Int {
+        @Sendable func openDescriptors() throws -> Int {
             try FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd").count
         }
         // Warm up the dispatch sources and threads the first calls create.
         for _ in 0..<5 { _ = try await Process.run("/usr/bin/env", args: ["true"]) }
         let before = try openDescriptors()
-        for _ in 0..<100 { _ = try await Process.run("/usr/bin/env", args: ["true"]) }
-        // A leak adds 200; other tests running alongside open a few of their own.
-        #expect(try openDescriptors() - before < 100)
+        for _ in 0..<500 { _ = try await Process.run("/usr/bin/env", args: ["true"]) }
+        // A leak adds 1,000. Tests running alongside hold a few hundred at
+        // most, and each call's read ends close just after it returns.
+        try await eventually(within: .seconds(10)) {
+            ((try? openDescriptors()) ?? .max) - before < 600
+        }
     }
 }
 #endif
