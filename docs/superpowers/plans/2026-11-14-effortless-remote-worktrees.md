@@ -309,40 +309,130 @@ the dialog so the Machines pane can reuse them.
 
 ---
 
-## PR 2: `feat(remote): fold SSH projects under their local project` (outline)
+## PR 2a: `feat(remote): link SSH projects to their local project` (core only)
 
-This PR gets detailed after PR 1 merges. Its tasks:
+PR 2 from the spec is split in two. 2a adds the core model and APIs, with
+tests and no app wiring, so nothing visible changes. 2b wires them into the
+app. Start 2a from `main` after #2503 merges.
 
-1. **Core linking.**
-   - Add `ProjectConfig.linkedProjectId: String?` (tolerant decode, omitted
-     when nil).
-   - Add `ProjectsManager.primaryProjects`.
-   - Add `ProjectsManager.settingsProject(for projectId: String) -> ProjectConfig?`.
-   - Add `ProjectsManager.visibleWorktrees(includingLinkedTo primaryId: String) -> [Worktree]`,
-     ordered by the primary's `worktreeOrder`.
-   - Add a pure `ProjectLink.match(remoteOrigin: String, locals: [(id: String, origin: String?)]) -> String?`,
-     which returns nil on zero or more than one match.
-   - Tests: `ProjectLink.match`, parameterized; the inherited vs per-record
-     split in `settingsProject`; merged ordering.
-2. **Auto-link.**
-   - When a host reports reachable (the `RemoteHostStatusStore.onStatusTransition`
-     online edge), read `origin` of each unlinked SSH git project on it with
-     one `RemoteExec` call, link it, remove it from spaces, and save.
-   - Removing a primary clears its links.
-   - Skip linked records at `AppState.swift:1880`.
-3. **Settings reads.** Switch the read sites listed in the spec's "Settings
+### Task 5: `linkedProjectId` and `ProjectLink.match`
+
+**Files:**
+- Modify: `Packages/AlasCore/Sources/AlasModel/Persistence/ProjectConfig.swift`.
+  Add the property next to `host`, a `CodingKeys` case, and a tolerant decode.
+  Encoding omits the key when it is nil; check whether `encode` is
+  synthesized and, if so, rely on `encodeIfPresent` semantics.
+- Create: `Packages/AlasCore/Sources/AlasModel/Model/ProjectLink.swift`
+- Test: `Packages/AlasCore/Tests/AlasCoreTests/ProjectLinkTests.swift`
+
+**Interfaces:**
+- Produces:
+  - `ProjectConfig.linkedProjectId: String?`
+  - `public enum ProjectLink`, containing:
+    - `public static func match(remoteOrigin: String, locals: [(id: String, origin: String?)]) -> String?`.
+      It normalizes both sides with `GitRemoteIdentity.normalized` and
+      returns the single matching id, or nil when nothing matches, more than
+      one matches, or the remote origin doesn't normalize.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `matchFindsTheOneLocalClone`, parameterized. Each row is (remote, locals,
+    expected):
+    - `"git@github.com:o/r.git"` against
+      `[("a","https://github.com/o/r"), ("b","https://github.com/o/x")]`
+      gives `"a"`.
+    - The same remote against two locals that both match gives `nil`.
+    - `"/srv/r.git"` (no host) gives `nil`.
+    - A local with a `nil` origin is skipped.
+  - `linkedProjectIdRoundTripsAndIsOmittedWhenNil`: encode a project
+    without a link and check the JSON has no `linkedProjectId` key. Encode
+    one with a link and check it decodes back equal.
+- [ ] **Step 2: Run them and see them fail.**
+  Run: `swift test --package-path Packages/AlasCore --filter ProjectLinkTests`.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them and see them pass.**
+- [ ] **Step 5: Commit** with the message
+  `feat(remote): record which local project an SSH project belongs to`.
+
+### Task 6: `ProjectsManager` linking APIs
+
+**Files:**
+- Modify: `Packages/AlasCore/Sources/AlasIntegrations/Projects/ProjectsManager.swift`
+- Test: extend the existing `ProjectsManager` suite (find it with
+  `grep -l "ProjectsManager(" Packages/AlasCore/Tests`). Create a new file
+  only if there is none.
+
+**Interfaces:**
+- Consumes: `ProjectConfig.linkedProjectId` (Task 5).
+- Produces:
+  - `public var primaryProjects: [ProjectConfig]`, the projects whose
+    `linkedProjectId` is nil.
+  - `public func linkedProjects(of primaryId: String) -> [ProjectConfig]`
+  - `public func settingsProject(for projectId: String) -> ProjectConfig?`,
+    which returns the primary for a linked record and the project itself
+    otherwise.
+  - `public func link(_ projectId: String, to primaryId: String)`. It
+    refuses, as a no-op, when:
+    - the record has no host, or is a folder project;
+    - the primary has a host, or is itself linked;
+    - another record with the same host is already linked to that primary.
+  - `public func unlinkAll(from primaryId: String)`. `removeProject(id:)`
+    calls it for the removed id before removing.
+  - `public func visibleWorktrees(includingLinkedTo primaryId: String) -> [Worktree]`.
+    It sorts the primary's and its linked records' visible rows with
+    `sortedWorktrees(_:project: primary)`. Only the primary's own main
+    worktree is pinned: change `isMainWorktree` so a row whose `projectId`
+    differs from `project.id` is never treated as main.
+  - `reorderWorktree(projectId: primaryId, movingId:destinationId:)` works
+    on the merged rows when the primary has linked records, writing the
+    primary's `worktreeOrder`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `settingsComeFromThePrimary`: a linked record's `settingsProject` is the
+    primary.
+  - `linkRefusesInvalidPairs`, parameterized over the refusal rows above.
+  - `removingThePrimaryUnlinksItsRecords`
+  - `mergedWorktreesFollowThePrimarysManualOrder`: a manual order
+    interleaving a local and a remote id is honored. The remote record's own
+    main row is not pinned.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them and see them pass.**
+- [ ] **Step 5: Run the full package suite.**
+  Run: `swift test --package-path Packages/AlasCore`
+  Expected: every test passes.
+- [ ] **Step 6: Commit and open PR 2a.**
+
+## PR 2b: `feat(remote): fold SSH projects under their local project` (app wiring)
+
+This section gets detailed after 2a merges. Its tasks:
+
+1. **Auto-link.**
+   - `RemoteHostStatusStore.onStatusTransition` (`AppState.swift:1975`):
+     on each online edge, for each unlinked SSH git project on that host,
+     read `git remote get-url origin` with one `RemoteExec` call. Pass it to
+     `ProjectLink.match` against local projects' origins, which are read
+     locally.
+   - On a match: `link`, remove the record from all spaces, save the
+     projects and spaces.
+   - Skip linked records in the load-time space auto-add
+     (`AppState.swift:1880`).
+2. **Settings reads.** Switch the read sites listed in the spec's "Settings
    inheritance" section to `settingsProject(for:)`.
-4. **Sidebar.**
-   - `projectRow` and `filteredWorktreeIds` use the merged list.
-   - Add a badge decision function on `WorktreeRowPresentation`, with a
-     parameterized test on label and state.
-   - Add a "Reconnect to <label>" menu item.
-   - Add the "Remove <host> checkout from Alas" item.
-5. **Lists.** Switch to `primaryProjects` at the sites listed in the spec's
-   "Hidden linked records" section. The CLI router's `list` and `switch`
-   filter by the same primary. Add `ProjectSnapshot.linkedProjectId`.
-6. **`CONTEXT.md` terms:** Machine, Linked Project, Run On, and the Execution
-   Location amendment.
+3. **Sidebar.**
+   - `SidebarView.projectRow` and `filteredWorktreeIds` use
+     `visibleWorktrees(includingLinkedTo:)`.
+   - Add a badge decision function on `WorktreeRowPresentation`, with one
+     parameterized test.
+   - Add "Reconnect to <label>" and "Remove <host> checkout from Alas" menu
+     items.
+4. **Lists.**
+   - Switch to `primaryProjects` at the sites listed in the spec's "Hidden
+     linked records" section.
+   - The CLI router (`AlasCLICommandRouter.swift:280`) filters by the same
+     primary.
+   - `ProjectSnapshot.linkedProjectId`: check whether new fields need a
+     `host.projects.*.v1` capability, as `ggMode` does.
+5. **`CONTEXT.md` terms.**
 
 ## PR 3: `feat(remote): choose where a new worktree runs` (outline)
 
@@ -375,4 +465,4 @@ This PR gets detailed after PR 1 merges. Its tasks:
 ## PR 5: iOS and Mac remote-client folding (outline)
 
 Fold by `ProjectSnapshot.linkedProjectId` in the iOS app and in the Mac's
-peer views of a host's projects. Merge this into PR 2 if it is small.
+peer views of a host's projects. Merge this into PR 2b if it is small.

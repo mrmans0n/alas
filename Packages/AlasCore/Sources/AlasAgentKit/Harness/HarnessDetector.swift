@@ -114,11 +114,36 @@ public final class HarnessDetector: @unchecked Sendable {
         return nil
     }
 
-    /// Resolve the executable basename of `pid` and try to match it.
+    /// Identify the foreground executable or the Codex binary behind its npm launcher.
     public static func matchKind(pid: pid_t) -> HarnessKind? {
         guard let path = ProcessTable.executablePath(of: pid) else { return nil }
         let basename = (path as NSString).lastPathComponent
-        return matchKind(processName: basename)
+        if let kind = matchKind(processName: basename) { return kind }
+
+        // The native Claude installer exposes a symlink named claude, but the
+        // executable path is its version-numbered target under .local/share/claude/versions.
+        let directory = (path as NSString).deletingLastPathComponent
+        if directory.hasSuffix("/.local/share/claude/versions"),
+           basename.wholeMatch(of: /[0-9]+\.[0-9]+\.[0-9]+/) != nil {
+            return .claudeCode
+        }
+
+        // The npm launcher is a Node process that stays alive while its Codex
+        // child runs. Both share the terminal's foreground process group.
+        guard basename == "node", hasCodexChild(pid: pid) else { return nil }
+        return .codex
+    }
+
+    private static func hasCodexChild(pid: pid_t) -> Bool {
+        let group = getpgid(pid)
+        guard group > 0 else { return false }
+        // The npm launcher spawns one native binary. Bound the scan so an
+        // unrelated Node workload cannot make each poll walk a large tree.
+        return ProcessTable.children(of: pid).prefix(32).contains { child in
+            guard getpgid(child) == group,
+                  let path = ProcessTable.executablePath(of: child) else { return false }
+            return matchKind(processName: (path as NSString).lastPathComponent) == .codex
+        }
     }
 
     public init() {}
