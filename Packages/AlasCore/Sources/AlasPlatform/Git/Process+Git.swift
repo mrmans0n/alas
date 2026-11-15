@@ -100,7 +100,7 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
             } else {
                 outAccum.append(data)
@@ -109,7 +109,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -170,9 +170,9 @@ extension Process {
         // we cap the wait at 2s to bound a worst-case stuck handler.
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        let (outEOF, errEOF) = await (outClosed, errClosed)
-        closeReadEnd(of: outPipe, sawEOF: outEOF)
-        closeReadEnd(of: errPipe, sawEOF: errEOF)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
 
         let timedOut = timeoutState.didTimeOut
         if timedOut {
@@ -377,23 +377,19 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 return
             }
             outAccum.append(data)
             if outAccum.snapshot().count >= maxBytes {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 terminateProcessWithEscalation(process)
             }
         }
-        let errAccum = ByteAccumulatorData()
         errPipe.fileHandleForReading.readabilityHandler = { handle in
-            if handle.availableData.isEmpty {
-                handle.readabilityHandler = nil
-                errAccum.markClosed()
-            }
+            if handle.availableData.isEmpty { stopReading(handle) }
         }
 
         do {
@@ -419,11 +415,9 @@ extension Process {
         }
         watchdog.cancel()
 
-        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        let (outEOF, errEOF) = await (outClosed, errClosed)
-        closeReadEnd(of: outPipe, sawEOF: outEOF)
-        closeReadEnd(of: errPipe, sawEOF: errEOF)
+        _ = await outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
 
         return outAccum.snapshot().prefix(maxBytes)
     }
@@ -500,13 +494,13 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 return
             }
             outAccum.append(data)
             if outAccum.snapshot().count >= maxOutputBytes {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 truncatedFlag.mark()
                 terminateProcessWithEscalation(process)
@@ -515,7 +509,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -557,9 +551,9 @@ extension Process {
 
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        let (outEOF, errEOF) = await (outClosed, errClosed)
-        closeReadEnd(of: outPipe, sawEOF: outEOF)
-        closeReadEnd(of: errPipe, sawEOF: errEOF)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
 
         if timedOutFlag.value {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
@@ -642,12 +636,12 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
             } else {
                 outAccum.append(data)
                 if let maxOutputBytes, outAccum.snapshot().count > maxOutputBytes {
-                    handle.readabilityHandler = nil
+                    stopReading(handle)
                     tooLargeFlag.mark()
                     outAccum.markClosed()
                     terminateProcessWithEscalation(process)
@@ -657,7 +651,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -701,9 +695,9 @@ extension Process {
 
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        let (outEOF, errEOF) = await (outClosed, errClosed)
-        closeReadEnd(of: outPipe, sawEOF: outEOF)
-        closeReadEnd(of: errPipe, sawEOF: errEOF)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
 
         if timedOutFlag.value, let timeout {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
@@ -734,14 +728,14 @@ private func childPipe() -> Pipe {
     return pipe
 }
 
-/// Drops a pipe's read handler and, once the child side reached EOF, closes the
-/// read end: nothing else closes it on Linux, so each call would keep the
-/// descriptor for the life of the process. A pipe still open (a grandchild
-/// kept the write end) may have a handler blocked in `availableData` on the
-/// handle's queue, and `close()` syncs onto that queue, so it stays open.
-private func closeReadEnd(of pipe: Pipe, sawEOF: Bool) {
-    pipe.fileHandleForReading.readabilityHandler = nil
-    if sawEOF { try? pipe.fileHandleForReading.close() }
+/// Stops reading a pipe from inside its readability handler and closes the read
+/// end: nothing else closes it on Linux, so each call would keep the descriptor
+/// for the life of the process. Not inline, since `close()` syncs onto the
+/// handle's queue, which runs this handler; nor from the caller, whose wait for
+/// EOF can time out while a handler still holds that queue.
+private func stopReading(_ handle: FileHandle) {
+    handle.readabilityHandler = nil
+    DispatchQueue.global().async { try? handle.close() }
 }
 
 private func validateLaunchConfiguration(executable: String, args: [String], cwd: URL?) throws {
