@@ -229,6 +229,8 @@ struct NewWorktreeDialog: View {
         }
         .task(id: projectId) { await refreshRunOn() }
         .onChange(of: runOnHost) { _, _ in
+            // The machine decides which agents can run there.
+            applyLaunchDefaults(for: projectId)
             refreshAutoNamePlaceholder()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -245,6 +247,9 @@ struct NewWorktreeDialog: View {
                 issueDrivenProjectID: issueDrivenProjectChangeID
             )
             issueDrivenProjectChangeID = nil
+            // The previous repo's machine and origin say nothing about this one.
+            runOnHost = nil
+            primaryHasOrigin = false
             applyGGModeDefault(for: projectId)
             if shouldApplyLaunchDefaults {
                 applyLaunchDefaults(for: projectId)
@@ -306,7 +311,8 @@ struct NewWorktreeDialog: View {
     }
 
     private var runOnOptions: [RunOnOption] {
-        guard let primary = state.worktreeProjects.first(where: { $0.id == projectId }) else { return [] }
+        // A standalone SSH project already names its machine.
+        guard let primary = state.worktreeProjects.first(where: { $0.id == projectId }), primary.host == nil else { return [] }
         return RunOnOptions.make(
             primary: primary,
             hasOrigin: primaryHasOrigin,
@@ -320,7 +326,7 @@ struct NewWorktreeDialog: View {
     /// then preselects the preset machine or the last one used.
     private func refreshRunOn() async {
         let selected = projectId
-        guard let primary = state.worktreeProjects.first(where: { $0.id == selected }) else { return }
+        guard let primary = state.worktreeProjects.first(where: { $0.id == selected }), primary.host == nil else { return }
         let origin = await AppState.originURL(projectPath: primary.path)
         guard selected == projectId else { return }
         primaryHasOrigin = origin.flatMap(GitRemoteIdentity.normalized) != nil
@@ -770,6 +776,10 @@ struct NewWorktreeDialog: View {
 
     private func create() {
         guard let project = targetProject else { return }
+        // Read now: the dialog stays editable while the create runs.
+        let primaryId = projectId
+        let chosenHost = runOnHost
+        let branchRepoPath = state.worktreeProjects.first { $0.id == primaryId }?.path ?? project.path
         cancelNameSuggestion()
         createTask?.cancel()
         createTask = Task { @MainActor in
@@ -779,7 +789,7 @@ struct NewWorktreeDialog: View {
                 // temporary name rather than failing the create.
                 let refs = try? await Process.git(
                     ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-                    cwd: URL(fileURLWithPath: project.path)
+                    cwd: URL(fileURLWithPath: branchRepoPath)
                 )
                 // The dialog stays editable meanwhile, so every input below is
                 // read after this point, from the same state.
@@ -825,7 +835,7 @@ struct NewWorktreeDialog: View {
                 createErrorMessage = "A worktree already exists at this path."
                 return
             }
-            state.projectsManager.setLastRunOnHost(projectId: projectId, host: runOnHost)
+            state.projectsManager.setLastRunOnHost(projectId: primaryId, host: chosenHost)
             state.setWorktreeLaunchDefaults(
                 projectId: project.id,
                 openAfterCreate: openAfterCreate,
