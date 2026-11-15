@@ -19,6 +19,9 @@ final class PushRegistrar {
     @ObservationIgnored private weak var hub: HostHub?
     @ObservationIgnored private let defaults = UserDefaults(suiteName: AppGroup.id) ?? .standard
     private static let tokenKey = "pushRelayToken"
+    /// The APNs token the relay token was issued for. The relay seals with a fresh IV each time, so
+    /// registering an unchanged token would still hand every host a "new" one.
+    private static let apnsTokenKey = "pushAPNsToken"
 
     init(hub: HostHub) {
         self.hub = hub
@@ -45,6 +48,7 @@ final class PushRegistrar {
 
     func didRegister(deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        guard relayToken == nil || defaults.string(forKey: Self.apnsTokenKey) != hex else { return }
         Task { await register(apnsToken: hex) }
     }
 
@@ -69,33 +73,31 @@ final class PushRegistrar {
               token != relayToken else { return }
         relayToken = token
         defaults.set(token, forKey: Self.tokenKey)
+        defaults.set(apnsToken, forKey: Self.apnsTokenKey)
         onTokenChange?()
     }
 
-    /// Removes delivered alerts whose session no longer waits on any host
-    /// whose list is current. Catches clear pings iOS never delivered.
+    /// Removes delivered alerts whose session a current list shows and
+    /// not waiting, on any host. Catches clear pings iOS never delivered.
     func reconcile() async {
         guard let hub else { return }
         var waiting = Set<String>()
-        var covered = Set<String>()
+        var listed = Set<String>()
         for host in hub.hosts {
             guard let list = hub.freshSessions(of: host.id) else { continue }
-            if let serverId = host.serverId { covered.insert(serverId) }
             for session in list {
                 guard let origin = session.serverId ?? host.serverId else { continue }
-                covered.insert(origin)
                 let id = session.serverId.map { session.id.dropFirst($0.count + 1) } ?? Substring(session.id)
-                if session.isActive, session.status == "awaitingPermission" || session.status == "awaitingInput" {
-                    waiting.insert(RemotePushID.collapseId(originServerId: origin, sessionId: String(id)))
-                }
+                let collapseId = RemotePushID.collapseId(originServerId: origin, sessionId: String(id))
+                listed.insert(collapseId)
+                // The host pushes for any waiting session, open in a tab or not.
+                if session.status == "awaitingPermission" || session.status == "awaitingInput" { waiting.insert(collapseId) }
             }
         }
         let center = UNUserNotificationCenter.current()
         let stale = await center.deliveredNotifications().compactMap { note -> String? in
-            guard let alas = note.request.content.userInfo["alas"] as? [String: Any],
-                  let origin = alas["serverId"] as? String, covered.contains(origin),
-                  !waiting.contains(note.request.identifier) else { return nil }
-            return note.request.identifier
+            let id = note.request.identifier
+            return listed.contains(id) && !waiting.contains(id) ? id : nil
         }
         if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
     }
