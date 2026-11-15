@@ -66,6 +66,7 @@
 		08C8CD106B50E925CFC2B1F4 /* LocalTextInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2556EDD2A6C6875CA05AC0C9 /* LocalTextInferenceEngine.swift */; };
 		08DBBE562CC62A888617AC09 /* SidebarHeaderViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25DBE942154BD154F2D10B9D /* SidebarHeaderViewTests.swift */; };
 		08DF3AC4BA50775940371445 /* ACPSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A443685B2A3322208D51AE /* ACPSessionStoreTests.swift */; };
+		092489FC78AD039330903551 /* AndroidPaneModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67613262F84679154AA321 /* AndroidPaneModel.swift */; };
 		095A19B85DFA5EBA5A24786D /* AdvancedPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = E16C4F54FB3E390F80208DA1 /* AdvancedPane.swift */; };
 		095E7D98616FB77A9F8BDFD9 /* ACPSessionManagerRetentionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1AAAE396590865426C592A /* ACPSessionManagerRetentionTests.swift */; };
 		096304FB0EA9B5EC04D76C49 /* ReviewLoopHandoffBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EC688020FD7B6A2A4393B72 /* ReviewLoopHandoffBuilderTests.swift */; };
@@ -662,6 +663,7 @@
 		536F79023AAEDB205061DAA0 /* AttachIssueDialogModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8FDA5449911989623B0F755 /* AttachIssueDialogModelTests.swift */; };
 		537A81FC4CFB2F27A4F5966A /* ComputerUseSystemPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC1C09C415DDF97BB1D6C02 /* ComputerUseSystemPermissions.swift */; };
 		538853DDE3FE6C25DBDC7886 /* AppState+RunScriptApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F3901910BD8C4542F2C3AD /* AppState+RunScriptApp.swift */; };
+		541E84CB6C4B4286AF2258FB /* AndroidDeviceStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64CA2894081C4686BE93991 /* AndroidDeviceStage.swift */; };
 		5426DC977050AACBCBDA37E9 /* AgentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DAAC7481503A68EA0888682 /* AgentDetectorTests.swift */; };
 		546E90A8B3F3690086FEBEA1 /* EditorDisplayIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66E2E9EF849D1463463CFD1 /* EditorDisplayIntegrationTests.swift */; };
 		547ED6F48DA5A3A3D31BEFAF /* FilesBookmarksPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730461F7EE2A160A1981DB39 /* FilesBookmarksPane.swift */; };
@@ -2611,6 +2613,7 @@
 		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
 		4B4AE3B47834B31019FA6EBA /* ACPComposer+UpstreamReferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ACPComposer+UpstreamReferences.swift"; sourceTree = "<group>"; };
 		4B58B29E5D4E497CEA3CE9BA /* GGCommandRunningStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGCommandRunningStreamingTests.swift; sourceTree = "<group>"; };
+		4B67613262F84679154AA321 /* AndroidPaneModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidPaneModel.swift; sourceTree = "<group>"; };
 		4BECCB29ED6324C55C541D54 /* DiffReviewRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRail.swift; sourceTree = "<group>"; };
 		4BF2EE8A6AAA7F9B45DACC0C /* SemanticVersionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticVersionTests.swift; sourceTree = "<group>"; };
 		4C2DCADE875AAD3ED679901C /* AppStateFollowStackEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFollowStackEntryTests.swift; sourceTree = "<group>"; };
@@ -3632,6 +3635,7 @@
 		D60051A6C7BEE35773F3FBB9 /* tool-call-content-terminal.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tool-call-content-terminal.json"; sourceTree = "<group>"; };
 		D6099B3BFE6E9BB1F2F14F1A /* SidebarHoverTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHoverTrackerTests.swift; sourceTree = "<group>"; };
 		D6128B044F59DB08F2383F7B /* RunScriptCreationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptCreationTests.swift; sourceTree = "<group>"; };
+		D64CA2894081C4686BE93991 /* AndroidDeviceStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidDeviceStage.swift; sourceTree = "<group>"; };
 		D65BEFA85B6671FDE505A30D /* CommitMessageEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitMessageEditorView.swift; sourceTree = "<group>"; };
 		D66E65143A9A61326FE5BBE1 /* ACPPermissionToolCallContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionToolCallContentTests.swift; sourceTree = "<group>"; };
 		D6A9977C979705A40595FD5E /* TabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerTests.swift; sourceTree = "<group>"; };
@@ -5067,6 +5071,8 @@
 		3B174AF65640CE47BFBBE6BE /* Android */ = {
 			isa = PBXGroup;
 			children = (
+				D64CA2894081C4686BE93991 /* AndroidDeviceStage.swift */,
+				4B67613262F84679154AA321 /* AndroidPaneModel.swift */,
 				CA5679D2AE8322196C978A4C /* AndroidScreenSession.swift */,
 				E3681AB08B42D970C2E49A68 /* AndroidSocket.swift */,
 				FE7B9B6C8188A30C96FEA46A /* AndroidStreamClient.swift */,
@@ -7879,6 +7885,8 @@
 				BF776A9CE2409594D67DE4BF /* AlasSegmentedControl.swift in Sources */,
 				214A48509F96D0B6613A1D1D /* AlasSlider.swift in Sources */,
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
+				541E84CB6C4B4286AF2258FB /* AndroidDeviceStage.swift in Sources */,
+				092489FC78AD039330903551 /* AndroidPaneModel.swift in Sources */,
 				B6E9E12226ED2847C580BA6D /* AndroidScreenSession.swift in Sources */,
 				5611CC0370DAAA4FCBB3E97B /* AndroidSocket.swift in Sources */,
 				04A23ECC02ACCB4A19B19C6A /* AndroidStreamClient.swift in Sources */,

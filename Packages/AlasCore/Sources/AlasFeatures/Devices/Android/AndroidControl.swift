@@ -26,11 +26,17 @@ public struct AndroidControl: Sendable {
         return result.stdout
     }
 
-    /// Connected devices, with each emulator's AVD and each ready device's Android version.
-    public func devices() async throws -> [AndroidDevice] {
+    /// Connected devices, with each emulator's AVD and each ready device's
+    /// Android version, taken from `known` for devices already read.
+    public func devices(known: [String: AndroidDevice] = [:]) async throws -> [AndroidDevice] {
         var devices = AndroidDevice.parseList(try await adb(nil, ["devices", "-l"]))
         for index in devices.indices where devices[index].state == .ready {
             let serial = devices[index].serial
+            if let previous = known[serial], previous.state == .ready, previous.release != nil {
+                devices[index].avdName = previous.avdName
+                devices[index].release = previous.release
+                continue
+            }
             if devices[index].isEmulator {
                 devices[index].avdName = (try? await adb(serial, ["emu", "avd", "name"])).flatMap(AndroidDevice.parseAVDName)
             }

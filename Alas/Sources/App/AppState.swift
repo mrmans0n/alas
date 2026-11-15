@@ -732,6 +732,9 @@ final class AppState {
     let devicePane = DevicePaneModel()
     @ObservationIgnored
     let simulatorStreams = SimulatorStreamClient()
+    let androidPane = AndroidPaneModel()
+    /// Android screens, through scrcpy; the SDK comes from `androidPane`.
+    @ObservationIgnored lazy var androidStreams = AndroidStreamClient { [weak self] in self?.androidPane.control }
     /// Runs agents' `device_*` calls and tracks who drives each simulator.
     @ObservationIgnored lazy var deviceControl = DeviceAgentControl(
         input: simulatorStreams,

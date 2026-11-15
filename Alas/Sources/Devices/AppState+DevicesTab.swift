@@ -42,7 +42,8 @@ extension AppState {
         return .resolve(
             simulators: devicePane.simulatorToolsFound == nil ? nil : devicePane.devices,
             listError: noTools ? "Install Xcode to use iOS simulators." : devicePane.listError,
-            vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving
+            vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving,
+            android: androidPane.listing
         )
     }
 }
