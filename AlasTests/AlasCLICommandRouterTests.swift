@@ -353,15 +353,29 @@ struct AlasCLICommandRouterTests {
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
     }
 
-    @Test func listsTheWholeLinkedGroupFromARemoteWorktree() async throws {
-        let local = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let current = Self.worktree(branch: "feature/remote", path: "/tmp/remote", projectId: "r1")
+    @Test func listsTheWholeLinkedGroupWithEachMachinesHost() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remote = Self.worktree(branch: "feature/remote", path: RemotePath.virtual(host: "devbox", realPath: "/srv/remote"), projectId: "r1")
         let differentProject = Self.worktree(branch: "main", path: "/tmp/other", projectId: "p2")
-        let router = Self.router(origin: current, visibleWorktrees: [local, current, differentProject], linked: ["r1": "p1"])
+        let router = Self.router(origin: current, visibleWorktrees: [current, remote, differentProject], linked: ["r1": "p1"])
 
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
 
-        #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [local, current], currentWorktreeId: current.id)))
+        #expect(response == .text([
+            "* main              /tmp/repo",
+            "  feature/remote    devbox:/srv/remote",
+        ]))
+    }
+
+    @Test func switchPrefersTheCallersOwnMachineWithinALinkedGroup() async throws {
+        let localMain = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: "devbox", realPath: "/srv/repo"), projectId: "r1")
+        let current = Self.worktree(branch: "feature/remote", path: RemotePath.virtual(host: "devbox", realPath: "/srv/feature"), projectId: "r1")
+        let router = Self.router(origin: current, visibleWorktrees: [localMain, remoteMain, current], linked: ["r1": "p1"])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "main"))))
+
+        #expect(response == .ok)
     }
 
     @Test func returnsWorktreeResolutionErrors() async throws {

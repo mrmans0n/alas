@@ -304,6 +304,10 @@ public struct AlasCLICommandRouter {
         case .worktree(.list):
             return .text(AlasCLIWorktreeResolver.rows(worktrees: groupWorktrees, currentWorktreeId: origin.id))
         case .worktree(.switch(let target)):
+            // The caller's own machine wins, so `main` means this machine's main.
+            if case .matched = AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
+                return service.switch(target: target, projectWorktrees: projectWorktrees)
+            }
             return service.switch(target: target, projectWorktrees: groupWorktrees)
         case .worktree(.new(let branch, let base)):
             return await createWorktree(origin, branch, base, caller)

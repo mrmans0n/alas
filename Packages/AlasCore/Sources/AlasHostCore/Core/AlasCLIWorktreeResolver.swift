@@ -18,10 +18,14 @@ public enum AlasCLIWorktreeResolver {
     public static func rows(worktrees: [Worktree], currentWorktreeId: String) -> [String] {
         let labels = worktrees.map(\.branch)
         let width = max(labels.map(\.count).max() ?? 0, 1) + 4
+        // Paths on the caller's machine print as that machine sees them; others carry their host.
+        let here = worktrees.first { $0.id == currentWorktreeId }.flatMap { RemotePath.split($0.path.path)?.host }
         return worktrees.map { worktree in
             let marker = worktree.id == currentWorktreeId ? "*" : " "
             let label = worktree.branch.padding(toLength: width, withPad: " ", startingAt: 0)
-            return "\(marker) \(label)\(RemotePath.realPath(worktree.path.path))"
+            let path = worktree.path.path
+            let shown = RemotePath.split(path)?.host == here ? RemotePath.realPath(path) : RemotePath.display(path)
+            return "\(marker) \(label)\(shown)"
         }
     }
 
