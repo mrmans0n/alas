@@ -1,5 +1,4 @@
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -1473,7 +1472,7 @@ public struct WorktreeService: Sendable {
         let result: (status: Int32, error: Int32) = source.withUnsafeFileSystemRepresentation { sourcePath in
             destination.withUnsafeFileSystemRepresentation { destinationPath in
                 guard let sourcePath, let destinationPath else { return (-1, EINVAL) }
-                let status = Darwin.rename(sourcePath, destinationPath)
+                let status = Foundation.rename(sourcePath, destinationPath)
                 return (status, status == 0 ? 0 : errno)
             }
         }
@@ -1484,8 +1483,8 @@ public struct WorktreeService: Sendable {
 
     private static func resolvedFileSystemPath(_ url: URL) -> String {
         url.withUnsafeFileSystemRepresentation { path in
-            guard let path, let resolved = Darwin.realpath(path, nil) else { return url.path }
-            defer { Darwin.free(resolved) }
+            guard let path, let resolved = Foundation.realpath(path, nil) else { return url.path }
+            defer { Foundation.free(resolved) }
             return String(cString: resolved)
         }
     }

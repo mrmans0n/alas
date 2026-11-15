@@ -1,6 +1,6 @@
 import AlasACP
 import AlasFoundation
-import CryptoKit
+import Crypto
 import Foundation
 
 /// The outcome of reading a plan review's negotiated plan file on the

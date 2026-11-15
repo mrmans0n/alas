@@ -1,6 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
-import os
+#endif
 import AlasFoundation
 
 /// Where this Mac's own remote credentials live: the peer identity private
@@ -30,11 +31,17 @@ public enum RemoteSecretStores: Sendable {
     }
 
     /// The production store: Keychain, falling back to owner-only files.
+    /// Linux has no Keychain; there the owner-only files are the store.
     public static func makeDefault() -> any RemoteSecretStore {
+        #if canImport(Security)
         RemoteKeychainSecretStore(fallback: RemoteFileSecretStore())
+        #else
+        RemoteFileSecretStore()
+        #endif
     }
 }
 
+#if canImport(Security)
 /// Keychain-backed storage, with a file fallback for the cases where the
 /// Keychain is not available to this build at all.
 ///
@@ -136,6 +143,7 @@ public final class RemoteKeychainSecretStore: RemoteSecretStore, @unchecked Send
         SecItemDelete(baseQuery(account: account) as CFDictionary)
     }
 }
+#endif
 
 /// The headless host's store: reads like the app does, but writes only to the
 /// file store. An app and a host taking turns on one profile must keep the same
@@ -150,7 +158,7 @@ public final class RemoteHostSecretStore: RemoteSecretStore, Sendable {
     private let writing: any RemoteSecretStore
 
     public init(
-        reading: any RemoteSecretStore = RemoteKeychainSecretStore(fallback: RemoteFileSecretStore()),
+        reading: any RemoteSecretStore = RemoteSecretStores.makeDefault(),
         writing: any RemoteSecretStore = RemoteFileSecretStore()
     ) {
         self.reading = reading

@@ -21,6 +21,20 @@ public struct HookInstallNudge: Equatable, Sendable {
 }
 
 public enum HookInstallNudgeResolver: Sendable {
+    /// The distinct agents running in local panes, in pane order. The installers
+    /// write to this machine, so an agent in an SSH pane can't ask for one.
+    public static func localDetectedHarnesses(
+        sessionIDs: [String],
+        harnessBySession: [String: HarnessKind],
+        isLocal: (String) -> Bool
+    ) -> [HarnessKind] {
+        var seen = Set<HarnessKind>()
+        return sessionIDs
+            .filter(isLocal)
+            .compactMap { harnessBySession[$0] }
+            .filter { seen.insert($0).inserted }
+    }
+
     public static func resolve(
         detectedHarnesses: [HarnessKind],
         dismissed: [String],

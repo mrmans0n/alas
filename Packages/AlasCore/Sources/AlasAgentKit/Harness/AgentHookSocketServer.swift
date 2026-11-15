@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -207,8 +206,8 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         }
         for entry in entries where entry.hasPrefix("sock-") || entry.hasPrefix(".sock-") {
             let path = "\(directory)/\(entry)"
-            var linkStat = Darwin.stat()
-            guard Darwin.lstat(path, &linkStat) == 0,
+            var linkStat = Foundation.stat()
+            guard Foundation.lstat(path, &linkStat) == 0,
                   (linkStat.st_mode & S_IFMT) == S_IFLNK,
                   access(path, F_OK) != 0
             else { continue }
@@ -290,8 +289,8 @@ public final class AgentHookSocketServer: @unchecked Sendable {
             // in-process server shares the pid path) or sits in a directory
             // the checks below would refuse anyway; fighting over it would
             // make two live servers take the path from each other forever.
-            var st = Darwin.stat()
-            guard Darwin.lstat(bindPath, &st) != 0 else { return nil }
+            var st = Foundation.stat()
+            guard Foundation.lstat(bindPath, &st) != 0 else { return nil }
             // The same `rm` removes an isolated profile's runtime root
             // (`/tmp/alas-<uid>-<hash>`), and another user could recreate it.
             if let runtimeRoot {
@@ -447,6 +446,12 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     /// still reads the reply, and looks the same as a closed one to a read or `poll`. Nothing is
     /// written, so no SIGPIPE either.
     static func clientLeft(_ clientFD: Int32) -> Bool {
+        #if !canImport(Darwin)
+        // Linux: a client that only half-closed raises POLLRDHUP; one that closed raises POLLHUP.
+        var entry = pollfd(fd: clientFD, events: Int16(POLLOUT), revents: 0)
+        guard poll(&entry, 1, 0) == 1 else { return false }
+        return entry.revents & Int16(POLLHUP | POLLERR) != 0
+        #else
         let queue = kqueue()
         guard queue >= 0 else { return false }
         defer { close(queue) }
@@ -457,6 +462,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         var immediately = timespec(tv_sec: 0, tv_nsec: 0)
         guard kevent(queue, &change, 1, &event, 1, &immediately) == 1 else { return false }
         return event.flags & UInt16(EV_EOF) != 0
+        #endif
     }
 
     private static func payloadKind(_ data: Data) -> String? {
@@ -508,8 +514,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(clientFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        var noSigPipe: Int32 = 1
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        NoSigPipe.socket(clientFD)
     }
 
     private static func sendResponse(clientFD: Int32, ok: Bool, error: String? = nil) {
@@ -536,7 +541,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
             guard let base = buffer.baseAddress else { return }
             var written = 0
             while written < data.count {
-                let result = Darwin.write(clientFD, base.advanced(by: written), data.count - written)
+                let result = Foundation.write(clientFD, base.advanced(by: written), data.count - written)
                 if result < 0 {
                     if errno == EINTR { continue }
                     return
@@ -552,7 +557,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     private static let bindLock = NSLock()
 
     private static func createSocket(path: String) -> Int32 {
-        let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        let socketFD = socket(AF_UNIX, streamSocketType, 0)
         guard socketFD >= 0 else { return -1 }
 
         let bindResult = Self.bindSocket(socketFD, toPath: path)
@@ -637,7 +642,7 @@ private final class ClientTaskRegistry: @unchecked Sendable {
         lock.lock()
         if stopped, entries[token] != nil {
             entries[token]?.task = task
-            shutdown(fd, SHUT_RDWR)
+            shutdown(fd, Int32(SHUT_RDWR))
             lock.unlock()
             task.cancel()
             return true
@@ -666,7 +671,7 @@ private final class ClientTaskRegistry: @unchecked Sendable {
         stopped = true
         let active = Array(entries.values)
         for entry in active {
-            shutdown(entry.fd, SHUT_RDWR)
+            shutdown(entry.fd, Int32(SHUT_RDWR))
         }
         lock.unlock()
 

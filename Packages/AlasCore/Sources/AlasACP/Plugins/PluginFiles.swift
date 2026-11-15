@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -75,9 +74,8 @@ public enum PluginFiles: Sendable {
             var unread = false
             while let entry = readdir(stream) {
                 let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
-                    FileManager.default.string(
-                        withFileSystemRepresentation: bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
-                        length: Int(entry.pointee.d_namlen))
+                    let characters = bytes.baseAddress!.assumingMemoryBound(to: CChar.self)
+                    return FileManager.default.string(withFileSystemRepresentation: characters, length: strlen(characters))
                 }
                 guard name != ".", name != "..", name.lowercased() != ".git" else { continue }
                 guard names.count < readLimit else {

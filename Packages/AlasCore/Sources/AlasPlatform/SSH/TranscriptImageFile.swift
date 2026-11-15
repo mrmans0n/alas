@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
+#endif
 import AlasModel
 
 /// Resolves transcript images on the machine that owns the session. Unlike
@@ -50,8 +52,20 @@ public enum TranscriptImageFile {
     /// Validate on the serving host before sending bytes to a peer. File names
     /// are not reliable image identifiers, especially for generated assets.
     public static func isImage(_ data: Data) -> Bool {
+        #if canImport(ImageIO)
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
         return CGImageSourceGetCount(source) > 0
+        #else
+        // No image decoder here: accept the formats a transcript shows by their signatures.
+        let signatures: [[UInt8]] = [
+            [0x89, 0x50, 0x4E, 0x47], // PNG
+            [0xFF, 0xD8, 0xFF], // JPEG
+            Array("GIF8".utf8),
+        ]
+        let bytes = [UInt8](data.prefix(12))
+        if signatures.contains(where: { bytes.starts(with: $0) }) { return true }
+        return bytes.count == 12 && bytes.starts(with: Array("RIFF".utf8)) && Array(bytes[8...]) == Array("WEBP".utf8)
+        #endif
     }
 
     public static func read(_ source: String, root: URL?, maxBytes: Int = maxBytes) async -> Data? {

@@ -1,5 +1,5 @@
 import Foundation
-import CryptoKit
+import Crypto
 
 /// A Mac's answer to "prove you are the peer this record was paired with".
 /// Carries the public half so the verifier can compare it against the key its

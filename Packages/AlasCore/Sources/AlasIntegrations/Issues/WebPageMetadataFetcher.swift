@@ -1,4 +1,5 @@
 import Foundation
+import AlasRemoteKit
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -114,21 +115,15 @@ public struct WebPageMetadataFetcher: Sendable {
         configuration.httpShouldSetCookies = false
         let session = URLSession(configuration: configuration)
         defer { session.finishTasksAndInvalidate() }
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              let responseURL = http.url
-        else {
-            throw URLError(.badServerResponse)
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            (data, http) = try await boundedFetch(request, session: session, maxBytes: maximumResponseSize)
+        } catch let error as URLError where error.code == .dataLengthExceedsMaximum {
+            throw FetchError.responseTooLarge
         }
-        var data = Data()
-        let expectedSize = http.expectedContentLength > 0 ? Int(http.expectedContentLength) : 0
-        data.reserveCapacity(min(expectedSize, maximumResponseSize))
-        for try await byte in bytes {
-            guard data.count < maximumResponseSize else {
-                throw FetchError.responseTooLarge
-            }
-            data.append(byte)
+        guard (200..<300).contains(http.statusCode), let responseURL = http.url else {
+            throw URLError(.badServerResponse)
         }
         return Response(
             data: data,

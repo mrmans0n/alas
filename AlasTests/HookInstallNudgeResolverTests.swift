@@ -116,4 +116,18 @@ struct HookInstallNudgeResolverTests {
         )
         #expect(nudge == nil)
     }
+
+    @Test("agents in SSH panes never reach the local installer nudge")
+    func sshPanesAreExcluded() {
+        let active: [String: HarnessKind] = ["ssh": .codex, "local": .claudeCode, "local-2": .claudeCode, "ssh-2": .cursor]
+        let local = HookInstallNudgeResolver.localDetectedHarnesses(
+            sessionIDs: ["ssh", "local", "local-2", "ssh-2"],
+            harnessBySession: active,
+            isLocal: { !$0.hasPrefix("ssh") }
+        )
+        #expect(local == [.claudeCode])
+        #expect(HookInstallNudgeResolver.localDetectedHarnesses(
+            sessionIDs: ["ssh", "ssh-2"], harnessBySession: active, isLocal: { _ in false }
+        ).isEmpty)
+    }
 }

@@ -1,5 +1,7 @@
-import CoreGraphics
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 import AlasFoundation
 
 /// Where the `/btw` card sits in the chat surface.

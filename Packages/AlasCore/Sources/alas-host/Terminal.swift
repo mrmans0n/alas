@@ -1,5 +1,5 @@
 import AlasCore
-import Darwin
+import Foundation
 
 /// The terminal's settings before raw mode, for the signal handlers to restore.
 private nonisolated(unsafe) var savedAttributes = termios()

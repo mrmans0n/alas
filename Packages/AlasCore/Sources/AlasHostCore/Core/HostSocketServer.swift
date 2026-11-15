@@ -1,6 +1,4 @@
-import Darwin
 import Foundation
-import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -54,7 +52,7 @@ public final class HostSocketServer: @unchecked Sendable {
         }
         // Holding the lock, whatever is at the path is a dead host's.
         unlink(path)
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0, Self.withAddress(path, { bind(fd, $0, $1) }) == 0,
               chmod(path, 0o600) == 0, listen(fd, 16) == 0
         else {
@@ -77,7 +75,7 @@ public final class HostSocketServer: @unchecked Sendable {
             guard !isStopped else { return }
             isStopped = true
             unlink(path)
-            shutdown(listenFD, SHUT_RDWR)
+            shutdown(listenFD, Int32(SHUT_RDWR))
             close(listenFD)
             Self.release(lockFD)
         }
@@ -111,8 +109,7 @@ public final class HostSocketServer: @unchecked Sendable {
                 close(client)
                 continue
             }
-            var noSigPipe: Int32 = 1
-            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+            NoSigPipe.socket(client)
             let connection = HostSocketConnection(fd: client)
             Task { @MainActor [server] in
                 connection.serve(server.connect(caller: .localUser(uid: uid), send: connection.write))
@@ -142,19 +139,19 @@ public final class HostSocketServer: @unchecked Sendable {
 
     /// Whether something accepts connections at `path` now.
     static func connect(to path: String) -> Bool {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
-        return withAddress(path) { Darwin.connect(fd, $0, $1) } == 0
+        return withAddress(path) { Foundation.connect(fd, $0, $1) } == 0
     }
 
     /// Sends one request to the host serving `path` and waits for its
     /// answer, for a command-line client that asks once and exits.
     public static func request(_ request: HostRequest, at path: String = defaultPath()) throws -> HostResponse {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0 else { throw POSIXError(.EBADF) }
         defer { close(fd) }
-        guard withAddress(path, { Darwin.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }
+        guard withAddress(path, { Foundation.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }
         var line = try JSONEncoder().encode(HostClientMessage(id: 1, request: request))
         line.append(UInt8(ascii: "\n"))
         let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
@@ -239,7 +236,7 @@ final class HostSocketConnection: @unchecked Sendable {
                 data.withUnsafeBytes { buffer in
                     var offset = 0
                     while offset < buffer.count {
-                        let written = Darwin.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                        let written = Foundation.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
                         if written < 0 {
                             if errno == EINTR { continue }
                             return

@@ -348,6 +348,8 @@ final class AppState {
     @ObservationIgnored var vmPendingResumes: [String: Set<String>] = [:]
     /// The VMs the user took over, by registry id, with the sessions each take over stopped.
     var vmTakeOvers = VMTakeOvers()
+    /// Agent calls to a VM the user drives, waiting for hand back.
+    @ObservationIgnored let vmHolds = HeldCalls()
     /// The registry ids of the VMs the user took over; agent calls to them are refused.
     var vmTakenOver: Set<String> { vmTakeOvers.recordIDs }
     /// The last agent call forwarded to each VM, by registry id, for who drives it. Observed per
@@ -513,6 +515,7 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
+    private let remoteTerminalHarness = RemoteTerminalHarnessMonitor()
     @ObservationIgnored
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
@@ -7127,10 +7130,17 @@ final class AppState {
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
         terminal.onSessionRegistered = { [weak self] session in
-            self?.acquireCheckpointTerminalLease(for: session)
+            guard let self else { return }
+            self.acquireCheckpointTerminalLease(for: session)
+            if let host = session.remoteHost, let name = session.zmxSessionName {
+                self.remoteTerminalHarness.register(sessionID: session.id, host: host, name: name, harness: self.harness)
+            }
         }
         terminal.onSessionUnregistered = { [weak self] session in
             guard let self else { return }
+            if let host = session.remoteHost {
+                self.remoteTerminalHarness.unregister(sessionID: session.id, host: host, harness: self.harness)
+            }
             self.checkpointWriterLeases.release(sessionID: session.id, instanceID: self.instanceId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
@@ -7784,7 +7794,9 @@ final class AppState {
             )
             opened = .init(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
-        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        if terminal.registry.session(for: opened.id)?.remoteHost == nil {
+            harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        }
         return opened
     }
 
@@ -7848,7 +7860,9 @@ final class AppState {
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
-        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        if terminal.registry.session(for: opened.id)?.remoteHost == nil {
+            harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        }
         let title = titleOverride ?? tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)

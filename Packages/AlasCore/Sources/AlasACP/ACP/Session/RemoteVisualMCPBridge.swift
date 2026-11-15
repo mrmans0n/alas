@@ -337,7 +337,7 @@ public actor RemoteVisualMCPBridge {
     private static func isValidId(_ id: Any) -> Bool {
         if id is String { return true }
         guard let number = id as? NSNumber else { return false }
-        return CFGetTypeID(number) != CFBooleanGetTypeID()
+        return !number.isJSONBoolean
     }
 
     /// Every tool any relay backend serves; the backend itself refuses the

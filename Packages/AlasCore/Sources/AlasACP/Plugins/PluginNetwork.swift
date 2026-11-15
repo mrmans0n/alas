@@ -45,6 +45,10 @@ public struct PluginURLSessionTransport: PluginHTTPTransport, Sendable {
     }()
 
     public func data(for request: URLRequest, redirectHosts: [String]) async throws -> (Data, HTTPURLResponse) {
+        #if canImport(FoundationNetworking)
+        // Plugins don't run here (no JavaScriptCore), so nothing asks.
+        throw URLError(.unsupportedURL)
+        #else
         let (bytes, response) = try await Self.session.bytes(for: request, delegate: RedirectPolicy(hosts: redirectHosts))
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         var data = Data()
@@ -56,6 +60,7 @@ public struct PluginURLSessionTransport: PluginHTTPTransport, Sendable {
             }
         }
         return (data, http)
+        #endif
     }
 
     public init() {

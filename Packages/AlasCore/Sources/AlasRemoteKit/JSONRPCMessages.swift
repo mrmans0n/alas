@@ -130,11 +130,10 @@ public struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
         if let value = value as? AnyCodable { return value.canonicalValue }
         if value is NSNull { return .null }
         if let value = value as? NSNumber {
-            let cfValue = value as CFNumber
-            if CFGetTypeID(cfValue) == CFBooleanGetTypeID() {
+            if value.isJSONBoolean {
                 return .bool(value.boolValue)
             }
-            if CFNumberIsFloatType(cfValue) {
+            if ["f", "d"].contains(String(cString: value.objCType)) {
                 return .double(value.doubleValue)
             }
             return .int(value.intValue)

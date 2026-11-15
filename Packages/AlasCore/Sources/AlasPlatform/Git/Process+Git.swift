@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -139,9 +138,8 @@ extension Process {
             if process.isRunning {
                 timeoutState.markTimedOut()
                 stdinWriter?.close()
-                fputs(
-                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                    stderr
+                writeStandardError(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n"
                 )
                 terminateProcessWithEscalation(process)
             }
@@ -537,9 +535,8 @@ extension Process {
             if Task.isCancelled { return }
             if process.isRunning {
                 timedOutFlag.mark()
-                fputs(
-                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                    stderr
+                writeStandardError(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n"
                 )
                 terminateProcessWithEscalation(process)
             }
@@ -681,9 +678,8 @@ extension Process {
                 if Task.isCancelled { return }
                 if process.isRunning {
                     timedOutFlag.mark()
-                    fputs(
-                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                        stderr
+                    writeStandardError(
+                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n"
                     )
                     terminateProcessWithEscalation(process)
                 }

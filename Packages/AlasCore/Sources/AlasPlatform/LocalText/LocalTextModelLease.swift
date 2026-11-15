@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import Synchronization
 import AlasFoundation
@@ -109,7 +108,7 @@ public enum LocalTextModelFiles: Sendable {
         let copy = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard copy >= 0 else { throw posix() }
         guard let stream = fdopendir(copy) else {
-            Darwin.close(copy)
+            Foundation.close(copy)
             throw posix()
         }
         defer { closedir(stream) }

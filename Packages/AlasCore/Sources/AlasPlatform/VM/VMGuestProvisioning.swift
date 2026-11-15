@@ -1,4 +1,6 @@
+#if canImport(CommonCrypto)
 import CommonCrypto
+#endif
 import Foundation
 
 /// The local account Alas creates in an unattended golden image. A throwaway
@@ -69,6 +71,7 @@ public enum VMGuestProvisioning {
         guard let rounds = UInt32(exactly: iterations), rounds > 0 else {
             throw VMGuestProvisioningError.invalidIterations(iterations)
         }
+        #if canImport(CommonCrypto)
         let passwordBytes = Array(password.utf8)
         var entropy = [UInt8](repeating: 0, count: entropyLength)
         let status = salt.withUnsafeBytes { saltBuffer in
@@ -84,6 +87,11 @@ public enum VMGuestProvisioning {
             }
         }
         guard status == kCCSuccess else { throw VMGuestProvisioningError.keyDerivationFailed(status: status) }
+        #else
+        // VMs run only on macOS; nothing provisions a guest elsewhere.
+        let entropy: [UInt8] = []
+        throw VMGuestProvisioningError.keyDerivationFailed(status: -1)
+        #endif
         let shadow: [String: Any] = [
             "SALTED-SHA512-PBKDF2": ["entropy": Data(entropy), "iterations": iterations, "salt": salt] as [String: Any],
         ]

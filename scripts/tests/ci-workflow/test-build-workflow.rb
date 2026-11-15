@@ -226,7 +226,8 @@ end
 expected_runners = {
   "ci-workflow-contract" => "ubuntu-26.04",
   "rust-tests" => "${{ matrix.os || 'ubuntu-26.04' }}",
-  "remote-web-tests" => "ubuntu-26.04"
+  "remote-web-tests" => "ubuntu-26.04",
+  "alas-host-linux" => "${{ matrix.runner }}"
 }
 
 expected_runners.each do |name, runner|
@@ -247,6 +248,14 @@ raise "rust-tests must cover every first-party Rust project with its declared to
 
 rust_command = rust_job.fetch("steps").find { |step| step["name"] == "Run locked Rust tests" }
 raise "rust-tests must run cargo test --locked" unless rust_command&.fetch("run", "")&.include?("rustup run ${{ matrix.toolchain }} cargo test --locked")
+
+linux_job = jobs.fetch("alas-host-linux")
+linux_runners = linux_job.dig("strategy", "matrix", "include").map { |entry| [entry.fetch("arch"), entry.fetch("runner")] }
+raise "alas-host-linux must build on both Linux architectures" unless linux_runners == [
+  ["x86_64", "ubuntu-26.04"],
+  ["aarch64", "ubuntu-26.04-arm"]
+]
+raise "alas-host-linux must build in the Swift Linux image" unless linux_job["container"].to_s.start_with?("swift:")
 
 remote_steps = jobs.fetch("remote-web-tests").fetch("steps").map { |step| step["run"] }
 [

@@ -140,9 +140,10 @@ final class TerminalSession {
 
     /// Captures the local persistent session's identity on the main actor,
     /// then queries its inner PTY from the detector's background queue.
-    /// Direct shells and SSH sessions still use Ghostty's own PTY.
+    /// Direct local shells use Ghostty's PTY. SSH detection runs on the host.
     func foregroundPidProvider(zmxClient: ZmxClient? = nil) -> HarnessDetector.PidProvider {
-        if remoteHost == nil, let name = zmxSessionName {
+        guard remoteHost == nil else { return { nil } }
+        if let name = zmxSessionName {
             let client = zmxClient ?? ZmxClient(env: ZmxEnv.resolve())
             return { [weak self] in
                 guard self != nil else { return nil }
@@ -154,6 +155,7 @@ final class TerminalSession {
 
     /// The provider holds the session weakly so a closed pane reports nil.
     func registerForegroundPid(with detector: HarnessDetector, zmxClient: ZmxClient? = nil) {
+        guard remoteHost == nil else { return }
         detector.register(sessionId: id, pidProvider: foregroundPidProvider(zmxClient: zmxClient))
     }
 }
