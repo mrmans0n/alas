@@ -38,6 +38,10 @@ final class TerminalConsole {
     @ObservationIgnored private var escapeToken = 0
     /// The lease the filter's held bytes began under; they never go out under another.
     @ObservationIgnored private var pendingLease: PeerConsoleControl?
+    /// The view's grid, as SwiftTerm last reported it.
+    @ObservationIgnored private var viewGrid: (rows: Int, columns: Int)?
+    /// The host's grid changed under a snapshot laid out for it: ask for another once the view fits.
+    @ObservationIgnored private var resyncWhenFitted = false
     @ObservationIgnored private var watchGeneration = 0
     /// The host's `onlineCount` the attachment was made under.
     @ObservationIgnored private var attachedOnline = 0
@@ -103,6 +107,13 @@ final class TerminalConsole {
 
     /// The holder's view changed size: the host lays its screen out for it, where it can.
     func viewResized(rows: Int, columns: Int) {
+        viewGrid = (rows, columns)
+        if resyncWhenFitted, rows == self.rows, columns == self.columns, phase == .live {
+            // Bytes fed into the old grid lost what it couldn't hold; only a new snapshot restores it.
+            resyncWhenFitted = false
+            expected = nil
+            send(.resync(attachmentId: attachmentId))
+        }
         guard canResize, isControlling, rows > 0, columns > 0, rows != self.rows || columns != self.columns else { return }
         send(.resize(attachmentId: attachmentId, rows: rows, columns: columns))
     }
@@ -144,8 +155,7 @@ final class TerminalConsole {
     private func handle(_ event: PeerConsoleEvent) {
         switch event {
         case .attached(_, let rows, let columns, let control):
-            self.rows = rows
-            self.columns = columns
+            gridChanged(rows: rows, columns: columns)
             self.control = control
             phase = .live
         case .snapshot(_, let sequence, _, let data):
@@ -164,8 +174,7 @@ final class TerminalConsole {
         case .control(_, let control):
             self.control = control
         case .geometry(_, let rows, let columns):
-            self.rows = rows
-            self.columns = columns
+            gridChanged(rows: rows, columns: columns)
         case .detached(_, let reason):
             listener = nil
             watchGeneration += 1
@@ -173,6 +182,14 @@ final class TerminalConsole {
         case .inputAck, .list, .opened, .openFailed, .openNeedsRepoHookApproval:
             break
         }
+    }
+
+    /// The view lays the new grid out only after SwiftUI's next update, while the snapshot that
+    /// follows is fed at once, so it is replaced once the view fits.
+    private func gridChanged(rows: Int, columns: Int) {
+        self.rows = rows
+        self.columns = columns
+        if viewGrid.map({ $0.rows != rows || $0.columns != columns }) ?? true { resyncWhenFitted = true }
     }
 
     private func send(_ request: PeerConsoleRequest) {
