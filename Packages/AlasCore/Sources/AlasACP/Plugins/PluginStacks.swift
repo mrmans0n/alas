@@ -109,6 +109,15 @@ public struct StackInventory: Codable, Equatable, Sendable {
     }
     public static var unavailable: Self { .init(complete: false, busy: false, stacks: [], error: "Native stacks are not available.") }
 
+    /// What a plugin can match against reviews: stacks confirmed to have none (no numbered entry, `reviewNumbers`
+    /// of []) are dropped. A repository's merged-but-uncleaned stacks are hundreds of these, enough to push the
+    /// reply past the plugin message limit. Unknown membership (nil) stays, since it blocks provider actions.
+    public var reviewLinked: Self {
+        var linked = self
+        linked.stacks = stacks.filter { $0.reviewNumbers != [] || $0.entries.contains { $0.number != nil } }
+        return linked
+    }
+
     /// Incorporates a membership-only discovery row without asserting entry order or heads.
     public mutating func includeDiscoveredStack(_ discovered: NativeStack) {
         guard let index = stacks.firstIndex(where: { $0.id == discovered.id }) else {

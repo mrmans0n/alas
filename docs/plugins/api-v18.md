@@ -21,7 +21,8 @@ discovery succeeded. Incomplete inventory with no applicability flag remains
 unknown and cannot authorize generic writes. Non-applicability still retains
 known native stacks as read-only dependencies. Failures preserve previously known stacks
 as incomplete data. Cached inventory becomes stale after native changes or 30
-seconds. Mutation decisions require a successful refresh.
+seconds. Mutation decisions require a successful refresh. `stacks` leaves out
+stacks known to have no reviews: no numbered entry and `reviewNumbers: []`.
 
 Each stack has opaque `id`, `name`, `base`, provider `host` and `repo`, optional
 `worktree`, `fingerprint`, `complete`, ordered `entries`, supported `actions`, and
