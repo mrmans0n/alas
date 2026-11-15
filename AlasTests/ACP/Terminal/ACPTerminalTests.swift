@@ -433,7 +433,7 @@ struct ACPTerminalTests {
         #expect(source.contains("descendantTracker = Task.detached(priority: .utility)"))
         #expect(source.contains("let cached = orphanedDescendants"))
         #expect(source.contains("let preKillDescendants = Set(Self.collectChildDescendants(of: pid))"))
-        #expect(source.contains("Darwin.kill(-pid, SIGTERM)"))
+        #expect(source.contains("Foundation.kill(-pid, SIGTERM)"))
         #expect(source.contains("Task.detached(priority: .utility) {\n            var initial = preKillDescendants"))
         #expect(source.contains("initial.formUnion(await BlockingWork.run {"))
         #expect(source.contains("var found = Set(Self.collectDescendants(of: pid))"))
