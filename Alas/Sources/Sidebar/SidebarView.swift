@@ -293,12 +293,12 @@ struct SidebarView: View {
                                                 evidence: evidence
                                             )
                                         },
-                                        pluginCommands: { state.pluginCommands($0, projectID: project.id) },
+                                        pluginCommands: { slot, wt in state.pluginCommands(slot, projectID: wt?.projectId ?? project.id) },
                                         onRunPluginCommand: { item, slot, wt in
                                             state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
                                         },
                                         pluginDecorations: { wt in
-                                            wt.map { state.pluginDecorations(.worktreeRow, projectID: project.id, target: $0.id) }
+                                            wt.map { state.pluginDecorations(.worktreeRow, projectID: $0.projectId, target: $0.id) }
                                                 ?? state.pluginDecorations(.repoRow, projectID: project.id, target: project.id)
                                         },
                                         onRunPluginDecoration: { state.runPluginDecoration($0) },

@@ -108,7 +108,8 @@ struct RepoGroupView: View {
     var onPrepareWorktreeExplanation:
         @MainActor (Worktree, WorktreeExplainerEvidence) async -> Bool = { _, _ in true }
 
-    var pluginCommands: (PluginCommandSlot) -> [PluginCommandItem] = { _ in [] }
+    /// Commands for a worktree row's project, or for the group's when the worktree is nil.
+    var pluginCommands: (PluginCommandSlot, Worktree?) -> [PluginCommandItem] = { _, _ in [] }
     var onRunPluginCommand: (PluginCommandItem, PluginCommandSlot, Worktree?) -> Void = { _, _, _ in }
     /// Plugin badges for a worktree row, or for the project's header when nil.
     var pluginDecorations: (Worktree?) -> [PluginDecorationItem] = { _ in [] }
@@ -240,7 +241,7 @@ struct RepoGroupView: View {
                     .disabled(isMember && !canRemoveFromSpace(space.id))
                 }
             }
-            let commands = pluginCommands(.repoMenu)
+            let commands = pluginCommands(.repoMenu, nil)
             if !commands.isEmpty {
                 Divider()
                 PluginCommandButtons(items: commands) { onRunPluginCommand($0, .repoMenu, nil) }
@@ -298,7 +299,7 @@ struct RepoGroupView: View {
             onPrepareWorktreeExplanation: { evidence in
                 await onPrepareWorktreeExplanation(wt, evidence)
             },
-            pluginCommands: pluginCommands(.worktreeMenu),
+            pluginCommands: pluginCommands(.worktreeMenu, wt),
             onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
             pluginDecorations: pluginDecorations(wt),
             onRunPluginDecoration: onRunPluginDecoration,
