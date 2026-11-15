@@ -53,6 +53,8 @@ public enum SimulatorReadBack<Value: Equatable & Sendable>: Equatable, Sendable 
         switch self {
         case .value(let value as SimulatorAppearance): value.rawValue
         case .value(let value as SimulatorTextSize): value.rawValue
+        case .value(let value as SimulatorColorFilter): value.rawValue
+        case .value(let value as SimulatorLiquidGlass): value.rawValue
         case .value(let value): value
         case .unsupported: "unsupported"
         case .unknown: "unknown"
@@ -191,10 +193,18 @@ public protocol SimulatorSettingsControl: Sendable {
     func openURL(udid: String, url: String) async throws
     func userApps(udid: String) async throws -> [SimulatorApp]
     func isInstalled(udid: String, bundleID: String) async -> Bool
+    func accessibility(udid: String) async throws -> SimulatorAccessibility
+    /// Sets each setting `change` names, then reads all of them back.
+    func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility
 }
 
 public struct LiveSimulatorSettings: SimulatorSettingsControl {
-    public init() {}
+    /// serve-sim's `sim-ax-settings`, built for the simulator; the app bundles it.
+    public let accessibilityHelper: URL?
+
+    public init(accessibilityHelper: URL? = nil) {
+        self.accessibilityHelper = accessibilityHelper
+    }
 
     public func display(udid: String) async throws -> SimulatorDisplaySettings {
         try await SimulatorControl.display(udid: udid)
@@ -233,5 +243,30 @@ public struct LiveSimulatorSettings: SimulatorSettingsControl {
 
     public func isInstalled(udid: String, bundleID: String) async -> Bool {
         await SimulatorControl.isInstalled(udid: udid, bundleID: bundleID)
+    }
+
+    public func accessibility(udid: String) async throws -> SimulatorAccessibility {
+        try await readAccessibility(udid: udid, runtimeVersion: await SimulatorControl.runtimeVersion(udid: udid))
+    }
+
+    public func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+        let runtimeVersion = await SimulatorControl.runtimeVersion(udid: udid)
+        // Refused before setting anything, since the helper would write it and read it back.
+        if change.liquidGlass != nil, !SimulatorAccessibility.supportsLiquidGlass(runtimeVersion: runtimeVersion) {
+            throw SimulatorAccessibilityError.liquidGlassUnsupported
+        }
+        for arguments in change.helperArguments { _ = try await runHelper(udid: udid, arguments) }
+        return try await readAccessibility(udid: udid, runtimeVersion: runtimeVersion)
+    }
+
+    private func readAccessibility(udid: String, runtimeVersion: String?) async throws -> SimulatorAccessibility {
+        try SimulatorAccessibility.parse(Data(try await runHelper(udid: udid, ["status"]).utf8), runtimeVersion: runtimeVersion)
+    }
+
+    private func runHelper(udid: String, _ arguments: [String]) async throws -> String {
+        guard let helper = accessibilityHelper, FileManager.default.isExecutableFile(atPath: helper.path) else {
+            throw SimulatorAccessibilityError.helperMissing
+        }
+        return try await SimulatorControl.accessibilityHelper(udid: udid, helper: helper, arguments)
     }
 }

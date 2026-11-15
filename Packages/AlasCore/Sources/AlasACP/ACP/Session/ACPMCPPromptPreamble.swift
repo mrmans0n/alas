@@ -81,8 +81,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         "vm_run", "vm_status",
         "device_list", "device_open", "device_snapshot", "device_screenshot",
         "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
-        "device_set_appearance", "device_set_permission", "device_set_location", "device_push", "device_open_url",
-        "device_logs", "device_clipboard", "device_rotate", "device_record",
+        "device_set_appearance", "device_set_accessibility", "device_set_permission", "device_set_location",
+        "device_push", "device_open_url", "device_logs", "device_clipboard", "device_rotate", "device_record",
     ]
 
     /// What a child delegated from another Mac reports with. It cannot message
@@ -350,8 +350,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                             + "Device actions return what changed on the screen, and refs you hold stay valid while their element is on screen; call device_snapshot only when you need the whole screen. "
                             + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
                             + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
-                            + "To test dark mode, Dynamic Type, permissions, location, notifications or deep links, use "
-                            + "device_set_appearance, device_set_permission, device_set_location, device_push and device_open_url. "
+                            + "To test dark mode, Dynamic Type, accessibility settings, permissions, location, notifications or deep links, use "
+                            + "device_set_appearance, device_set_accessibility, device_set_permission, device_set_location, device_push and device_open_url. "
                             + "Read the app's logs and crash reports with device_logs. "
                             + "device_type types any text; read or set the simulator's pasteboard with device_clipboard. "
                             + "Rotate with device_rotate and record the screen with device_record. "

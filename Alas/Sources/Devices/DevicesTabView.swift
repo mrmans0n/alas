@@ -50,7 +50,8 @@ struct DevicesTabView: View {
                     let text = NSPasteboard.general.string(forType: .string)
                     Task { await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard) }
                 },
-                onCopy: { Task { await model.copy(udid: device.udid, pasteboard: state.devicePasteboard) } }
+                onCopy: { Task { await model.copy(udid: device.udid, pasteboard: state.devicePasteboard) } },
+                accessibilityOverlay: model.accessibilityOverlays.contains(device.udid)
             )
             .id(device.udid)
         case .simulator(let device, .booting):

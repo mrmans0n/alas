@@ -213,6 +213,9 @@ targets:
       - name: Build TreeSitter Pack
         script: '"${SRCROOT}/scripts/build-treesitter-pack.sh"'
         basedOnDependencyAnalysis: false
+      - name: Build Simulator Accessibility Helper
+        script: '"${SRCROOT}/scripts/build-sim-ax-settings.sh"'
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed Ghostty Resources
         script: '"${SRCROOT}/scripts/embed-ghostty-resources.sh"'

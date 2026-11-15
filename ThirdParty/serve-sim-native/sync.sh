@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-vendors serve-sim's native Swift from expo/expo-device-hub at one commit.
-# Copies StreamingPolicy and CoreDeviceShim whole, and the SimNative files
-# listed in vendored-files.txt. AlasSimulatorSession.swift is ours and is
+# Copies StreamingPolicy and CoreDeviceShim whole, SimAXSettings' source,
+# and the SimNative files listed in vendored-files.txt. AlasSimulatorSession.swift is ours and is
 # left alone.
 set -euo pipefail
 
@@ -20,8 +20,10 @@ git -C "$work/repo" checkout -q "$commit"
 
 src="$work/repo/packages/serve-sim/packages/serve-sim/Sources"
 mkdir -p "$here/Sources/ServeSimCore"
-rm -rf "$here/Sources/StreamingPolicy" "$here/Sources/CoreDeviceShim"
+rm -rf "$here/Sources/StreamingPolicy" "$here/Sources/CoreDeviceShim" "$here/Sources/SimAXSettings"
+mkdir -p "$here/Sources/SimAXSettings"
 cp -R "$src/StreamingPolicy" "$src/CoreDeviceShim" "$here/Sources/"
+cp "$src/SimAXSettings/sim-ax-settings.m" "$here/Sources/SimAXSettings/"
 while read -r name; do
   [ -n "$name" ] || continue
   cp "$src/SimNative/$name.swift" "$here/Sources/ServeSimCore/$name.swift"

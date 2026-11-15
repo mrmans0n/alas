@@ -100,6 +100,13 @@ enum DesignCaptureDevices {
             [SimulatorApp(bundleID: "io.example.lantern", name: "Lantern"), SimulatorApp(bundleID: "io.example.lantern.beta", name: "Lantern Beta")]
         }
         func isInstalled(udid: String, bundleID: String) async -> Bool { true }
+        private static let accessibility = SimulatorAccessibility(
+            voiceOver: .value(false), reduceMotion: .value(true), buttonShapes: .value(false),
+            reduceTransparency: .value(false), colorFilter: .value(.none), liquidGlass: .value(.clear))
+        func accessibility(udid: String) async throws -> SimulatorAccessibility { Self.accessibility }
+        func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+            Self.accessibility
+        }
     }
 
     private struct FakeLogs: SimulatorLogsControl {
@@ -178,7 +185,7 @@ enum DesignCaptureDevices {
 
         var body: some View {
             DeviceSettingsPopover(udid: DesignCaptureDevices.phone.udid, settings: FakeSettings(), control: control)
-                .frame(height: 560, alignment: .top)
+                .frame(height: 780, alignment: .top)
                 .background(theme.color("bg-2"))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -203,6 +210,7 @@ enum DesignCaptureDevices {
                     DevicesActions(
                         device: device, booted: booted, client: SimulatorStreamClient(), control: control,
                         canChangeSettings: booted, onShutDown: {}, onOpenLogs: {},
+                        accessibilityOverlay: false, onToggleAccessibilityOverlay: {},
                         recorder: fakeRecorder(), agentName: { _ in "Claude" })
                 }
             }
@@ -244,7 +252,8 @@ enum DesignCaptureDevices {
         func stage(_ device: SimulatorDevice, control: DeviceAgentControl, install: DevicePaneModel.AppInstall?) -> some View {
             DeviceStage(
                 device: device, shape: shape, client: client, control: control, agentName: { _ in "Claude" }, now: now,
-                appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {}, notice: nil, onPaste: {}, onCopy: {})
+                appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {}, notice: nil, onPaste: {}, onCopy: {},
+                accessibilityOverlay: false)
         }
         let agentVMDriver = VMDriverStatus.make(
             driver: .agent(sessionID: "demo-agent", tool: "computer_click", at: now.addingTimeInterval(-4)), agentName: "Claude", now: now)
