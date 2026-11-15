@@ -341,6 +341,7 @@ final class NativePeerHosts {
         case .ship: "Ship Failed"
         case .resume: "Resume Failed"
         case .stop: "Stop Shepherding Failed"
+        case .enableAutoFix, .disableAutoFix, .enableAutoMerge, .disableAutoMerge: "Shepherd Change Failed"
         }
         let showError = showError
         Task {

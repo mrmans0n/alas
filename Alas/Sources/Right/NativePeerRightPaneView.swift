@@ -736,34 +736,59 @@ struct NativePeerRightPaneView: View {
         }
     }
 
-    /// "Shepherd with…" for the open request no session of the worktree
-    /// shepherds: the picked session's Ship on the host binds it.
+    /// The host's shepherd of the worktree's request: its switches, Resume,
+    /// Stop and Move to… while a session shepherds it, else "Shepherd with…"
+    /// for an open one. Each runs on the host through a session's shepherd.
     private func shepherdDrawerModel(_ target: (serverId: String, worktree: PeerHostWorktree)) -> ReviewShepherdDrawerModel? {
-        guard let snapshot = reviewLoop.snapshot, let request = snapshot.reviewRequest, request.state == .open,
-              let candidates = client.shepherdCandidates(
+        guard let snapshot = reviewLoop.snapshot, let request = snapshot.reviewRequest,
+              let hosts = client.hosts,
+              let shepherd = client.worktreeShepherd(
                   serverId: target.serverId, worktreeID: target.worktree.snapshot.worktree.id,
                   number: "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
-              ),
-              !candidates.isEmpty,
-              let hosts = client.hosts
+              )
         else { return nil }
+        let serverId = target.serverId
+        let candidates = shepherd.candidates.map {
+            ReviewShepherdDrawerModel.Candidate(
+                id: $0.sessionID, title: $0.summary.title, agentName: state.agent(id: $0.summary.agentId)?.displayName
+            )
+        }
+        guard let owner = shepherd.owner else {
+            guard request.state == .open, !candidates.isEmpty else { return nil }
+            return ReviewShepherdDrawerModel(
+                bound: nil,
+                presentation: ShepherdPresentation.make(
+                    record: nil, request: request,
+                    mergeGatePasses: ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+                ),
+                ownerTitle: nil, ownerAgent: nil, candidates: candidates,
+                setAutoFix: { _ in }, setAutoMerge: { _ in }, jump: {}, stop: {}, resume: {},
+                shepherdWith: { hosts.shepherd($0, action: .ship, serverId: serverId) },
+                shepherdWithNewSession: nil,
+                refreshSessions: {}
+            )
+        }
+        // A host before `host.shepherds.toggles.v1` leaves it to the session's pill.
+        guard let autoFix = owner.shepherd.autoFix, let autoMerge = owner.shepherd.autoMerge,
+              let presentation = owner.shepherd.presentation
+        else { return nil }
+        let ownerID = owner.session.sessionID
         return ReviewShepherdDrawerModel(
-            record: nil,
-            presentation: ShepherdPresentation.make(
-                record: nil, request: request,
-                mergeGatePasses: ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+            bound: .init(
+                autoFix: autoFix, autoMerge: autoMerge,
+                isTerminal: presentation.badge == .merged || presentation.badge == .closed,
+                isResumable: owner.shepherd.resumable == true
             ),
-            ownerTitle: nil,
-            ownerAgent: nil,
-            candidates: candidates.map {
-                .init(id: $0.sessionID, title: $0.summary.title, agentName: state.agent(id: $0.summary.agentId)?.displayName)
-            },
-            setAutoFix: { _ in },
-            setAutoMerge: { _ in },
-            jump: {},
-            stop: {},
-            resume: {},
-            shepherdWith: { hosts.shepherd($0, action: .ship, serverId: target.serverId) },
+            presentation: presentation,
+            ownerTitle: owner.session.summary.title,
+            ownerAgent: state.agent(id: owner.session.summary.agentId),
+            candidates: candidates,
+            setAutoFix: { hosts.shepherd(ownerID, action: $0 ? .enableAutoFix : .disableAutoFix, serverId: serverId) },
+            setAutoMerge: { hosts.shepherd(ownerID, action: $0 ? .enableAutoMerge : .disableAutoMerge, serverId: serverId) },
+            jump: { client.select(owner.session.summary.id) },
+            stop: { hosts.shepherd(ownerID, action: .stop, serverId: serverId) },
+            resume: { hosts.shepherd(ownerID, action: .resume, serverId: serverId) },
+            shepherdWith: { hosts.shepherd($0, action: .ship, serverId: serverId) },
             shepherdWithNewSession: nil,
             refreshSessions: {}
         )

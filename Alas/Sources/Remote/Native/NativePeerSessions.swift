@@ -730,32 +730,44 @@ final class NativePeerSessions {
 
     var isPromptPending: Bool { pendingPrompt != nil }
 
-    /// "Shepherd with" for request `number` ("#7") of a host worktree, as
-    /// host session ids. Nil when the host can't shepherd.
-    func shepherdCandidates(serverId: String, worktreeID: String, number: String) -> [(sessionID: String, summary: RemoteSessionSummary)]? {
+    typealias PeerShepherdSession = (sessionID: String, summary: RemoteSessionSummary)
+
+    /// A host worktree's shepherd for its open request `number` ("#7"):
+    /// the session shepherding it and the sessions Ship could hand it to.
+    struct PeerWorktreeShepherd {
+        var owner: (session: PeerShepherdSession, shepherd: HostSessionShepherd)?
+        var candidates: [PeerShepherdSession]
+    }
+
+    /// Nil when the host can't shepherd.
+    func worktreeShepherd(serverId: String, worktreeID: String, number: String) -> PeerWorktreeShepherd? {
         guard hosts?.canShepherd(serverId: serverId) == true else { return nil }
         let peers = Set(snapshot.groups.map(\.serverId))
         let sessions = snapshot.groups.flatMap(\.sessions).compactMap { summary in
             RemoteFederatedSessionID.parse(summary.id, peers: peers)
                 .flatMap { $0.serverId == serverId ? (sessionID: $0.sessionId, summary: summary) : nil }
         }
-        return Self.shepherdCandidates(sessions, shepherds: hosts?.shepherds[serverId] ?? [:], worktreeID: worktreeID, number: number)
+        return Self.worktreeShepherd(sessions, shepherds: hosts?.shepherds[serverId] ?? [:], worktreeID: worktreeID, number: number)
     }
 
-    /// The worktree's sessions its host drives and would Ship, newest first;
-    /// Ship binds the open request to the one picked. A session holding any
-    /// shepherd record, even a finished one, refuses Ship. Nil while one of
-    /// the worktree's sessions shepherds `number`: its toolbar pill owns it.
-    static func shepherdCandidates(
-        _ sessions: [(sessionID: String, summary: RemoteSessionSummary)],
+    /// Candidates are the worktree's sessions its host drives and would Ship,
+    /// newest first; Ship binds the open request to the one picked, taking it
+    /// from its owner. A session holding any shepherd record, even a finished
+    /// one, refuses Ship.
+    static func worktreeShepherd(
+        _ sessions: [PeerShepherdSession],
         shepherds: [String: HostSessionShepherd],
         worktreeID: String,
         number: String
-    ) -> [(sessionID: String, summary: RemoteSessionSummary)]? {
+    ) -> PeerWorktreeShepherd {
         let here = sessions.filter { $0.summary.worktreeId == worktreeID }
-        if here.contains(where: { shepherds[$0.sessionID]?.number == number }) { return nil }
-        return here.filter { $0.summary.canDrive && HostShepherdAction.offered(for: shepherds[$0.sessionID]).contains(.ship) }
-            .sorted { $0.summary.updatedAt > $1.summary.updatedAt }
+        let owner = here.lazy.compactMap { session in
+            shepherds[session.sessionID].flatMap { $0.number == number ? (session: session, shepherd: $0) : nil }
+        }.first
+        let candidates = here.filter {
+            $0.summary.canDrive && HostShepherdAction.offered(for: shepherds[$0.sessionID]).contains(.ship)
+        }
+        return PeerWorktreeShepherd(owner: owner, candidates: candidates.sorted { $0.summary.updatedAt > $1.summary.updatedAt })
     }
 
     /// The selected session's shepherd pill on its host.

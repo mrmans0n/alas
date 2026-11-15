@@ -935,9 +935,10 @@ struct HostSessionsTests {
         }
     }
 
-    /// A paired Mac stops a session's shepherd; a session that shepherds
-    /// nothing has nothing to stop, and one that does can't ship again.
-    @Test func aPeerStopsTheSessionsShepherdOnce() async throws {
+    /// A paired Mac sets a session's shepherd switches and stops it; a
+    /// session that shepherds nothing has nothing to stop or switch, and one
+    /// that does can't ship again.
+    @Test func aPeerSwitchesAndStopsTheSessionsShepherdOnce() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let sessions = fixture.host.sessions
@@ -951,10 +952,18 @@ struct HostSessionsTests {
         await #expect(throws: HostError.failed(message: "This session already shepherds a pull request.")) {
             try await sessions.shepherd(id, action: .ship, caller: peer)
         }
+        try await sessions.shepherd(id, action: .disableAutoFix, caller: peer)
+        try await sessions.shepherd(id, action: .enableAutoMerge, caller: peer)
+        let shepherd = sessions.list().first { $0.id == id }?.shepherd
+        #expect(shepherd?.autoFix == false)
+        #expect(shepherd?.autoMerge == true)
         try await sessions.shepherd(id, action: .stop, caller: peer)
         #expect(fixture.core.reviewShepherd.record(forSession: id) == nil)
         await #expect(throws: HostError.failed(message: "This session isn't shepherding anything.")) {
             try await sessions.shepherd(id, action: .stop, caller: peer)
+        }
+        await #expect(throws: HostError.failed(message: "This session isn't shepherding a pull request.")) {
+            try await sessions.shepherd(id, action: .enableAutoFix, caller: peer)
         }
     }
 

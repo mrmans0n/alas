@@ -13,8 +13,30 @@ struct ReviewShepherdDrawerModel {
         }
     }
 
+    /// What the drawer shows of a shepherd: the app's record, or a host's.
+    struct Bound: Equatable {
+        let autoFix: Bool
+        let autoMerge: Bool
+        let isTerminal: Bool
+        let isResumable: Bool
+
+        init(autoFix: Bool, autoMerge: Bool, isTerminal: Bool, isResumable: Bool) {
+            self.autoFix = autoFix
+            self.autoMerge = autoMerge
+            self.isTerminal = isTerminal
+            self.isResumable = isResumable
+        }
+
+        init(_ record: ShepherdRecord) {
+            self.init(
+                autoFix: record.autoFix, autoMerge: record.autoMerge,
+                isTerminal: record.phase.isTerminal, isResumable: record.phase.isResumable
+            )
+        }
+    }
+
     /// Nil when the open PR is not shepherded yet.
-    let record: ShepherdRecord?
+    let bound: Bound?
     let presentation: ShepherdPresentation
     /// Nil when the owning session is archived or no longer exists.
     let ownerTitle: String?
@@ -41,8 +63,8 @@ struct ReviewShepherdBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            if let record = model.record {
-                bound(record)
+            if let state = model.bound {
+                bound(state)
             } else {
                 unbound
             }
@@ -60,7 +82,7 @@ struct ReviewShepherdBlock: View {
 
     /// The owner and Jump live in `ReviewShepherdChip` in the collapsed row.
     @ViewBuilder
-    private func bound(_ record: ShepherdRecord) -> some View {
+    private func bound(_ record: ReviewShepherdDrawerModel.Bound) -> some View {
         Text(model.presentation.phaseLine)
             .font(scale.metaFont)
             .foregroundColor(theme.color("fg-dim"))
@@ -71,19 +93,19 @@ struct ReviewShepherdBlock: View {
             title: "Auto-fix",
             detail: "CI failures, conflicts and reviewer threads go back to the shepherding session",
             isOn: record.autoFix,
-            isDisabled: record.phase.isTerminal,
+            isDisabled: record.isTerminal,
             set: model.setAutoFix
         )
         ShepherdSwitchRow(
             title: "Auto-merge",
             detail: "Squash-merge once checks, reviewers and the head are settled",
             isOn: record.autoMerge,
-            isDisabled: record.phase.isTerminal,
+            isDisabled: record.isTerminal,
             set: model.setAutoMerge
         )
 
         HStack(spacing: 8) {
-            if record.phase.isResumable {
+            if record.isResumable {
                 ReviewShepherdActionButton(title: "Resume", systemImage: "play", help: "Watch again and reset the fix attempt count") {
                     model.resume()
                 }
@@ -92,7 +114,7 @@ struct ReviewShepherdBlock: View {
                 model.stop()
             }
             Spacer(minLength: 0)
-            if !record.phase.isTerminal {
+            if !record.isTerminal {
                 ReviewShepherdSessionMenu(model: model, title: "Move to…", help: "Hand this PR to another session")
             }
         }
@@ -315,7 +337,7 @@ struct ReviewShepherdChip: View {
                 .accessibilityHint("Focus the session that owns this PR")
             } else {
                 Menu {
-                    if model.record?.phase.isTerminal == false {
+                    if model.bound?.isTerminal == false {
                         ForEach(model.candidates) { candidate in
                             Button(candidate.menuTitle) { model.shepherdWith(candidate.id) }
                         }
@@ -335,7 +357,7 @@ struct ReviewShepherdChip: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .disabled(model.record?.phase.isTerminal != false)
+                .disabled(model.bound?.isTerminal != false)
                 .help("The session shepherding \(model.presentation.number ?? "this PR") was archived or no longer exists. Click to hand it to another session.")
                 .accessibilityLabel("PR shepherd owner archived or missing")
             }

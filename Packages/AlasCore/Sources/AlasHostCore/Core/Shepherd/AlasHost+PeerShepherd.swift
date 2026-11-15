@@ -12,6 +12,8 @@ public enum HostShepherdAction: String, Codable, Sendable {
     case resume
     /// Stops shepherding; the pull requests are left alone.
     case stop
+    /// A pull request shepherd's switches (`host.shepherds.toggles.v1`).
+    case enableAutoFix, disableAutoFix, enableAutoMerge, disableAutoMerge
 
     /// What a Mac offers for a session whose host pill is `shepherd`: Ship
     /// without one, Resume while it is escalated or paused, Stop until it finished.
@@ -30,6 +32,14 @@ extension SessionsAPI {
         let stack = core.stackShepherd.record(forSession: sessionID).flatMap { $0.isFinished ? nil : $0 }
         let request = core.reviewShepherd.record(forSession: sessionID)
         switch action {
+        case .enableAutoFix, .disableAutoFix, .enableAutoMerge, .disableAutoMerge:
+            guard let request, !request.phase.isTerminal else {
+                throw HostError.failed(message: "This session isn't shepherding a pull request.")
+            }
+            switch action {
+            case .enableAutoFix, .disableAutoFix: core.reviewShepherd.setAutoFix(action == .enableAutoFix, for: request.id)
+            default: core.reviewShepherd.setAutoMerge(action == .enableAutoMerge, for: request.id)
+            }
         case .stop, .resume:
             guard stack != nil || request != nil else {
                 throw HostError.failed(message: "This session isn't shepherding anything.")
