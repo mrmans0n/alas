@@ -22,6 +22,10 @@ final class PushRegistrar {
     /// The APNs token the relay token was issued for. The relay seals with a fresh IV each time, so
     /// registering an unchanged token would still hand every host a "new" one.
     private static let apnsTokenKey = "pushAPNsToken"
+    private static let registeredAtKey = "pushRegisteredAt"
+    /// How long a relay token is reused for an unchanged APNs token. Rotating the relay's secret
+    /// invalidates every token, and only the relay knows that, so each phone re-registers this often.
+    private static let reregisterAfter: TimeInterval = 24 * 60 * 60
 
     init(hub: HostHub) {
         self.hub = hub
@@ -48,7 +52,9 @@ final class PushRegistrar {
 
     func didRegister(deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
-        guard relayToken == nil || defaults.string(forKey: Self.apnsTokenKey) != hex else { return }
+        let registeredAt = Date(timeIntervalSince1970: defaults.double(forKey: Self.registeredAtKey))
+        guard relayToken == nil || defaults.string(forKey: Self.apnsTokenKey) != hex
+            || Date().timeIntervalSince(registeredAt) > Self.reregisterAfter else { return }
         Task { await register(apnsToken: hex) }
     }
 
@@ -69,8 +75,9 @@ final class PushRegistrar {
         // A failure keeps the old token; the next launch registers again.
         guard let (reply, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
-              let token = (try? JSONDecoder().decode([String: String].self, from: reply))?["relayToken"],
-              token != relayToken else { return }
+              let token = (try? JSONDecoder().decode([String: String].self, from: reply))?["relayToken"] else { return }
+        defaults.set(Date().timeIntervalSince1970, forKey: Self.registeredAtKey)
+        guard token != relayToken else { return }
         relayToken = token
         defaults.set(token, forKey: Self.tokenKey)
         defaults.set(apnsToken, forKey: Self.apnsTokenKey)
