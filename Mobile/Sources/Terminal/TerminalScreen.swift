@@ -12,7 +12,7 @@ struct TerminalScreen: View {
     }
 
     var body: some View {
-        TerminalSurface(console: console, columns: console.columns, controlling: console.isControlling)
+        TerminalSurface(console: console, columns: console.columns, rows: console.rows, controlling: console.isControlling)
             .background(Color.black)
             .overlay {
                 switch console.phase {
@@ -66,12 +66,14 @@ struct TerminalScreen: View {
 private struct TerminalSurface: UIViewRepresentable {
     let console: TerminalConsole
     let columns: Int
+    let rows: Int
     let controlling: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(console: console) }
 
-    func makeUIView(context: Context) -> FittingTerminalView {
-        let view = FittingTerminalView(frame: .zero)
+    func makeUIView(context: Context) -> HostGridView {
+        let container = HostGridView()
+        let view = container.terminal
         view.terminalDelegate = context.coordinator
         // The phone forwards no mouse reports; a tap only places focus.
         view.allowMouseReporting = false
@@ -83,12 +85,13 @@ private struct TerminalSurface: UIViewRepresentable {
             let bytes = isSnapshot ? Data("\u{1B}c".utf8) + data : data
             view?.feed(byteArray: ArraySlice(bytes))
         }
-        return view
+        return container
     }
 
-    func updateUIView(_ view: FittingTerminalView, context: Context) {
-        // A holder on a host that resizes gets a readable font and its own grid.
-        view.columnsToFit = controlling && console.canResize ? nil : columns
+    func updateUIView(_ container: HostGridView, context: Context) {
+        // A holder on a host that resizes lays the console out for the phone; anyone else shows the host's grid.
+        container.hostGrid = controlling && console.canResize ? nil : (columns, rows)
+        let view = container.terminal
         if controlling {
             if !view.isFirstResponder { _ = view.becomeFirstResponder() }
         } else if view.isFirstResponder {
@@ -121,30 +124,65 @@ private struct TerminalSurface: UIViewRepresentable {
     }
 }
 
-/// Picks the largest monospaced font, up to the default, that fits `columnsToFit` across.
-final class FittingTerminalView: TerminalView {
+/// Holds the terminal at exactly the host's grid, as the Mac's viewer does: the host lays its
+/// screen out for its rows and columns, so a smaller grid clips and a different one wraps
+/// differently. The font is the largest, up to the default, that fits the grid on screen; past the
+/// minimum the grid overflows and is clipped. Without a host grid the terminal fills the view.
+final class HostGridView: UIView {
     static let defaultSize: CGFloat = 12
     static let minimumSize: CGFloat = 5
 
-    var columnsToFit: Int? {
-        didSet { if columnsToFit != oldValue { setNeedsLayout() } }
+    let terminal = TerminalView(frame: .zero)
+
+    var hostGrid: (columns: Int, rows: Int)? {
+        didSet {
+            if hostGrid?.columns != oldValue?.columns || hostGrid?.rows != oldValue?.rows { setNeedsLayout() }
+        }
     }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        backgroundColor = .black
+        addSubview(terminal)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func layoutSubviews() {
-        fitFont()
         super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard let grid = hostGrid, grid.columns > 0, grid.rows > 0 else {
+            setFont(Self.defaultSize)
+            terminal.frame = bounds
+            return
+        }
+        var size = Self.defaultSize
+        while size > Self.minimumSize {
+            let cell = Self.cell(size)
+            if cell.width * CGFloat(grid.columns) <= bounds.width, cell.height * CGFloat(grid.rows) <= bounds.height { break }
+            size -= 0.5
+        }
+        setFont(size)
+        let cell = Self.cell(size)
+        // Half a cell of slack: SwiftTerm floors frame / cell, so this lands on the grid exactly.
+        terminal.frame = CGRect(x: 0, y: 0, width: cell.width * (CGFloat(grid.columns) + 0.5),
+                                height: cell.height * (CGFloat(grid.rows) + 0.5))
     }
 
-    private func fitFont() {
-        guard bounds.width > 0 else { return }
-        var size = Self.defaultSize
-        if let columns = columnsToFit, columns > 0 {
-            let probe = UIFont.monospacedSystemFont(ofSize: 100, weight: .regular)
-            let advance = ("M" as NSString).size(withAttributes: [.font: probe]).width / 100
-            // A little under the exact fit, so rounding never leaves the grid a column short.
-            size = min(Self.defaultSize, max(Self.minimumSize, (bounds.width / (CGFloat(columns) * advance) * 0.98 * 10).rounded(.down) / 10))
-        }
-        guard abs(font.pointSize - size) >= 0.1 else { return }
-        font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    private func setFont(_ size: CGFloat) {
+        guard abs(terminal.font.pointSize - size) >= 0.1 else { return }
+        terminal.font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// SwiftTerm's cell for a font of `size`, measured as `computeFontDimensions` measures it.
+    private static func cell(_ size: CGFloat) -> CGSize {
+        let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        let scale = UITraitCollection.current.displayScale > 0 ? UITraitCollection.current.displayScale : 3
+        let width = ("W" as NSString).size(withAttributes: [.font: font]).width
+        let ctFont = font as CTFont
+        let height = ceil(CTFontGetAscent(ctFont) + CTFontGetDescent(ctFont) + CTFontGetLeading(ctFont))
+        return CGSize(width: max(1, (width * scale).rounded() / scale), height: max(1, ceil(height * scale) / scale))
     }
 }

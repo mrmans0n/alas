@@ -36,6 +36,9 @@ final class TerminalConsole {
     @ObservationIgnored private var filter = PeerConsoleInputFilter()
     @ObservationIgnored private var inputSequence = 0
     @ObservationIgnored private var escapeToken = 0
+    @ObservationIgnored private var watchGeneration = 0
+    /// The host's `onlineCount` the attachment was made under.
+    @ObservationIgnored private var attachedOnline = 0
 
     init(hub: HostHub, hostID: UUID, console: PeerConsoleSummary) {
         self.hub = hub
@@ -53,7 +56,35 @@ final class TerminalConsole {
             guard case .console(let event) = message, event.attachmentId == self?.attachmentId else { return }
             self?.handle(event)
         }
+        attachedOnline = hub.onlineCount(of: hostID)
+        sendAttach()
+        watchGeneration += 1
+        watchHost(generation: watchGeneration)
+    }
+
+    private func sendAttach() {
         send(.attach(consoleId: consoleId, attachmentId: attachmentId, scrollbackRows: 1000))
+    }
+
+    /// A dropped socket takes its attachments with it on the host, which says nothing about them:
+    /// once the link is back, attach again and start over from a fresh snapshot, as a viewer.
+    private func watchHost(generation: Int) {
+        guard generation == watchGeneration, listener != nil else { return }
+        let (online, count) = withObservationTracking {
+            (hub.state(of: hostID) == .online, hub.onlineCount(of: hostID))
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.watchHost(generation: generation) }
+        }
+        if !online, phase == .live {
+            phase = .attaching
+        } else if online, count != attachedOnline {
+            attachedOnline = count
+            expected = nil
+            filter = PeerConsoleInputFilter()
+            control = PeerConsoleControl(owner: .host, generation: 0, change: .current)
+            phase = .attaching
+            sendAttach()
+        }
     }
 
     func detach() {
@@ -61,6 +92,7 @@ final class TerminalConsole {
         guard listener != nil else { return }
         send(.detach(attachmentId: attachmentId))
         listener = nil
+        watchGeneration += 1
     }
 
     func takeControl() { send(.takeControl(attachmentId: attachmentId)) }
@@ -120,6 +152,7 @@ final class TerminalConsole {
             self.columns = columns
         case .detached(_, let reason):
             listener = nil
+            watchGeneration += 1
             phase = .ended(Self.message(reason))
         case .inputAck, .list, .opened, .openFailed, .openNeedsRepoHookApproval:
             break
