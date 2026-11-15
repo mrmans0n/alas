@@ -202,6 +202,13 @@ private final class InotifyTree: @unchecked Sendable {
         }
     }
 
+    private func removeTree(_ path: String) {
+        for (wd, directory) in directories where directory == path || directory.hasPrefix(path + "/") {
+            inotify_rm_watch(fd, wd)
+            directories[wd] = nil
+        }
+    }
+
     private func addWatch(_ path: String) -> Bool {
         let wd = inotify_add_watch(fd, path, Self.mask | UInt32(IN_ONLYDIR) | UInt32(IN_DONT_FOLLOW))
         guard wd >= 0 else {
@@ -249,6 +256,11 @@ private final class InotifyTree: @unchecked Sendable {
         }
         let path = name.isEmpty ? directory : directory + "/" + name
         pending.append(path)
+        // A folder moved away keeps its watches, which would follow it out of the
+        // tree; drop them. A move within the tree adds them back at the new path.
+        if event.mask & UInt32(IN_ISDIR) != 0, event.mask & UInt32(IN_MOVED_FROM) != 0 {
+            removeTree(path)
+        }
         let createdDirectory = event.mask & UInt32(IN_ISDIR) != 0
             && event.mask & UInt32(IN_CREATE | IN_MOVED_TO) != 0
         if createdDirectory {
