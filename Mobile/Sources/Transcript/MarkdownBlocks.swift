@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Markdown
 
 enum MarkdownBlock: Equatable {
@@ -73,6 +74,13 @@ enum MarkdownBlock: Equatable {
 
     private static func styled(_ s: String, _ intent: InlinePresentationIntent) -> AttributedString {
         var a = AttributedString(s)
+        var intent = intent
+        if intent.contains(.code) {
+            // Monospaced glyphs read larger than body text at the same size: a step down, on a tint, as on the Mac.
+            intent.remove(.code)
+            a.font = .system(.callout, design: .monospaced)
+            a.backgroundColor = Color.secondary.opacity(0.12)
+        }
         if !intent.isEmpty { a.inlinePresentationIntent = intent }
         return a
     }

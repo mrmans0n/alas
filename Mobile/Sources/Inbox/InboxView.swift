@@ -21,7 +21,8 @@ struct InboxView: View {
         NavigationStack(path: $path) {
             Group {
                 if shown.isEmpty {
-                    ContentUnavailableView("Nothing needs you right now.", systemImage: "tray")
+                    ContentUnavailableView("Nothing needs you right now", systemImage: "tray",
+                                           description: Text("Permission requests, questions and plans from your sessions show up here."))
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 20) {

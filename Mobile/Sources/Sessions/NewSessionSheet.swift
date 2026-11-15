@@ -213,7 +213,8 @@ struct NewSessionSheet: View {
             }
             ForEach(model.availableAgents, id: \.id) { agent in
                 Button { model.selectAgent(agent.id) } label: {
-                    HStack {
+                    HStack(spacing: 12) {
+                        AgentLogo(agentId: agent.id)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(agent.name.isEmpty ? agent.id : agent.name).foregroundStyle(.primary)
                             if agent.isDefault { Text("Default agent").font(.caption).foregroundStyle(.secondary) }
@@ -251,4 +252,29 @@ struct NewSessionSheet: View {
             }
         }
     }
+}
+
+/// An agent's logo, from the Mac's set (`AgentKind.logoAssetName`); a generic glyph for agents it has none for.
+struct AgentLogo: View {
+    let agentId: String
+    var size: CGFloat = 28
+
+    var body: some View {
+        Group {
+            if let asset = Self.asset[agentId] {
+                Image(asset).resizable().scaledToFit()
+            } else {
+                Image(systemName: "sparkles").font(.system(size: size * 0.5)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
+    /// ACP agent id to asset, as `AgentKind(acpAgentID:)` maps them on the Mac.
+    private static let asset: [String: String] = [
+        "claude": "agent-claude", "codex": "agent-codex", "cursor-agent": "agent-cursor",
+        "gemini": "agent-gemini", "antigravity": "agent-antigravity", "opencode": "agent-opencode", "pi": "agent-pi",
+        "omp": "agent-omp", "copilot": "agent-copilot",
+    ]
 }

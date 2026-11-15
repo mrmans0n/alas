@@ -123,18 +123,56 @@ private struct FileRow: View {
     let nested: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            StatusBadge(status: file.status)
             Text(file.path.split(separator: "/").last.map(String.init) ?? file.path)
                 .lineLimit(1).truncationMode(.middle)
             if file.conflict != nil {
                 Text("conflict").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
             }
             Spacer(minLength: 8)
-            Text(file.status).font(.caption).foregroundStyle(.secondary)
-            Counts(add: file.add, del: file.del)
+            if file.add + file.del > 0 { Counts(add: file.add, del: file.del) }
+            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(.leading, nested ? 16 : 0)
         .contentShape(Rectangle())
+    }
+}
+
+/// Git's status letter on its color, as in Xcode's navigator: green added, blue modified, red deleted.
+struct StatusBadge: View {
+    let status: String
+
+    var body: some View {
+        let letter = String(status.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+        Text(letter.isEmpty ? "·" : letter)
+            .font(.caption2.weight(.bold).monospaced())
+            .foregroundStyle(.white)
+            .frame(width: 18, height: 18)
+            .background(color(letter), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .accessibilityLabel(name(letter))
+    }
+
+    private func color(_ letter: String) -> Color {
+        switch letter {
+        case "A", "?": .green
+        case "D": .red
+        case "R", "C": .purple
+        case "U": .orange
+        default: .blue
+        }
+    }
+
+    private func name(_ letter: String) -> String {
+        switch letter {
+        case "A": "Added"
+        case "?": "Untracked"
+        case "D": "Deleted"
+        case "R": "Renamed"
+        case "C": "Copied"
+        case "U": "Unmerged"
+        default: "Modified"
+        }
     }
 }
 

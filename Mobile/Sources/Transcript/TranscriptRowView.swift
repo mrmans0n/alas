@@ -89,7 +89,7 @@ struct TranscriptRowView: View {
                 Image(systemName: Self.toolIcon(call.kind)).foregroundStyle(.secondary)
                 Text(call.title).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer(minLength: 0)
-                Text(call.status).font(.caption).foregroundStyle(.secondary)
+                Self.toolStatus(call.status)
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.tertiary)
             }
             if isExpanded {
@@ -135,6 +135,20 @@ struct TranscriptRowView: View {
             out += a
         }
         return out
+    }
+
+    /// An icon reads faster than the status word; running ones spin.
+    @ViewBuilder private static func toolStatus(_ status: String) -> some View {
+        switch status {
+        case "completed":
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Completed")
+        case "failed":
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red).accessibilityLabel("Failed")
+        case "pending", "in_progress":
+            ProgressView().controlSize(.mini).accessibilityLabel("Running")
+        default:
+            Text(status).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private static func planIcon(_ status: String) -> String {

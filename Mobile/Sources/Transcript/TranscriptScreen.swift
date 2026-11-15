@@ -4,6 +4,7 @@ import SwiftUI
 /// One session's live transcript.
 struct TranscriptScreen: View {
     @Environment(SessionRegistry.self) private var registry
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let hostID: UUID
     let sessionId: String
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
@@ -121,6 +122,9 @@ struct TranscriptScreen: View {
             .navigationTitle(session.summary?.title ?? "Session")
             .navigationSubtitle(subtitle(session))
             .navigationBarTitleDisplayMode(.inline)
+            // On the iPhone a conversation gets the whole screen, as in Messages; the composer takes the
+            // tab bar's place. Where the session sits beside its list (iPad), the tabs stay.
+            .toolbar(sizeClass == .compact ? .hidden : .automatic, for: .tabBar)
             .toolbarTitleMenu {
                 if !session.hasEnded {
                     Button("Rename…", systemImage: "pencil") {
