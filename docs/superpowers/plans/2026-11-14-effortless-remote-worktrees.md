@@ -479,11 +479,23 @@ project; 2d moves settings to the primary and adds Reconnect.
   lists (archives belong to the record), and Workspace dialogs (an SSH
   Workspace needs its SSH Projects as members).
 
-## PR 2d: settings from the primary, and Reconnect (outline)
+## PR 2d: `feat(remote): give linked SSH projects their local project's settings`
 
-- `settingsProject(for:)` at the "Settings inheritance" read sites, and
-  `ChangesPane` lists primaries.
-- "Reconnect to <label>" on linked rows.
+### Task 10: settings copy and Reconnect
+
+- `ProjectsManager.copySettings(toRecordsLinkedTo:)` (private) copies
+  `startupScripts`, `mcpServers`, `worktreeBranchTemplate`,
+  `worktreeLaunchPreference`, `shepherd`, and `ggMode` from the primary to
+  each linked record. `link`, `updateProject`, and `setGGMode` call it.
+  Those are the only writers of these fields, so every reader keyed by
+  `worktree.projectId` gets the primary's settings with no change. This
+  replaces the spec's per-read-site `settingsProject(for:)`, which is
+  removed. Test `linkedRecordsFollowThePrimarysSettings` in
+  `ProjectsManagerTests` (replaces `settingsComeFromThePrimary`).
+- `ChangesPane` lists `primaryProjects`.
+- `WorktreeRowView`: "Reconnect to <label>" on linked rows whose machine is
+  not online. It refreshes that record's worktrees, and the SSH traffic
+  reports the machine's reachability.
 
 ## PR 3: `feat(remote): choose where a new worktree runs` (outline)
 
