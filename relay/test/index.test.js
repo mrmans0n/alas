@@ -62,5 +62,12 @@ test("bad bodies and routes", async () => {
   assert.equal(await status(post("/register", "x".repeat(5000))), 400);
   assert.equal(await status(post("/push", { ...push(relayToken), kind: "nope" })), 400);
   assert.equal(await status(post("/push", { ...push(relayToken), collapseId: "c".repeat(65) })), 400);
+  assert.equal(await status(post("/push", { ...push(relayToken), collapseId: "bad\nid" })), 400);
   assert.equal(await status(post("/nope", {})), 404);
+});
+
+test("a network failure reaching APNs is 502", async () => {
+  const { env, relayToken } = await setup(new Response(null, { status: 200 }));
+  globalThis.fetch = async () => { throw new TypeError("network down"); };
+  assert.equal((await worker.fetch(post("/push", push(relayToken)), env)).status, 502);
 });

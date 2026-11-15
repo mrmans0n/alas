@@ -33,7 +33,7 @@ async function register(request, env) {
 
 async function push(request, env) {
   const b = await readJSON(request);
-  if (!b || !str(b.relayToken, 1024) || !["attention", "clear"].includes(b.kind) || !str(b.collapseId, 64)
+  if (!b || !str(b.relayToken, 1024) || !["attention", "clear"].includes(b.kind) || !/^[A-Za-z0-9_-]{1,64}$/.test(b.collapseId)
     || !str(b.serverId, 128) || !str(b.sessionId, 128) || !["awaitingPermission", "awaitingInput"].includes(b.status)) {
     return new Response("bad request", { status: 400 });
   }
@@ -43,7 +43,12 @@ async function push(request, env) {
     return new Response("rate limited", { status: 429 });
   }
   const now = Math.floor(Date.now() / 1000);
-  const res = await fetch(apnsRequest(b, opened, await apnsJWT(env, now), now));
+  let res;
+  try {
+    res = await fetch(apnsRequest(b, opened, await apnsJWT(env, now), now));
+  } catch {
+    return new Response("apns failure", { status: 502 });
+  }
   if (res.ok) return new Response(null, { status: 204 });
   const reason = await res.json().then((j) => j.reason, () => undefined);
   if (res.status === 410 || (res.status === 400 && reason === "BadDeviceToken")) return new Response("gone", { status: 410 });
