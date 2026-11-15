@@ -172,7 +172,7 @@ struct GGCommandRunningStreamingTests {
         let end = try #require(source.range(of: "private func rootExitSnapshot", range: start.upperBound ..< source.endIndex))
         let helper = source[start.lowerBound ..< end.lowerBound]
         let validation = try #require(helper.range(of: "ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)"))
-        let groupSignal = try #require(helper.range(of: "Darwin.kill(-pid, signal)"))
+        let groupSignal = try #require(helper.range(of: "Foundation.kill(-pid, signal)"))
         #expect(validation.lowerBound < groupSignal.lowerBound)
     }
 
@@ -185,7 +185,7 @@ struct GGCommandRunningStreamingTests {
             contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasIntegrations/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
-        #expect(source.contains("eventMask: [.fork, .exit]"))
+        #expect(source.contains("watchExit: true"))
         #expect(source.contains("forkSources.removeValue(forKey: pid)"))
     }
 
