@@ -15,6 +15,7 @@ public final class HeldCalls {
     private struct Call {
         let id: UUID
         let sessionID: String
+        let token: String?
         let onRelease: @MainActor () -> Void
         let resume: CheckedContinuation<Outcome, Never>
         let timer: Task<Void, Never>
@@ -33,10 +34,11 @@ public final class HeldCalls {
         self.sleep = sleep
     }
 
-    /// Waits until `releaseAll(key)`, the limit, or the caller's cancellation.
-    /// `onRelease` runs at release, in arrival order, before the call resumes.
+    /// Waits until `releaseAll(key)`, the limit, the caller's cancellation, or
+    /// `cancel(token:)` with `token`. `onRelease` runs at release, in arrival
+    /// order, before the call resumes.
     public func hold(
-        _ key: String, sessionID: String, onRelease: @escaping @MainActor () -> Void = {}
+        _ key: String, sessionID: String, token: String? = nil, onRelease: @escaping @MainActor () -> Void = {}
     ) async -> Outcome {
         guard !Task.isCancelled else { return .cancelled }
         let id = UUID()
@@ -49,7 +51,7 @@ public final class HeldCalls {
                     self?.end(key, id: id, as: .timedOut)
                 }
                 held[key, default: []].append(Call(
-                    id: id, sessionID: sessionID, onRelease: onRelease, resume: continuation, timer: timer
+                    id: id, sessionID: sessionID, token: token, onRelease: onRelease, resume: continuation, timer: timer
                 ))
             }
         } onCancel: {
@@ -63,6 +65,14 @@ public final class HeldCalls {
             call.timer.cancel()
             call.onRelease()
             call.resume.resume(returning: .released)
+        }
+    }
+
+    /// Cancels the held call `token` names, for a cancel that arrives as its
+    /// own request rather than by the caller going away.
+    public func cancel(token: String) {
+        for (key, calls) in held {
+            for call in calls where call.token == token { end(key, id: call.id, as: .cancelled) }
         }
     }
 

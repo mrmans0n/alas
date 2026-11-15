@@ -47,6 +47,18 @@ struct HeldCallsTests {
         #expect(await second.value == .released)
     }
 
+    @Test func aCallCancelledByItsTokenLeavesTheOthersWaiting() async throws {
+        let holds = HeldCalls(sleep: Self.untilCancelled)
+        let first = Task { await holds.hold("vm", sessionID: "a", token: "a:1") }
+        try await eventually { await holds.waiting("vm") == ["a"] }
+        let second = Task { await holds.hold("vm", sessionID: "a", token: "a:2") }
+        try await eventually { await holds.waiting("vm") == ["a", "a"] }
+        holds.cancel(token: "a:1")
+        #expect(await first.value == .cancelled)
+        holds.releaseAll("vm")
+        #expect(await second.value == .released)
+    }
+
     @Test func keysAreIndependent() async throws {
         let holds = HeldCalls(sleep: Self.untilCancelled)
         let other = Task { await holds.hold("y", sessionID: "a") }

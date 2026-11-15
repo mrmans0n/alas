@@ -170,8 +170,15 @@ extension AppState {
                     return .error(ComputerUseCoordinator.stoppedMessage)
                 }
             }
+            // A cancel of a call still waiting for hand back ends the wait here: the guest never got it.
+            if command.action == .cancel, let callID = command.callID {
+                vmHolds.cancel(token: Self.vmHoldToken(sessionID: sessionID, callID: callID))
+            }
             // While the user drives the VM, the call waits for them to hand it back.
-            if let refusal = await vmHeld(action: command.action, recordID: recordID, sessionID: sessionID) {
+            if let refusal = await vmHeld(
+                action: command.action, recordID: recordID, sessionID: sessionID,
+                token: command.callID.map { Self.vmHoldToken(sessionID: sessionID, callID: $0) }
+            ) {
                 return .error(refusal)
             }
             // A hand back's resume and turnEnded go out before any new call to the VM.
@@ -221,13 +228,18 @@ extension AppState {
     }
 
     /// Waits while the user drives VM `recordID`, up to `vmHolds`' limit: nil to go on, else the error.
-    private func vmHeld(action: ComputerUseCommand.Action?, recordID: String, sessionID: String) async -> String? {
+    /// `token` lets a later `computer_cancel` for the call end its wait.
+    private func vmHeld(
+        action: ComputerUseCommand.Action?, recordID: String, sessionID: String, token: String? = nil
+    ) async -> String? {
         await VMTakeOvers.held(
             action: action,
             driver: { [weak self] in self?.vmDriver(recordID: recordID) ?? .idle },
-            hold: { [weak self] in await self?.vmHolds.hold(recordID, sessionID: sessionID) ?? .cancelled }
+            hold: { [weak self] in await self?.vmHolds.hold(recordID, sessionID: sessionID, token: token) ?? .cancelled }
         )
     }
+
+    private static func vmHoldToken(sessionID: String, callID: String) -> String { "\(sessionID):\(callID)" }
 
     /// The driver gate of an agent call to VM `recordID`: refused while the user drives it or its
     /// first-boot setup runs.
