@@ -36,6 +36,8 @@ final class TerminalConsole {
     @ObservationIgnored private var filter = PeerConsoleInputFilter()
     @ObservationIgnored private var inputSequence = 0
     @ObservationIgnored private var escapeToken = 0
+    /// The lease the filter's held bytes began under; they never go out under another.
+    @ObservationIgnored private var pendingLease: PeerConsoleControl?
     @ObservationIgnored private var watchGeneration = 0
     /// The host's `onlineCount` the attachment was made under.
     @ObservationIgnored private var attachedOnline = 0
@@ -81,6 +83,7 @@ final class TerminalConsole {
             attachedOnline = count
             expected = nil
             filter = PeerConsoleInputFilter()
+            pendingLease = nil
             control = PeerConsoleControl(owner: .host, generation: 0, change: .current)
             phase = .attaching
             sendAttach()
@@ -105,8 +108,14 @@ final class TerminalConsole {
     }
 
     /// Bytes the view wrote: keys, paste, and its own replies to queries, which the filter drops.
+    /// A sequence begun under one lease (or while viewing) is dropped rather than finished under
+    /// another, as the Mac's `PeerConsoleInputRelay` does.
     func viewWrote(_ data: Data) {
-        forward(filter.filter(data))
+        let heldUnder = filter.hasPending ? pendingLease : nil
+        let keys = filter.filter(data)
+        let crossesLease = heldUnder.map { !Self.sameLease($0, control) } ?? false
+        pendingLease = filter.hasPending ? (heldUnder ?? control) : nil
+        if !crossesLease { forward(keys) }
         guard filter.hasAmbiguousPrefix else { return }
         // A lone ESC waits briefly for the rest of a sequence, then goes out as the Escape key.
         escapeToken += 1
@@ -114,8 +123,15 @@ final class TerminalConsole {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(30))
             guard let self, token == escapeToken else { return }
-            forward(filter.flushAmbiguousPrefix())
+            let lease = pendingLease
+            let keys = filter.flushAmbiguousPrefix()
+            pendingLease = filter.hasPending ? lease : nil
+            if let lease, Self.sameLease(lease, control) { forward(keys) }
         }
+    }
+
+    private static func sameLease(_ a: PeerConsoleControl, _ b: PeerConsoleControl) -> Bool {
+        a.owner == b.owner && a.generation == b.generation
     }
 
     private func forward(_ keys: Data) {
