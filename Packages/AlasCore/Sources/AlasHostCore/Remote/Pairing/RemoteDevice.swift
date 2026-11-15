@@ -35,6 +35,31 @@ public enum RemoteDeviceScope: String, Codable, Equatable, Sendable {
     public static let pairCapability = "pair.delegation-scope.v1"
 }
 
+/// Where a host posts a phone's attention pings, and the token that relay
+/// issued for that phone. A token opens only at its own relay, so the phone
+/// supplies both.
+public struct RemotePushRelay: Codable, Equatable, Sendable {
+    public var url: URL
+    public var token: String
+
+    public init(url: URL, token: String) {
+        self.url = url
+        self.token = token
+    }
+
+    public static let maxURLBytes = 512
+    public static let maxTokenBytes = 1024
+
+    /// The relay a `pushRegistration` names, or nil when it is not an `https`
+    /// URL within the caps or has no token.
+    public static func validated(url: String, token: String?) -> RemotePushRelay? {
+        guard url.utf8.count <= maxURLBytes, let token, !token.isEmpty, token.utf8.count <= maxTokenBytes,
+              let parsed = URL(string: url), parsed.scheme?.lowercased() == "https", parsed.host?.isEmpty == false
+        else { return nil }
+        return RemotePushRelay(url: parsed, token: token)
+    }
+}
+
 public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public let id: String          // UUID
     public var name: String
@@ -56,6 +81,8 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     /// What the token may do. Only a redeemer that proved its key gets
     /// anything but `.full`.
     public var scope: RemoteDeviceScope
+    /// The push relay this phone registered; nil when it has none.
+    public var pushRelay: RemotePushRelay?
 
     public init(id: String, name: String, tokenHash: String, createdAt: Date, lastSeenAt: Date?,
          kind: RemoteDeviceKind = .browser, peerServerId: String? = nil,
@@ -73,7 +100,7 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess, peerPublicKey, scope
+        case id, name, tokenHash, createdAt, lastSeenAt, kind, peerServerId, agentAccess, peerPublicKey, scope, pushRelay
     }
 
     // Records written before federation have no `kind`; treat them as browsers
@@ -97,6 +124,7 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
         } else {
             scope = .full
         }
+        pushRelay = try? c.decodeIfPresent(RemotePushRelay.self, forKey: .pushRelay)
     }
 }
 

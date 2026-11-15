@@ -67,32 +67,9 @@ struct ElicitationFormView: View {
                 get: { if case .toggle(let on) = inputs[field.key] { on } else { false } },
                 set: { inputs[field.key] = .toggle($0) }))
         case "array":
-            VStack(spacing: 6) {
-                ForEach(field.options, id: \.value) { option in
-                    let on = selection(field).contains(option.value)
-                    Button {
-                        var items = selection(field)
-                        if on { items.removeAll { $0 == option.value } } else { items.append(option.value) }
-                        inputs[field.key] = .selection(items)
-                    } label: {
-                        HStack {
-                            Image(systemName: on ? "checkmark.square.fill" : "square").foregroundStyle(on ? Color.accentColor : .secondary)
-                            Text(option.title ?? option.value).foregroundStyle(.primary)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }
+            optionList(field, multiple: true)
         case "string" where !field.options.isEmpty:
-            Picker(field.title, selection: Binding(
-                get: { selection(field).first ?? "" },
-                set: { inputs[field.key] = $0.isEmpty ? nil : .selection([$0]) })) {
-                Text("Choose…").tag("")
-                ForEach(field.options, id: \.value) { Text($0.title ?? $0.value).tag($0.value) }
-            }
-            .pickerStyle(.menu).labelsHidden()
+            optionList(field, multiple: false)
         case "string" where Self.isDate(field):
             DatePicker(field.title, selection: Binding(
                 get: { if case .date(let d) = inputs[field.key] { d } else { Date() } },
@@ -117,6 +94,44 @@ struct ElicitationFormView: View {
             .background(Color(.secondarySystemBackground).opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         default:
             Text("This field type isn\u{2019}t supported on the phone.").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Every option on screen, as on the Mac: a menu hides the choices and their descriptions.
+    private func optionList(_ field: RemoteElicitationField, multiple: Bool) -> some View {
+        VStack(spacing: 6) {
+            ForEach(field.options, id: \.value) { option in
+                let on = selection(field).contains(option.value)
+                Button {
+                    var items = selection(field)
+                    if on {
+                        items.removeAll { $0 == option.value }
+                    } else {
+                        items = multiple ? items + [option.value] : [option.value]
+                    }
+                    // An emptied multiple choice stays an explicit empty answer; a single one goes back to unset.
+                    inputs[field.key] = items.isEmpty && !multiple ? nil : .selection(items)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: multiple ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle"))
+                            .foregroundStyle(on ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.title ?? option.value).foregroundStyle(.primary)
+                            if let description = option.description, !description.isEmpty {
+                                Text(description).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(on ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground).opacity(0.7),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
         }
     }
 
