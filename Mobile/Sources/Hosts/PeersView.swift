@@ -28,6 +28,9 @@ struct PeersView: View {
                         }
                     }
                 }
+                if let registrar = hub.registrar, !hub.hosts.isEmpty, !PushRegistrar.relayURL.isEmpty {
+                    NotificationKindsSection(registrar: registrar)
+                }
                 #if DEBUG
                     Section("Developer") {
                         NavigationLink {
@@ -155,6 +158,32 @@ extension PhoneConnection.State {
         case .incompatible: "Needs a newer Alas"
         case .identityMismatch: "A different Mac answered"
         case .identityUnproven: "Couldn't verify this Mac"
+        }
+    }
+}
+
+/// Which alerts this phone gets; every paired Mac honours the same choice.
+private struct NotificationKindsSection: View {
+    @Bindable var registrar: PushRegistrar
+
+    var body: some View {
+        Section {
+            toggle("Permission requests", systemImage: "hand.raised", kind: RemotePushKind.permission)
+            toggle("Questions and plans", systemImage: "questionmark.bubble", kind: RemotePushKind.input)
+            toggle("Finished turns", systemImage: "checkmark.circle", kind: RemotePushKind.finished)
+        } header: {
+            Text("Notify me about")
+        } footer: {
+            Text("Questions and plans include forms and visuals waiting for an answer.")
+        }
+    }
+
+    private func toggle(_ title: String, systemImage: String, kind: String) -> some View {
+        Toggle(isOn: Binding(
+            get: { registrar.kinds.contains(kind) },
+            set: { on in if on { registrar.kinds.insert(kind) } else { registrar.kinds.remove(kind) } }
+        )) {
+            Label(title, systemImage: systemImage)
         }
     }
 }
