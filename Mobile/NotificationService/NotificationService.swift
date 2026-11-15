@@ -32,6 +32,8 @@ private struct Unsendable: @unchecked Sendable {
 private final class Job {
     /// The extension is killed shortly after 30 s; leave room to deliver.
     private static let deadline: Duration = .seconds(20)
+    /// The host sends the requests a follow has pending right after its snapshot.
+    private static let settle: Duration = .seconds(1)
 
     private let original: UNNotificationContent
     private let deliver: (UNNotificationContent) -> Void
@@ -41,6 +43,8 @@ private final class Job {
     private var pending: PhoneServerMessage?
     private var title: String?
     private var listed = false
+    /// The target's snapshot arrived and the requests behind it had time to.
+    private var settled = false
     private var finished = false
 
     init(request: UNNotificationRequest, deliver: @escaping (UNNotificationContent) -> Void) {
@@ -98,10 +102,21 @@ private final class Job {
             case .permissionRequest(let id, _), .questionRequest(let id, _), .planRequest(let id, _), .elicitationRequest(let id, _):
                 guard id == target, pending == nil else { return }
                 pending = message
+            case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == target:
+                Task { [weak self] in
+                    try? await Task.sleep(for: Self.settle)
+                    guard let self, !finished else { return }
+                    settled = true
+                    if listed { finish() }
+                }
+                return
+            case .sessionClosed(let id) where id == target:
+                // Nothing to wait for: the host does not have it open.
+                settled = true
             default:
                 return
             }
-            if pending != nil, listed { finish() }
+            if listed, pending != nil || settled { finish() }
         default:
             break
         }
@@ -120,7 +135,14 @@ private final class Job {
               let updated = original.mutableCopy() as? UNMutableNotificationContent else { return original }
         updated.title = alert.title
         updated.body = alert.body
-        if alert.isPermission { updated.categoryIdentifier = "permission" }
+        // Allow and Deny answer only the request this names, so they never approve one the user did not see.
+        if alert.isPermission, case .permissionRequest(_, let payload) = pending,
+           let identity = RemoteRequestIdentity.of(payload),
+           var alas = updated.userInfo["alas"] as? [String: Any] {
+            alas["request"] = identity
+            updated.userInfo["alas"] = alas
+            updated.categoryIdentifier = "permission"
+        }
         return updated
     }
 }

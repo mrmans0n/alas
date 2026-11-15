@@ -50,7 +50,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let sessionId = alas?["sessionId"] as? String
         let action = response.actionIdentifier
         if action == "allow" || action == "deny", let serverId, let sessionId {
-            let answered = await Self.answer(serverId: serverId, sessionId: sessionId, allow: action == "allow")
+            // Only the request the alert showed may be answered; an alert the extension did not rewrite names none.
+            let request = alas?["request"] as? String
+            var answered = false
+            if let request {
+                answered = await Self.answerInBackground(serverId: serverId, sessionId: sessionId, request: request,
+                                                         allow: action == "allow")
+            }
             if !answered { await Self.postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
             return
         }
@@ -61,12 +67,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Answers the session's pending permission once, taking over the writer lease when the Mac holds it,
-    /// and waits (within the system's budget for this callback) until the request resolves.
-    @MainActor private static func answer(serverId: String, sessionId: String, allow: Bool) async -> Bool {
-        guard let route = hub?.route(serverId: serverId, sessionId: sessionId),
-              let (session, token) = registry?.acquire(hostID: route.hostID, sessionId: route.sessionId) else { return false }
+    /// The actions do not open the app, so iOS may run this with the app in the background and its
+    /// hosts disconnected: connect for the answer, and let go again unless the app came forward.
+    @MainActor private static func answerInBackground(serverId: String, sessionId: String, request: String,
+                                                      allow: Bool) async -> Bool {
+        let app = UIApplication.shared
+        // No expiration handler: `answer` gives up after 25 s, inside the system's budget.
+        let task = app.beginBackgroundTask(withName: "Answer permission")
+        defer {
+            if app.applicationState != .active { hub?.disconnectAll() }
+            app.endBackgroundTask(task)
+        }
+        return await answer(serverId: serverId, sessionId: sessionId, request: request, allow: allow)
+    }
+
+    /// Answers the session's pending permission once, if it is the request `request` names, taking over
+    /// the writer lease when the Mac holds it, and waits until it resolves.
+    @MainActor private static func answer(serverId: String, sessionId: String, request: String, allow: Bool) async -> Bool {
+        guard let hub, let registry, let route = hub.route(serverId: serverId, sessionId: sessionId) else { return false }
+        // What a session already following the online host shows is current; anything else waits for a snapshot
+        // sent after this began, since the one it holds may predate a disconnect.
+        let wasLive = hub.state(of: route.hostID) == .online
+            && registry.live(hostID: route.hostID, sessionId: route.sessionId)?.isOpen == true
+        let (session, token) = registry.acquire(hostID: route.hostID, sessionId: route.sessionId)
         defer { token.cancel() }
+        let snapshots = session.snapshotsReceived
+        hub.connectAll()
         let deadline = ContinuousClock.now + .seconds(25)
         func wait(until done: () -> Bool) async -> Bool {
             while !done() {
@@ -75,15 +101,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return true
         }
-        // Nothing pending once the snapshot is in: it was answered elsewhere, so there is nothing to apologize for.
-        guard await wait(until: { session.permission != nil || session.hasSnapshot }) else { return false }
-        guard let first = session.permission else { return true }
-        let identity = TranscriptSession.requestIdentity(first)
+        if !wasLive || !session.hasSnapshot {
+            guard await wait(until: { session.snapshotsReceived > snapshots }) else { return false }
+            // The host surfaces pending requests right behind the snapshot, and the session briefly holds
+            // the ones from before the resubscribe; answer only what the host sent again.
+            try? await Task.sleep(for: .seconds(1))
+        }
         var sent = false
         let settled = await wait(until: {
+            // Nothing pending and nothing sent: it was answered elsewhere, so there is nothing to apologize for.
+            guard let now = session.permission else { return !sent || !session.hasDeferredAnswer(.permission) }
             // A different request than the one the user saw must never get this answer.
-            guard let now = session.permission else { return sent && !session.hasDeferredAnswer(.permission) }
-            guard TranscriptSession.requestIdentity(now) == identity else { return true }
+            guard RemoteRequestIdentity.of(now) == request else { return true }
             if !sent {
                 // `answerPermission` ignores a request that only just replaced another, so retry until it takes.
                 // An already-answered kind is not re-sent: that guard is what keeps this a single answer.
@@ -94,9 +123,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return false
         })
-        guard settled else { return false }
-        // Done only if it was our request that resolved after the answer went out.
-        return sent && session.permission == nil
+        // Done once no request is left: ours resolved after the answer went out, or was answered elsewhere.
+        return settled && session.permission == nil
     }
 
     private static func postCouldntAnswer(serverId: String, sessionId: String, title: String) async {
@@ -105,8 +133,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         content.body = "Couldn't answer. Open Alas to respond."
         content.categoryIdentifier = "attention"
         content.userInfo = ["alas": ["serverId": serverId, "sessionId": sessionId]]
+        // Under the session's collapse id, so it replaces the alert and a clear ping or reconcile removes it.
+        let identifier = RemotePushID.collapseId(originServerId: serverId, sessionId: sessionId)
         try? await UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
 }
 

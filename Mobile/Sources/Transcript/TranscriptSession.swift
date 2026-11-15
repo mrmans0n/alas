@@ -65,6 +65,8 @@ final class TranscriptSession {
     var canLoadOlder = false
     /// True once the first snapshot arrived, so an empty transcript can say so.
     private(set) var hasSnapshot = false
+    /// Counts snapshot frames, so a caller can wait for one the host sent after it asked.
+    @ObservationIgnored private(set) var snapshotsReceived = 0
     private(set) var isClosed = false
     private(set) var streamingState = "idle"
     private(set) var config: RemoteSessionConfig?
@@ -295,14 +297,17 @@ final class TranscriptSession {
             rejection = "\(hostName) is offline. Nothing was sent."
             return
         }
-        let identity = Self.requestIdentity(shown)
+        let identity = RemoteRequestIdentity.of(shown)
         deferredAnswers[kind] = {
-            guard let now = current(), Self.requestIdentity(now) == identity else { return nil }
+            guard let now = current(), RemoteRequestIdentity.of(now) == identity else { return nil }
             return message(now)
         }
         answered.insert(kind)
         takeOver()
     }
+
+    /// True between `open()` and `close()`.
+    var isOpen: Bool { subscription != nil }
 
     /// True while an answer waits for the take-over to land; closing the session would drop it.
     func hasDeferredAnswer(_ kind: RequestKind) -> Bool { deferredAnswers[kind] != nil }
@@ -316,14 +321,6 @@ final class TranscriptSession {
             answered.insert(kind)
             hub.send(message, to: hostID)
         }
-    }
-
-    /// A request's content without its wire id, which a fresh follow may change.
-    static func requestIdentity<P: Encodable>(_ payload: P) -> Data? {
-        guard let data = try? JSONEncoder().encode(payload),
-              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        object["requestId"] = nil
-        return try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
     }
 
     /// False once answered, and briefly after the request changed under the user's finger.
@@ -511,6 +508,7 @@ final class TranscriptSession {
              .transcriptPage(let id, _, _, _) where id == sessionId:
             fetchingOlder = false
             if case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = message {
+                snapshotsReceived += 1
                 settle(rows: rows)
                 applyVisualAidRows(rows, snapshot: true)
             }

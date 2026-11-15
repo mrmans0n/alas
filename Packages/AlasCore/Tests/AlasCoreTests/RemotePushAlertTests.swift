@@ -45,6 +45,17 @@ struct RemotePushAlertTests {
     }
 }
 
+struct RemoteRequestIdentityTests {
+    @Test(arguments: [
+        (RemotePermissionPayload(requestId: 9, toolName: "Bash", options: [], title: "git push"), true),
+        (RemotePermissionPayload(requestId: 1, toolName: "Bash", options: [], title: "git push --force"), false),
+    ] as [(RemotePermissionPayload, Bool)])
+    func ignoresTheWireIdOnly(other: RemotePermissionPayload, same: Bool) {
+        let shown = RemotePermissionPayload(requestId: 1, toolName: "Bash", options: [], title: "git push")
+        #expect((RemoteRequestIdentity.of(shown) == RemoteRequestIdentity.of(other)) == same)
+    }
+}
+
 struct RemotePermissionQuickAnswerTests {
     private static func options(_ kinds: [String]) -> [RemotePermissionOption] {
         kinds.map { RemotePermissionOption(optionId: "id-\($0)", name: $0, kind: $0) }
