@@ -65,6 +65,8 @@ public final class FederatedSessionsProvider {
     /// would miss transitions among peers that were never carrying, and
     /// miss `forget` on one that never was.
     public var onPeerAvailabilityChanged: (@MainActor () -> Void)?
+    /// Fired whenever `peerRows` may have changed.
+    public var onPeerRowsChanged: (@MainActor () -> Void)?
 
     /// Holds a `FederatedDownstream` weakly. This provider does not own
     /// downstream lifetime — the `RemoteSessionGateway` that created one does,
@@ -189,7 +191,8 @@ public final class FederatedSessionsProvider {
     /// Peers that carry sessions right now, by `serverId`.
     private var activePeers: [String: FederatedPeerInfo] = [:]
     /// Each active peer's last list, already loop-guarded, tagged and namespaced.
-    private var peerRows: [String: [RemoteSessionSummary]] = [:]
+    /// A peer is absent until its first list arrives, and once it goes away.
+    public private(set) var peerRows: [String: [RemoteSessionSummary]] = [:]
     /// The peer's complete project inventory, independent of session activity.
     public private(set) var peerProjects: [String: [RemoteProjectOption]] = [:]
     /// Namespaced session id → downstreams that asked for it.
@@ -658,6 +661,7 @@ public final class FederatedSessionsProvider {
     }
 
     private func notifySessionListChanged() {
+        onPeerRowsChanged?()
         pruneDeadDownstreams()
         for box in downstreams.values { box.value?.sessionListChanged() }
     }

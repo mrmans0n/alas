@@ -33,6 +33,7 @@ public final class RemoteServer {
     /// without closing is gone within twice this, and so are its routes.
     public var livenessInterval: Duration = .seconds(20)
     private var livenessTask: Task<Void, Never>?
+    private var pushNotifier: RemotePushNotifier?
     /// Cap on simultaneous sockets. An unauthenticated peer can open a socket
     /// (auth only happens at WS upgrade), so bound the count defensively.
     private let maxConnections = 64
@@ -197,6 +198,12 @@ public final class RemoteServer {
         listener.service = advertisement?.service
         listener.start(queue: queue)
         self.listener = listener
+        let serverId = identityProvider().serverId
+        if !serverId.isEmpty {
+            let notifier = RemotePushNotifier(pairing: pairing, host: host, federation: federation, serverId: serverId)
+            notifier.start()
+            pushNotifier = notifier
+        }
         let interval = livenessInterval
         livenessTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -219,6 +226,8 @@ public final class RemoteServer {
     public func stop() {
         livenessTask?.cancel()
         livenessTask = nil
+        pushNotifier?.stop()
+        pushNotifier = nil
         listener?.cancel()
         listener = nil
         port = nil

@@ -1,10 +1,4 @@
 import Foundation
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
-import AlasCode
-import AlasAgents
 
 /// The id scheme for sessions a gateway forwards from a peer.
 ///
