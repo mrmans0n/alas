@@ -389,11 +389,15 @@ public struct RemotePermissionPayload: Codable, Equatable, Sendable {
     /// First text block from the permission's `toolCall.content`, commonly
     /// the command that is awaiting approval.
     public let commandSummary: String?
+    /// The ACP tool call this permission is for. Unlike `requestId`, which each
+    /// follow renumbers, it stays the same for one request and differs between
+    /// two requests for the same command. Absent from older hosts.
+    public let toolCallId: String?
 
     public init(
         requestId: Int, toolName: String, options: [RemotePermissionOption],
         title: String? = nil, reason: String? = nil, defaultToNo: Bool = false,
-        mcpServerName: String? = nil, commandSummary: String? = nil
+        mcpServerName: String? = nil, commandSummary: String? = nil, toolCallId: String? = nil
     ) {
         self.requestId = requestId
         self.toolName = toolName
@@ -403,10 +407,11 @@ public struct RemotePermissionPayload: Codable, Equatable, Sendable {
         self.defaultToNo = defaultToNo
         self.mcpServerName = mcpServerName
         self.commandSummary = commandSummary
+        self.toolCallId = toolCallId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName, commandSummary
+        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName, commandSummary, toolCallId
     }
 
     // `RemotePeerConnection` decodes this from other Alas instances, which
@@ -425,6 +430,7 @@ public struct RemotePermissionPayload: Codable, Equatable, Sendable {
         defaultToNo = try c.decodeIfPresent(Bool.self, forKey: .defaultToNo) ?? false
         mcpServerName = try c.decodeIfPresent(String.self, forKey: .mcpServerName)
         commandSummary = try c.decodeIfPresent(String.self, forKey: .commandSummary)
+        toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
     }
 }
 

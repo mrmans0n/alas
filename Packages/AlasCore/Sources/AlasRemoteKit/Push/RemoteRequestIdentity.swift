@@ -3,7 +3,8 @@ import Foundation
 
 /// Names a pending request by its content, not its wire id, which a fresh
 /// follow may change. A permission alert carries it so its Allow or Deny can
-/// only answer the request the user saw.
+/// only answer the request the user saw. The content includes the permission's
+/// `toolCallId`, so a repeat of the same command is a different request.
 public enum RemoteRequestIdentity {
     /// Hex SHA-256 of the payload's JSON without `requestId`, keys sorted.
     public static func of<P: Encodable>(_ payload: P) -> String? {

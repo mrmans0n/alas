@@ -1204,7 +1204,8 @@ public final class RemoteSessionGateway {
             commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
                 guard case .content(.text(let text)) = block else { return nil }
                 return text
-            }.first)
+            }.first,
+            toolCallId: tc.toolCallId)
     }
 
     private static func elicitationPayload(_ pending: ACPUserInputRequest, requestId: String) -> RemoteElicitationPayload {
