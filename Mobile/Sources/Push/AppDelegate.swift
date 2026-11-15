@@ -79,7 +79,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // No expiration handler: `answer` gives up after 25 s, inside the system's budget.
         let task = app.beginBackgroundTask(withName: "Answer permission")
         defer {
-            if app.applicationState != .active { hub?.disconnectAll() }
+            // Only from the background: a user opening the app meanwhile passes through inactive, and
+            // disconnecting then would leave the screen they open offline until the next background trip.
+            if app.applicationState == .background { hub?.disconnectAll() }
             app.endBackgroundTask(task)
         }
         return await answer(serverId: serverId, sessionId: sessionId, request: request, allow: allow)
