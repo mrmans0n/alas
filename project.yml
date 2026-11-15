@@ -216,6 +216,9 @@ targets:
       - name: Build Simulator Accessibility Helper
         script: '"${SRCROOT}/scripts/build-sim-ax-settings.sh"'
         basedOnDependencyAnalysis: false
+      - name: Fetch scrcpy Server
+        script: '"${SRCROOT}/scripts/fetch-scrcpy-server.sh"'
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed Ghostty Resources
         script: '"${SRCROOT}/scripts/embed-ghostty-resources.sh"'
