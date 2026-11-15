@@ -5,16 +5,21 @@ import { apnsJWT, apnsRequest } from "../src/apns.js";
 
 const b64u = (s) => JSON.parse(Buffer.from(s, "base64url").toString());
 
-test("apnsJWT is a verifiable ES256 token", async () => {
+test("apnsJWT is a verifiable ES256 token, signed with the environment's own key when set", async () => {
   const { pair, env } = await makeEnv();
+  const prod = await makeEnv();
+  env.APNS_KEY_P8_PRODUCTION = prod.env.APNS_KEY_P8;
+  env.APNS_KEY_ID_PRODUCTION = "PRODKEY";
   const now = 1_800_000_000;
-  const [h, c, s] = (await apnsJWT(env, now)).split(".");
-  assert.deepEqual(b64u(h), { alg: "ES256", kid: "KEY123" });
-  assert.deepEqual(b64u(c), { iss: "TEAM456", iat: now });
-  const ok = await crypto.subtle.verify(
-    { name: "ECDSA", hash: "SHA-256" }, pair.publicKey,
-    Buffer.from(s, "base64url"), new TextEncoder().encode(`${h}.${c}`));
-  assert.ok(ok);
+  for (const [environment, kid, publicKey] of [["sandbox", "KEY123", pair.publicKey], ["production", "PRODKEY", prod.pair.publicKey]]) {
+    const [h, c, s] = (await apnsJWT(env, now, environment)).split(".");
+    assert.deepEqual(b64u(h), { alg: "ES256", kid });
+    assert.deepEqual(b64u(c), { iss: "TEAM456", iat: now });
+    const ok = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" }, publicKey,
+      Buffer.from(s, "base64url"), new TextEncoder().encode(`${h}.${c}`));
+    assert.ok(ok);
+  }
 });
 
 const opened = (environment) => ({ apnsToken: "abcd", topic: "io.nlopez.alas", environment });

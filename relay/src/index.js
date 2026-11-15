@@ -45,7 +45,7 @@ async function push(request, env) {
   const now = Math.floor(Date.now() / 1000);
   let res;
   try {
-    res = await fetch(apnsRequest(b, opened, await apnsJWT(env, now), now));
+    res = await fetch(apnsRequest(b, opened, await apnsJWT(env, now, opened.environment), now));
   } catch {
     return new Response("apns failure", { status: 502 });
   }

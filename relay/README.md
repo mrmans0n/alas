@@ -15,14 +15,22 @@ host names or paths. Rotating `RELAY_SECRET` invalidates every token.
 
 ## Deploy
 
-1. In the Apple developer portal, create an APNs auth key (`.p8`). Note its Key
-   ID and your Team ID.
-2. Set the secrets from this directory:
+1. In the Apple developer portal, create an APNs auth key (`.p8`). A key for
+   "Sandbox & Production" serves both; keys limited to one environment can be
+   set per environment instead (step 2). Note each Key ID and your Team ID.
+2. Set the secrets from this directory. Values from a pipe or file keep the
+   `.p8` line breaks intact:
    ```sh
-   npx wrangler secret put RELAY_SECRET   # at least 32 random bytes, base64: openssl rand -base64 32
-   npx wrangler secret put APNS_KEY_P8    # the full .p8 PEM text
-   npx wrangler secret put APNS_KEY_ID
-   npx wrangler secret put APNS_TEAM_ID
+   openssl rand -base64 32 | npx wrangler secret put RELAY_SECRET
+   echo -n TEAMID | npx wrangler secret put APNS_TEAM_ID
+   # One key for both environments:
+   npx wrangler secret put APNS_KEY_P8 < AuthKey_KEYID.p8
+   echo -n KEYID | npx wrangler secret put APNS_KEY_ID
+   # Or one key per environment (debug builds use sandbox, release builds production):
+   npx wrangler secret put APNS_KEY_P8_SANDBOX < AuthKey_SANDBOXKEYID.p8
+   echo -n SANDBOXKEYID | npx wrangler secret put APNS_KEY_ID_SANDBOX
+   npx wrangler secret put APNS_KEY_P8_PRODUCTION < AuthKey_PRODKEYID.p8
+   echo -n PRODKEYID | npx wrangler secret put APNS_KEY_ID_PRODUCTION
    ```
 3. `npx wrangler deploy`
 4. Put the resulting URL into the iOS build setting `ALAS_PUSH_RELAY_URL`

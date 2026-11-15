@@ -1,18 +1,26 @@
 const enc = new TextEncoder();
 const b64u = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 
-// Cached for 50 minutes: APNs wants a token refreshed no more than hourly, and rejects ones older than an hour.
-let cached = null;
+// Per key, cached for 50 minutes: APNs wants a token refreshed no more than hourly, and rejects ones older than an hour.
+const cached = new Map();
 
-export async function apnsJWT(env, now) {
-  if (cached && cached.keyId === env.APNS_KEY_ID && now - cached.iat < 50 * 60) return cached.jwt;
-  const der = Uint8Array.from(atob(env.APNS_KEY_P8.replace(/-----[^-]+-----|\s/g, "")), (c) => c.charCodeAt(0));
+// A key made for one APNs environment only works there; APNS_KEY_P8/APNS_KEY_ID serve both when no per-environment key is set.
+function keyFor(env, environment) {
+  const suffix = environment === "production" ? "PRODUCTION" : "SANDBOX";
+  return { p8: env[`APNS_KEY_P8_${suffix}`] ?? env.APNS_KEY_P8, keyId: env[`APNS_KEY_ID_${suffix}`] ?? env.APNS_KEY_ID };
+}
+
+export async function apnsJWT(env, now, environment) {
+  const { p8, keyId } = keyFor(env, environment);
+  const hit = cached.get(keyId);
+  if (hit && now - hit.iat < 50 * 60) return hit.jwt;
+  const der = Uint8Array.from(atob(p8.replace(/-----[^-]+-----|\s/g, "")), (c) => c.charCodeAt(0));
   const key = await crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
-  const head = b64u(enc.encode(JSON.stringify({ alg: "ES256", kid: env.APNS_KEY_ID })));
+  const head = b64u(enc.encode(JSON.stringify({ alg: "ES256", kid: keyId })));
   const claims = b64u(enc.encode(JSON.stringify({ iss: env.APNS_TEAM_ID, iat: now })));
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(`${head}.${claims}`));
   const jwt = `${head}.${claims}.${b64u(sig)}`;
-  cached = { jwt, iat: now, keyId: env.APNS_KEY_ID };
+  cached.set(keyId, { jwt, iat: now });
   return jwt;
 }
 
