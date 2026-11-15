@@ -339,6 +339,7 @@ struct NewWorktreeDialog: View {
     private func refreshRunOn() async {
         let selected = projectId
         guard let primary = state.worktreeProjects.first(where: { $0.id == selected }), primary.host == nil else { return }
+        let launchBefore = (launchMode, launchAgentId, openAfterCreate)
         let origin = await AppState.originURL(projectPath: primary.path)
         guard selected == projectId else { return }
         primaryHasOrigin = origin.flatMap(GitRemoteIdentity.normalized) != nil
@@ -346,9 +347,11 @@ struct NewWorktreeDialog: View {
         presetRunOnHost = nil
         guard preselected != runOnHost else { return }
         runOnHost = preselected
-        // An automatic choice resolves the defaults for its machine; an attached
-        // issue's launch choice still stands.
-        if issueState.draft == nil { applyLaunchDefaults(for: selected) }
+        // An automatic choice resolves the defaults for its machine; a launch choice
+        // made during the lookup, by the user or an attached issue, still stands.
+        if issueState.draft == nil, (launchMode, launchAgentId, openAfterCreate) == launchBefore {
+            applyLaunchDefaults(for: selected)
+        }
     }
 
     private var showsRepositorySelector: Bool {
