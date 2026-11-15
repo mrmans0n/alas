@@ -12,7 +12,9 @@
 		06CEABA81FDA709351A18A6E /* WorktreeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E827B4E05449D23196D8F673 /* WorktreeRow.swift */; };
 		071E34299495A5835CCC2F75 /* SessionSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */; };
 		0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C859167B848F3A5C43EEE3D7 /* PeersView.swift */; };
+		1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97D516817E514246987838F /* PushRegistrar.swift */; };
 		185E46AA928760C65408C50C /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416F4E87800E3DD89EE7DC25 /* NewSessionSheet.swift */; };
+		1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014513AD15C2212B8C007245 /* AppDelegate.swift */; };
 		1CC892A943E9499D5E01DEAD /* VisualAidCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */; };
 		271977086F72799EB499DD8E /* TranscriptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E507C5A48716AB80CFF1AC55 /* TranscriptSession.swift */; };
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
@@ -51,6 +53,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		014513AD15C2212B8C007245 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		03FA6AEA78D99344CAAD8095 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
@@ -81,6 +84,7 @@
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidCard.swift; sourceTree = "<group>"; };
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
+		C97D516817E514246987838F /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
 		CFC88463B7E1083C886AC282 /* WorktreesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesView.swift; sourceTree = "<group>"; };
 		D8C41B3901C2155F0CB451B1 /* PairHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairHostView.swift; sourceTree = "<group>"; };
 		DC497CD9E3E3ACCED5B931CD /* FileViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewer.swift; sourceTree = "<group>"; };
@@ -110,6 +114,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1BE6052810B0AFD9464EA34C /* Push */ = {
+			isa = PBXGroup;
+			children = (
+				014513AD15C2212B8C007245 /* AppDelegate.swift */,
+				C97D516817E514246987838F /* PushRegistrar.swift */,
+			);
+			path = Push;
+			sourceTree = "<group>";
+		};
 		213C22D640776C6B97AA598C /* Workspace */ = {
 			isa = PBXGroup;
 			children = (
@@ -265,6 +278,7 @@
 				CC8E626A8FE5ED036DE7FB8B /* Composer */,
 				E8C2655B49BA1922799A4F7E /* Hosts */,
 				3532103143A737814C349FAA /* Inbox */,
+				1BE6052810B0AFD9464EA34C /* Push */,
 				A2B95EC638C15843966D4066 /* Requests */,
 				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
@@ -352,6 +366,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0144E12D60D9B05A662DDE7C /* AlasMobileApp.swift in Sources */,
+				1B5C0283E882903921EC7AE9 /* AppDelegate.swift in Sources */,
 				B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */,
 				E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */,
 				A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */,
@@ -372,6 +387,7 @@
 				FB774A2243E6DDC0B91251BC /* PairHostView.swift in Sources */,
 				0A8D289B2698E3FC9CBB5104 /* PeersView.swift in Sources */,
 				914E4332300D586F6F309630 /* PhoneProtocol.swift in Sources */,
+				1635F671055BF795E113B685 /* PushRegistrar.swift in Sources */,
 				468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */,
 				90AE44675FE782B711960528 /* RequestCard.swift in Sources */,
 				7DAFD28FE14392621FCDBF53 /* SessionListCache.swift in Sources */,

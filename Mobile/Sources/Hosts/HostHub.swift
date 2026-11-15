@@ -30,6 +30,10 @@ final class HostHub {
     private(set) var hosts: [PairedHost]
     private var states: [UUID: PhoneConnection.State] = [:]
     private var sessionLists: [UUID: [RemoteSessionSummary]] = [:]
+    /// Hosts whose list arrived on the live connection, not from the cache.
+    @ObservationIgnored private var listedLive: Set<UUID> = []
+    /// What each host's hello advertised, for this connection.
+    @ObservationIgnored private var capabilities: [UUID: Set<String>] = [:]
 
     @ObservationIgnored private var connections: [UUID: PhoneConnection] = [:]
     @ObservationIgnored private var listeners: [UUID: [UUID: @MainActor (PhoneServerMessage) -> Void]] = [:]
@@ -37,6 +41,9 @@ final class HostHub {
     /// only the last holder's release may unsubscribe.
     @ObservationIgnored private var subscriptions: [UUID: [String: Int]] = [:]
     @ObservationIgnored private let store: HostStore
+    @ObservationIgnored var registrar: PushRegistrar? {
+        didSet { registrar?.onTokenChange = { [weak self] in self?.sendPushRegistrationToOnlineHosts() } }
+    }
     @ObservationIgnored private let listCache = SessionListCache()
     /// Stamps cache writes in main-actor order; see `SessionListCache.newest`.
     @ObservationIgnored private var cacheSeq = 0
@@ -59,6 +66,11 @@ final class HostHub {
 
     func sessions(of id: UUID) -> [RemoteSessionSummary] {
         sessionLists[id] ?? []
+    }
+
+    /// The host's sessions, only while its list came from the live connection.
+    func freshSessions(of id: UUID) -> [RemoteSessionSummary]? {
+        listedLive.contains(id) ? sessions(of: id) : nil
     }
 
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
@@ -90,12 +102,18 @@ final class HostHub {
         let connection = makeConnection(for: host, token: result.token)
         connections[host.id] = connection
         connection.connect()
+        registrar?.start()
     }
 
     func forget(_ id: UUID) {
+        if state(of: id) == .online, registrar?.relayToken != nil, capabilities[id]?.contains(PushRelayCapability.v1) == true {
+            send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: nil), to: id)
+        }
         connections.removeValue(forKey: id)?.disconnect()
         hosts.removeAll { $0.id == id }
         states[id] = nil
+        listedLive.remove(id)
+        capabilities[id] = nil
         sessionLists[id] = nil
         listeners[id] = nil
         subscriptions[id] = nil
@@ -149,6 +167,15 @@ final class HostHub {
         }
     }
 
+    private func sendPushRegistration(to id: UUID) {
+        guard let token = registrar?.relayToken, capabilities[id]?.contains(PushRelayCapability.v1) == true else { return }
+        send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: token), to: id)
+    }
+
+    private func sendPushRegistrationToOnlineHosts() {
+        for host in hosts where state(of: host.id) == .online { sendPushRegistration(to: host.id) }
+    }
+
     /// Creates the connection of any host that lacks one. Retried on every
     /// `connectAll()`, so a token the Keychain could not read earlier (before
     /// first unlock) is picked up. A host whose token stays unreadable reads
@@ -175,11 +202,15 @@ final class HostHub {
         switch event {
         case .stateChanged(let state):
             states[id] = state
-            if state == .online { send(.listSessions, to: id) }
-        case .hello:
+            if state != .online { listedLive.remove(id) }
+            if state == .online {
+                send(.listSessions, to: id)
+                sendPushRegistration(to: id)
+            }
+        case .hello(_, _, _, _, let capabilities, _):
             // Arrives just before `.online`, while `send` is still a no-op;
-            // the state change above asks for the list.
-            break
+            // the state change above asks for the list and registers push.
+            self.capabilities[id] = Set(capabilities)
         case .originChanged(let origin):
             guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }
             hosts[index].lastOrigin = origin
@@ -188,6 +219,8 @@ final class HostHub {
             switch message {
             case .sessionList(let sessions):
                 sessionLists[id] = sessions
+                listedLive.insert(id)
+                if let registrar { Task { await registrar.reconcile() } }
                 let cache = listCache
                 cacheSeq += 1
                 let seq = cacheSeq
