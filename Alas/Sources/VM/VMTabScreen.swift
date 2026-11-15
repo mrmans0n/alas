@@ -146,8 +146,9 @@ struct VMDriverStatus: Equatable {
     let details: [String]
     let action: Action
 
-    /// `agentName` names the session of an `.agent` driver; `now` dates its last call.
-    static func make(driver: VMDriver, agentName: String, now: Date) -> VMDriverStatus {
+    /// `agentName` names the session of an `.agent` driver; `now` dates its last call. `waiting`
+    /// names the agents whose calls wait for the user to hand back, first to arrive first.
+    static func make(driver: VMDriver, agentName: String, now: Date, waiting: [String] = []) -> VMDriverStatus {
         switch driver {
         case .idle:
             VMDriverStatus(tone: .running, title: "Running", details: [], action: .takeOver)
@@ -157,7 +158,12 @@ struct VMDriverStatus: Equatable {
                 details: ["\(tool) \(max(0, Int(now.timeIntervalSince(at))))s ago"], action: .takeOver
             )
         case .user:
-            VMDriverStatus(tone: .busy, title: "You're driving", details: ["agent calls are on hold"], action: .handBack)
+            VMDriverStatus(tone: .busy, title: "You're driving", details: [waitingDetail(waiting)], action: .handBack)
         }
+    }
+
+    private static func waitingDetail(_ waiting: [String]) -> String {
+        guard let first = waiting.first else { return "agent calls wait for you to hand back" }
+        return waiting.count > 1 ? "\(first) is waiting, +\(waiting.count - 1) more" : "\(first) is waiting"
     }
 }
