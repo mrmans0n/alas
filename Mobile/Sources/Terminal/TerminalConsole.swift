@@ -2,6 +2,12 @@ import AlasRemoteKit
 import Foundation
 import Observation
 
+/// `PeerConsoleInputRelay.maxChunk` on the Mac: the largest `input` message, well under the
+/// host's 1 MiB cap.
+private enum PeerConsoleInputRelayLimit {
+    static let maxChunk = 64 * 1024
+}
+
 /// One attachment to a host console: keeps its output in order for the view,
 /// and turns what the view writes into `input` while this phone holds the
 /// lease. Starts as a viewer, as on the Mac; typing needs `takeControl`.
@@ -148,8 +154,15 @@ final class TerminalConsole {
     private func forward(_ keys: Data) {
         // Nothing typed while only viewing goes anywhere.
         guard !keys.isEmpty, isControlling else { return }
-        inputSequence += 1
-        send(.input(attachmentId: attachmentId, generation: control.generation, sequence: inputSequence, data: keys))
+        // In order and in pieces the host accepts, as the Mac's relay splits a paste.
+        var offset = keys.startIndex
+        while offset < keys.endIndex {
+            let end = min(offset + PeerConsoleInputRelayLimit.maxChunk, keys.endIndex)
+            inputSequence += 1
+            send(.input(attachmentId: attachmentId, generation: control.generation, sequence: inputSequence,
+                        data: keys.subdata(in: offset..<end)))
+            offset = end
+        }
     }
 
     private func handle(_ event: PeerConsoleEvent) {
