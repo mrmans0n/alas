@@ -871,7 +871,12 @@ jobs:
 
       - name: Test AlasCore
         # Two jobs: the largest sources need several GB each to compile.
-        run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update -j 2
+        # At most 32 tests at once: unbounded, the run holds ~2,000 descriptors,
+        # and Foundation's Process (Swift 6.4) reads past /proc/self/fd's
+        # buffer above ~1,350 and crashes (swift-corelibs-foundation#5472).
+        run: >-
+          swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update -j 2
+          --experimental-maximum-parallelization-width 32
 
   remote-web-tests:
     name: Remote web tests
