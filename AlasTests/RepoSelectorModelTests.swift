@@ -347,6 +347,23 @@ struct RepoSelectorModelTests {
         #expect(rows.contains(.action(.newWorktreeForRepo(projectId: "p1"))))
     }
 
+    @Test func emptyQueryListsALinkedRecordsWorktreesUnderItsPrimary() {
+        let model = RepoSelectorModel()
+        var remote = project("r1")
+        remote.linkedProjectId = "p1"
+        let local = worktree("w1", projectId: "p1")
+        let onMachine = worktree("w2", projectId: "r1")
+        let e = env(projects: [remote, project("p1")], worktrees: ["p1": [local], "r1": [onMachine]])
+        #expect(model.rows(environment: e) == [
+            .projectHeader(projectId: "p1"),
+            .worktree(local, indices: [], isCurrent: false),
+            .worktree(onMachine, indices: [], isCurrent: false),
+            .action(.newWorktreeForRepo(projectId: "p1")),
+            .actionsHeader,
+            .action(.newProject)
+        ])
+    }
+
     @Test func isCurrentSetForCurrentWorktreeInBothRecentAndProjectSections() {
         let model = RepoSelectorModel()
         let p1 = project("p1")

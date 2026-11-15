@@ -345,7 +345,7 @@ struct RunScheduleEditorView: View {
                     draft.worktreeID = state.projectsManager.visibleMainWorktree(projectId: newValue)?.id
                 }
             ),
-            projects: state.projects,
+            projects: state.projectsManager.primaryProjects,
             icon: { state.effectiveIcon(for: $0) }
         )
         .fixedSize()

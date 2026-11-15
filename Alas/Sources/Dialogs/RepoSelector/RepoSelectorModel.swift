@@ -76,18 +76,26 @@ final class RepoSelectorModel {
         }
 
         // Project sections, ordered by recency of their most-recently-touched
-        // worktree (alpha as the tie-breaker / no-recents fallback).
+        // worktree (alpha as the tie-breaker / no-recents fallback). A linked
+        // Project's worktrees list under its primary, as in the sidebar.
+        let sections = projects.filter { $0.linkedProjectId == nil }
+        let members = Dictionary(uniqueKeysWithValues: sections.map { primary in
+            (primary.id, [primary.id] + projects.filter { $0.linkedProjectId == primary.id }.map(\.id))
+        })
+        let worktreesBySection = members.mapValues { $0.flatMap { worktreesByProject[$0] ?? [] } }
         let projectOrder = orderedProjects(
-            projects: projects,
-            worktreesByProject: worktreesByProject,
+            projects: sections,
+            worktreesByProject: worktreesBySection,
             recents: recents,
             currentId: currentId
         )
         for project in projectOrder {
             rows.append(.projectHeader(projectId: project.id))
-            let worktrees = worktreesByProject[project.id] ?? []
+            let worktrees = worktreesBySection[project.id] ?? []
             let validIds = Set(worktrees.map(\.id))
-            let recentIds = recents.liveWorktreeIds(in: project.id, validWorktreeIds: validIds)
+            let recentIds = (members[project.id] ?? []).flatMap {
+                recents.liveWorktreeIds(in: $0, validWorktreeIds: validIds)
+            }
             let recentSet = Set(recentIds)
             let byId = Dictionary(uniqueKeysWithValues: worktrees.map { ($0.id, $0) })
             for id in recentIds {

@@ -278,6 +278,11 @@ public struct AlasCLICommandRouter {
         }
 
         let projectWorktrees = service.visibleWorktrees().filter { $0.projectId == origin.projectId }
+        // `list` and `switch` see the whole sidebar group: a local Project and the Machines linked to it.
+        let projects = host.core.projects
+        let primaryId = projects.projects.first { $0.id == origin.projectId }?.linkedProjectId ?? origin.projectId
+        let groupIds = Set([primaryId] + projects.linkedProjects(of: primaryId).map(\.id))
+        let groupWorktrees = service.visibleWorktrees().filter { groupIds.contains($0.projectId) }
         let request = request.virtualizingPaths(like: origin.path.path)
         switch request.command {
         case .resolve:
@@ -297,9 +302,9 @@ public struct AlasCLICommandRouter {
                 from: .worktree(origin, sessionID: request.sessionId, owner: originOwner), caller: caller
             )
         case .worktree(.list):
-            return .text(AlasCLIWorktreeResolver.rows(worktrees: projectWorktrees, currentWorktreeId: origin.id))
+            return .text(AlasCLIWorktreeResolver.rows(worktrees: groupWorktrees, currentWorktreeId: origin.id))
         case .worktree(.switch(let target)):
-            return service.switch(target: target, projectWorktrees: projectWorktrees)
+            return service.switch(target: target, projectWorktrees: groupWorktrees)
         case .worktree(.new(let branch, let base)):
             return await createWorktree(origin, branch, base, caller)
         case .worktree(.delete(let target, let force, let keepBranch)):

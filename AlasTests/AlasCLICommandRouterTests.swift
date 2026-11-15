@@ -353,6 +353,17 @@ struct AlasCLICommandRouterTests {
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
     }
 
+    @Test func listsTheWholeLinkedGroupFromARemoteWorktree() async throws {
+        let local = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let current = Self.worktree(branch: "feature/remote", path: "/tmp/remote", projectId: "r1")
+        let differentProject = Self.worktree(branch: "main", path: "/tmp/other", projectId: "p2")
+        let router = Self.router(origin: current, visibleWorktrees: [local, current, differentProject], linked: ["r1": "p1"])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
+
+        #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [local, current], currentWorktreeId: current.id)))
+    }
+
     @Test func returnsWorktreeResolutionErrors() async throws {
         let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let first = Self.worktree(branch: "feature/a", path: "/tmp/a", projectId: "p1")
@@ -1483,11 +1494,12 @@ struct AlasCLICommandRouterTests {
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],
+        linked: [String: String] = [:],
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
         openReview: @escaping (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in .ok }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
-            host: AlasHost.routerFixture(visibleWorktrees, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
+            host: AlasHost.routerFixture(visibleWorktrees, linked: linked, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
             openRelativeFile: { _, _ in Issue.record("expected no relative file open") },
             openExternalFile: { _, _ in Issue.record("expected no external file open") },
             openReviewChanges: openReviewChanges,
@@ -1516,6 +1528,7 @@ extension AlasHost {
     static func routerFixture(
         _ worktrees: [Worktree],
         hidden: [Worktree] = [],
+        linked: [String: String] = [:],
         sessionWorktree: @escaping (String) -> String? = { _ in nil },
         sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil },
         harness: HarnessService = HarnessService(),
@@ -1525,7 +1538,12 @@ extension AlasHost {
         orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence()
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
-            ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
+            var project = ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
+            if let primary = linked[$0] {
+                project.host = "devbox"
+                project.linkedProjectId = primary
+            }
+            return project
         })
         (worktrees + hidden).forEach(projects.insertOptimisticWorktree)
         for worktree in hidden {
