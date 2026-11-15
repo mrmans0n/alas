@@ -193,6 +193,7 @@ This is plan 4. Plans 3a (#2482), 3b (#2492) and 3c (#2496) brought the phone to
 - Modify:
   - `RemoteServer.swift`: own the notifier, and start and stop it with the server;
   - `FederatedSessionsProvider.swift`: an `onPeerRowsChanged` callback, or an observable property the notifier can watch.
+  - Move `AlasHostCore/Remote/Federation/RemoteFederatedSessionID.swift` to `AlasRemoteKit/Protocol/`, unchanged and public, so the phone can compose and split federated IDs (Tasks 5 and 6).
 - Test: `AlasCoreTests/.../RemotePushPlannerTests.swift` (new: it is a new type); a `RemotePushID` case goes into the same suite.
 
 **Interfaces:**
