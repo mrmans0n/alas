@@ -71,6 +71,8 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     private var queue: DispatchQueue!
     private var onState: (@Sendable (TCPStreamState) -> Void)?
     private var handle: SocketHandle?
+    /// The socket still connecting, so cancelling closes it at once.
+    private var dialing: SocketHandle?
     private var reader: DispatchSourceProtocol?
     private var writer: DispatchSourceProtocol?
     private var sends: [PendingSend] = []
@@ -151,6 +153,8 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
             sends.removeAll()
             handle?.close()
             handle = nil
+            dialing?.close()
+            dialing = nil
             reader = nil
             writer = nil
             onState?(.cancelled)
@@ -210,11 +214,13 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
             handle.close()
             return dial(addresses.dropFirst())
         }
+        dialing = handle
         var waiting: DispatchSourceProtocol?
         waiting = handle.watch(.write, queue: queue) { [weak self] in
             waiting?.cancel()
             waiting = nil
             guard let self, !cancelled else { return handle.close() }
+            dialing = nil
             var failure: Int32 = 0
             var length = socklen_t(MemoryLayout<Int32>.size)
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &length)
