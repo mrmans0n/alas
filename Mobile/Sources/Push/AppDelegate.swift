@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let action = response.actionIdentifier
         if action == "allow" || action == "deny", let serverId, let sessionId {
             let answered = await Self.answer(serverId: serverId, sessionId: sessionId, allow: action == "allow")
-            if !answered { await Self.postCouldntAnswer(serverId: serverId, sessionId: sessionId) }
+            if !answered { await Self.postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
             return
         }
         await MainActor.run {
@@ -75,22 +75,33 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return true
         }
-        guard await wait(until: { session.permission != nil }), let payload = session.permission,
-              let optionId = RemotePermissionQuickAnswer.optionId(in: payload, allow: allow) else { return false }
-        // `answerPermission` ignores a request that only just replaced another, so retry until it takes.
+        // Nothing pending once the snapshot is in: it was answered elsewhere, so there is nothing to apologize for.
+        guard await wait(until: { session.permission != nil || session.hasSnapshot }) else { return false }
+        guard let first = session.permission else { return true }
+        let identity = TranscriptSession.requestIdentity(first)
         var sent = false
-        guard await wait(until: {
+        let settled = await wait(until: {
+            // A different request than the one the user saw must never get this answer.
+            guard let now = session.permission else { return sent && !session.hasDeferredAnswer(.permission) }
+            guard TranscriptSession.requestIdentity(now) == identity else { return true }
             if !sent {
-                session.answerPermission(optionId: optionId)
+                // `answerPermission` ignores a request that only just replaced another, so retry until it takes.
+                // An already-answered kind is not re-sent: that guard is what keeps this a single answer.
+                if let optionId = RemotePermissionQuickAnswer.optionId(in: now, allow: allow) {
+                    session.answerPermission(optionId: optionId)
+                }
                 sent = session.answered.contains(.permission)
             }
-            return sent
-        }) else { return false }
-        return await wait(until: { session.permission == nil })
+            return false
+        })
+        guard settled else { return false }
+        // Done only if it was our request that resolved after the answer went out.
+        return sent && session.permission == nil
     }
 
-    private static func postCouldntAnswer(serverId: String, sessionId: String) async {
+    private static func postCouldntAnswer(serverId: String, sessionId: String, title: String) async {
         let content = UNMutableNotificationContent()
+        content.title = title.isEmpty ? "Alas" : title
         content.body = "Couldn't answer. Open Alas to respond."
         content.categoryIdentifier = "attention"
         content.userInfo = ["alas": ["serverId": serverId, "sessionId": sessionId]]

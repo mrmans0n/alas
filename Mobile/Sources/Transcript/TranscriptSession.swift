@@ -304,6 +304,9 @@ final class TranscriptSession {
         takeOver()
     }
 
+    /// True while an answer waits for the take-over to land; closing the session would drop it.
+    func hasDeferredAnswer(_ kind: RequestKind) -> Bool { deferredAnswers[kind] != nil }
+
     private func sendDeferredAnswers() {
         guard state.canDrive, !deferredAnswers.isEmpty else { return }
         for (kind, build) in deferredAnswers {
@@ -316,7 +319,7 @@ final class TranscriptSession {
     }
 
     /// A request's content without its wire id, which a fresh follow may change.
-    private static func requestIdentity<P: Encodable>(_ payload: P) -> Data? {
+    static func requestIdentity<P: Encodable>(_ payload: P) -> Data? {
         guard let data = try? JSONEncoder().encode(payload),
               var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         object["requestId"] = nil
