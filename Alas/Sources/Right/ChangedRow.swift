@@ -39,6 +39,16 @@ struct ChangedRow: View {
         12 + CGFloat(depth * 14)
     }
 
+    /// As wide as a typical short deletion count ("−999"), right-aligned;
+    /// a longer one just widens its own row.
+    private func deletionColumn(_ text: String) -> some View {
+        ZStack(alignment: .trailing) {
+            Text("−999").hidden()
+            Text(text).foregroundColor(theme.color("del"))
+        }
+        .accessibilityHidden(text.isEmpty)
+    }
+
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
         let add = displayAdd ?? file.add
@@ -62,11 +72,16 @@ struct ChangedRow: View {
                 // A fixed gutter keeps the status letter from reading as part
                 // of the counts.
                 HStack(spacing: scale.space[2]) {
-                    HStack(spacing: scale.space[1]) {
-                        if add > 0 { Text("+" + WorktreeRowPresentation.compactCount(add)).foregroundColor(theme.color("add")) }
-                        if del > 0 { Text("−" + WorktreeRowPresentation.compactCount(del)).foregroundColor(theme.color("del")) }
+                    // The − figure sits in a fixed column, so counts end on one
+                    // edge down the list. Rows without counts reserve nothing.
+                    if add > 0 || del > 0 {
+                        HStack(spacing: scale.space[1]) {
+                            if add > 0 { Text("+" + WorktreeRowPresentation.compactCount(add)).foregroundColor(theme.color("add")) }
+                            deletionColumn(del > 0 ? "−" + WorktreeRowPresentation.compactCount(del) : "")
+                        }
+                        .fixedSize()
+                        .help("\(add) lines added, \(del) lines deleted")
                     }
-                    .help(add > 0 || del > 0 ? "\(add) lines added, \(del) lines deleted" : "")
                     StatusBadge(status: file.status)
                 }
             }

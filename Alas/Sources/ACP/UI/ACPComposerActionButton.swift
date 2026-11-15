@@ -15,6 +15,9 @@ struct ACPComposerActionButton: View {
     var nativeSteering = false
     /// Peer composers cannot schedule on the host, so they hide the menu.
     var showsSchedule = true
+    /// An approval is waiting above, so Stop steps back to an outline and the
+    /// approval card's Allow is the one filled action on screen.
+    var defersToApproval = false
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -118,11 +121,11 @@ struct ACPComposerActionButton: View {
             .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .fill(theme.color("del").opacity(0.15))
+                    .fill(theme.color("del").opacity(defersToApproval ? 0 : 0.15))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: scale.radius.medium)
-                    .strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
+                    .strokeBorder(theme.color("del").opacity(defersToApproval ? 0.30 : 0.45), lineWidth: 0.75)
             )
         }
         .buttonStyle(.plain)

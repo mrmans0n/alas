@@ -16,6 +16,17 @@ enum WorktreeRowPresentation {
         return false
     }
 
+    /// A branch name split at its last slash: "nacho/fix-x" reads as a dim
+    /// "nacho/" and the part that tells siblings apart. Names without a
+    /// slash, or ending in one, have no prefix.
+    nonisolated static func nameParts(_ title: String) -> (prefix: String, leaf: String) {
+        guard let slash = title.lastIndex(of: "/"), title.index(after: slash) < title.endIndex else {
+            return ("", title)
+        }
+        let cut = title.index(after: slash)
+        return (String(title[..<cut]), String(title[cut...]))
+    }
+
     /// Short enough to sit beside a name: "5m", "3h", "2d".
     nonisolated static func compactAge(since date: Date, now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))

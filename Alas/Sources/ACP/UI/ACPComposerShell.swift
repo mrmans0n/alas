@@ -677,7 +677,8 @@ struct ACPComposer: View {
             onSchedule: { actions.submitWithIntent?(.schedule($0)) },
             queueBadgeCount: session.visibleQueueCount,
             queueByDefault: sendOnEnter,
-            nativeSteering: session.canSteerRunningTurn
+            nativeSteering: session.canSteerRunningTurn,
+            defersToApproval: session.transcript.pendingPermission != nil
         )
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)

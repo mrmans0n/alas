@@ -103,6 +103,10 @@ struct ChangesPreparationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             header
+            // A failure leads the card: it is what needs you before any action.
+            if let notice = leadingFailureNotice {
+                ggBlockedNoticeRow(notice)
+            }
             if let landing = model.landingStatus {
                 ggLandingStatusView(landing)
             } else if let syncProgress = model.syncProgress {
@@ -131,6 +135,15 @@ struct ChangesPreparationCard: View {
         .accessibilityIdentifier("changes-preparation-card")
     }
 
+    /// A retryable gg failure, shown above the actions rather than among them.
+    private var leadingFailureNotice: ChangesPreparationModel.GGBlockedNotice? {
+        guard model.landingStatus == nil, model.syncProgress == nil,
+              !model.ggActions.isEmpty, model.showsGGCommitActions,
+              let notice = model.ggBlockedNotice, notice.offersRetry
+        else { return nil }
+        return notice
+    }
+
     @ViewBuilder
     private var prepareActions: some View {
         if let reviewAction = model.reviewAction {
@@ -142,7 +155,7 @@ struct ChangesPreparationCard: View {
                     ggReconciliationButton(reconciliationAction)
                 }
                 if let notice = model.ggBlockedNotice {
-                    ggBlockedNoticeRow(notice)
+                    if !notice.offersRetry { ggBlockedNoticeRow(notice) }
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
                         ForEach(model.ggActions, id: \.kind) { action in
@@ -517,9 +530,9 @@ struct ChangesPreparationCard: View {
         .background {
             if notice.offersRetry {
                 RoundedRectangle(cornerRadius: scale.radius.small)
-                    .fill(theme.color("warn").opacity(0.10))
+                    .fill(theme.color("warn").opacity(0.16))
                     .overlay(RoundedRectangle(cornerRadius: scale.radius.small)
-                        .strokeBorder(theme.color("warn").opacity(0.35), lineWidth: 1))
+                        .strokeBorder(theme.color("warn").opacity(0.55), lineWidth: 1))
             }
         }
         .accessibilityIdentifier("changes-preparation-gg-blocked")
