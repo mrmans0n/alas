@@ -310,7 +310,8 @@ final class TerminalService {
                 worktreePath: remoteCwd,
                 zmxSessionName: zmxSessionName,
                 keepAlive: cfg.keepSessionsAlive,
-                startupSuffix: effectiveScript.isEmpty ? nil : effectiveScript
+                startupSuffix: effectiveScript.isEmpty ? nil : effectiveScript,
+                hookSessionID: sessionId
             )
             executable = launch.executable
             args = launch.args
@@ -414,7 +415,8 @@ final class TerminalService {
                 zmxSessionName: sessionName,
                 keepAlive: cfg.keepSessionsAlive,
                 startupSuffix: context.startupScript.isEmpty ? nil : context.startupScript,
-                environment: launchContext.environment
+                environment: launchContext.environment,
+                hookSessionID: leafId
             )
             executable = launch.executable
             args = launch.args
@@ -486,8 +488,11 @@ final class TerminalService {
         }
     }
 
-    nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?, environment: [String: String] = [:]) -> (executable: String, args: [String]) {
-        let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix, environment: environment)
+    nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?, environment: [String: String] = [:], hookSessionID: String? = nil) -> (executable: String, args: [String]) {
+        let script = RemoteTerminalScript.attachScript(
+            worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive,
+            startupSuffix: startupSuffix, environment: environment, hookSessionID: hookSessionID
+        )
         let invocation = RemoteTerminalScript.surfaceInvocation(host: host, script: script)
         return (invocation.executable, invocation.args)
     }

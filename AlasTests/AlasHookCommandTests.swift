@@ -153,7 +153,7 @@ struct AlasHookCommandTests {
         let cmd = AlasHookCommand.compositeCommand(
             events: [.busy], agent: .cursor, forwardStdinAsBody: false
         )
-        #expect(cmd.hasPrefix(#"[ -n "${ALAS_SOCKET_PATH:-}" ]"#))
+        #expect(cmd.hasPrefix(#"[ -n "${ALAS_SOCKET_PATH:-}${ALAS_HOOK_EVENT_FILE:-}" ]"#))
     }
 
     @Test func sentinel_isOwnershipMarker() {
