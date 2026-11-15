@@ -138,6 +138,9 @@ jobs:
         # the app build starts.
         run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
+      - name: Test the push relay
+        run: node --test 'relay/test/*.test.js'
+
       - name: Build the iOS app
         # Also compiles AlasRemoteKit for iOS: an iOS-breaking change in the
         # shared module fails fast.
