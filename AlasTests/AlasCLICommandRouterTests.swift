@@ -378,12 +378,20 @@ struct AlasCLICommandRouterTests {
         #expect(response == .ok)
     }
 
-    @Test func switchTakesAListedHostQualifiedPath() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+    @Test(arguments: [(fromRemote: false, target: "devbox:/srv/repo"), (fromRemote: true, target: "local:/tmp/repo")])
+    func switchTakesAListedMachineQualifiedPath(fromRemote: Bool, target: String) async throws {
+        let localMain = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: "devbox", realPath: "/srv/repo"), projectId: "r1")
-        let router = Self.router(origin: current, visibleWorktrees: [current, remoteMain], linked: ["r1": "p1"])
+        let origin = fromRemote ? remoteMain : localMain
+        let router = Self.router(origin: origin, visibleWorktrees: [localMain, remoteMain], linked: ["r1": "p1"])
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "devbox:/srv/repo"))))
+        let list = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
+        guard case .text(let rows) = list else {
+            Issue.record("expected rows, got \(list)")
+            return
+        }
+        #expect(rows.contains { $0.hasSuffix(target) })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: target))))
 
         #expect(response == .ok)
     }
