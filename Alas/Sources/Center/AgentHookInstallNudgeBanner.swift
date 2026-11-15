@@ -14,12 +14,13 @@ struct AgentHookInstallNudgeBanner: View {
     @State private var resolvedNudge: HookInstallNudge?
 
     private var nudgeKey: HookInstallNudgeKey {
-        let sessionIds = terminalTab.root.leaves().map(\.sessionId)
-        let detected = sessionIds.compactMap { appState.harness.activeHarnessBySession[$0] }
-        var seen = Set<HarnessKind>()
-        let uniqueDetected = detected.filter { seen.insert($0).inserted }
+        let detected = HookInstallNudgeResolver.localDetectedHarnesses(
+            sessionIDs: terminalTab.root.leaves().map(\.sessionId),
+            harnessBySession: appState.harness.activeHarnessBySession,
+            isLocal: { appState.terminal.registry.session(for: $0)?.remoteHost == nil }
+        )
         return HookInstallNudgeKey(
-            detectedHarnesses: uniqueDetected,
+            detectedHarnesses: detected,
             dismissed: appState.config.harness.dismissedHookInstallNudges
         )
     }
