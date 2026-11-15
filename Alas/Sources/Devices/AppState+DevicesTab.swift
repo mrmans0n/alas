@@ -5,7 +5,7 @@ extension AppState {
     /// The Devices tab shows where this worktree can run VMs or the Mac has
     /// Xcode's simulator tools. Peer worktrees use their own pane and never show it.
     func devicesTabAvailable(in worktree: Worktree) -> Bool {
-        canOpenVirtualMachine(in: worktree) || devicePane.simulatorToolsFound == true
+        canOpenVirtualMachine(in: worktree) || devicePane.simulatorToolsFound == true || androidPane.control != nil
     }
 
     func vmDeviceStatus(worktreeID: String, guest: VMGuestOS) -> VMDeviceStatus {
@@ -42,7 +42,8 @@ extension AppState {
         return .resolve(
             simulators: devicePane.simulatorToolsFound == nil ? nil : devicePane.devices,
             listError: noTools ? "Install Xcode to use iOS simulators." : devicePane.listError,
-            vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving
+            vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving,
+            android: androidPane.listing
         )
     }
 }

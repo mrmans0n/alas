@@ -172,3 +172,14 @@ if [ -x "${sim_ax_source}" ]; then
     mkdir -p "${sim_ax_destination_dir}"
     rsync -a "${sim_ax_source}" "${sim_ax_destination_dir}/alas-sim-ax-settings"
 fi
+
+# scrcpy-server, pushed to Android devices to stream their screens, and its licence.
+scrcpy_source="${SRCROOT}/.build/scrcpy"
+scrcpy_destination="${destination_root}/scrcpy"
+if [ ! -f "${scrcpy_source}/scrcpy-server" ] || [ ! -f "${scrcpy_source}/LICENSE" ]; then
+    echo "embed-ghostty-resources.sh: error: scrcpy-server not found in ${scrcpy_source}" >&2
+    exit 1
+fi
+rm -rf "${scrcpy_destination}"
+mkdir -p "${scrcpy_destination}"
+rsync -a "${scrcpy_source}/scrcpy-server" "${scrcpy_source}/LICENSE" "${scrcpy_destination}/"

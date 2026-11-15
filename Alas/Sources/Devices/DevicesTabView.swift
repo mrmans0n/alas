@@ -21,6 +21,10 @@ struct DevicesTabView: View {
             guard model.simulatorToolsFound == true else { return }
             await model.pollWhileVisible()
         }
+        .task {
+            guard state.androidPane.control != nil else { return }
+            await state.androidPane.pollWhileVisible()
+        }
     }
 
     @ViewBuilder
@@ -68,6 +72,35 @@ struct DevicesTabView: View {
             )
         case .vm(let guest, let status):
             vmCard(guest, status: status, now: now)
+        case .android(let target, .ready):
+            if let device = target.device {
+                AndroidDeviceStage(device: device, client: state.androidStreams, pane: state.androidPane)
+                    .id(device.serial)
+            }
+        case .android(let target, .booting):
+            DevicesEmptyState(title: "Booting \(target.title)…", detail: "A cold boot takes about 20 seconds.")
+        case .android(let target, .shutDown):
+            let error = state.androidPane.errors[target.id]
+            DevicesEmptyState(
+                symbol: "candybarphone", title: "\(target.title) is shut down",
+                detail: error ?? "Android emulator", detailTone: error == nil ? "fg-dim" : "warn",
+                action: .init(title: "Boot", icon: "power") {
+                    rps.devicesSelection = .android(target.id)
+                    if let avd = target.avdName { Task { await state.androidPane.boot(avd: avd) } }
+                }
+            )
+        case .android(let target, .unauthorized):
+            DevicesEmptyState(
+                symbol: "lock", title: "Allow USB debugging on the phone",
+                detail: "Unlock \(target.title) and allow this Mac when it asks.",
+                action: .init(title: "Retry", icon: "arrow.clockwise") { Task { await state.androidPane.refresh() } }
+            )
+        case .android(let target, .offline):
+            DevicesEmptyState(
+                symbol: "candybarphone", title: "\(target.title) is offline",
+                detail: "Reconnect it, or restart adb with `adb kill-server`.",
+                action: .init(title: "Retry", icon: "arrow.clockwise") { Task { await state.androidPane.refresh() } }
+            )
         }
     }
 
