@@ -68,7 +68,45 @@ private struct ChangeList: View {
             commitCount: reply.commits.count, commitsTruncated: reply.commitsTruncated)
     }
 
+    @State private var error: String?
+    @State private var committing = false
+    /// Paths a Discard waits to confirm.
+    @State private var discarding: [String]?
+
+    private var canGit: Bool { workspace.canUseGit }
+
     var body: some View {
+        content
+            .safeAreaInset(edge: .bottom) {
+                if canGit {
+                    GitBar(canCommit: !reply.staged.isEmpty, running: workspace.gitRunning != nil,
+                           commit: { committing = true }, run: run)
+                }
+            }
+            .sheet(isPresented: $committing) {
+                CommitSheet { subject, body in run(.commit(subject: subject, body: body)) }
+            }
+            .confirmationDialog(
+                discarding?.count == 1 ? "Discard changes to this file?" : "Discard these changes?",
+                isPresented: Binding { discarding != nil } set: { if !$0 { discarding = nil } },
+                titleVisibility: .visible, presenting: discarding
+            ) { paths in
+                Button("Discard", role: .destructive) { run(.discard(paths: paths)) }
+            } message: { _ in
+                Text("This can't be undone.")
+            }
+            .alert("Couldn't do that", isPresented: Binding { error != nil } set: { if !$0 { error = nil } }) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(error ?? "")
+            }
+    }
+
+    private func run(_ change: RemoteGitChange) {
+        Task { if let message = await workspace.git(change) { error = message } }
+    }
+
+    @ViewBuilder private var content: some View {
         if !reply.metricsAvailable {
             ContentUnavailableView("Change metrics are unavailable for this worktree.", systemImage: "chart.bar.xaxis")
         } else if sections.isEmpty {
@@ -77,7 +115,7 @@ private struct ChangeList: View {
             List {
                 Text(summary).font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
                 ForEach(sections) { section in
-                    SwiftUI.Section(section.title) {
+                    SwiftUI.Section {
                         ForEach(RemoteChangesRules.grouped(section.files), id: \.directory) { group in
                             if !group.directory.isEmpty {
                                 Label(group.directory, systemImage: "folder")
@@ -88,9 +126,34 @@ private struct ChangeList: View {
                                     FileRow(file: file, nested: !group.directory.isEmpty)
                                 }
                                 .buttonStyle(.plain)
+                                .swipeActions(edge: .leading) {
+                                    if canGit, section.stage == "unstaged" {
+                                        Button("Stage", systemImage: "plus") { run(.stage(paths: [file.path])) }.tint(.green)
+                                    } else if canGit, section.stage == "staged" {
+                                        Button("Unstage", systemImage: "minus") { run(.unstage(paths: [file.path])) }.tint(.orange)
+                                    }
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    if canGit, section.stage == "unstaged" {
+                                        Button("Discard", systemImage: "trash", role: .destructive) { discarding = [file.path] }
+                                    }
+                                }
                             }
                         }
                         ForEach(section.commits, id: \.revision) { CommitRow(commit: $0) }
+                    } header: {
+                        HStack {
+                            Text(section.title)
+                            Spacer()
+                            if canGit, let stage = section.stage {
+                                let paths = section.files.map(\.path)
+                                Button(stage == "staged" ? "Unstage All" : "Stage All") {
+                                    run(stage == "staged" ? .unstage(paths: paths) : .stage(paths: paths))
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .disabled(workspace.gitRunning != nil)
+                            }
+                        }
                     }
                 }
                 if reply.truncated {
@@ -152,5 +215,68 @@ private struct CommitRow: View {
             }
             .font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Commit and sync, under the change list.
+private struct GitBar: View {
+    let canCommit: Bool
+    let running: Bool
+    let commit: () -> Void
+    let run: (RemoteGitChange) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button("Commit…", systemImage: "checkmark.circle", action: commit)
+                .buttonStyle(.borderedProminent)
+                .disabled(!canCommit || running)
+            Spacer(minLength: 0)
+            if running { ProgressView() }
+            Menu {
+                Button("Push", systemImage: "arrow.up") { run(.push) }
+                Button("Pull", systemImage: "arrow.down") { run(.pull) }
+                Button("Fetch", systemImage: "arrow.clockwise") { run(.fetch) }
+            } label: {
+                Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.bordered)
+            .disabled(running)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 12).padding(.bottom, 4)
+    }
+}
+
+/// A commit message for what is staged.
+private struct CommitSheet: View {
+    let commit: (_ subject: String, _ body: String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var subject = ""
+    @State private var message = ""
+    @FocusState private var subjectFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Summary", text: $subject).focused($subjectFocused)
+                TextField("Description (optional)", text: $message, axis: .vertical).lineLimit(3...10)
+            }
+            .navigationTitle("Commit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Commit") {
+                        commit(subject.trimmingCharacters(in: .whitespacesAndNewlines),
+                               message.trimmingCharacters(in: .whitespacesAndNewlines))
+                        dismiss()
+                    }
+                    .disabled(subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .onAppear { subjectFocused = true }
     }
 }
