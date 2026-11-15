@@ -9,7 +9,10 @@ public enum RemoteTerminalHarness {
         let parent: Int
         let group: Int
         let foregroundGroup: Int
-        let executable: String
+        /// The process name, then the resolved executable link when the host sends one.
+        let executables: [String]
+
+        var kind: HarnessKind? { executables.lazy.compactMap(RemoteTerminalHarness.matchExecutable).first }
 
         init?(_ line: Substring) {
             let columns = line.split(maxSplits: 4, whereSeparator: \.isWhitespace)
@@ -21,9 +24,10 @@ public enum RemoteTerminalHarness {
             self.group = group
             self.foregroundGroup = foregroundGroup
             // Linux appends this suffix when an update unlinks the running binary.
-            let path = columns[4]
             let deletedSuffix = " (deleted)"
-            self.executable = String(path.hasSuffix(deletedSuffix) ? path.dropLast(deletedSuffix.count) : path)
+            self.executables = columns[4].split(separator: "\t").map { path in
+                String(path.hasSuffix(deletedSuffix) ? path.dropLast(deletedSuffix.count) : path)
+            }
         }
     }
 
@@ -56,17 +60,17 @@ public enum RemoteTerminalHarness {
                   shell.foregroundGroup > 0, let foreground = byPID[shell.foregroundGroup],
                   foreground.group == shell.foregroundGroup else { continue }
             groupsByName[session.name] = foreground.group
-            if let kind = matchExecutable(foreground.executable) {
+            if let kind = foreground.kind {
                 result.agents[session.name] = kind
                 continue
             }
 
             let candidates = Set(foregroundChildren(of: foreground).flatMap { child -> [HarnessKind] in
-                if let kind = matchExecutable(child.executable) { return [kind] }
+                if let kind = child.kind { return [kind] }
                 // A noninteractive zmx shell can share its foreground group
                 // with a launcher and the native executable it starts.
                 guard foreground.pid == shellPID else { return [] }
-                return foregroundChildren(of: child).compactMap { matchExecutable($0.executable) }
+                return foregroundChildren(of: child).compactMap(\.kind)
             })
             if candidates.count == 1 { result.agents[session.name] = candidates.first }
         }
@@ -155,7 +159,8 @@ public enum RemoteTerminalHarness {
     /// One batch SSH request per host. The host takes a single process snapshot and
     /// returns only the monitored sessions, the rows their detection needs, and
     /// their hook mailboxes. On Linux, comm can truncate executable names, so
-    /// resolve the executable link for those rows when available.
+    /// those rows also carry the resolved executable link after a tab. comm stays
+    /// first: an interpreter-backed agent is recognizable only by its name.
     static func observeSnapshot(host: String, namesByID: [String: String]) async throws -> Snapshot {
         guard !namesByID.isEmpty else { return Snapshot() }
         let marker = "__ALAS_REMOTE_PROCESS_TABLE__"
@@ -174,10 +179,11 @@ public enum RemoteTerminalHarness {
         \#(selectRowsScript)
         printf '%s\n' "$rows" | {
             while read -r pid parent group foreground executable; do
+                resolved=
                 if [ "$group" = "$foreground" ] && [ "$group" -gt 0 ] && [ -L "/proc/$pid/exe" ]; then
-                    resolved=$(readlink "/proc/$pid/exe" 2>/dev/null) && executable="$resolved"
+                    resolved=$(readlink "/proc/$pid/exe" 2>/dev/null) || resolved=
                 fi
-                printf '%s %s %s %s %s\n' "$pid" "$parent" "$group" "$foreground" "$executable"
+                printf '%s %s %s %s %s\t%s\n' "$pid" "$parent" "$group" "$foreground" "$executable" "$resolved"
             done
         }
         printf '%s\n' '\#(hookMarker)'

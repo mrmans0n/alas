@@ -48,9 +48,10 @@ struct RemoteTerminalHarnessTests {
 
     @Test(arguments: [
         ("aifx", 102, "/home/user/.local/bin/claude", HarnessKind.claudeCode as HarnessKind?),
-        ("aifx", 102, "/home/user/.local/share/claude/versions/2.1.325 (deleted)", .claudeCode),
+        ("aifx", 102, "2.1.325\t/home/user/.local/share/claude/versions/2.1.325 (deleted)", .claudeCode),
         ("aifx", 103, "/home/user/.local/bin/claude", nil),
         ("wrapper", 102, "/opt/codex/bin/codex", .codex),
+        ("wrapper", 102, "gemini\t/usr/bin/node", .gemini),
         ("wrapper", 102, "/usr/bin/vim", nil),
     ])
     func recognizesAgentsBehindLaunchersInTheForegroundGroup(
