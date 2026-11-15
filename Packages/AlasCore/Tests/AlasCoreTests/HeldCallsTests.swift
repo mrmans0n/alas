@@ -14,18 +14,13 @@ struct HeldCallsTests {
         }
     }
 
-    private func waitUntil(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<1000 where !condition() { await Task.yield() }
-        #expect(condition())
-    }
-
     @Test func releasesInArrivalOrderRunningOnReleaseFirst() async throws {
         let holds = HeldCalls(sleep: Self.untilCancelled)
         var released: [String] = []
         var outcomes: [Task<HeldCalls.Outcome, Never>] = []
         for session in ["a", "b", "c"] {
             outcomes.append(Task { await holds.hold("vm", sessionID: session) { released.append(session) } })
-            try await waitUntil { holds.waiting("vm").last == session }
+            try await eventually { await holds.waiting("vm").last == session }
         }
         holds.releaseAll("vm")
         #expect(released == ["a", "b", "c"])
@@ -42,12 +37,12 @@ struct HeldCallsTests {
     @Test func aCancelledHoldLeavesTheQueue() async throws {
         let holds = HeldCalls(sleep: Self.untilCancelled)
         let first = Task { await holds.hold("vm", sessionID: "a") }
-        try await waitUntil { holds.waiting("vm") == ["a"] }
+        try await eventually { await holds.waiting("vm") == ["a"] }
         let second = Task { await holds.hold("vm", sessionID: "b") }
-        try await waitUntil { holds.waiting("vm") == ["a", "b"] }
+        try await eventually { await holds.waiting("vm") == ["a", "b"] }
         first.cancel()
         #expect(await first.value == .cancelled)
-        try await waitUntil { holds.waiting("vm") == ["b"] }
+        try await eventually { await holds.waiting("vm") == ["b"] }
         holds.releaseAll("vm")
         #expect(await second.value == .released)
     }
@@ -55,7 +50,7 @@ struct HeldCallsTests {
     @Test func keysAreIndependent() async throws {
         let holds = HeldCalls(sleep: Self.untilCancelled)
         let other = Task { await holds.hold("y", sessionID: "a") }
-        try await waitUntil { holds.waiting("y") == ["a"] }
+        try await eventually { await holds.waiting("y") == ["a"] }
         holds.releaseAll("x")
         #expect(holds.waiting("y") == ["a"])
         holds.releaseAll("y")
