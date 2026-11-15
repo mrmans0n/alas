@@ -18,8 +18,8 @@ GPS route playback and session record/replay are decided after I.
 
 - Emulators and connected phones both show. Only AVDs can be booted.
 - Alas boots an AVD headless; the screen lives in the Devices tab.
-- Shut Down stops an emulator (`adb emu kill`); for a phone it reads
-  Disconnect and only stops streaming.
+- Shut Down stops an emulator (`adb emu kill`). A phone has nothing to shut
+  down, so its toolbar has no Shut Down.
 - The scrcpy client is written in Swift, in the app (approach A). The SDK's
   `adb` and `emulator` are the user's; Alas bundles only `scrcpy-server`.
 - Beyond the screen and input, G includes rotate, ⌘C/⌘V, screenshot, screen
@@ -66,8 +66,8 @@ GPS route playback and session record/replay are decided after I.
   started detached so it outlives Alas, as simulators do. Alas waits for the
   device and `sys.boot_completed`; a failed boot shows the emulator's last
   log lines.
-- **Shut down.** The toolbar's ⋯ menu: Shut Down runs `adb -s <serial> emu
-  kill` for an emulator; for a phone it is Disconnect.
+- **Shut down.** The toolbar's ⋯ menu, for an emulator: Shut Down runs
+  `adb -s <serial> emu kill` and selects the AVD's row again.
 - **Agents.** None in G: no driver pill on Android until H.
 
 ## Streaming
@@ -129,7 +129,7 @@ GPS route playback and session record/replay are decided after I.
 - **Record.** `adb shell screenrecord --time-limit 180
   /sdcard/alas-<id>.mp4`. Stop sends it SIGINT; Alas pulls the file to the
   Desktop and deletes it from the device. At the 3-minute limit it stops by
-  itself and is saved the same way, with a notice that it hit the limit.
+  itself and is saved the same way.
 - **Drop an `.apk`.** `adb install -r -t`, then launch: the package comes
   from `aapt2 dump packagename` (the SDK's newest build-tools), the launch
   from `adb shell monkey -p <package> -c android.intent.category.LAUNCHER 1`.
