@@ -590,7 +590,7 @@ final class LabHost {
     }
 
     private nonisolated static func exchange(_ payload: Data, path: String) throws -> CLIAnswer {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         defer { close(fd) }
         var patience = timeval(tv_sec: 180, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &patience, socklen_t(MemoryLayout<timeval>.size))
@@ -919,7 +919,7 @@ final class PeerLab {
 
     /// A port nothing listens on now, for a host to bind on every interface.
     static func freePort() throws -> UInt16 {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = socket(AF_INET, streamSocketType, 0)
         defer { close(fd) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)

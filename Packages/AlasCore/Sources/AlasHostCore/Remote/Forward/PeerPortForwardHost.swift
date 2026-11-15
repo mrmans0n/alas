@@ -1,6 +1,5 @@
 import AlasRemoteKit
 import Foundation
-import Network
 import AlasFeatures
 import Observation
 
@@ -9,7 +8,7 @@ import Observation
 /// it. Streams belong to the peer connection that opened them and end with
 /// it.
 ///
-/// `@unchecked Sendable` because all mutable state, and every `NWConnection`
+/// `@unchecked Sendable` because all mutable state, and every connection
 /// callback, is confined to `queue`.
 public final class PeerPortForwardHost: @unchecked Sendable {
     public typealias Send = @Sendable (_ connectionID: UUID, _ event: PeerPortForwardEvent) -> Void
@@ -25,7 +24,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
 
     private final class Stream: @unchecked Sendable {
         let runID: String
-        var connection: NWConnection?
+        var connection: (any TCPStream)?
         var opened = false
         var reading = false
         /// Bytes the Mac still lets the host send.
@@ -48,7 +47,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     private var streams: [Key: Stream] = [:]
     /// Run sockets the Mac closed, still writing out what it sent. They count
     /// against the caps until cancelled.
-    private var draining: [Key: (connection: NWConnection, runID: String)] = [:]
+    private var draining: [Key: (connection: any TCPStream, runID: String)] = [:]
 
     /// `resolve` returns the endpoint host and port of `runID` only while it
     /// is the current active `.running` run of its worktree with a loopback
@@ -154,41 +153,39 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         // Closed while resolving.
         guard streams[key] === stream else { return }
         guard let target, PeerPortForwardEndpoint.isLoopbackHost(target.host), target.port > 0,
-              let nwPort = UInt16(exactly: target.port).flatMap(NWEndpoint.Port.init(rawValue:))
+              let tcpPort = UInt16(exactly: target.port)
         else {
             streams[key] = nil
             return send(key.connection, .refused(stream: key.stream, message: Self.notRunningMessage))
         }
         let port = target.port
-        let host = NWEndpoint.Host(PeerPortForwardEndpoint.dialHost(target.host))
-        let connection = NWConnection(host: host, port: nwPort, using: .tcp)
+        let connection = TCP.connect(host: PeerPortForwardEndpoint.dialHost(target.host), port: tcpPort)
         stream.connection = connection
-        connection.stateUpdateHandler = { [weak self, weak stream] state in
+        connection.start(queue: queue) { [weak self, weak stream] state in
             guard let self, let stream, self.streams[key] === stream else { return }
             switch state {
             case .ready where !stream.opened:
                 stream.opened = true
                 send(key.connection, .opened(stream: key.stream))
                 read(key, stream)
-            case .waiting, .failed:
+            case .failed:
                 guard stream.opened else {
                     drop(key)
                     return send(key.connection, .refused(stream: key.stream, message: "The run isn't accepting connections on port \(port)."))
                 }
                 close(key)
-            default:
+            case .ready, .cancelled:
                 break
             }
         }
-        connection.start(queue: queue)
     }
 
     /// Reads the run's socket while the Mac's window has room.
     private func read(_ key: Key, _ stream: Stream) {
         guard stream.opened, !stream.reading, stream.sendWindow > 0, let connection = stream.connection else { return }
         stream.reading = true
-        connection.receive(minimumIncompleteLength: 1, maximumLength: min(limits.maxChunk, stream.sendWindow)) {
-            [weak self, weak stream] data, _, isComplete, error in
+        connection.receive(maximumLength: min(limits.maxChunk, stream.sendWindow)) {
+            [weak self, weak stream] data, isComplete, error in
             guard let self, let stream, self.streams[key] === stream else { return }
             stream.reading = false
             if let data, !data.isEmpty {
@@ -208,12 +205,12 @@ public final class PeerPortForwardHost: @unchecked Sendable {
               stream.unwritten + bytes.count <= limits.window
         else { return close(key) }
         stream.unwritten += bytes.count
-        connection.send(content: bytes, completion: .contentProcessed { [weak self, weak stream] error in
+        connection.send(bytes) { [weak self, weak stream] error in
             guard let self, let stream, self.streams[key] === stream else { return }
             guard error == nil else { return close(key) }
             stream.unwritten -= bytes.count
             send(key.connection, .credit(stream: key.stream, bytes: bytes.count))
-        })
+        }
     }
 
     /// Ends a stream. One that never opened is refused, so the Mac doesn't
@@ -230,10 +227,10 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         guard stream.opened, let connection = stream.connection else { return drop(key) }
         streams[key] = nil
         draining[key] = (connection, stream.runID)
-        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
+        connection.finish { [weak self] in
             if self?.draining[key]?.connection === connection { self?.draining[key] = nil }
             connection.cancel()
-        })
+        }
     }
 
     private func send(_ connectionID: UUID, _ event: PeerPortForwardEvent) {

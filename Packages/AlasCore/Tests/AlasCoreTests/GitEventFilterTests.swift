@@ -48,7 +48,9 @@ struct GitEventFilterTests {
             gitDir: repoGit,
             worktreeRoot: tmp.appendingPathComponent("repo")
         )
-        #expect(cat == .headChange(worktreeRoot.standardizedFileURL))
+        // A directory URL, as the classifier derives it: whether a URL built from a path
+        // ends in `/` depends on the platform looking at the disk.
+        #expect(cat == .headChange(URL(fileURLWithPath: worktreeRoot.path, isDirectory: true).standardizedFileURL))
     }
 
     @Test func classifiesWorktreesDirectoryAsTopology() {

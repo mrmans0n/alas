@@ -1,3 +1,5 @@
+// Bonjour discovery, and pairing with what it finds, need Apple's Network framework.
+#if canImport(Network)
 import Crypto
 import Foundation
 import AlasFoundation
@@ -319,3 +321,4 @@ public final class RemotePairingApprovalClient {
         }
     }
 }
+#endif

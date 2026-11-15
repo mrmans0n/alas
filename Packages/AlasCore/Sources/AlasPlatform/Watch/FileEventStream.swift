@@ -24,11 +24,15 @@ public final class FileEventStream: @unchecked Sendable {
 
     /// `fileEvents` asks for per-file paths rather than per-directory ones
     /// where the platform makes the difference (FSEvents). `latency` is how
-    /// long events coalesce into one batch. Nil when no watch could be set up.
+    /// long events coalesce into one batch. `recursive: false` watches only
+    /// the roots' own entries where the platform makes the difference
+    /// (inotify; FSEvents always covers the tree). Nil when no watch could be
+    /// set up.
     public init?(
         paths: [String],
         fileEvents: Bool,
         latency: TimeInterval = 0.5,
+        recursive: Bool = true,
         queue: DispatchQueue,
         handler: @escaping Handler
     ) {
@@ -41,7 +45,8 @@ public final class FileEventStream: @unchecked Sendable {
         FSEventStreamStart(stream)
         self.stream = stream
         #else
-        guard let tree = InotifyTree(roots: paths, latency: latency, queue: queue, handler: handler) else { return nil }
+        guard let tree = InotifyTree(roots: paths, latency: latency, recursive: recursive, queue: queue, handler: handler)
+        else { return nil }
         inotify = tree
         #endif
     }
@@ -151,6 +156,7 @@ private final class InotifyTree: @unchecked Sendable {
     /// inotify doesn't follow, and callers expect paths under the root they gave.
     private let roots: [(given: String, resolved: String)]
     private let latency: TimeInterval
+    private let recursive: Bool
     private let queue: DispatchQueue
     private let handler: FileEventStream.Handler
     private var source: DispatchSourceRead?
@@ -161,10 +167,14 @@ private final class InotifyTree: @unchecked Sendable {
     private var flushScheduled = false
     private var warnedAboutLimit = false
 
-    init?(roots: [String], latency: TimeInterval, queue: DispatchQueue, handler: @escaping FileEventStream.Handler) {
+    init?(
+        roots: [String], latency: TimeInterval, recursive: Bool, queue: DispatchQueue,
+        handler: @escaping FileEventStream.Handler
+    ) {
         fd = inotify_init1(Int32(IN_NONBLOCK | IN_CLOEXEC))
         guard fd >= 0 else { return nil }
         self.latency = latency
+        self.recursive = recursive
         self.queue = queue
         self.handler = handler
         self.roots = roots.map { ($0, URL(fileURLWithPath: $0).resolvingSymlinksInPath().path) }
@@ -188,7 +198,7 @@ private final class InotifyTree: @unchecked Sendable {
     }
 
     private func addTree(_ root: String) {
-        guard addWatch(root) else { return }
+        guard addWatch(root), recursive else { return }
         let enumerator = FileManager.default.enumerator(
             at: URL(fileURLWithPath: root),
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
@@ -263,7 +273,7 @@ private final class InotifyTree: @unchecked Sendable {
         }
         let createdDirectory = event.mask & UInt32(IN_ISDIR) != 0
             && event.mask & UInt32(IN_CREATE | IN_MOVED_TO) != 0
-        if createdDirectory {
+        if createdDirectory, recursive {
             addTree(path)
         }
     }

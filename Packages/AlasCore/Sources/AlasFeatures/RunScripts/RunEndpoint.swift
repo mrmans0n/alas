@@ -134,7 +134,7 @@ public enum RunPortProbe: Sendable {
     }
 
     private static func isIPv4PortInUse(_ port: Int) -> Bool {
-        let descriptor = socket(AF_INET, streamSocketType, 0)
+        let descriptor = streamSocket(AF_INET)
         guard descriptor >= 0 else { return false }
         defer { Foundation.close(descriptor) }
         var address = sockaddr_in()
@@ -153,7 +153,7 @@ public enum RunPortProbe: Sendable {
     }
 
     private static func isIPv6PortInUse(_ port: Int) -> Bool {
-        let descriptor = socket(AF_INET6, streamSocketType, 0)
+        let descriptor = streamSocket(AF_INET6)
         guard descriptor >= 0 else { return false }
         defer { Foundation.close(descriptor) }
         var address = sockaddr_in6()

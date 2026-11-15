@@ -1,3 +1,5 @@
+// Covers a macOS-only feature.
+#if os(macOS)
 import Foundation
 import Testing
 @testable import AlasPlatform
@@ -248,3 +250,4 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
     }
 }
+#endif

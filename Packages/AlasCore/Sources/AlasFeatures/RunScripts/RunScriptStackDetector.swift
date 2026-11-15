@@ -1625,9 +1625,9 @@ public enum RunScriptStackDetector: Sendable {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT"]
         process.currentDirectoryURL = worktreeRoot
-        let output = Pipe()
+        let output = Pipe.closingOnExec()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = Pipe.closingOnExec()
         do {
             try process.run()
             let deadline = Date().addingTimeInterval(0.25)
@@ -2489,9 +2489,9 @@ public enum RunScriptStackDetector: Sendable {
             "-c",
             "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'); print(platform.machine())",
         ]
-        let output = Pipe()
+        let output = Pipe.closingOnExec()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = Pipe.closingOnExec()
         do {
             try process.run()
             let deadline = Date().addingTimeInterval(1)

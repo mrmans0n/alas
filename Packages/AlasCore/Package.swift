@@ -4,6 +4,8 @@ import PackageDescription
 let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto")
 /// Apple's SDKs ship an `SQLite3` module; Linux gets the system library through `CSQLite`.
 let sqlite: Target.Dependency = .target(name: "CSQLite", condition: .when(platforms: [.linux]))
+/// Apple's SDKs ship a `zlib` module; Linux gets the system library through `CZlib`.
+let zlib: Target.Dependency = .target(name: "CZlib", condition: .when(platforms: [.linux]))
 /// Linux system calls Glibc doesn't expose to Swift.
 let linuxSupport: Target.Dependency = .target(name: "CAlasLinux", condition: .when(platforms: [.linux]))
 
@@ -35,6 +37,7 @@ let package = Package(
         .target(name: "AlasRemoteKit", dependencies: [crypto]),
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
         .target(name: "CAlasLinux"),
+        .systemLibrary(name: "CZlib", pkgConfig: "zlib", providers: [.apt(["zlib1g-dev"])]),
         .target(
             name: "AlasFoundation",
             dependencies: ["AlasRemoteKit", crypto, sqlite, linuxSupport],
@@ -58,7 +61,7 @@ let package = Package(
         .target(name: "AlasSessions", dependencies: base + ["AlasACP"]),
         .target(name: "AlasAgentKit", dependencies: base + ["AlasACP", "AlasSessions"]),
         .target(name: "AlasAgents", dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit"]),
-        .target(name: "AlasHostCore", dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit", "AlasAgents"]),
+        .target(name: "AlasHostCore", dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit", "AlasAgents", zlib]),
         // The umbrella: re-exports every module, so the app imports one.
         .target(
             name: "AlasCore",

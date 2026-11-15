@@ -173,8 +173,8 @@ private struct GatedPipeFixture {
     @discardableResult
     func release() -> Bool {
         let fd = open(fifo, O_WRONLY | O_NONBLOCK)
-        if fd >= 0 { _ = "release\n".withCString { Darwin.write(fd, $0, 8) }
-        Darwin.close(fd) }
+        if fd >= 0 { _ = "release\n".withCString { Foundation.write(fd, $0, 8) }
+        Foundation.close(fd) }
         return fd >= 0
     }
     func cleanup() {

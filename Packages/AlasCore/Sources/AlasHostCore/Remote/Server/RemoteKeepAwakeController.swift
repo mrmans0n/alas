@@ -1,3 +1,4 @@
+#if canImport(IOKit)
 import Foundation
 import IOKit.pwr_mgt
 import IOKit.ps
@@ -100,3 +101,16 @@ public final class RemoteKeepAwakeController {
         return id
     }
 }
+#else
+import Foundation
+
+/// Servers on Linux don't sleep the way laptops do; there is nothing to hold awake.
+@MainActor
+public final class RemoteKeepAwakeController {
+    public init() {}
+
+    public func update(enabled: Bool, serverRunning: Bool) {}
+
+    public func powerSourceChanged() {}
+}
+#endif

@@ -196,7 +196,11 @@ struct ACPReportedChangesPresentationTests {
 
         // Reached through `/tmp`, a symlink itself, as a stored root can be.
         let physicalRoot = try #require(ACPReportedPathRoots.physicalRoot(of: root.path))
+        #if canImport(Darwin)
         #expect(physicalRoot == "/private" + root.path)
+        #else
+        #expect(physicalRoot == root.path) // `/tmp` is a real folder here
+        #endif
         #expect(ACPReportedPathRoots.physicalRoot(of: root.path + "/self") == physicalRoot)
         #expect(ACPReportedPathRoots.physicalRoot(of: root.path + "/gone") == nil)
         #expect(ACPReportedPathRoots.physicalRoot(of: Self.remoteRoot) == nil)

@@ -5,10 +5,15 @@
 // the environment is kept; a blank one, which means the everyday profile, is
 // not.
 
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#include <removefile.h>
+#else
+#define _GNU_SOURCE
+#include <ftw.h>
+#endif
 #include <ctype.h>
 #include <limits.h>
-#include <removefile.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +28,7 @@ static int is_blank(const char *value) {
     return 1;
 }
 
+#ifdef __APPLE__
 // Removes the profile and the runtime directory derived from it, named as
 // `AlasProfile.runtimeDirectory(for:uid:)` names it: the first four bytes of
 // the SHA-256 of the profile's canonical path, standardized as Foundation
@@ -44,6 +50,17 @@ static void remove_scratch_profile(void) {
     }
     removefile(scratch, NULL, REMOVEFILE_RECURSIVE);
 }
+#else
+static int remove_entry(const char *path, const struct stat *info, int flag, struct FTW *walk) {
+    (void)info; (void)flag; (void)walk;
+    return remove(path);
+}
+
+// Removes the profile. Its runtime directory lives in /tmp, which CI throws away.
+static void remove_scratch_profile(void) {
+    nftw(scratch, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+}
+#endif
 
 __attribute__((constructor)) static void use_scratch_profile(void) {
     const char *set = getenv("ALAS_APP_SUPPORT_DIR");

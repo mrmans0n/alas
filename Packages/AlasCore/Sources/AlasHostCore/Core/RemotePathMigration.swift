@@ -197,7 +197,7 @@ public enum RemotePathMigration: Sendable {
         do {
             let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
             let rewritten = rewriter.rewrite(object)
-            guard !(rewritten as AnyObject).isEqual(object) else { return true }
+            guard !jsonValuesEqual(rewritten, object) else { return true }
             try JSONSerialization.data(withJSONObject: rewritten, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
                 .write(to: url, options: .atomic)
             return true
@@ -242,7 +242,7 @@ public enum RemotePathMigration: Sendable {
             guard let id = row["child_session_id"] as? String, let data = row["worktree_request"] as? Data,
                   let object = try? JSONSerialization.jsonObject(with: data) else { continue }
             let rewritten = rewriter.rewrite(object)
-            guard !(rewritten as AnyObject).isEqual(object) else { continue }
+            guard !jsonValuesEqual(rewritten, object) else { continue }
             try db.exec(
                 "UPDATE delegations SET worktree_request = ? WHERE child_session_id = ?",
                 bindings: [try JSONSerialization.data(withJSONObject: rewritten), id]

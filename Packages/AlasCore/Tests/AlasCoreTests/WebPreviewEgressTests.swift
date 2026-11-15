@@ -1,3 +1,5 @@
+// Covers a macOS-only feature.
+#if os(macOS)
 import Foundation
 import Network
 import Synchronization
@@ -77,7 +79,7 @@ struct WebPreviewEgressTests {
     ] as [(String, String, Bool, String?)])
     func theProxyConnectsOnlyToVettedAddresses(request: String, status: String, echoes: Bool, credentials: String?) async throws {
         let lan = try Self.lanAddress()
-        let echo = try await EchoServer.start(host: "0.0.0.0")
+        let echo = try await EchoServer.start(host: .any)
         let loopback = try await EchoServer.start()
         defer {
             echo.stop()
@@ -115,8 +117,8 @@ struct WebPreviewEgressTests {
     /// host would be. Several tunnels at once, since the loss depended on
     /// timing.
     @Test func aClosingServersLastBytesReachTheClient() async throws {
-        let server = socket(AF_INET, SOCK_STREAM, 0)
-        defer { Darwin.close(server) }
+        let server = socket(AF_INET, streamSocketType, 0)
+        defer { Foundation.close(server) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -138,7 +140,7 @@ struct WebPreviewEgressTests {
                 for part in [reply, body] {
                     _ = part.withCString { write(connection, $0, strlen($0)) }
                 }
-                Darwin.close(connection)
+                Foundation.close(connection)
             }
         }
         let lan = try Self.lanAddress()
@@ -217,8 +219,8 @@ struct WebPreviewEgressTests {
     /// the tunnel still gives its slot back once `linger` passes.
     @Test(arguments: [DispatchTimeInterval.nanoseconds(0), .milliseconds(200)])
     func aHalfClosedTunnelGivesItsSlotBack(linger: DispatchTimeInterval) async throws {
-        let server = socket(AF_INET, SOCK_STREAM, 0)
-        defer { Darwin.close(server) }
+        let server = socket(AF_INET, streamSocketType, 0)
+        defer { Foundation.close(server) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -233,7 +235,7 @@ struct WebPreviewEgressTests {
         Thread.detachNewThread {
             let connection = accept(server, nil, nil)
             _ = write(connection, "bye", 3)
-            Darwin.close(connection)
+            Foundation.close(connection)
         }
         let lan = try Self.lanAddress()
         let proxy = WebPreviewEgressProxy(resolve: { _ in [lan] }, localAddresses: { [] }, maxTunnels: 1,
@@ -297,3 +299,4 @@ struct WebPreviewEgressTests {
         "Proxy-Authorization: Basic \(Data("\(WebPreviewEgressProxy.username):\(proxy.password)".utf8).base64EncodedString())\r\n"
     }
 }
+#endif

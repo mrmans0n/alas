@@ -162,7 +162,7 @@ public struct ProcessGGCommandRunner: GGCommandRunning, Sendable {
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let processTreeID = UUID().uuidString
-            let launchGate = Pipe()
+            let launchGate = Pipe.closingOnExec()
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             // Job control assigns the gated child its own process group before
@@ -180,8 +180,8 @@ public struct ProcessGGCommandRunner: GGCommandRunning, Sendable {
             var processEnvironment = env ?? ProcessInfo.processInfo.environment
             processEnvironment["ALAS_GG_PROCESS_TREE_ID"] = processTreeID
             process.environment = processEnvironment
-            let outPipe = Pipe()
-            let errPipe = Pipe()
+            let outPipe = Pipe.closingOnExec()
+            let errPipe = Pipe.closingOnExec()
             process.standardOutput = outPipe
             process.standardError = errPipe
 

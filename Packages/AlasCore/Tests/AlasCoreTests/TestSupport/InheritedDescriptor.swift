@@ -4,7 +4,11 @@ import Foundation
 /// child another thread is spawning does until its exec closes it. A lock
 /// released by `close` alone stays held for that long.
 func withChildHolding<T>(_ descriptor: Int32, _ body: () throws -> T) throws -> T {
+    #if canImport(Darwin)
     var actions: posix_spawn_file_actions_t?
+    #else
+    var actions = posix_spawn_file_actions_t()
+    #endif
     posix_spawn_file_actions_init(&actions)
     defer { posix_spawn_file_actions_destroy(&actions) }
     // dup2 onto another number clears close-on-exec on the child's copy; onto

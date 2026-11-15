@@ -74,9 +74,9 @@ extension Process {
         if let env { process.environment = env }
 
         let stdinWriter = stdin.map(StdinPipeWriter.init)
-        let inputPipe = stdinWriter.map { _ in Pipe() }
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let inputPipe = stdinWriter.map { _ in Pipe.closingOnExec() }
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         if let inputPipe { process.standardInput = inputPipe } else { process.neverPromptsOnStandardInput() }
         process.standardOutput = outPipe
         process.standardError = errPipe
@@ -100,7 +100,7 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
             } else {
                 outAccum.append(data)
@@ -109,7 +109,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -365,8 +365,8 @@ extension Process {
         if let cwd = invocation.cwd { process.currentDirectoryURL = cwd }
         if let env = invocation.env { process.environment = env }
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -377,19 +377,19 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 return
             }
             outAccum.append(data)
             if outAccum.snapshot().count >= maxBytes {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 terminateProcessWithEscalation(process)
             }
         }
         errPipe.fileHandleForReading.readabilityHandler = { handle in
-            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
+            if handle.availableData.isEmpty { stopReading(handle) }
         }
 
         do {
@@ -480,8 +480,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -494,13 +494,13 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 return
             }
             outAccum.append(data)
             if outAccum.snapshot().count >= maxOutputBytes {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
                 truncatedFlag.mark()
                 terminateProcessWithEscalation(process)
@@ -509,7 +509,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -622,8 +622,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -636,12 +636,12 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 outAccum.markClosed()
             } else {
                 outAccum.append(data)
                 if let maxOutputBytes, outAccum.snapshot().count > maxOutputBytes {
-                    handle.readabilityHandler = nil
+                    stopReading(handle)
                     tooLargeFlag.mark()
                     outAccum.markClosed()
                     terminateProcessWithEscalation(process)
@@ -651,7 +651,7 @@ extension Process {
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                handle.readabilityHandler = nil
+                stopReading(handle)
                 errAccum.markClosed()
             } else {
                 errAccum.append(data)
@@ -715,6 +715,16 @@ extension Process {
 }
 
 private let maximumFoundationProcessArgumentCount = 4096
+
+/// Stops reading a pipe from inside its readability handler and closes the read
+/// end: nothing else closes it on Linux, so each call would keep the descriptor
+/// for the life of the process. Not inline, since `close()` syncs onto the
+/// handle's queue, which runs this handler; nor from the caller, whose wait for
+/// EOF can time out while a handler still holds that queue.
+private func stopReading(_ handle: FileHandle) {
+    handle.readabilityHandler = nil
+    DispatchQueue.global().async { try? handle.close() }
+}
 
 private func validateLaunchConfiguration(executable: String, args: [String], cwd: URL?) throws {
     guard FileManager.default.isExecutableFile(atPath: executable) else {
@@ -939,8 +949,7 @@ private final class StdinPipeWriter: @unchecked Sendable {
             closed = true
             handle = nil
             lock.unlock()
-            writeHandle.writeabilityHandler = nil
-            try? writeHandle.close()
+            Self.finish(writeHandle)
             return
         }
         let end = min(offset + chunkSize, data.count)
@@ -957,9 +966,16 @@ private final class StdinPipeWriter: @unchecked Sendable {
             writeHandle.write(chunk)
         }
         if didFinish {
-            writeHandle.writeabilityHandler = nil
-            try? writeHandle.close()
+            Self.finish(writeHandle)
         }
+    }
+
+    /// Called from the writeability handler, which on Linux runs on the
+    /// handle's own queue: closing there waits on that queue and traps, so
+    /// the close happens elsewhere.
+    private static func finish(_ writeHandle: FileHandle) {
+        writeHandle.writeabilityHandler = nil
+        DispatchQueue.global(qos: .utility).async { try? writeHandle.close() }
     }
 }
 

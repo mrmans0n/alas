@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -12,11 +14,11 @@ import AlasAgents
 /// `/ws` requests to WebSocket, bridging each to a `RemoteSessionGateway`.
 ///
 /// `@MainActor`-confined for its public surface (start/stop/port and the
-/// connection table); `NWListener`/`NWConnection` callbacks arrive on the
+/// connection table); listener and connection callbacks arrive on the
 /// serial `queue` and hop back to MainActor before touching state.
 @MainActor
 public final class RemoteServer {
-    private var listener: NWListener?
+    private var listener: (any TCPListener)?
     private let queue = DispatchQueue(label: "io.alas.remote.server")
     private var connections: [ObjectIdentifier: RemoteConnection] = [:]
     /// Maps each authenticated connection to the device it logged in as, so a
@@ -149,20 +151,10 @@ public final class RemoteServer {
         stop()
         if desired != 0 { didFallback = false }
         self.loopbackOnly = loopbackOnly
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-        let endpointPort: NWEndpoint.Port = desired == 0 ? .any : (NWEndpoint.Port(rawValue: desired) ?? .any)
-        let listener: NWListener
-        if loopbackOnly {
-            params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: endpointPort)
-            listener = try NWListener(using: params)
-        } else {
-            listener = try NWListener(using: params, on: endpointPort)
-        }
-        listener.stateUpdateHandler = { [weak self] state in
+        let listener = try TCP.listener(host: loopbackOnly ? .loopbackV4 : .any, port: desired)
+        let onState: @Sendable (TCPListenerState) -> Void = { [weak self] state in
             switch state {
-            case .ready:
-                let assigned = listener.port?.rawValue
+            case .ready(let assigned):
                 Task { @MainActor in
                     // Ignore events from a superseded listener (e.g. the old one's
                     // late `.cancelled` after a port-fallback) so they can't wipe
@@ -188,16 +180,13 @@ public final class RemoteServer {
                     self.port = nil
                     self.onPortChange?(nil)
                 }
-            default:
-                break
             }
         }
-        listener.newConnectionHandler = { [weak self] nwConn in
-            Task { @MainActor in self?.accept(nwConn) }
-        }
-        listener.service = advertisement?.service
-        listener.start(queue: queue)
         self.listener = listener
+        setService(advertisement)
+        listener.start(queue: queue, onState: onState) { [weak self] stream in
+            Task { @MainActor in self?.accept(stream) }
+        }
         let serverId = identityProvider().serverId
         if !serverId.isEmpty {
             let notifier = RemotePushNotifier(pairing: pairing, host: host, federation: federation, serverId: serverId)
@@ -232,7 +221,7 @@ public final class RemoteServer {
         listener = nil
         port = nil
         // Deterministically close in-flight sockets rather than relying on ARC
-        // to drop the NWConnections when the table clears. `cancel()` only
+        // to drop the connections when the table clears. `cancel()` only
         // queues teardown on the connection's queue, and the table clear below
         // drops the last strong reference in this same turn — so the queued
         // teardown can lose the race and the socket would die without ever
@@ -271,11 +260,18 @@ public final class RemoteServer {
 
     /// Registers (or, with nil, withdraws) this listener's Bonjour service.
     /// `NWListener.service` may be reassigned on a running listener, so this
-    /// never restarts the server or touches live connections.
+    /// never restarts the server or touches live connections. Only Apple's
+    /// Network framework advertises; elsewhere peers pair by address.
     public func advertise(_ advertisement: RemoteBonjourAdvertisement?) {
         guard self.advertisement != advertisement else { return }
         self.advertisement = advertisement
-        listener?.service = advertisement?.service
+        setService(advertisement)
+    }
+
+    private func setService(_ advertisement: RemoteBonjourAdvertisement?) {
+        #if canImport(Network)
+        (listener as? NetworkTCPListener)?.listener.service = advertisement?.service
+        #endif
     }
 
     /// Immediately closes every live connection authenticated as `deviceId`.
@@ -321,8 +317,8 @@ public final class RemoteServer {
         connections.keys.filter { connectionDevice[$0] == nil }.count
     }
 
-    private func accept(_ nwConn: NWConnection) {
-        guard connections.count < maxConnections else { nwConn.cancel()
+    private func accept(_ stream: any TCPStream) {
+        guard connections.count < maxConnections else { stream.cancel()
         return }
         let identity = self.identityProvider
         let signer = self.signer
@@ -355,7 +351,7 @@ public final class RemoteServer {
         let host = self.host
         let federation = self.federation
         let conn = RemoteConnection(
-            conn: nwConn,
+            conn: stream,
             queue: queue,
             // The CORS echo follows the current origin policy, as the
             // connection's own gate does.

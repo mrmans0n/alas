@@ -97,7 +97,7 @@ public final class RemoteTailscaleServeProcess {
 
     public let port: UInt16
     private let process = Process()
-    private let stderr = Pipe()
+    private let stderr = Pipe.closingOnExec()
 
     /// `onExit` runs on the main actor with stderr when serving stops on its
     /// own; never after `stop()`.

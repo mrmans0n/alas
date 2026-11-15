@@ -1,3 +1,5 @@
+// Bonjour discovery, and pairing with what it finds, need Apple's Network framework.
+#if canImport(Network)
 import Foundation
 import Network
 import AlasFoundation
@@ -191,3 +193,4 @@ private final class ResumeGate: @unchecked Sendable {
 
     public init() {}
 }
+#endif

@@ -1,3 +1,6 @@
+// The fixtures copy /bin/sleep under new names; on Linux it is often a multicall
+// binary (coreutils) that dispatches on its name, so the copies never run.
+#if os(macOS)
 import Darwin
 import Foundation
 import Testing
@@ -79,3 +82,4 @@ struct HarnessDetectorTests {
         #expect(HarnessDetector.matchKind(pid: launcherPID) == (childKind == .codex ? .codex : nil))
     }
 }
+#endif

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -25,6 +27,7 @@ public struct RemoteBonjourTXT: Equatable, Sendable {
         self.model = model
     }
 
+    #if canImport(Network)
     /// Nil when `id` is missing or empty, or `v` is not an integer: a record
     /// another program happened to register under our type, not an Alas peer.
     public init?(txt: NWTXTRecord) {
@@ -50,6 +53,7 @@ public struct RemoteBonjourTXT: Equatable, Sendable {
         if let model { txt[Self.modelKey] = model }
         return txt
     }
+    #endif
 }
 
 /// What `RemoteServer.advertise` registers: the name and TXT, kept as plain
@@ -58,9 +62,11 @@ public struct RemoteBonjourAdvertisement: Equatable, Sendable {
     public let displayName: String
     public let txt: RemoteBonjourTXT
 
+    #if canImport(Network)
     public var service: NWListener.Service {
         RemoteBonjourService.service(displayName: displayName, txt: txt)
     }
+    #endif
 
     public init(displayName: String, txt: RemoteBonjourTXT) {
         self.displayName = displayName
@@ -107,17 +113,23 @@ public enum RemoteBonjourService: Sendable {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    #if canImport(Network)
     public static func service(displayName: String, txt: RemoteBonjourTXT) -> NWListener.Service {
         NWListener.Service(name: serviceName(displayName), type: type, txtRecord: txt.nwTXTRecord)
     }
+    #endif
 
     /// `hw.model`, e.g. "Mac16,6". Shown beside a discovered instance's name.
     public static func hardwareModel() -> String? {
+        #if !canImport(Darwin)
+        return nil
+        #else
         var size = 0
         guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 1 else { return nil }
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
         let model = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
         return model.isEmpty ? nil : model
+        #endif
     }
 }

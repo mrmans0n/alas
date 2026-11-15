@@ -1,3 +1,5 @@
+// Bonjour discovery, and pairing with what it finds, need Apple's Network framework.
+#if canImport(Network)
 import Foundation
 import Network
 import Observation
@@ -172,3 +174,4 @@ public final class RemotePeerBrowser {
         if !results.isEmpty { lastError = nil }
     }
 }
+#endif

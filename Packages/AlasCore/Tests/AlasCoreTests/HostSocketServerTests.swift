@@ -99,7 +99,7 @@ struct HostSocketServerTests {
     @Test(.timeLimit(.minutes(1))) func aOneShotRequestReturnsAnOlderHostsRefusal() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("h-\(UUID().uuidString.prefix(8)).sock").path
         defer { unlink(path) }
-        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        let listener = socket(AF_UNIX, streamSocketType, 0)
         defer { close(listener) }
         #expect(HostSocketServer.withAddress(path, { bind(listener, $0, $1) }) == 0)
         #expect(listen(listener, 1) == 0)
@@ -136,7 +136,7 @@ final class SocketClient {
     private(set) var events: [HostEvent] = []
 
     init(path: String) throws {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, streamSocketType, 0)
         guard fd >= 0, HostSocketServer.withAddress(path, { connect(fd, $0, $1) }) == 0 else {
             throw POSIXError(.ECONNREFUSED)
         }
@@ -159,7 +159,7 @@ final class SocketClient {
     }
 
     func close() {
-        Darwin.close(fd)
+        Foundation.close(fd)
     }
 
     func request(_ request: HostRequest) async throws -> HostResponse {

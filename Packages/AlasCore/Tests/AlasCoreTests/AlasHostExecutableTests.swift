@@ -233,7 +233,8 @@ struct AlasHostExecutableTests {
         defer { client.close() }
         try await eventually {
             guard case .snapshot(let snapshot) = try? await client.request(.snapshot) else { return false }
-            return snapshot.worktrees.contains { $0.worktree.path.standardizedFileURL == repo.standardizedFileURL }
+            // By path: whether a directory URL ends in `/` depends on the platform.
+            return snapshot.worktrees.contains { $0.worktree.path.standardizedFileURL.path == repo.standardizedFileURL.path }
         }
     }
 
@@ -293,7 +294,7 @@ struct AlasHostExecutableTests {
 
     /// A port nothing listens on now, for a host to bind.
     private func freePort() throws -> UInt16 {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = socket(AF_INET, streamSocketType, 0)
         defer { close(fd) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)

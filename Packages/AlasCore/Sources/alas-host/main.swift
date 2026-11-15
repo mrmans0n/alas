@@ -157,7 +157,12 @@ if !arguments.isEmpty, !waitsForLock {
 // Opened before the lock is waited for, so an upgrade while the app holds
 // the directory is still this file's.
 let executablePath = Bundle.main.executableURL?.resolvingSymlinksInPath().path
-let executableFD: Int32 = waitsForLock ? executablePath.map { open($0, O_EVTONLY) } ?? -1 : -1
+#if canImport(Darwin)
+let watchOnly = O_EVTONLY
+#else
+let watchOnly = O_RDONLY
+#endif
+let executableFD: Int32 = waitsForLock ? executablePath.map { open($0, watchOnly) } ?? -1 : -1
 /// Whether the executable at this process's path is no longer the file it started from.
 func executableWasReplaced() -> Bool {
     guard executableFD >= 0, let executablePath else { return false }
@@ -394,7 +399,7 @@ if let listen = config.hostRemoteListen {
         for address in advertisedAddresses(port: port) where address.kind != .localhost {
             print("remote \(address.url)")
         }
-        fflush(stdout)
+        fflush(nil)
         Task { @MainActor in
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
@@ -411,7 +416,7 @@ if let listen = config.hostRemoteListen {
                 }
                 tailnetHTTPSHost = status.dnsName
                 print("remote https://\(status.dnsName)")
-                fflush(stdout)
+                fflush(nil)
             } catch {
                 FileHandle.standardError.write(Data("alas-host: cannot run tailscale serve: \(error.localizedDescription)\n".utf8))
             }
@@ -487,6 +492,7 @@ for signalNumber in [SIGINT, SIGTERM] {
     source.resume()
     stopSources.append(source)
 }
+#if canImport(Darwin)
 if executableFD >= 0 {
     let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: executableFD, eventMask: [.delete, .rename, .revoke], queue: .main)
     source.setEventHandler { MainActor.assumeIsolated { stop() } }
@@ -495,6 +501,18 @@ if executableFD >= 0 {
     // Replaced between the check after the lock and now.
     if executableWasReplaced() { stop() }
 }
+#else
+// No vnode events here: watch the executable's folder and check whether the file was swapped.
+// `stop` captures top-level state, so it isn't Sendable; the handler runs on the main queue.
+nonisolated(unsafe) let stopIfReplaced: () -> Void = { if executableWasReplaced() { stop() } }
+let executableWatch = executablePath.flatMap { path in
+    FileEventStream(
+        paths: [URL(fileURLWithPath: path).deletingLastPathComponent().path], fileEvents: true, latency: 0.2,
+        recursive: false, queue: .main
+    ) { _ in MainActor.assumeIsolated { stopIfReplaced() } }
+}
+if executableFD >= 0, executableWasReplaced() { stop() }
+#endif
 
 // Only as the launch agent, which starts the upgraded host again.
 if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePath: executablePath) {
@@ -510,11 +528,16 @@ if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePa
 }
 
 print(socket.path)
-fflush(stdout)
+fflush(nil)
 
 // The main run loop, not `dispatchMain()`: keep-awake follows power-source
 // changes through a run loop source. It serves the main queue too; the port
 // keeps it running with no other source attached.
+#if canImport(Darwin)
 RunLoop.main.add(Port(), forMode: .default)
+#else
+// No mach ports here: a timer that never fires keeps the run loop up instead.
+RunLoop.main.add(Timer(timeInterval: .greatestFiniteMagnitude, repeats: false) { _ in }, forMode: .default)
+#endif
 RunLoop.main.run()
 fail("the main run loop stopped")

@@ -1,3 +1,5 @@
+// Covers a macOS-only feature.
+#if os(macOS)
 import AlasFoundation
 import CommonCrypto
 import Foundation
@@ -111,3 +113,4 @@ struct VMGuestProvisioningTests {
         return Data(out)
     }
 }
+#endif

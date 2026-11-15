@@ -39,14 +39,14 @@ public final class PeerConsoleBridge: @unchecked Sendable {
     public init(maxPendingBytes: Int = 16 * 1024 * 1024, onInput: @escaping @Sendable (Data) -> Void) throws {
         self.maxPendingBytes = maxPendingBytes
         var template = Array("/tmp/alas-pc.XXXXXX".utf8CString)
-        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }) else {
+        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         let directory = String(cString: dir)
         let path = directory + "/s"
         self.directory = directory
         socketPath = path
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
@@ -107,7 +107,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
     }
 
     private func acceptAndRead(onInput: @Sendable (Data) -> Void) {
-        let fd = accept(listener, nil, nil)
+        let fd = acceptClosingOnExec(listener)
         // Single use: nothing else may connect once the surface has.
         unlink(socketPath)
         guard fd >= 0 else { return }

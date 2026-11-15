@@ -300,7 +300,7 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", "codex features enable hooks"]
-        let errorPipe = Pipe()
+        let errorPipe = Pipe.closingOnExec()
         process.standardError = errorPipe
         let status = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int32, Error>) in
             process.terminationHandler = { p in continuation.resume(returning: p.terminationStatus) }

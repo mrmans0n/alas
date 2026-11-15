@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(zlib)
 import zlib
+#else
+import CZlib
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform

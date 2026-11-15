@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasRemoteKit
+import AlasFoundation
 
 @Suite struct RemoteBoundedFetchTests {
     /// A caller cancelled as the fetch starts makes the delegate report the
@@ -24,7 +25,7 @@ private struct SilentServer {
     let port: UInt16
 
     init() throws {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = socket(AF_INET, streamSocketType, 0)
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian

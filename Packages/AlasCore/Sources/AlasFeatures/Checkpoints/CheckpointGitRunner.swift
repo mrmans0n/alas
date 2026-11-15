@@ -197,9 +197,9 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
         process.currentDirectoryURL = invocation.cwd
         process.environment = gitEnvironment([:])
 
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
+        let stdin = Pipe.closingOnExec()
+        let stdout = Pipe.closingOnExec()
+        let stderr = Pipe.closingOnExec()
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr

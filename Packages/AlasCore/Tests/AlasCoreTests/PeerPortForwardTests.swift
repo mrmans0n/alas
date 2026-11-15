@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import Synchronization
 import Testing
 import AlasCore
@@ -124,7 +123,8 @@ struct PeerPortForwardTests {
         let freePort = try await EchoServer.start()
         let endpointPort = freePort.port
         freePort.stop()
-        try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
+        // The listener was on IPv4; wait until its port is free there, whatever the client dials.
+        try await eventually { (try? await TestClient.connect(host: "127.0.0.1", port: endpointPort)) == nil }
         let endpoint = try #require(URL(string: "http://\(endpointHost):\(endpointPort)/app?x=1"))
         let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint) { host.receive($0, from: connection) }
         forwarderBox.withLock { $0 = forwarder }
@@ -305,96 +305,94 @@ private final class EventLog: Sendable {
 /// A TCP echo server, on loopback unless told otherwise, that reads only once its previous echo was
 /// written, so it stops reading when its peer stops reading.
 final class EchoServer: Sendable {
-    private let listener: NWListener
+    private let listener: any TCPListener
     private let acceptedCount = Mutex(0)
     private let receivedCount = Mutex(0)
+    private let boundPort = Mutex(0)
     private let queue = DispatchQueue(label: "PeerPortForwardTests.echo")
 
     var accepted: Int { acceptedCount.withLock { $0 } }
     /// Bytes read from every connection.
     var received: Int { receivedCount.withLock { $0 } }
-    var port: Int { Int(listener.port?.rawValue ?? 0) }
+    var port: Int { boundPort.withLock { $0 } }
 
-    private init(host: NWEndpoint.Host) throws {
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: host, port: .any)
-        listener = try NWListener(using: parameters)
+    private init(host: TCPHost) throws {
+        listener = try TCP.listener(host: host, port: 0)
     }
 
-    static func start(host: NWEndpoint.Host = "127.0.0.1") async throws -> EchoServer {
+    static func start(host: TCPHost = .loopbackV4) async throws -> EchoServer {
         let server = try EchoServer(host: host)
-        server.listener.newConnectionHandler = { [weak server] connection in
+        server.listener.start(queue: server.queue, onState: { [weak server] state in
+            if case .ready(let port) = state { server?.boundPort.withLock { $0 = Int(port) } }
+        }, onConnection: { [weak server] connection in
             guard let server else { return connection.cancel() }
             server.acceptedCount.withLock { $0 += 1 }
-            connection.start(queue: server.queue)
+            connection.start(queue: server.queue) { _ in }
             server.echo(connection)
-        }
-        server.listener.start(queue: server.queue)
+        })
         try await eventually { server.port != 0 }
         return server
     }
 
     func stop() { listener.cancel() }
 
-    private func echo(_ connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
+    private func echo(_ connection: any TCPStream) {
+        connection.receive(maximumLength: 64 * 1024) { [self] data, isComplete, error in
             receivedCount.withLock { $0 += data?.count ?? 0 }
             guard error == nil, !isComplete, let data else { return connection.cancel() }
-            connection.send(content: data, completion: .contentProcessed { [self] error in
+            connection.send(data) { [self] error in
                 guard error == nil else { return connection.cancel() }
                 echo(connection)
-            })
+            }
         }
     }
 }
 
 /// A loopback TCP client.
 final class TestClient: Sendable {
-    private let connection: NWConnection
+    private let connection: any TCPStream
     private let state = Mutex((bytes: Data(), ended: false, finished: false))
 
-    private init(_ connection: NWConnection) { self.connection = connection }
+    private init(_ connection: any TCPStream) { self.connection = connection }
 
     deinit { connection.cancel() }
 
     /// Throws unless the connection becomes ready.
     static func connect(host: String, port: Int, sending initialData: Data? = nil) async throws -> TestClient {
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
+        let connection = TCP.connect(host: host, port: try #require(UInt16(exactly: port)))
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let pending = Mutex<CheckedContinuation<Void, Error>?>(continuation)
-            connection.stateUpdateHandler = { state in
+            connection.start(queue: DispatchQueue(label: "PeerPortForwardTests.client")) { state in
                 switch state {
                 case .ready:
                     guard let ready = pending.withLock({ $0.take() }) else { return }
                     guard let initialData else { return ready.resume() }
                     // Send protocol headers on the network queue. A busy test
                     // executor must not leave an accepted connection idle.
-                    connection.send(content: initialData, completion: .contentProcessed { _ in })
+                    connection.send(initialData) { _ in }
                     ready.resume()
-                case .waiting(let error), .failed(let error):
+                case .failed(let error):
                     connection.cancel()
                     pending.withLock { $0.take() }?.resume(throwing: error)
-                case .cancelled: pending.withLock { $0.take() }?.resume(throwing: CancellationError())
-                default: break
+                case .cancelled:
+                    pending.withLock { $0.take() }?.resume(throwing: CancellationError())
                 }
             }
-            connection.start(queue: DispatchQueue(label: "PeerPortForwardTests.client"))
         }
         let client = TestClient(connection)
-        connection.stateUpdateHandler = nil
         client.readUntilEnd()
         return client
     }
 
     func send(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        connection.send(data) { _ in }
     }
 
     /// Bytes read so far, EOF, and whether receiving finished with EOF or an error.
     var received: (bytes: Data, ended: Bool, finished: Bool) { state.withLock { $0 } }
 
     private func readUntilEnd() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
+        connection.receive(maximumLength: 64 * 1024) { [self] data, isComplete, error in
             state.withLock {
                 $0.bytes.append(data ?? Data())
                 $0.ended = isComplete

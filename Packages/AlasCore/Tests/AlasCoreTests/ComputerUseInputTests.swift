@@ -1,3 +1,5 @@
+// Covers a macOS-only feature.
+#if os(macOS)
 import CoreGraphics
 import Foundation
 import Testing
@@ -1095,3 +1097,4 @@ struct ComputerUseInputTests {
         #expect(ComputerUseBackgroundDrag.readsSettled(previous: read(previous), current: read(current)) == settled)
     }
 }
+#endif

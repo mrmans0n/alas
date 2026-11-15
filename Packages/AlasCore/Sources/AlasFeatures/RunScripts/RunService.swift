@@ -38,7 +38,7 @@ public final class RunService {
     /// nothing here grows with the script's output. Cancelling the calling
     /// task terminates the whole group and throws `CancellationError`.
     public static let runInShell: Launch = { shellScript, workingDirectory in
-        let output = Pipe()
+        let output = Pipe.closingOnExec()
         output.fileHandleForReading.readabilityHandler = { handle in
             if handle.availableData.isEmpty { handle.readabilityHandler = nil }
         }

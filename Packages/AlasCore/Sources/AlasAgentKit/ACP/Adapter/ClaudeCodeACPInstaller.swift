@@ -59,9 +59,9 @@ public struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
         proc.environment = ACPProcessEnvironment.augmented()
-        let err = Pipe()
+        let err = Pipe.closingOnExec()
         proc.standardError = err
-        proc.standardOutput = Pipe()
+        proc.standardOutput = Pipe.closingOnExec()
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(status: Int32, stderr: String), Error>) in
