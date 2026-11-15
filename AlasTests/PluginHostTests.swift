@@ -1610,13 +1610,15 @@ struct PluginHostTests {
         let handle = try PluginFoundationLauncher().launch(
             ["/bin/sh", "-c", "set -m; sleep 30 & echo $!; wait"], in: FileManager.default.temporaryDirectory, stdin: nil,
             keep: .head, limit: 1024)
+        defer { handle.kill() }
         var iterator = handle.events.makeAsyncIterator()
-        guard case .stdout(let data)? = await iterator.next(),
-              let child = pid_t(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
-        else {
-            Issue.record("expected the child's pid")
-            return
+        var output = Data()
+        while !output.contains(0x0A), let event = await iterator.next() {
+            if case .stdout(let data) = event { output.append(data) }
+            if case .exit = event { break }
         }
+        let child = try #require(pid_t(String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
+                                 "expected the child's pid")
         handle.terminate()
         while await iterator.next() != nil {}
         #expect(await awaitCondition { Darwin.kill(child, 0) != 0 })
