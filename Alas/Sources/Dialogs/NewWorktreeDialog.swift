@@ -339,11 +339,14 @@ struct NewWorktreeDialog: View {
     private func refreshRunOn() async {
         let selected = projectId
         guard let primary = state.worktreeProjects.first(where: { $0.id == selected }), primary.host == nil else { return }
+        let hostBefore = runOnHost
         let launchBefore = (launchMode, launchAgentId, openAfterCreate)
         let origin = await AppState.originURL(projectPath: primary.path)
         guard selected == projectId else { return }
         primaryHasOrigin = origin.flatMap(GitRemoteIdentity.normalized) != nil
-        let preselected = RunOnOptions.preselectedHost(in: runOnOptions, lastRunOnHost: presetRunOnHost ?? primary.lastRunOnHost)
+        // A location the user picked during the lookup stands while it can still run the project.
+        let wanted = runOnHost != hostBefore ? runOnHost : presetRunOnHost ?? primary.lastRunOnHost
+        let preselected = RunOnOptions.preselectedHost(in: runOnOptions, lastRunOnHost: wanted)
         presetRunOnHost = nil
         guard preselected != runOnHost else { return }
         runOnHost = preselected
