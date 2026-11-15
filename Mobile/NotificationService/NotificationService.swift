@@ -43,6 +43,8 @@ private final class Job {
     private var pending: PhoneServerMessage?
     private var title: String?
     private var listed = false
+    /// The host that listed the session first; the rest are ignored.
+    private var source: UUID?
     /// The target's snapshot arrived and the requests behind it had time to.
     private var settled = false
     private var finished = false
@@ -63,20 +65,19 @@ private final class Job {
         guard let serverId, let sessionId else { return finish() }
         let store = HostStore()
         let hosts = store.load()
-        // Direct: the Mac that owns the session. Otherwise ask every host,
-        // since a gateway lists the session under its namespaced id.
+        // Ask every host: the Mac that owns the session may be out of reach from
+        // this network while a gateway, listing it under its namespaced id, is not.
         // ponytail: asks all hosts; a cached session list would pick one.
-        let direct = hosts.filter { $0.serverId == serverId }
-        let candidates = direct.isEmpty ? hosts : direct
-        let target = direct.isEmpty ? RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId) : sessionId
-        for host in candidates {
+        let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
+        for host in hosts {
             guard let token = store.token(for: host.id) else { continue }
             let id = host.id
+            let direct = host.serverId == serverId
             connections[id] = PhoneConnection(
                 origins: host.origins, lastOrigin: host.lastOrigin, token: token,
                 expectedServerId: host.serverId, expectedPublicKey: host.publicKey
             ) { [weak self] event in
-                self?.handle(event, target: target, direct: !direct.isEmpty, host: id)
+                self?.handle(event, target: direct ? sessionId : namespaced, direct: direct, host: id)
             }
         }
         if connections.isEmpty { return finish() }
@@ -84,21 +85,21 @@ private final class Job {
     }
 
     private func handle(_ event: PhoneConnection.Event, target: String, direct: Bool, host: UUID) {
-        guard !finished else { return }
+        guard !finished, source == nil || source == host else { return }
         switch event {
         case .stateChanged(.online):
             connections[host]?.send(.listSessions)
-            if direct { connections[host]?.send(.subscribe(sessionId: target)) }
         case .message(let message):
             switch message {
             case .sessionList(let sessions):
                 // A direct host's list settles the title even when the session
                 // is missing from it; a gateway's only counts if it has it.
                 let session = sessions.first(where: { $0.id == target })
-                guard session != nil || direct else { return }
+                guard source == nil, session != nil || direct else { return }
+                source = host
                 title = session?.title
                 listed = true
-                if !direct { connections[host]?.send(.subscribe(sessionId: target)) }
+                connections[host]?.send(.subscribe(sessionId: target))
             case .permissionRequest(let id, _), .questionRequest(let id, _), .planRequest(let id, _), .elicitationRequest(let id, _):
                 guard id == target, pending == nil else { return }
                 pending = message

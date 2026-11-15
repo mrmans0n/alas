@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// Taps that arrived before the UI set `open` (cold launch).
     @MainActor private static var pending: [SessionRoute?] = []
+    /// Background answers in flight: only the last to finish may disconnect the hosts they share.
+    @MainActor private static var answering = 0
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -89,10 +91,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let app = UIApplication.shared
         // No expiration handler: `answer` gives up after 25 s, inside the system's budget.
         let task = app.beginBackgroundTask(withName: "Answer permission")
+        answering += 1
         defer {
+            answering -= 1
             // Only from the background: a user opening the app meanwhile passes through inactive, and
             // disconnecting then would leave the screen they open offline until the next background trip.
-            if app.applicationState == .background { hub?.disconnectAll() }
+            if answering == 0, app.applicationState == .background { hub?.disconnectAll() }
             app.endBackgroundTask(task)
         }
         return await answer(serverId: serverId, sessionId: sessionId, request: request, allow: allow)
@@ -141,8 +145,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return false
         })
-        // Done once no request is left: ours resolved after the answer went out, or was answered elsewhere.
-        return settled && session.permission == nil
+        // Settled means ours is gone: resolved after the answer went out, answered elsewhere, or replaced by
+        // the next request, which the 500 ms a resolved one lingers can hide behind without a nil in between.
+        return settled
     }
 
     private static func postCouldntAnswer(serverId: String, sessionId: String, title: String) async {
@@ -170,13 +175,24 @@ extension HostHub {
             .map { SessionRoute(hostID: $0.id, sessionId: namespaced) }
     }
 
-    /// `route`, after connecting: a peer session created while the phone was away is only in a
-    /// gateway's live list. Gives up at `deadline`, or once every host sent a live list without it.
+    /// `route`, after connecting, preferring what is reachable: the Mac once online, else a gateway whose
+    /// live list has the session (a saved pairing is no proof the Mac answers from this network, and a peer
+    /// session created while the phone was away is only in a gateway's live list). Falls back to `route`
+    /// at `deadline`, or once every host is online with a live list or failed to connect.
     func route(serverId: String, sessionId: String, before deadline: ContinuousClock.Instant) async -> SessionRoute? {
         connectAll()
+        let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
         while true {
-            if let route = route(serverId: serverId, sessionId: sessionId) { return route }
-            if ContinuousClock.now >= deadline || Task.isCancelled || hosts.allSatisfy({ freshSessions(of: $0.id) != nil }) { return nil }
+            if let host = hosts.first(where: { $0.serverId == serverId && state(of: $0.id) == .online }) {
+                return SessionRoute(hostID: host.id, sessionId: sessionId)
+            }
+            if let gateway = hosts.first(where: { freshSessions(of: $0.id)?.contains { $0.id == namespaced } == true }) {
+                return SessionRoute(hostID: gateway.id, sessionId: namespaced)
+            }
+            let settled = hosts.allSatisfy { host in
+                freshSessions(of: host.id) != nil || ![.idle, .connecting, .online].contains(state(of: host.id))
+            }
+            if settled || ContinuousClock.now >= deadline || Task.isCancelled { return route(serverId: serverId, sessionId: sessionId) }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
