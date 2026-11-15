@@ -152,6 +152,9 @@ private final class InotifyTree: @unchecked Sendable {
     )
 
     private let fd: Int32
+    /// Each root as given and as resolved: a root may be a symlink, which
+    /// inotify doesn't follow, and callers expect paths under the root they gave.
+    private let roots: [(given: String, resolved: String)]
     private let latency: TimeInterval
     private let recursive: Bool
     private let queue: DispatchQueue
@@ -172,8 +175,9 @@ private final class InotifyTree: @unchecked Sendable {
         self.recursive = recursive
         self.queue = queue
         self.handler = handler
-        for root in roots {
-            addTree(root)
+        self.roots = roots.map { ($0, URL(fileURLWithPath: $0).resolvingSymlinksInPath().path) }
+        for root in self.roots {
+            addTree(root.resolved)
         }
         guard !directories.isEmpty else {
             Foundation.close(fd)
@@ -238,8 +242,12 @@ private final class InotifyTree: @unchecked Sendable {
 
     private func handle(_ event: inotify_event, name: String) {
         if event.mask & UInt32(IN_Q_OVERFLOW) != 0 {
-            // Events were dropped; report the roots so callers refresh everything.
-            pending += directories.values
+            // Events were dropped, directories created meanwhile among them: watch
+            // the trees again, and report the roots so callers refresh everything.
+            for root in roots {
+                addTree(root.resolved)
+                pending.append(root.resolved)
+            }
             return
         }
         guard let directory = directories[event.wd] else { return }
@@ -256,13 +264,22 @@ private final class InotifyTree: @unchecked Sendable {
         }
     }
 
+    /// `path` under the root as the caller gave it.
+    private func given(_ path: String) -> String {
+        for root in roots where root.given != root.resolved {
+            if path == root.resolved { return root.given }
+            if path.hasPrefix(root.resolved + "/") { return root.given + path.dropFirst(root.resolved.count) }
+        }
+        return path
+    }
+
     private func scheduleFlush() {
         guard !pending.isEmpty, !flushScheduled else { return }
         flushScheduled = true
         queue.asyncAfter(deadline: .now() + latency) { [weak self] in
             guard let self, source != nil else { return }
             flushScheduled = false
-            let paths = pending
+            let paths = pending.map(given)
             pending.removeAll()
             handler(paths)
         }
