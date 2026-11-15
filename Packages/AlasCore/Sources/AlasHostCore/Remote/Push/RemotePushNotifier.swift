@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 import AlasAgents
 import AlasACP
@@ -23,6 +22,10 @@ final class RemotePushNotifier {
     /// Each peer's statuses, by its `serverId`, kept while the peer is away.
     private var peers: [String: [Key: String]] = [:]
     private var subscription: HostSubscription?
+    /// The latest post per phone and alert. Each waits for the one before, so an alert and
+    /// the clear after it (same collapse id) reach the relay, and APNs, in the order sent.
+    private var sends: [String: (seq: Int, task: Task<Void, Never>)] = [:]
+    private var sendSeq = 0
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
@@ -141,7 +144,13 @@ final class RemotePushNotifier {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(body.merging(["relayToken": relay.token]) { $1 })
-        Task { @MainActor [urlSession, weak pairing] in
+        let key = "\(deviceID)\u{0}\(body["collapseId"] ?? "")"
+        let previous = sends[key]?.task
+        sendSeq += 1
+        let seq = sendSeq
+        sends[key] = (seq, Task { @MainActor [weak self, urlSession, weak pairing] in
+            await previous?.value
+            defer { if self?.sends[key]?.seq == seq { self?.sends[key] = nil } }
             do {
                 let (_, response) = try await urlSession.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -154,6 +163,6 @@ final class RemotePushNotifier {
             } catch {
                 logger.error("Push relay unreachable: \(error.localizedDescription, privacy: .public)")
             }
-        }
+        })
     }
 }
