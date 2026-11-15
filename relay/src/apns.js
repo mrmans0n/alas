@@ -30,7 +30,7 @@ export function apnsRequest(body, opened, jwt, now) {
   const attention = body.kind === "attention";
   const payload = attention
     ? {
-        aps: { alert: { title: "Alas", body: "An agent needs you." }, "mutable-content": 1, category: "attention", "thread-id": body.sessionId },
+        aps: { alert: { title: "Alas", body: body.status === "finished" ? "Finished its turn." : "An agent needs you." }, "mutable-content": 1, category: "attention", "thread-id": body.sessionId },
         alas,
       }
     : { aps: { "content-available": 1 }, alas: { ...alas, clear: true } };
