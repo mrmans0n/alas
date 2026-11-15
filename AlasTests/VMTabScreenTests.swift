@@ -145,10 +145,21 @@ struct VMTabScreenTests {
          VMDriverStatus(tone: .running, title: "Claude is driving", details: ["computer_click 12s ago"], action: .takeOver)),
         (.agent(sessionID: "s1", tool: "vm_run", at: Date(timeIntervalSince1970: 112.9)),
          VMDriverStatus(tone: .running, title: "Claude is driving", details: ["vm_run 0s ago"], action: .takeOver)),
-        (.user, VMDriverStatus(tone: .busy, title: "You're driving", details: ["agent calls are on hold"], action: .handBack)),
+        (.user, VMDriverStatus(
+            tone: .busy, title: "You're driving", details: ["agent calls wait for you to hand back"], action: .handBack
+        )),
     ])
     func driverStatus(_ driver: VMDriver, _ expected: VMDriverStatus) {
         #expect(VMDriverStatus.make(driver: driver, agentName: "Claude", now: Date(timeIntervalSince1970: 112.5)) == expected)
+    }
+
+    @Test(arguments: [
+        (["Claude"], "Claude is waiting"),
+        (["Claude", "Codex", "Pi"], "Claude is waiting, +2 more"),
+    ])
+    func whileYouDriveTheStatusNamesWhoWaits(waiting: [String], detail: String) {
+        let status = VMDriverStatus.make(driver: .user, agentName: "", now: Date(), waiting: waiting)
+        #expect(status.details == [detail])
     }
 
     struct BadgeCase: CustomTestStringConvertible, Sendable {

@@ -170,6 +170,17 @@ extension AppState {
                     return .error(ComputerUseCoordinator.stoppedMessage)
                 }
             }
+            // A cancel of a call still waiting for hand back ends the wait here: the guest never got it.
+            if command.action == .cancel, let callID = command.callID {
+                vmHolds.cancel(token: Self.vmHoldToken(sessionID: sessionID, callID: callID))
+            }
+            // While the user drives the VM, the call waits for them to hand it back.
+            if let refusal = await vmHeld(
+                action: command.action, recordID: recordID, sessionID: sessionID,
+                token: command.callID.map { Self.vmHoldToken(sessionID: sessionID, callID: $0) }
+            ) {
+                return .error(refusal)
+            }
             // A hand back's resume and turnEnded go out before any new call to the VM.
             await vmHandingBack[recordID]?.value
             // A refused call didn't drive the VM, so it is neither recorded nor told about lifecycles.
@@ -215,6 +226,20 @@ extension AppState {
             return response
         }
     }
+
+    /// Waits while the user drives VM `recordID`, up to `vmHolds`' limit: nil to go on, else the error.
+    /// `token` lets a later `computer_cancel` for the call end its wait.
+    private func vmHeld(
+        action: ComputerUseCommand.Action?, recordID: String, sessionID: String, token: String? = nil
+    ) async -> String? {
+        await VMTakeOvers.held(
+            action: action,
+            driver: { [weak self] in self?.vmDriver(recordID: recordID) ?? .idle },
+            hold: { [weak self] in await self?.vmHolds.hold(recordID, sessionID: sessionID, token: token) ?? .cancelled }
+        )
+    }
+
+    private static func vmHoldToken(sessionID: String, callID: String) -> String { "\(sessionID):\(callID)" }
 
     /// The driver gate of an agent call to VM `recordID`: refused while the user drives it or its
     /// first-boot setup runs.
@@ -277,6 +302,9 @@ extension AppState {
             // Connects before the take-over check: a `run` carries no session, so no stop can
             // reach it, and it must not go out once the user took over during the handshake.
             _ = try? await client.hello()
+            if let refusal = await vmHeld(action: nil, recordID: recordID, sessionID: sessionID) {
+                return .error(refusal)
+            }
             await vmHandingBack[recordID]?.value
             if let refusal = vmCallRefusal(action: nil, recordID: recordID) {
                 return .error(refusal)
@@ -497,6 +525,8 @@ extension AppState {
             await cleanup.value
             if vmHandingBack[recordID] == cleanup { vmHandingBack[recordID] = nil }
         }
+        // Waiting calls go on, behind the resumes above (they await `vmHandingBack`).
+        vmHolds.releaseAll(recordID)
     }
 
     /// VM `recordID` stopped here: whoever drove it, it is idle now.
@@ -504,6 +534,8 @@ extension AppState {
         // A setup run that outlives its VM publishes nothing; the next start gets its own.
         vmSetupRuns[recordID] = nil
         vmTakeOvers.vmStopped(recordID)
+        // The take over ended with the VM: waiting calls go on as calls to a stopped VM.
+        vmHolds.releaseAll(recordID)
         vmLastAgentCall[recordID] = nil
         vmLastUserInput[recordID] = nil
     }
