@@ -41,10 +41,10 @@ public func boundedFetch(_ request: URLRequest, session: URLSession = .shared, m
     }
 }
 
-#if canImport(FoundationNetworking)
 /// Linux's URLSession has no `bytes(for:)`; a delegate sees each chunk as it
-/// arrives instead and cancels the task once the cap is passed.
-private final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// arrives instead and cancels the task once the cap is passed. Built on
+/// every platform so its tests run everywhere; only Linux uses it.
+final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let request: URLRequest
     private let configuration: URLSessionConfiguration
     private let maxBytes: Int
@@ -114,4 +114,3 @@ private final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecke
         continuation?.resume(with: result)
     }
 }
-#endif
