@@ -1749,6 +1749,11 @@ final class AppState {
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
     @ObservationIgnored
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
+
+    /// Checks an SSH project's machine now, as "Reconnect to <machine>" asks.
+    func reconnectMachine(projectId: String) {
+        remoteProjectWatchers[projectId]?.checkNow()
+    }
     @ObservationIgnored
     private var worktreeUpstreamStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored

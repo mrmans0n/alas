@@ -192,6 +192,8 @@ public final class ProjectsManager {
             projects[index].mcpServers = primary.mcpServers
             projects[index].worktreeBranchTemplate = primary.worktreeBranchTemplate
             projects[index].worktreeLaunchPreference = primary.worktreeLaunchPreference
+            projects[index].worktreeOpenAfterCreate = primary.worktreeOpenAfterCreate
+            projects[index].worktreeDefaultLauncherMode = primary.worktreeDefaultLauncherMode
             projects[index].shepherd = primary.shepherd
             projects[index].ggMode = primary.ggMode
         }
@@ -352,15 +354,19 @@ public final class ProjectsManager {
         if let shepherd = update.shepherd {
             projects[idx].shepherd = shepherd.isEmpty ? nil : shepherd
         }
-        copySettings(toRecordsLinkedTo: id)
+        // A linked record's settings are its primary's: put them back.
+        copySettings(toRecordsLinkedTo: projects[idx].linkedProjectId ?? id)
     }
 
     /// Sets the per-project stacked-diffs mode. Callers persist via
     /// `AppState.saveProjects()`.
     public func setGGMode(projectId: String, mode: GGProjectMode) {
-        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard let linked = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        // A linked record's gg mode is its group's, which the primary holds.
+        let primaryId = projects[linked].linkedProjectId ?? projectId
+        guard let idx = projects.firstIndex(where: { $0.id == primaryId }) else { return }
         projects[idx].ggMode = mode
-        copySettings(toRecordsLinkedTo: projectId)
+        copySettings(toRecordsLinkedTo: primaryId)
     }
 
     /// Sets the project's worktree VM settings. Off is stored as nil, and so is

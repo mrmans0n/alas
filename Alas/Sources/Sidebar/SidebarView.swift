@@ -315,8 +315,7 @@ struct SidebarView: View {
                                             )
                                         },
                                         onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) },
-                                        // Talking to the machine reports whether it is back.
-                                        onReconnectMachine: { wt in Task { await state.refreshProjectTopology(projectId: wt.projectId) } }
+                                        onReconnectMachine: { wt in state.reconnectMachine(projectId: wt.projectId) }
                                     )
                                 }
                                 if let nativePeerSessions = state.nativePeerSessions {

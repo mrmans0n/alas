@@ -1186,6 +1186,11 @@ extension ProjectsManagerTests {
         #expect(try record().worktreeBranchTemplate == "nacho/{name}")
         #expect(try record().ggMode == .auto)
         #expect(try record().name == "R")
+
+        // A peer sees the record as its own repo and may set its gg mode: that is the group's.
+        manager.setGGMode(projectId: "R", mode: .off)
+        #expect(manager.projects.first { $0.id == "L" }?.ggMode == .off)
+        #expect(try record().ggMode == .off)
     }
 
     struct LinkCase: CustomTestStringConvertible, Sendable {

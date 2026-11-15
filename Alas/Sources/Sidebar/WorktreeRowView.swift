@@ -940,7 +940,7 @@ struct WorktreeRowView: View {
             Button("Reveal in Finder", action: onRevealInFinder)
         }
         if let machineBadge {
-            if machineBadge.state != .online {
+            if machineBadge.state == .offline {
                 Button("Reconnect to \(machineBadge.label)", action: onReconnectMachine)
             }
             Button("Remove \(machineBadge.label) Checkout from Alas…", action: onRemoveLinkedCheckout)
