@@ -83,6 +83,8 @@ struct DevicesActions: View {
     let canChangeSettings: Bool
     let onShutDown: () -> Void
     let onOpenLogs: () -> Void
+    let accessibilityOverlay: Bool
+    let onToggleAccessibilityOverlay: () -> Void
     let recorder: DeviceRecorder
     /// Names the agent session recording the device.
     let agentName: (String) -> String
@@ -107,10 +109,16 @@ struct DevicesActions: View {
             }
             ToolbarBtn(icon: "doc.text.magnifyingglass", tooltip: "Logs", action: onOpenLogs)
                 .disabled(!booted)
+            ToolbarBtn(
+                icon: "accessibility",
+                tooltip: accessibilityOverlay ? "Hide accessibility overlay" : "Show accessibility overlay",
+                isActive: accessibilityOverlay, action: onToggleAccessibilityOverlay
+            )
+            .disabled(!booted)
             ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Simulator settings") { showsSettings = true }
                 .disabled(!canChangeSettings)
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings(), control: control)
+                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings.bundled, control: control)
                 }
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)

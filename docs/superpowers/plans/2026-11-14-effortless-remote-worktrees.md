@@ -404,35 +404,86 @@ app. Start 2a from `main` after #2503 merges.
 
 ## PR 2b: `feat(remote): fold SSH projects under their local project` (app wiring)
 
-This section gets detailed after 2a merges. Its tasks:
+Start from `main` after #2508. This PR makes the fold visible: linked records
+leave spaces, and their rows show in the primary's group with a machine badge.
+Pickers, settings inheritance, the CLI filter, `ProjectSnapshot`, Reconnect
+and `CONTEXT.md` move to PR 2c. Until then those places show a linked record
+as a project of its own and use its own settings, which is today's behavior.
 
-1. **Auto-link.**
-   - `RemoteHostStatusStore.onStatusTransition` (`AppState.swift:1975`):
-     on each online edge, for each unlinked SSH git project on that host,
-     read `git remote get-url origin` with one `RemoteExec` call. Pass it to
-     `ProjectLink.match` against local projects' origins, which are read
-     locally.
-   - On a match: `link`, remove the record from all spaces, save the
-     projects and spaces.
-   - Skip linked records in the load-time space auto-add
-     (`AppState.swift:1880`).
-2. **Settings reads.** Switch the read sites listed in the spec's "Settings
-   inheritance" section to `settingsProject(for:)`.
-3. **Sidebar.**
-   - `SidebarView.projectRow` and `filteredWorktreeIds` use
-     `visibleWorktrees(includingLinkedTo:)`.
-   - Add a badge decision function on `WorktreeRowPresentation`, with one
-     parameterized test.
-   - Add "Reconnect to <label>" and "Remove <host> checkout from Alas" menu
-     items.
-4. **Lists.**
-   - Switch to `primaryProjects` at the sites listed in the spec's "Hidden
-     linked records" section.
-   - The CLI router (`AlasCLICommandRouter.swift:280`) filters by the same
-     primary.
-   - `ProjectSnapshot.linkedProjectId`: check whether new fields need a
-     `host.projects.*.v1` capability, as `ggMode` does.
-5. **`CONTEXT.md` terms.**
+### Task 7: auto-link and spaces (`Alas/Sources/App/AppState.swift`)
+
+- `func linkRemoteProjects(onHost host: String) async`:
+  - Candidates are unlinked, non-folder projects on `host`; return if there
+    are none.
+  - Read `origin` for each local git primary, then for each candidate, with
+    `Process.git(["remote", "get-url", "origin"], cwd:)`. That command routes
+    over SSH for virtual paths.
+  - `ProjectLink.match`, then `projectsManager.link`. When the link took,
+    `spacesManager.removeProjectEverywhere`.
+  - Save projects and spaces once if anything linked.
+- Call it on the online edge in `onStatusTransition`, and at the end of
+  `addProject` when `host != nil`.
+- At launch, the space auto-add iterates `core.projects.primaryProjects`, and
+  every linked record is removed from all spaces.
+- `removeProjectAfterDirtyResolution`: the records linked to the removed
+  project are added to the active space once they are standalone again.
+- No new test: matching and `link` are pinned in core. This is wiring.
+
+### Task 8: merged sidebar group and badge
+
+- `WorktreeRowPresentation.machineBadge(rowProjectId:groupProjectId:host:machines:reachability:) -> MachineBadge?`
+  - `MachineBadge { label, state: RemoteHostReachability }`.
+  - Returns nil for the group's own rows or a nil host.
+  - The label is the `Machine.label` for the host, else the host itself.
+  - Test `machineBadgeShowsOnlyOnLinkedRows`, parameterized: own row; linked
+    row on a listed machine; on an unlisted host; offline.
+- `SidebarView`:
+  - `projectRow` and `filteredWorktreeIds` use
+    `visibleWorktrees(includingLinkedTo:)`.
+  - `isMain` resolves against the row's own project.
+  - It passes `machineBadge` and `onRemoveLinkedCheckout` (which calls
+    `onRemoveProject(wt.projectId)`).
+- `RepoGroupView` forwards both to `WorktreeRowView`.
+- `WorktreeRowView` draws `⌁ label` on the name line, dimmed while unknown,
+  with `○` when offline. The context menu adds "Remove <label> checkout from
+  Alas…".
+- Verification: the build, the presentation test, and the moved ordering
+  suites.
+
+## PR 2c: `feat(remote): list linked SSH projects under their local project everywhere`
+
+Start from `main` after #2516. The remaining items split in two:
+2c hides linked records from lists and folds them where a list groups by
+project; 2d moves settings to the primary and adds Reconnect.
+
+### Task 9: lists, the repo selector, the CLI and the wire
+
+- `RepoSelectorModel.emptyQueryRows`: sections are primaries only. Each
+  section lists its own worktrees followed by its linked records', and its
+  recents come from every member record. The RECENT section and filter mode
+  keep real project ids. Test `emptyQueryListsALinkedRecordsWorktreesUnderItsPrimary`
+  in `RepoSelectorModelTests`.
+- `AlasCLICommandRouter`: `worktree list` and `worktree switch` see the
+  origin's whole group (the primary plus its linked records). `new`,
+  `delete` and review overrides keep the caller's own record. Test
+  `listsTheWholeLinkedGroupFromARemoteWorktree` in
+  `AlasCLICommandRouterTests`, with a `linked:` fixture parameter.
+- `ProjectSnapshot.linkedProjectId`, additive and omitted when nil.
+- `primaryProjects` in `SpacesPane` membership and the run schedule
+  editor's project picker.
+- `CONTEXT.md`: Machine and Linked Project, and the Execution Location
+  amendment. Run On lands with PR 3.
+- Left as they are, with rulings in the ledger: New Worktree's repository
+  picker and its issue attachment (PR 3 replaces them with Run on),
+  `ChangesPane` gg modes (settings move in 2d), `WorktreesPane` archived
+  lists (archives belong to the record), and Workspace dialogs (an SSH
+  Workspace needs its SSH Projects as members).
+
+## PR 2d: settings from the primary, and Reconnect (outline)
+
+- `settingsProject(for:)` at the "Settings inheritance" read sites, and
+  `ChangesPane` lists primaries.
+- "Reconnect to <label>" on linked rows.
 
 ## PR 3: `feat(remote): choose where a new worktree runs` (outline)
 

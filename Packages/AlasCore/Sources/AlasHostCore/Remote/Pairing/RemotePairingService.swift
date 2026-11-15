@@ -225,6 +225,17 @@ public final class RemotePairingService {
         return true
     }
 
+    /// Records the relay a device's phone registered; nil clears it.
+    public func setPushRelay(_ relay: RemotePushRelay?, for deviceID: String) {
+        guard let i = devices.firstIndex(where: { $0.id == deviceID }), devices[i].pushRelay != relay else { return }
+        devices[i].pushRelay = relay
+        saveDevices()
+    }
+
+    public var pushRelays: [(deviceID: String, relay: RemotePushRelay)] {
+        devices.compactMap { d in d.pushRelay.map { (d.id, $0) } }
+    }
+
     /// Lowers the other devices carrying `deviceId`'s peer identity to its
     /// scope, when that scope is narrower. A re-pair keeps the earlier
     /// devices, so the peer's rollback still has a token that works, but a

@@ -3,6 +3,8 @@ import SwiftUI
 /// Everything waiting on the user, answerable in place.
 struct InboxView: View {
     let hub: HostHub
+    /// A route to push, set by a tapped notification; cleared once pushed.
+    @Binding var openRoute: SessionRoute?
     @Environment(SessionRegistry.self) private var registry
     @State private var model = InboxModel()
     @State private var path: [SessionRoute] = []
@@ -34,6 +36,11 @@ struct InboxView: View {
                 TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
+        }
+        .onChange(of: openRoute, initial: true) { _, route in
+            guard let route else { return }
+            path = [route]
+            openRoute = nil
         }
         .onAppear {
             visible = true

@@ -1,0 +1,12 @@
+name = "alas-push"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+preview_urls = false
+
+[[ratelimits]]
+name = "PUSH_LIMIT"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 30
+  period = 60

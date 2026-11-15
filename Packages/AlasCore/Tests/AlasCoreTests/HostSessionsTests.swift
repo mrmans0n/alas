@@ -75,7 +75,7 @@ struct HostSessionsTests {
             do { try await answer.value } catch SessionRefusal.notPending { refused += 1 }
         }
         #expect(refused == 1)
-        #expect(fixture.agent.permissionResponses[requestID] != nil)
+        try await eventually { await fixture.agent.permissionResponses[requestID] != nil }
 
         // A late reply to that request does not answer the next one, though
         // it offers the same option.
@@ -619,6 +619,36 @@ struct HostSessionsTests {
         }
         #expect(try await client.request(.followSession(sessionID: created.id, from: nil)) == .done)
         try await client.waitForEvent { if case .sessionState(_, created.id, _) = $0 { true } else { false } }
+    }
+
+    /// A question asked during a turn leaves the turn streaming, yet the
+    /// session waits on its user: that is what its summary reports, and says
+    /// again when the question appears.
+    @Test func aQuestionDuringATurnReportsTheSessionAwaitingInput() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        var attaching: Task<UUID?, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        _ = await (try #require(attaching)).value
+        let session = try #require(fixture.core.sessionManagers.values.first?.liveSession(for: id))
+        session.transcript.streamingState = .streaming
+        try await eventually { await fixture.host.sessions.list().first { $0.id == id }?.streamingState == .streaming }
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+
+        session.transcript.pendingQuestion = .init(id: .number(3), params: ACPQuestionRequestParams(
+            toolCallId: "call-1", title: nil,
+            questions: [ACPQuestion(id: "q", prompt: "Which?", options: [ACPQuestionOption(id: "a", label: "A")], allowMultiple: false)]
+        ))
+
+        try await eventually {
+            await received.events.contains {
+                if case .sessionChanged(let summary) = $0 { summary.id == id && summary.streamingState == .awaitingInput } else { false }
+            }
+        }
+        subscription.cancel()
     }
 
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {

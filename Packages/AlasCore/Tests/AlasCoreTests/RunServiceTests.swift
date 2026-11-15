@@ -140,9 +140,24 @@ struct RunServiceTests {
     /// with a deadline rather than checking once.
     private static func processExits(_ pid: pid_t) async throws -> Bool {
         let deadline = ContinuousClock.now + .seconds(10)
-        while kill(pid, 0) == 0, ContinuousClock.now < deadline {
+        while isAlive(pid), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
-        return kill(pid, 0) != 0
+        return !isAlive(pid)
+    }
+
+    /// A zombie is dead, only not reaped yet: in a container whose init doesn't
+    /// reap (CI's `tail -f /dev/null`), an orphan stays one.
+    private static func isAlive(_ pid: pid_t) -> Bool {
+        guard kill(pid, 0) == 0 else { return false }
+        #if os(Linux)
+        // /proc/<pid>/stat: "pid (comm) state …"; comm may contain spaces or parens.
+        if let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+           let close = stat.lastIndex(of: ")"),
+           stat[stat.index(after: close)...].trimmingCharacters(in: .whitespaces).first == "Z" {
+            return false
+        }
+        #endif
+        return true
     }
 }

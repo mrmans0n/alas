@@ -138,6 +138,15 @@ jobs:
         # the app build starts.
         run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
+      - name: Set up Node for the push relay
+        # The test glob needs Node 22+; the runner image's default may be older.
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Test the push relay
+        run: node --test 'relay/test/*.test.js'
+
       - name: Build the iOS app
         # Also compiles AlasRemoteKit for iOS: an iOS-breaking change in the
         # shared module fails fast.
@@ -862,7 +871,12 @@ jobs:
 
       - name: Test AlasCore
         # Two jobs: the largest sources need several GB each to compile.
-        run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update -j 2
+        # At most 32 tests at once: unbounded, the run holds ~2,000 descriptors,
+        # and Foundation's Process (Swift 6.4) reads past /proc/self/fd's
+        # buffer above ~1,350 and crashes (swift-corelibs-foundation#5472).
+        run: >-
+          swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update -j 2
+          --experimental-maximum-parallelization-width 32
 
   remote-web-tests:
     name: Remote web tests

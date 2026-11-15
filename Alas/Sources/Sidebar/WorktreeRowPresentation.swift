@@ -5,6 +5,25 @@ import Foundation
 /// A row is two lines: the name, then everything the row knows, always on
 /// screen so a scan of the list reads it without a pointer.
 enum WorktreeRowPresentation {
+    struct MachineBadge: Equatable {
+        let label: String
+        let state: RemoteHostReachability
+    }
+
+    /// The machine a linked record's row runs on, shown in its primary's
+    /// group. Nil for the group's own rows.
+    nonisolated static func machineBadge(
+        rowProjectId: String,
+        groupProjectId: String,
+        host: String?,
+        machines: [Machine],
+        reachability: RemoteHostReachability
+    ) -> MachineBadge? {
+        guard rowProjectId != groupProjectId, let host else { return nil }
+        let label = machines.first { $0.destination == host }?.label ?? host
+        return MachineBadge(label: label, state: reachability)
+    }
+
     /// Agent state and conflicts get a coloured dot and lead line 2. A plain
     /// file count gets neither.
     nonisolated static func isStatusLoud(

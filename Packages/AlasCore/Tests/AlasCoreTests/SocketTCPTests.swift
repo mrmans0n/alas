@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import AlasFoundation
 @testable import AlasHostCore
 
 /// The socket transport Linux hosts serve over, driven through real loopback sockets.
@@ -34,6 +35,14 @@ struct SocketTCPTests {
             return try await group.next()!
         }
         #expect(failed)
+    }
+
+    @Test func cancellingAnAcceptedStreamBeforeStartClosesItsSocket() throws {
+        var fds: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, streamSocketType, 0, &fds) == 0)
+        defer { Foundation.close(fds[1]) }
+        SocketTCPStream(fd: fds[0]).cancel()
+        #expect(fcntl(fds[0], F_GETFD) == -1)
     }
 
     @Test func aRefusedConnectionReportsFailure() async throws {

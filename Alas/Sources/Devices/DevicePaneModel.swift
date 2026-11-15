@@ -65,6 +65,13 @@ final class DevicePaneModel {
 
     /// A short message on each simulator's screen, after a copy or paste.
     private(set) var notices: [String: String] = [:]
+    /// Simulators whose screen shows the accessibility overlay.
+    private(set) var accessibilityOverlays: Set<String> = []
+
+    func toggleAccessibilityOverlay(udid: String) {
+        if accessibilityOverlays.remove(udid) == nil { accessibilityOverlays.insert(udid) }
+    }
+
     @ObservationIgnored private var noticeTasks: [String: Task<Void, Never>] = [:]
 
     /// Pastes the Mac clipboard's text into the simulator's focused field.

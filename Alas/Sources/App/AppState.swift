@@ -515,6 +515,7 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
+    private let remoteTerminalHarness = RemoteTerminalHarnessMonitor()
     @ObservationIgnored
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
@@ -738,7 +739,7 @@ final class AppState {
         boot: { try await SimulatorControl.boot(udid: $0) },
         install: { try await SimulatorControl.install(udid: $0, app: $1) },
         launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
-        settings: LiveSimulatorSettings(),
+        settings: LiveSimulatorSettings.bundled,
         logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
         pasteboard: devicePasteboard,
         recorder: deviceRecorder
@@ -1887,7 +1888,13 @@ final class AppState {
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
-        for project in projectsFile.projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+        // A linked record shows inside its primary's group, never on its own.
+        for project in core.projects.projects where project.linkedProjectId != nil
+            && spacesManager.membershipCount(forProject: project.id) > 0 {
+            spacesManager.removeProjectEverywhere(project.id)
+            spacesChanged = true
+        }
+        for project in core.projects.primaryProjects where spacesManager.membershipCount(forProject: project.id) == 0 {
             spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
             spacesChanged = true
         }
@@ -1979,6 +1986,7 @@ final class AppState {
             self.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
             if !isDisconnected {
                 self.rescanRemoteWorktreeStatuses(host: host)
+                Task { await self.linkRemoteProjects(onHost: host) }
             }
         }
         harness.onActivityTransition = { [weak self] transition in
@@ -4990,7 +4998,7 @@ final class AppState {
 
     func toggleProject(projectId: String, inSpace spaceId: String) {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
-            projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
+            projectsManager.visibleWorktrees(includingLinkedTo: projectId).contains { $0.id == selectedId }
         } ?? false
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
@@ -5008,7 +5016,8 @@ final class AppState {
     }
 
     func focusGlobalWorktree(id: String, projectId: String) {
-        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+        let groupId = projectsManager.projects.first { $0.id == projectId }?.linkedProjectId ?? projectId
+        if let containing = spacesManager.containingSpaceId(forProjectId: groupId),
            containing != spacesManager.activeSpaceId {
             spacesManager.switchToSpace(id: containing)
         }
@@ -5591,6 +5600,49 @@ final class AppState {
         if let host, config.seedMachinesIfNeeded(projectHosts: [host]) {
             _ = saveConfig()
         }
+        if let host {
+            await linkRemoteProjects(onHost: host)
+        }
+    }
+
+    /// Links each unlinked SSH git project on `host` to the one local project
+    /// with the same git origin, folding it into that project's sidebar group.
+    func linkRemoteProjects(onHost host: String) async {
+        let candidates = projectsManager.projects.filter { $0.host == host && $0.linkedProjectId == nil && !$0.isFolder }
+        guard !candidates.isEmpty else { return }
+        var locals: [(id: String, origin: String?)] = []
+        for project in projectsManager.primaryProjects where project.host == nil && !project.isFolder {
+            locals.append((project.id, await Self.originURL(projectPath: project.path)))
+        }
+        var linked = false
+        for candidate in candidates {
+            guard let origin = await Self.originURL(projectPath: candidate.path),
+                  let primaryId = ProjectLink.match(remoteOrigin: origin, locals: locals)
+            else { continue }
+            projectsManager.link(candidate.id, to: primaryId)
+            guard projectsManager.projects.first(where: { $0.id == candidate.id })?.linkedProjectId == primaryId else { continue }
+            spacesManager.removeProjectEverywhere(candidate.id)
+            linked = true
+        }
+        if linked {
+            saveProjects()
+            saveSpaces()
+            // The selected row now shows where its primary does, which may be
+            // another space; follow it there instead of leaving an empty pane.
+            if let selected = selectedWorktreeId,
+               let owner = projectsManager.projects.first(where: { project in
+                   project.linkedProjectId != nil && projectsManager.worktrees(projectId: project.id).contains { $0.id == selected }
+               }) {
+                focusGlobalWorktree(id: selected, projectId: owner.id)
+            }
+        }
+    }
+
+    private static func originURL(projectPath: String) async -> String? {
+        guard let result = try? await Process.git(["remote", "get-url", "origin"], cwd: URL(fileURLWithPath: projectPath)),
+              result.exitCode == 0
+        else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func addProject(
@@ -5691,8 +5743,13 @@ final class AppState {
         unpersistedGGWorktreeModes.removeValue(forKey: id)
         // A directory this project owned goes straight back to a project that
         // lost it, so its id stays live and its tabs and sessions survive.
+        let unlinkedIds = projectsManager.linkedProjects(of: id).map(\.id)
         let restoredProjectIds = projectsManager.removeProject(id: id)
         spacesManager.removeProjectEverywhere(id)
+        // Its linked records are standalone again and need a group of their own.
+        for unlinkedId in unlinkedIds {
+            spacesManager.addProject(unlinkedId, toSpace: spacesManager.activeSpaceId)
+        }
         runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
         saveSpaces()
@@ -7126,10 +7183,17 @@ final class AppState {
             self?.harness.socketServer.linkSession(leafId: leafId)
         }
         terminal.socketReleaseHandler = { [weak self] leafId in
-            self?.harness.socketServer.unlinkSession(leafId: leafId)
+            guard let self else { return }
+            self.harness.socketServer.unlinkSession(leafId: leafId)
+            // Every close ends here, including leaves whose tab was never shown.
+            self.remoteTerminalHarness.unregister(sessionID: leafId, harness: self.harness)
         }
         terminal.onSessionRegistered = { [weak self] session in
-            self?.acquireCheckpointTerminalLease(for: session)
+            guard let self else { return }
+            self.acquireCheckpointTerminalLease(for: session)
+            if let host = session.remoteHost, let name = session.zmxSessionName {
+                self.remoteTerminalHarness.register(sessionID: session.id, host: host, name: name, harness: self.harness)
+            }
         }
         terminal.onSessionUnregistered = { [weak self] session in
             guard let self else { return }
@@ -7433,6 +7497,7 @@ final class AppState {
                     guard case .terminal(let state) = tab else { continue }
                     for leaf in state.root.leaves() {
                         _ = harness.socketServer.linkSession(leafId: leaf.id)
+                        watchPersistedRemoteLeaf(leaf.id, owner: .worktree(worktree.id), host: project.host)
                     }
                 }
             }
@@ -7443,9 +7508,20 @@ final class AppState {
                 guard case .terminal(let state) = tab else { continue }
                 for leaf in state.root.leaves() {
                     _ = harness.socketServer.linkSession(leafId: leaf.id)
+                    watchPersistedRemoteLeaf(leaf.id, owner: owner, host: checkout.executionLocation.sshHost)
                 }
             }
         }
+    }
+
+    /// SSH panes report from their host, so a persisted one is polled before its tab is
+    /// shown. `socketReleaseHandler` stops it with the leaf; a live surface keeps its own
+    /// registration, which may carry a legacy session name.
+    private func watchPersistedRemoteLeaf(_ leafId: String, owner: SessionOwnerID, host: String?) {
+        guard let host, config.terminal.keepSessionsAlive, terminal.registry.session(for: leafId) == nil else { return }
+        remoteTerminalHarness.register(
+            sessionID: leafId, host: host, name: ZmxSessionName.derive(owner: owner, leafId: leafId), harness: harness
+        )
     }
 
     /// Shared orchestration coordinator: the CLI/MCP router, the manager
@@ -7786,7 +7862,9 @@ final class AppState {
             )
             opened = .init(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
-        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        if terminal.registry.session(for: opened.id)?.remoteHost == nil {
+            harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        }
         return opened
     }
 
@@ -7850,7 +7928,9 @@ final class AppState {
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
-        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        if terminal.registry.session(for: opened.id)?.remoteHost == nil {
+            harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
+        }
         let title = titleOverride ?? tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
@@ -10276,7 +10356,7 @@ final class AppState {
         if spacesManager.pruneMissingProjects(validProjectIds: validProjectIds) {
             changed = true
         }
-        for project in projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+        for project in projectsManager.primaryProjects where spacesManager.membershipCount(forProject: project.id) == 0 {
             spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
             changed = true
         }

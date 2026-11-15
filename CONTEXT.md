@@ -8,6 +8,14 @@ Alas organizes repositories and their coordinated working copies while keeping n
 A persistent Alas entity for one Git repository on one execution location.
 _Avoid_: Repository, workspace
 
+**Machine**:
+A user-managed SSH execution location with a label and a projects folder, offered when creating worktrees.
+_Avoid_: Host, peer
+
+**Linked Project**:
+A Project on a Machine connected to a primary local Project with the same git origin identity. It has no navigation entry of its own: its worktrees are listed under the primary, and it resolves Project settings from the primary.
+_Avoid_: Remote project, host setup
+
 **Space**:
 An ordered sidebar visibility collection whose members are Projects or Workspaces.
 _Avoid_: Workspace, project group
@@ -86,6 +94,7 @@ _Avoid_: Orphaned Workspace, deleted Workspace
 
 **Execution Location**:
 The local machine or one exact normalized SSH destination on which every member of a Workspace or Workspace Checkout executes.
+In the UI, an SSH execution location is a Machine.
 _Avoid_: Host, environment
 
 **Work Item**:

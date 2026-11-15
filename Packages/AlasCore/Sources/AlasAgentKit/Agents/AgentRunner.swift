@@ -108,7 +108,7 @@ public enum AgentRunner: Sendable {
             bypassPermissions: bypassPermissions,
             executableOverride: processExecutableOverride
         )
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         // We can't use Process.run directly because it doesn't accept
         // stdin. Inline a minimal variant that does, reusing gitEnv()
         // semantics (parent env + GIT_OPTIONAL_LOCKS=0 doesn't matter
@@ -125,8 +125,8 @@ public enum AgentRunner: Sendable {
         }
         process.environment = invocation.environment
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardInput = pipe
         process.standardOutput = outPipe
         process.standardError = errPipe

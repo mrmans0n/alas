@@ -170,6 +170,9 @@ public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
     /// Whether its worktrees are gg stacks; nil from a host before
     /// `host.projects.ggMode.v1`.
     public var ggMode: GGProjectMode?
+    /// The local Project this one is listed under; nil from a host before
+    /// linked Projects, and for a Project of its own.
+    public var linkedProjectId: String?
 
     public init(_ project: ProjectConfig) {
         id = project.id
@@ -179,6 +182,7 @@ public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
         kind = project.kind
         addedAt = project.addedAt
         ggMode = project.ggMode
+        linkedProjectId = project.linkedProjectId
     }
 }
 

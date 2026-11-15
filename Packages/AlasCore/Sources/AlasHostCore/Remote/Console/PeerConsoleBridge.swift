@@ -46,7 +46,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         let path = directory + "/s"
         self.directory = directory
         socketPath = path
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
@@ -107,7 +107,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
     }
 
     private func acceptAndRead(onInput: @Sendable (Data) -> Void) {
-        let fd = accept(listener, nil, nil)
+        let fd = acceptClosingOnExec(listener)
         // Single use: nothing else may connect once the surface has.
         unlink(socketPath)
         guard fd >= 0 else { return }

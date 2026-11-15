@@ -13,10 +13,13 @@ public struct DeviceElement: Equatable, Sendable {
     public let width: Double
     public let height: Double
     public let enabled: Bool
+    /// An element of a type that acts (button, field, switch, slider, cell,
+    /// link, tab), kept even without a label.
+    public let isControl: Bool
 
     public init(
         ref: String, role: String, label: String?, value: String?, id: String?,
-        x: Double, y: Double, width: Double, height: Double, enabled: Bool
+        x: Double, y: Double, width: Double, height: Double, enabled: Bool, isControl: Bool = false
     ) {
         self.ref = ref
         self.role = role
@@ -28,6 +31,7 @@ public struct DeviceElement: Equatable, Sendable {
         self.width = width
         self.height = height
         self.enabled = enabled
+        self.isControl = isControl
     }
 }
 
@@ -36,7 +40,7 @@ extension DeviceElement {
     public func withRef(_ ref: String) -> DeviceElement {
         DeviceElement(
             ref: ref, role: role, label: label, value: value, id: id,
-            x: x, y: y, width: width, height: height, enabled: enabled
+            x: x, y: y, width: width, height: height, enabled: enabled, isControl: isControl
         )
     }
 }
@@ -86,7 +90,8 @@ public struct DeviceSnapshot: Equatable, Sendable {
                     role: text(node["role_description"]) ?? type.lowercased(),
                     label: label, value: value, id: id,
                     x: frame.x, y: frame.y, width: frame.width, height: frame.height,
-                    enabled: node["enabled"] as? Bool ?? true
+                    enabled: node["enabled"] as? Bool ?? true,
+                    isControl: interactiveTypes.contains(type)
                 ))
             }
             for child in node["children"] as? [[String: Any]] ?? [] { visit(child) }

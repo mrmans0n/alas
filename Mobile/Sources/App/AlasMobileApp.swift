@@ -4,16 +4,27 @@ private enum AppTab { case worktrees, inbox, peers, search }
 
 @main
 struct AlasMobileApp: App {
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @Environment(\.scenePhase) private var scenePhase
+    @State private var backgrounded = false
     @State private var hub: HostHub
     @State private var registry: SessionRegistry
     @State private var worktrees = WorktreesModel()
     @State private var selection = AppTab.worktrees
+    @State private var openRoute: SessionRoute?
+    private let registrar: PushRegistrar
 
     init() {
         let hub = HostHub()
         _hub = State(initialValue: hub)
-        _registry = State(initialValue: SessionRegistry(hub: hub))
+        let registry = SessionRegistry(hub: hub)
+        _registry = State(initialValue: registry)
+        AppDelegate.registry = registry
+        let registrar = PushRegistrar(hub: hub)
+        hub.registrar = registrar
+        self.registrar = registrar
+        AppDelegate.hub = hub
+        AppDelegate.registrar = registrar
     }
 
     var body: some Scene {
@@ -23,7 +34,7 @@ struct AlasMobileApp: App {
                     WorktreesView(hub: hub, model: worktrees) { selection = .peers }
                 }
                 Tab("Inbox", systemImage: "tray", value: AppTab.inbox) {
-                    InboxView(hub: hub)
+                    InboxView(hub: hub, openRoute: $openRoute)
                 }
                 .badge(InboxModel.entries(in: hub).count)
                 Tab("Peers", systemImage: "laptopcomputer", value: AppTab.peers) {
@@ -34,10 +45,24 @@ struct AlasMobileApp: App {
                 }
             }
             .environment(registry)
+            .onAppear {
+                AppDelegate.open = { route in
+                    selection = .inbox
+                    openRoute = route
+                }
+            }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {
-                case .active: hub.connectAll()
-                case .background: hub.disconnectAll()
+                case .active:
+                    // Links opened in the background, to answer from an alert, died when iOS suspended
+                    // the app but still look connecting: dial afresh, or they stay offline.
+                    if backgrounded { hub.disconnectAll() }
+                    backgrounded = false
+                    hub.connectAll()
+                    registrar.start()
+                case .background:
+                    backgrounded = true
+                    hub.disconnectAll()
                 default: break
                 }
             }

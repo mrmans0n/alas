@@ -44,9 +44,9 @@ public final class LSPTransport: @unchecked Sendable {
     private let environment: [String: String]
     /// Set by `start()`.
     private var process: SpawnedProcess?
-    private let stdin = Pipe()
-    private let stdout = Pipe()
-    private let stderr = Pipe()
+    private let stdin = Pipe.closingOnExec()
+    private let stdout = Pipe.closingOnExec()
+    private let stderr = Pipe.closingOnExec()
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private let refreshLock = NSLock()
@@ -343,7 +343,7 @@ public final class LSPTransport: @unchecked Sendable {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
         proc.arguments = ["-o", "pid=,ppid=,lstart=", "-ax"]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         let data: Data
@@ -383,7 +383,7 @@ public final class LSPTransport: @unchecked Sendable {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
         proc.arguments = ["-o", "pid=,lstart=", "-ax"]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         let data: Data

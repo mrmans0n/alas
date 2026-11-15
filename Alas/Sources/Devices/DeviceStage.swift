@@ -19,6 +19,8 @@ struct DeviceStage: View {
     let notice: String?
     let onPaste: () -> Void
     let onCopy: () -> Void
+    /// Outline the screen's accessibility elements.
+    let accessibilityOverlay: Bool
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -27,6 +29,10 @@ struct DeviceStage: View {
     @State private var dropTargeted = false
     /// The interface orientation of the frames shown; nil until one arrives.
     @State private var frameOrientation: DeviceScreenOrientation?
+    /// The pointer over the screen, while the overlay shows.
+    @State private var hover: CGPoint?
+    /// Bumped by the user's input and rotations, so the overlay reads the screen again.
+    @State private var overlayReadKey = 0
 
     private static let margin: CGFloat = 12
     private static let gutter: CGFloat = 44
@@ -45,7 +51,7 @@ struct DeviceStage: View {
             // The radius scales with the device's short side, which is its width in portrait.
             let radius = shape?.cornerRadius(forFittedWidth: landscape ? size.height : size.width) ?? 0
             HStack(spacing: 0) {
-                screen(allowsInput: allowsInput, driver: driver)
+                screen(allowsInput: allowsInput, driver: driver, landscape: landscape)
                     .frame(width: size.width, height: size.height)
                     .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                     .overlay(
@@ -76,16 +82,27 @@ struct DeviceStage: View {
         return CGSize(width: width * scale, height: height * scale)
     }
 
-    private func screen(allowsInput: Bool, driver: VMDriver) -> some View {
+    private func screen(allowsInput: Bool, driver: VMDriver, landscape: Bool) -> some View {
         ZStack(alignment: .top) {
             DeviceScreenView(
                 udid: device.udid, client: client, onStopped: { streamError = $0 },
                 allowsInput: allowsInput, onBlockedClick: pulsePill,
                 onDropApp: onDropApp, onDropTargeted: { dropTargeted = $0 },
-                onPaste: onPaste, onCopy: onCopy, onOrientation: { frameOrientation = $0 }
+                onPaste: onPaste, onCopy: onCopy,
+                onOrientation: { orientation in
+                    frameOrientation = orientation
+                    overlayReadKey += 1
+                },
+                onHover: accessibilityOverlay ? { hover = $0 } : nil,
+                onUserInput: { overlayReadKey += 1 }
             )
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
+            if accessibilityOverlay, streamError == nil {
+                DeviceAccessibilityOverlay(
+                    udid: device.udid, client: client, readKey: overlayReadKey, landscape: landscape, hover: hover
+                )
+            }
             if let streamError {
                 theme.color("bg-2").opacity(0.92)
                 DevicesEmptyState(
@@ -240,6 +257,7 @@ struct DeviceStage: View {
             icon: symbol, tooltip: help, metrics: ToolbarControlMetrics(width: 28, height: 28, cornerRadius: 14) // design-literal: pill-shaped hardware button, half its 28pt frame
         ) {
             client.button(udid: device.udid, name: name)
+            overlayReadKey += 1
         }
     }
 
@@ -252,6 +270,7 @@ struct DeviceStage: View {
             let udid = device.udid
             let next = turn(client.deviceOrientation(udid: udid))
             Task { try? await client.rotate(udid: udid, to: next) }
+            overlayReadKey += 1
         }
     }
 }

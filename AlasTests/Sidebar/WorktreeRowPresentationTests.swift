@@ -97,4 +97,25 @@ struct WorktreeRowPresentationTests {
         ))
         #expect(label == "main, 9 mo ago")
     }
+
+    /// Only rows a linked record contributes to its primary's group get a badge.
+    @Test(arguments: [
+        ("L", "devbox", RemoteHostReachability.online, WorktreeRowPresentation.MachineBadge?.none),
+        ("R", "devbox", .online, .some(.init(label: "Dev Box", state: .online))),
+        ("R", "mini", .unknown, .some(.init(label: "mini", state: .unknown))),
+        ("R", "devbox", .offline, .some(.init(label: "Dev Box", state: .offline))),
+    ])
+    func machineBadgeShowsOnlyOnLinkedRows(
+        rowProjectId: String, host: String, reachability: RemoteHostReachability,
+        expected: WorktreeRowPresentation.MachineBadge?
+    ) {
+        let badge = WorktreeRowPresentation.machineBadge(
+            rowProjectId: rowProjectId,
+            groupProjectId: "L",
+            host: host,
+            machines: [Machine(destination: "devbox", label: "Dev Box", projectsFolder: "~/code")],
+            reachability: reachability
+        )
+        #expect(badge == expected)
+    }
 }

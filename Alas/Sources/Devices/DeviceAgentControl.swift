@@ -181,7 +181,7 @@ final class DeviceAgentControl {
         // installing and launching take their turn too.
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
-             .setAppearance, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate: true
+             .setAppearance, .setAccessibility, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate: true
         case .list, .open, .snapshot, .screenshot, .logs, .record: false
         }
         var inputTurn: UUID?
@@ -329,6 +329,10 @@ final class DeviceAgentControl {
                 .text([Self.json(try await settings.setDisplay(
                     udid: udid, appearance: appearance, textSize: textSize, increaseContrast: increaseContrast
                 ).json)])
+            }
+        case .setAccessibility(_, let change):
+            return await settingsCall {
+                .text([Self.json(try await settings.setAccessibility(udid: udid, change).json)])
             }
         case .setPermission(_, let bundleID, let service, let action):
             guard await settings.isInstalled(udid: udid, bundleID: bundleID) else { return Self.notInstalled(bundleID, on: device) }

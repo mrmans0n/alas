@@ -253,6 +253,15 @@ public final class RemoteSessionGateway {
                 action: action,
                 content: content
             )
+        case .pushRegistration(let url, let token):
+            // Only a full-scope device's own phone may point pings anywhere;
+            // anything invalid is dropped like other malformed verbs.
+            guard case .remotePeer(let deviceID)? = caller else { break }
+            if token == nil {
+                delegationPairing?.setPushRelay(nil, for: deviceID)
+            } else if let relay = RemotePushRelay.validated(url: url, token: token) {
+                delegationPairing?.setPushRelay(relay, for: deviceID)
+            }
         case .takeOver(let id):
             try? await sessions?.takeOver(id, caller: hostCaller)
             // Takeover mostly changes the lease, not the transcript: following
@@ -1195,7 +1204,8 @@ public final class RemoteSessionGateway {
             commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
                 guard case .content(.text(let text)) = block else { return nil }
                 return text
-            }.first)
+            }.first,
+            toolCallId: tc.toolCallId)
     }
 
     private static func elicitationPayload(_ pending: ACPUserInputRequest, requestId: String) -> RemoteElicitationPayload {
@@ -1466,7 +1476,7 @@ public final class RemoteSessionGateway {
         }
     }
 
-    private static let visualAidToolName = "Visual aid"
+    private static let visualAidToolName = RemotePushAlert.visualAidToolName
 
     private static func remoteToolCall(
         _ call: ACPMessage.ToolCall,

@@ -109,15 +109,20 @@ fi
 sign_embedded_executable() {
   local path="$1"
   local label="$2"
+  local entitlements="${3:-}"
   if [ ! -x "$path" ]; then
     return
   fi
 
   echo "==> Signing embedded $label"
+  local extra=()
+  if [ -n "$entitlements" ]; then extra=(--entitlements "$entitlements"); fi
+  # The guarded expansion keeps bash 3.2 from failing on an empty array under set -u.
   codesign \
     --force \
     --options runtime \
     --timestamp \
+    ${extra[@]+"${extra[@]}"} \
     --sign "$MACOS_SIGNING_IDENTITY" \
     "$path"
   codesign --verify --strict --verbose=2 "$path"
@@ -135,6 +140,8 @@ for cli_arch in macos-x86_64 macos-aarch64; do
     "Alas CLI ($cli_arch)"
 done
 sign_embedded_executable "$app_path/Contents/Resources/alas-host/alas-host" "alas-host"
+sign_embedded_executable "$app_path/Contents/Resources/sim-ax-settings/alas-sim-ax-settings" \
+  "simulator accessibility helper" "$repo_root/Alas/Resources/SimAXSettings.entitlements"
 
 # Nested app bundles are signed inside-out, before the outer app, so its seal covers a signed
 # helper. The helper has no nested code of its own.

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -56,5 +57,22 @@ struct RemoteTerminalScriptTests {
         #expect(command.contains("export ZMX_DIR=\"$HOME/.alas/zmx\""))
         #expect(command.contains("\"$Z\" 'ls' '--short'"))
         #expect(command.contains("command -v zmx"))
+    }
+
+    @Test func onlyPersistentSSHTerminalsExportMailboxEnvironment() {
+        let id = UUID().uuidString
+        let persistent = RemoteTerminalScript.attachScript(
+            worktreePath: "/repo", sessionName: "alas-demo",
+            useZmx: true, startupSuffix: nil, hookSessionID: id
+        )
+        let direct = RemoteTerminalScript.attachScript(
+            worktreePath: "/repo", sessionName: "alas-demo",
+            useZmx: false, startupSuffix: nil, hookSessionID: id
+        )
+        #expect(persistent.contains("ALAS_SESSION_ID='\(id)'"))
+        #expect(persistent.contains("ALAS_HOOK_EVENT_FILE=\"$HOME/.alas/terminal-hooks/\(id).json\""))
+        #expect(!persistent.contains("ALAS_SOCKET_PATH"))
+        #expect(!direct.contains("ALAS_HOOK_EVENT_FILE"))
+        #expect(RemoteTerminalScript.hookMailboxPath(sessionID: "../unsafe") == nil)
     }
 }

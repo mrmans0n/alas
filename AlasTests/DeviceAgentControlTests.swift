@@ -162,6 +162,16 @@ struct DeviceAgentControlTests {
         func openURL(udid: String, url: String) async throws { calls.append("open \(url)") }
         func userApps(udid: String) async throws -> [SimulatorApp] { [] }
         func isInstalled(udid: String, bundleID: String) async -> Bool { installed.contains(bundleID) }
+        var accessibilityRead = SimulatorAccessibility(
+            voiceOver: .value(false), reduceMotion: .value(false), buttonShapes: .value(false),
+            reduceTransparency: .value(false), colorFilter: .value(.none), liquidGlass: .value(.clear)
+        )
+        func accessibility(udid: String) async throws -> SimulatorAccessibility { accessibilityRead }
+        func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+            calls.append("accessibility \(change.helperArguments.map { $0.joined(separator: " ") })")
+            if let voiceOver = change.voiceOver { accessibilityRead.voiceOver = .value(voiceOver) }
+            return accessibilityRead
+        }
     }
 
     private func control(
@@ -187,17 +197,21 @@ struct DeviceAgentControlTests {
         )
     }
 
-    @Test func settingsAreHeldDuringATakeoverAndReturnWhatSimctlReadBack() async throws {
+    @Test(arguments: [
+        (DeviceCommand.setAppearance(udid: "on", appearance: .dark, textSize: nil, increaseContrast: nil),
+         #"{"appearance":"dark","increase_contrast":"unsupported","text_size":"large"}"#),
+        (.setAccessibility(udid: "on", change: SimulatorAccessibilityChange(voiceOver: true)),
+         #"{"button_shapes":false,"color_filter":"none","liquid_glass":"clear","reduce_motion":false,"reduce_transparency":false,"voiceover":true}"#),
+    ])
+    func settingsAreHeldDuringATakeoverAndReturnWhatWasReadBack(command: DeviceCommand, readBack: String) async throws {
         let settings = FakeSettings()
         let control = control(FakeInput(), settings: settings, sleep: Self.untilCancelled)
         control.takeOver(udid: "on")
-        async let changed = control.perform(
-            .setAppearance(udid: "on", appearance: .dark, textSize: nil, increaseContrast: nil), sessionID: "s"
-        )
+        async let changed = control.perform(command, sessionID: "s")
         try await eventually("call is held") { control.waitingSessions(udid: "on") == ["s"] }
         #expect(settings.calls.isEmpty)
         control.handBack(udid: "on")
-        #expect(await changed == .text([#"{"appearance":"dark","increase_contrast":"unsupported","text_size":"large"}"#]))
+        #expect(await changed == .text([readBack]))
     }
 
     @Test(arguments: [

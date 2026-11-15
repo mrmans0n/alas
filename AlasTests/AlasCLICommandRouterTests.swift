@@ -353,6 +353,53 @@ struct AlasCLICommandRouterTests {
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
     }
 
+    @Test func listsTheWholeLinkedGroupWithEachMachinesHost() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remote = Self.worktree(branch: "feature/remote", path: RemotePath.virtual(host: "devbox", realPath: "/srv/remote"), projectId: "r1")
+        let differentProject = Self.worktree(branch: "main", path: "/tmp/other", projectId: "p2")
+        let router = Self.router(origin: current, visibleWorktrees: [current, remote, differentProject], linked: ["r1": "p1"])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
+
+        #expect(response == .text([
+            "* main              /tmp/repo",
+            "  feature/remote    devbox:/srv/remote",
+        ]))
+    }
+
+    @Test func switchPrefersTheCallersOwnMachineWithinALinkedGroup() async throws {
+        let localMain = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: "devbox", realPath: "/srv/repo"), projectId: "r1")
+        let current = Self.worktree(branch: "feature/remote", path: RemotePath.virtual(host: "devbox", realPath: "/srv/feature"), projectId: "r1")
+        let router = Self.router(origin: current, visibleWorktrees: [localMain, remoteMain, current], linked: ["r1": "p1"])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "main"))))
+
+        #expect(response == .ok)
+    }
+
+    @Test(arguments: [
+        (fromRemote: false, host: "devbox", target: "devbox:/srv/repo"),
+        (fromRemote: false, host: "user@2001:db8::1", target: "user@2001:db8::1:/srv/repo"),
+        (fromRemote: true, host: "devbox", target: ":/tmp/repo"),
+    ])
+    func switchTakesAListedMachineQualifiedPath(fromRemote: Bool, host: String, target: String) async throws {
+        let localMain = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: host, realPath: "/srv/repo"), projectId: "r1")
+        let origin = fromRemote ? remoteMain : localMain
+        let router = Self.router(origin: origin, visibleWorktrees: [localMain, remoteMain], linked: ["r1": "p1"])
+
+        let list = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
+        guard case .text(let rows) = list else {
+            Issue.record("expected rows, got \(list)")
+            return
+        }
+        #expect(rows.contains { $0.hasSuffix(target) })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: target))))
+
+        #expect(response == .ok)
+    }
+
     @Test func returnsWorktreeResolutionErrors() async throws {
         let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let first = Self.worktree(branch: "feature/a", path: "/tmp/a", projectId: "p1")
@@ -1483,11 +1530,12 @@ struct AlasCLICommandRouterTests {
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],
+        linked: [String: String] = [:],
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
         openReview: @escaping (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in .ok }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
-            host: AlasHost.routerFixture(visibleWorktrees, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
+            host: AlasHost.routerFixture(visibleWorktrees, linked: linked, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
             openRelativeFile: { _, _ in Issue.record("expected no relative file open") },
             openExternalFile: { _, _ in Issue.record("expected no external file open") },
             openReviewChanges: openReviewChanges,
@@ -1516,6 +1564,7 @@ extension AlasHost {
     static func routerFixture(
         _ worktrees: [Worktree],
         hidden: [Worktree] = [],
+        linked: [String: String] = [:],
         sessionWorktree: @escaping (String) -> String? = { _ in nil },
         sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil },
         harness: HarnessService = HarnessService(),
@@ -1525,7 +1574,12 @@ extension AlasHost {
         orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence()
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
-            ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
+            var project = ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
+            if let primary = linked[$0] {
+                project.host = "devbox"
+                project.linkedProjectId = primary
+            }
+            return project
         })
         (worktrees + hidden).forEach(projects.insertOptimisticWorktree)
         for worktree in hidden {

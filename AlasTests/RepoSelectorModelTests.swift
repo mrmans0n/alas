@@ -305,6 +305,21 @@ struct RepoSelectorModelTests {
         #expect(inSection == [wb, wa, wc])
     }
 
+    @Test func emptyQueryRanksAPrimaryByItsLinkedRecordsRecency() {
+        let model = RepoSelectorModel()
+        var remote = project("r1")
+        remote.linkedProjectId = "p1"
+        var r = RepoSelectorRecents()
+        r.bumpProject("p1")
+        r.bumpProject("p2")
+        r.bumpProject("r1")  // most recent: a worktree on p1's machine
+        let e = env(projects: [project("p1"), project("p2"), remote], worktrees: [:], recents: r)
+        let headers = model.rows(environment: e).compactMap { row -> String? in
+            if case .projectHeader(let id) = row { return id } else { return nil }
+        }
+        #expect(headers == ["p1", "p2"])
+    }
+
     @Test func emptyQueryPutsCurrentWorktreesProjectFirst() {
         // Switching usually means jumping to another worktree in the same
         // repo, so the project owning the current worktree sorts first —
@@ -345,6 +360,23 @@ struct RepoSelectorModelTests {
         let rows = model.rows(environment: e)
         #expect(rows.contains(.projectHeader(projectId: "p1")))
         #expect(rows.contains(.action(.newWorktreeForRepo(projectId: "p1"))))
+    }
+
+    @Test func emptyQueryListsALinkedRecordsWorktreesUnderItsPrimary() {
+        let model = RepoSelectorModel()
+        var remote = project("r1")
+        remote.linkedProjectId = "p1"
+        let local = worktree("w1", projectId: "p1")
+        let onMachine = worktree("w2", projectId: "r1")
+        let e = env(projects: [remote, project("p1")], worktrees: ["p1": [local], "r1": [onMachine]])
+        #expect(model.rows(environment: e) == [
+            .projectHeader(projectId: "p1"),
+            .worktree(local, indices: [], isCurrent: false),
+            .worktree(onMachine, indices: [], isCurrent: false),
+            .action(.newWorktreeForRepo(projectId: "p1")),
+            .actionsHeader,
+            .action(.newProject)
+        ])
     }
 
     @Test func isCurrentSetForCurrentWorktreeInBothRecentAndProjectSections() {

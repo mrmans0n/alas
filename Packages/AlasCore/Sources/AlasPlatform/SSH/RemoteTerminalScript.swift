@@ -9,6 +9,12 @@ public enum RemoteTerminalScript: Sendable {
     public static let remoteZmxDirExport =
         "export ZMX_DIR=\"$HOME/.alas/zmx\"; mkdir -p \"$ZMX_DIR\""
 
+    /// The path is generated locally and expanded by the remote login shell.
+    public static func hookMailboxPath(sessionID: String) -> String? {
+        guard UUID(uuidString: sessionID) != nil else { return nil }
+        return "$HOME/.alas/terminal-hooks/\(sessionID).json"
+    }
+
     /// Prefer a host-installed zmx, then the Alas-pushed copy. An empty value
     /// lets terminal surfaces fall back to a plain login shell.
     private static let resolveZmx =
@@ -32,13 +38,20 @@ public enum RemoteTerminalScript: Sendable {
         sessionName: String,
         useZmx: Bool,
         startupSuffix: String?,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        hookSessionID: String? = nil
     ) -> String {
         let shell = shellCommand(startupSuffix: startupSuffix)
         let body: String
         if useZmx {
+            let hookExports: String
+            if let hookSessionID, let path = hookMailboxPath(sessionID: hookSessionID) {
+                hookExports = "export ALAS_SESSION_ID=\(SSHCommand.shellQuote(hookSessionID)) ALAS_HOOK_EVENT_FILE=\"\(path)\"; "
+            } else {
+                hookExports = ""
+            }
             body = "\(remoteZmxDirExport); \(resolveZmx); "
-                + "if [ -n \"$Z\" ]; then exec \"$Z\" attach \(SSHCommand.shellQuote(sessionName)) \(shell); "
+                + "if [ -n \"$Z\" ]; then \(hookExports)exec \"$Z\" attach \(SSHCommand.shellQuote(sessionName)) \(shell); "
                 + "else exec \(shell); fi"
         } else {
             body = "exec \(shell)"

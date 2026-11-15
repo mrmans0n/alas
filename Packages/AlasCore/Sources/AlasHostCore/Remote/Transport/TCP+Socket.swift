@@ -71,6 +71,8 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     private var queue: DispatchQueue!
     private var onState: (@Sendable (TCPStreamState) -> Void)?
     private var handle: SocketHandle?
+    /// The socket still connecting, so cancelling closes it at once.
+    private var dialing: SocketHandle?
     private var reader: DispatchSourceProtocol?
     private var writer: DispatchSourceProtocol?
     private var sends: [PendingSend] = []
@@ -86,6 +88,7 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     }
 
     func start(queue: DispatchQueue, onState: @escaping @Sendable (TCPStreamState) -> Void) {
+        guard !cancelled else { return }
         self.queue = queue
         self.onState = onState
         queue.async { [self] in
@@ -137,12 +140,21 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     }
 
     func cancel() {
-        queue?.async { [self] in
+        guard let queue else {
+            // Not started (a connection refused at accept): nothing else holds its descriptor.
+            guard !cancelled else { return }
+            cancelled = true
+            if case .accepted(let fd) = origin { Foundation.close(fd) }
+            return
+        }
+        queue.async { [self] in
             guard !cancelled else { return }
             cancelled = true
             sends.removeAll()
             handle?.close()
             handle = nil
+            dialing?.close()
+            dialing = nil
             reader = nil
             writer = nil
             onState?(.cancelled)
@@ -191,7 +203,7 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
         guard let address = addresses.first else {
             return onState?(.failed(POSIXError(.ECONNREFUSED))) ?? ()
         }
-        let fd = socket(address.family, streamSocketType, 0)
+        let fd = streamSocket(address.family)
         guard fd >= 0 else { return dial(addresses.dropFirst()) }
         let handle = SocketHandle(fd: fd)
         let result = address.withSockaddr { Foundation.connect(fd, $0, $1) }
@@ -202,11 +214,13 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
             handle.close()
             return dial(addresses.dropFirst())
         }
+        dialing = handle
         var waiting: DispatchSourceProtocol?
         waiting = handle.watch(.write, queue: queue) { [weak self] in
             waiting?.cancel()
             waiting = nil
             guard let self, !cancelled else { return handle.close() }
+            dialing = nil
             var failure: Int32 = 0
             var length = socklen_t(MemoryLayout<Int32>.size)
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &length)
@@ -269,7 +283,7 @@ final class SocketTCPListener: TCPListener, @unchecked Sendable {
             _ = bound.0.watch(.read, queue: queue) { [weak self] in
                 guard let self, let handle = self.handle else { return }
                 while true {
-                    let client = accept(handle.fd, nil, nil)
+                    let client = acceptClosingOnExec(handle.fd)
                     guard client >= 0 else { return }
                     onConnection(SocketTCPStream(fd: client))
                 }
@@ -289,12 +303,21 @@ final class SocketTCPListener: TCPListener, @unchecked Sendable {
     }
 
     private func bind() throws -> (SocketHandle, UInt16) {
-        let address: SocketAddress = switch host {
-        case .any: .ipv6Any(port: port)
-        case .loopbackV4: .ipv4Loopback(port: port)
-        case .loopbackV6: .ipv6Loopback(port: port)
+        switch host {
+        case .any:
+            do {
+                return try bind(.ipv6Any(port: port))
+            } catch let error as POSIXError where error.code == .EAFNOSUPPORT || error.code == .EADDRNOTAVAIL {
+                // A host with IPv6 disabled still serves its IPv4 clients.
+                return try bind(.ipv4Any(port: port))
+            }
+        case .loopbackV4: return try bind(.ipv4Loopback(port: port))
+        case .loopbackV6: return try bind(.ipv6Loopback(port: port))
         }
-        let fd = socket(address.family, streamSocketType, 0)
+    }
+
+    private func bind(_ address: SocketAddress) throws -> (SocketHandle, UInt16) {
+        let fd = streamSocket(address.family)
         guard fd >= 0 else { throw Self.posixError() }
         let handle = SocketHandle(fd: fd)
         var on: Int32 = 1
@@ -346,6 +369,13 @@ private enum SocketAddress {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         address.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian
+        return .v4(address)
+    }
+
+    static func ipv4Any(port: UInt16) -> SocketAddress {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
         return .v4(address)
     }
 
