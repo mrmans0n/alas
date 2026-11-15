@@ -16,7 +16,9 @@ struct AlasMobileApp: App {
     init() {
         let hub = HostHub()
         _hub = State(initialValue: hub)
-        _registry = State(initialValue: SessionRegistry(hub: hub))
+        let registry = SessionRegistry(hub: hub)
+        _registry = State(initialValue: registry)
+        AppDelegate.registry = registry
         let registrar = PushRegistrar(hub: hub)
         hub.registrar = registrar
         self.registrar = registrar

@@ -44,3 +44,22 @@ struct RemotePushAlertTests {
         #expect(content.body == String(repeating: "a", count: 177) + "…")
     }
 }
+
+struct RemotePermissionQuickAnswerTests {
+    private static func options(_ kinds: [String]) -> [RemotePermissionOption] {
+        kinds.map { RemotePermissionOption(optionId: "id-\($0)", name: $0, kind: $0) }
+    }
+
+    @Test(arguments: [
+        (["allow_always", "allow_once", "reject_once"], true, "id-allow_once"),
+        (["reject_once", "allow_always"], true, "id-allow_always"),
+        (["reject_always", "reject_once", "allow_once"], false, "id-reject_once"),
+        (["allow_once", "reject_always"], false, "id-reject_always"),
+        (["allow_once"], false, nil),
+        ([], true, nil),
+    ] as [([String], Bool, String?)])
+    func picksOnceThenPersistentAndNeverGuesses(kinds: [String], allow: Bool, expected: String?) {
+        let payload = RemotePermissionPayload(requestId: 1, toolName: "Bash", options: Self.options(kinds))
+        #expect(RemotePermissionQuickAnswer.optionId(in: payload, allow: allow) == expected)
+    }
+}
