@@ -1,11 +1,14 @@
 import Foundation
+#if canImport(UserNotifications)
 import UserNotifications
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
 
+#if canImport(UserNotifications)
 /// Main-actor confined: both handlers are wired by `NotificationService`
 /// during startup and route straight into `AppState`, which is `@MainActor`.
 /// `UNUserNotificationCenterDelegate` itself is not actor-isolated, so the
@@ -50,6 +53,15 @@ public final class NotificationDelegate: NSObject, UNUserNotificationCenterDeleg
         completionHandler()
     }
 }
+#else
+@MainActor
+public final class NotificationDelegate {
+    public var onClick: ((String, String, String) -> Void)?   // projectId, worktreeId, sessionId
+    public var onContextClick: ((NotificationClickContext) -> Void)?
+
+    public nonisolated init() {}
+}
+#endif
 
 public struct NotificationClickContext: Equatable, Sendable {
     public var projectId: String?

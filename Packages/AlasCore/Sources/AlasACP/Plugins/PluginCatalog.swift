@@ -157,7 +157,7 @@ public final class PluginCatalog {
         let data: Data, response: HTTPURLResponse
         do {
             (data, response) = try await boundedFetch(request, maxBytes: maxDownloadBytes)
-        } catch URLError.dataLengthExceedsMaximum {
+        } catch let error as URLError where error.code == .dataLengthExceedsMaximum {
             throw PluginCatalogError.tooLarge
         }
         guard (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }

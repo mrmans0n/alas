@@ -116,15 +116,7 @@ public final class HarnessDetector: @unchecked Sendable {
 
     /// Resolve the executable basename of `pid` and try to match it.
     public static func matchKind(pid: pid_t) -> HarnessKind? {
-        // PROC_PIDPATHINFO_MAXSIZE = 4 * MAXPATHLEN = 4096; the constant is a C macro
-        // not exported by the Swift Darwin overlay, so we use the literal value.
-        let maxPathSize = 4 * Int(MAXPATHLEN)   // 4096
-        var pathBuf = [CChar](repeating: 0, count: maxPathSize)
-        let len = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-        guard len > 0 else { return nil }
-        // `String(cString:)` is deprecated for arrays; `proc_pidpath` NUL-terminates,
-        // so decode up to the terminator rather than the whole fixed-size buffer.
-        let path = String(decoding: pathBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        guard let path = ProcessTable.executablePath(of: pid) else { return nil }
         let basename = (path as NSString).lastPathComponent
         return matchKind(processName: basename)
     }

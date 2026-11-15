@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 import AlasFoundation
 import AlasModel

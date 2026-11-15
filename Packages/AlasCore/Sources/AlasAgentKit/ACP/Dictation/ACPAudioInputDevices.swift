@@ -1,3 +1,5 @@
+// Dictation is macOS-only.
+#if canImport(CoreAudio)
 import CoreAudio
 import Foundation
 
@@ -102,3 +104,4 @@ public enum ACPAudioInputDevices {
         return value.takeRetainedValue() as String
     }
 }
+#endif

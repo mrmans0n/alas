@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -161,7 +160,7 @@ public enum ACPClaudeSessionHooksPolicy {
 
     private static func isBool(_ value: Any) -> Bool {
         guard let number = value as? NSNumber else { return false }
-        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        return number.isJSONBoolean
     }
 }
 

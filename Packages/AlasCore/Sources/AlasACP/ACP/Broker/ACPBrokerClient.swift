@@ -1773,7 +1773,7 @@ extension ACPBrokerJSONValue {
             // `protocolVersion` — would be misread as `true`. JSON booleans are
             // backed by `CFBoolean`, which has a distinct `CFTypeID`; use it to
             // tell real booleans apart from numbers before mapping.
-            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+            if value.isJSONBoolean {
                 self = .bool(value.boolValue)
             } else {
                 self = .number(value.doubleValue)

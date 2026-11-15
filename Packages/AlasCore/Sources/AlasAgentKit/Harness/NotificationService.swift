@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UserNotifications)
 import UserNotifications
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -22,8 +24,10 @@ public struct NotificationPlatform: Sendable {
 
 public final class NotificationService {
     public let delegate = NotificationDelegate()
+    #if canImport(UserNotifications)
     /// Looked up when used: a process without an app bundle has no center.
     private var center: UNUserNotificationCenter { .current() }
+    #endif
     private var enabled: Bool = true
     public var notificationAdder: (UNNotificationRequest) -> Void
     public var awaitingPingPlayer: () -> Void = { NotificationPlatform.shared.playAwaitingPing() }
@@ -33,7 +37,9 @@ public final class NotificationService {
             self.notificationAdder = notificationAdder
         } else {
             self.notificationAdder = { request in
+                #if canImport(UserNotifications)
                 UNUserNotificationCenter.current().add(request)
+                #endif
             }
         }
     }
@@ -43,16 +49,20 @@ public final class NotificationService {
     // `HarnessService.start`, which runs during `AppState.startHarness()`.
     @MainActor
     public func setup(onClick: @escaping (String, String, String) -> Void) {
-        center.delegate = delegate
         delegate.onClick = onClick
+        #if canImport(UserNotifications)
+        center.delegate = delegate
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        #endif
     }
 
     @MainActor
     public func setup(onContextClick: @escaping (NotificationClickContext) -> Void) {
-        center.delegate = delegate
         delegate.onContextClick = onContextClick
+        #if canImport(UserNotifications)
+        center.delegate = delegate
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        #endif
     }
 
     public func setEnabled(_ on: Bool) { enabled = on }
