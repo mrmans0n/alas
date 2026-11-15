@@ -157,6 +157,8 @@ public struct RemoteHTTPResponder: Sendable {
             /// a valid `proof`. A string, so a value from a newer build reads
             /// as no request, which that build then sees unechoed.
             let scope: String?
+            /// "ios" from the native app, which pairs as `.phone`; absent from browsers.
+            let client: String?
         }
         struct PairReply: Encodable {
             let token: String
@@ -286,7 +288,8 @@ public struct RemoteHTTPResponder: Sendable {
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
                 localDeviceId: result.deviceId, redeemedCode: code, inboundOnly: inboundOnly))
         } else {
-            guard let issued = try? pairing.redeem(code: code, deviceName: pr.deviceName) else { return unauthorized }
+            guard let issued = try? pairing.redeem(code: code, deviceName: pr.deviceName,
+                                                   kind: pr.client == "ios" ? .phone : .browser) else { return unauthorized }
             token = issued
         }
         let reply = PairReply(

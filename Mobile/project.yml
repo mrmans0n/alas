@@ -22,6 +22,10 @@ packages:
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.9.0
+  # 1.19 added a build-info plugin, which Xcode, CI and the TestFlight script would each have to trust.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    minorVersion: 1.18.0
 
 targets:
   AlasMobile:
@@ -41,6 +45,8 @@ targets:
         product: AlasRemoteKit
       - package: Markdown
         product: Markdown
+      - package: SwiftTerm
+        product: SwiftTerm
       - target: AlasNotificationService
         embed: true
     settings:

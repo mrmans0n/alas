@@ -30,6 +30,9 @@ final class HostHub {
     private(set) var hosts: [PairedHost]
     private var states: [UUID: PhoneConnection.State] = [:]
     private var sessionLists: [UUID: [RemoteSessionSummary]] = [:]
+    /// Counts each host's arrivals online, so a link that dropped and came back between two
+    /// looks still reads as new: the host forgot whatever the old socket held.
+    private var onlineCounts: [UUID: Int] = [:]
     /// Hosts whose list arrived on the live connection, not from the cache.
     @ObservationIgnored private var listedLive: Set<UUID> = []
     /// What each host's hello advertised, for this connection.
@@ -68,6 +71,13 @@ final class HostHub {
         states[id] ?? (connections[id] == nil ? .unauthorized : .idle)
     }
 
+    func onlineCount(of id: UUID) -> Int { onlineCounts[id] ?? 0 }
+
+    /// Whether the host's hello on this connection advertised `capability`.
+    func supports(_ capability: String, on id: UUID) -> Bool {
+        capabilities[id]?.contains(capability) == true
+    }
+
     func sessions(of id: UUID) -> [RemoteSessionSummary] {
         sessionLists[id] ?? []
     }
@@ -78,7 +88,7 @@ final class HostHub {
     }
 
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
-        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: "Alas for iOS")
+        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: "Alas for iOS", client: "ios")
         var allOrigins = [result.origin]
         for origin in origins where !allOrigins.contains(origin) {
             allOrigins.append(origin)
@@ -265,6 +275,7 @@ final class HostHub {
             states[id] = state
             if state != .online { listedLive.remove(id) }
             if state == .online {
+                onlineCounts[id, default: 0] += 1
                 send(.listSessions, to: id)
                 sendPushRegistration(to: id)
             }

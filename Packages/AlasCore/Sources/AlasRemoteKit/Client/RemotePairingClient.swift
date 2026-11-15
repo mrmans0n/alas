@@ -64,9 +64,13 @@ public struct RemotePairingClient: Sendable {
     /// but its code is spent, so when no later origin proves a key the phone
     /// keeps that token unpinned rather than failing: that is the trust a
     /// keyless reply already gets, and an existing pin is never dropped.
-    public func pair(origins: [String], code: String, deviceName: String) async throws(RemotePairingError) -> RemotePairingResult {
+    /// `client` names the app to the host ("ios" pairs as a phone, which is served terminals).
+    public func pair(origins: [String], code: String, deviceName: String,
+                     client: String? = nil) async throws(RemotePairingError) -> RemotePairingResult {
         let challenge = RemoteIdentityCrypto.randomChallenge()
-        let body = try? JSONEncoder().encode(["code": code, "deviceName": deviceName, "challenge": challenge])
+        var fields = ["code": code, "deviceName": deviceName, "challenge": challenge]
+        fields["client"] = client
+        let body = try? JSONEncoder().encode(fields)
         var denied = false
         var unproven: RemotePairingResult?
         for origin in origins where !Self.isLoopback(origin) {

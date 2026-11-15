@@ -25,6 +25,7 @@
 		44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */; };
 		468E5015B45747F86FC3A04F /* QueueTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836FA1B810A2D04B52F5C3BD /* QueueTray.swift */; };
 		4890F4ED46FAF3D1F5FA0BE4 /* NewSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */; };
+		56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01778058ACE3C53D047B6348 /* TerminalConsole.swift */; };
 		5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18514DE5113754F3401217CA /* TranscriptRowView.swift */; };
 		6C866751DA7A18248BB79315 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E2591444903E4ABB996767C9 /* Assets.xcassets */; };
 		7000D63FB53A488810B6E422 /* InboxModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB4C7CE3F100F5656449A2C /* InboxModel.swift */; };
@@ -38,12 +39,15 @@
 		9F9F8216D33B10E44F37D81E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E48FA0BE7E008A99E5968A8 /* NotificationService.swift */; };
 		A14327552D08819581097496 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		A59DD972FD0014D05D374C07 /* ComposerPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8F788F5756229A6125FB0A /* ComposerPickers.swift */; };
+		A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0A11D3E22001482E10DB6220 /* SwiftTerm */; };
+		ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */; };
 		B15AA036BD9AD1D8D0125304 /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6F3B8B35385E6C2729ABAA /* ChangesView.swift */; };
 		B43121A298365C510EF57149 /* frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B7A9014AA3A262509E8B3DB3 /* frame.html */; };
 		B875C536E4958A62E00D34A1 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03FA6AEA78D99344CAAD8095 /* DiffView.swift */; };
 		C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */; };
 		C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */; };
 		CB152CF506A31464F04D172F /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21408E08006F4C64E22701EE /* SessionRegistry.swift */; };
+		D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987B94F79FFA056339E54033 /* TerminalsList.swift */; };
 		E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 98208F3704BAEEBFCA4EE7FB /* Markdown */; };
 		E55F6FE33979517F56313A84 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A94D2BB531632B6E5027AE /* ComposerBar.swift */; };
 		E77139BEB6A5145597C12214 /* HostHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BF879B5D7FC97B6E77D8C6 /* HostHub.swift */; };
@@ -84,6 +88,7 @@
 
 /* Begin PBXFileReference section */
 		014513AD15C2212B8C007245 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		01778058ACE3C53D047B6348 /* TerminalConsole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConsole.swift; sourceTree = "<group>"; };
 		03FA6AEA78D99344CAAD8095 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		06499964301D8FB5B30EB8B6 /* RequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCard.swift; sourceTree = "<group>"; };
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
@@ -112,8 +117,10 @@
 		74DCE877093186C47AD8B088 /* LazyStackTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyStackTranscriptView.swift; sourceTree = "<group>"; };
 		836FA1B810A2D04B52F5C3BD /* QueueTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTray.swift; sourceTree = "<group>"; };
 		8AD039065974B934F0D88642 /* FrameMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameMeter.swift; sourceTree = "<group>"; };
+		987B94F79FFA056339E54033 /* TerminalsList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalsList.swift; sourceTree = "<group>"; };
 		B2B8568ACBAA2AEDD6BB231F /* NewSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionModel.swift; sourceTree = "<group>"; };
 		B7A9014AA3A262509E8B3DB3 /* frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = frame.html; sourceTree = "<group>"; };
+		BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreen.swift; sourceTree = "<group>"; };
 		C0E84291A6AA43082A7F684D /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		C692134FC753BDB9AA2D24DB /* VisualAidCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidCard.swift; sourceTree = "<group>"; };
 		C859167B848F3A5C43EEE3D7 /* PeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeersView.swift; sourceTree = "<group>"; };
@@ -150,6 +157,7 @@
 			files = (
 				C4B6369656041E9CD53091A1 /* AlasRemoteKit in Frameworks */,
 				E25E7EA6243D3DCDD5C3ACB4 /* Markdown in Frameworks */,
+				A6FDD0434FBF579996D90B20 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,6 +211,16 @@
 				5675178FB5741806BEB65930 /* InboxView.swift */,
 			);
 			path = Inbox;
+			sourceTree = "<group>";
+		};
+		445B6863625ACDFC6597212E /* Terminal */ = {
+			isa = PBXGroup;
+			children = (
+				01778058ACE3C53D047B6348 /* TerminalConsole.swift */,
+				BFE4FA35BA2B54541B0ABD61 /* TerminalScreen.swift */,
+				987B94F79FFA056339E54033 /* TerminalsList.swift */,
+			);
+			path = Terminal;
 			sourceTree = "<group>";
 		};
 		5DCBB4F5E953BC7D6DCB2D6C /* Packages */ = {
@@ -344,6 +362,7 @@
 				A2B95EC638C15843966D4066 /* Requests */,
 				ED52D1A93EE737EF94C55636 /* Sessions */,
 				30FFFD63A2837F752463B155 /* Spike */,
+				445B6863625ACDFC6597212E /* Terminal */,
 				D4974DEDF2DA5907B0A209CC /* Transcript */,
 				213C22D640776C6B97AA598C /* Workspace */,
 			);
@@ -371,6 +390,7 @@
 			packageProductDependencies = (
 				E68B8B1C31D411B9F77FD715 /* AlasRemoteKit */,
 				98208F3704BAEEBFCA4EE7FB /* Markdown */,
+				0A11D3E22001482E10DB6220 /* SwiftTerm */,
 			);
 			productName = AlasMobile;
 			productReference = F555B239BFDC686B6F661BF3 /* AlasMobile.app */;
@@ -423,6 +443,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				65D697BACE7C69B167FC0CCF /* XCRemoteSwiftPackageReference "swift-markdown" */,
+				C04FA493EB1D6CB7F8F9D4AB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				486008F89972136FF8B733D3 /* XCLocalSwiftPackageReference "../Packages/AlasCore" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -494,6 +515,9 @@
 				422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */,
 				C6202EE947C29771BB5EA5ED /* SpikeScreen.swift in Sources */,
 				FDEE855E804A37EE7A6421DF /* SpikeTranscript.swift in Sources */,
+				56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */,
+				ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */,
+				D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */,
 				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,
 				5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */,
 				FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */,
@@ -768,9 +792,22 @@
 				minimumVersion = 0.9.0;
 			};
 		};
+		C04FA493EB1D6CB7F8F9D4AB /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.18.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0A11D3E22001482E10DB6220 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C04FA493EB1D6CB7F8F9D4AB /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
 		3517313AC46E852EA7AE203C /* AlasRemoteKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AlasRemoteKit;
