@@ -83,8 +83,10 @@ final class RepoSelectorModel {
             (primary.id, [primary.id] + projects.filter { $0.linkedProjectId == primary.id }.map(\.id))
         })
         let worktreesBySection = members.mapValues { $0.flatMap { worktreesByProject[$0] ?? [] } }
+        let sectionOf = Dictionary(uniqueKeysWithValues: members.flatMap { section, ids in ids.map { ($0, section) } })
         let projectOrder = orderedProjects(
             projects: sections,
+            sectionOf: sectionOf,
             worktreesByProject: worktreesBySection,
             recents: recents,
             currentId: currentId
@@ -199,6 +201,7 @@ final class RepoSelectorModel {
     /// back to alpha order on name.
     private func orderedProjects(
         projects: [ProjectConfig],
+        sectionOf: [String: String],
         worktreesByProject: [String: [Worktree]],
         recents: RepoSelectorRecents,
         currentId: String?
@@ -210,10 +213,11 @@ final class RepoSelectorModel {
         }
         // Build a "most-recent index" per project: lower = more recent.
         // Projects with no recents get .max so they sort to the back.
-        let validProjectIds = Set(projects.map(\.id))
-        let recentProjectIds = recents.liveProjectIds(validProjectIds: validProjectIds)
+        // A linked Project's recency counts for its primary's section.
+        let recentProjectIds = recents.liveProjectIds(validProjectIds: Set(sectionOf.keys)).compactMap { sectionOf[$0] }
         let projectRecencyIndex: [String: Int] = Dictionary(
-            uniqueKeysWithValues: recentProjectIds.enumerated().map { ($0.element, $0.offset) }
+            recentProjectIds.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
         )
         return projects.sorted { a, b in
             if let currentProjectId {

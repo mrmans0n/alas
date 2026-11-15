@@ -35,9 +35,10 @@ public enum AlasCLIWorktreeResolver {
         var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
         // `host:/path`, or `:/path` for this Mac, as `rows` prints another machine's worktree.
-        if let colon = trimmed.firstIndex(of: ":"), trimmed[trimmed.index(after: colon)...].hasPrefix("/") {
-            let host = String(trimmed[..<colon])
-            let path = String(trimmed[trimmed.index(after: colon)...])
+        // Hosts never contain `/`, so the first `:/` splits even an IPv6 destination.
+        if let split = trimmed.range(of: ":/") {
+            let host = String(trimmed[..<split.lowerBound])
+            let path = String(trimmed[trimmed.index(after: split.lowerBound)...])
             if host.isEmpty {
                 trimmed = path
             } else if RemotePath.isValidHost(host) {

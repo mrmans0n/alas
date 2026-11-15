@@ -378,10 +378,14 @@ struct AlasCLICommandRouterTests {
         #expect(response == .ok)
     }
 
-    @Test(arguments: [(fromRemote: false, target: "devbox:/srv/repo"), (fromRemote: true, target: ":/tmp/repo")])
-    func switchTakesAListedMachineQualifiedPath(fromRemote: Bool, target: String) async throws {
+    @Test(arguments: [
+        (fromRemote: false, host: "devbox", target: "devbox:/srv/repo"),
+        (fromRemote: false, host: "user@2001:db8::1", target: "user@2001:db8::1:/srv/repo"),
+        (fromRemote: true, host: "devbox", target: ":/tmp/repo"),
+    ])
+    func switchTakesAListedMachineQualifiedPath(fromRemote: Bool, host: String, target: String) async throws {
         let localMain = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: "devbox", realPath: "/srv/repo"), projectId: "r1")
+        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: host, realPath: "/srv/repo"), projectId: "r1")
         let origin = fromRemote ? remoteMain : localMain
         let router = Self.router(origin: origin, visibleWorktrees: [localMain, remoteMain], linked: ["r1": "p1"])
 

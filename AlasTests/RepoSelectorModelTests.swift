@@ -305,6 +305,21 @@ struct RepoSelectorModelTests {
         #expect(inSection == [wb, wa, wc])
     }
 
+    @Test func emptyQueryRanksAPrimaryByItsLinkedRecordsRecency() {
+        let model = RepoSelectorModel()
+        var remote = project("r1")
+        remote.linkedProjectId = "p1"
+        var r = RepoSelectorRecents()
+        r.bumpProject("p1")
+        r.bumpProject("p2")
+        r.bumpProject("r1")  // most recent: a worktree on p1's machine
+        let e = env(projects: [project("p1"), project("p2"), remote], worktrees: [:], recents: r)
+        let headers = model.rows(environment: e).compactMap { row -> String? in
+            if case .projectHeader(let id) = row { return id } else { return nil }
+        }
+        #expect(headers == ["p1", "p2"])
+    }
+
     @Test func emptyQueryPutsCurrentWorktreesProjectFirst() {
         // Switching usually means jumping to another worktree in the same
         // repo, so the project owning the current worktree sorts first —
