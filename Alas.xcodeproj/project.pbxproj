@@ -568,6 +568,7 @@
 		481DEBE64E91C54A81185D09 /* ACPAdapterVersionCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF6536F169B7C7B2C339B1C /* ACPAdapterVersionCheckerTests.swift */; };
 		4896E5C8D1D4A5C0EC7473BF /* fs-write.json in Resources */ = {isa = PBXBuildFile; fileRef = 8526C9DB63760BDD2CE998BD /* fs-write.json */; };
 		48AD9728403D96C9C5958AC6 /* ACPSessionTerminalRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A2292E8F8E3D91440BE88FC /* ACPSessionTerminalRoutingTests.swift */; };
+		48BB5A386361120C172E99D2 /* RunOnPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C64FC8AD8A0F87A9B854ABD /* RunOnPicker.swift */; };
 		48D793FBEF8A9D1ABDABE2F4 /* DesignCaptureCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEC3FAC9460568D825F8DF1 /* DesignCaptureCode.swift */; };
 		48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */; };
 		48EFAD2DE1F112D72B5F9FAC /* AgentPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37987D5884297401F95478D3 /* AgentPathTests.swift */; };
@@ -1998,10 +1999,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2019,10 +2020,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2374,6 +2375,7 @@
 		2C051018EB105E225122750C /* ACPMCPStatusPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPStatusPolicy.swift; sourceTree = "<group>"; };
 		2C17465AF6747EDCD8CCE416 /* ReviewSessionLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionLoader.swift; sourceTree = "<group>"; };
 		2C2381497E73D74C8C314928 /* AgentRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRegistryTests.swift; sourceTree = "<group>"; };
+		2C64FC8AD8A0F87A9B854ABD /* RunOnPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOnPicker.swift; sourceTree = "<group>"; };
 		2C69DC33E8F5CD5731FEEC9B /* NativePeerDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerDocumentView.swift; sourceTree = "<group>"; };
 		2C84E444E25F7DDBE30FB824 /* ReviewFeedbackBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewFeedbackBundleTests.swift; sourceTree = "<group>"; };
 		2C91EC7522F31BF41F062610 /* RightPaneOptimisticStageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneOptimisticStageTests.swift; sourceTree = "<group>"; };
@@ -4765,6 +4767,7 @@
 				451DF4DBFCB621DAF6B84D29 /* ProjectSettingsTabBar.swift */,
 				0D1EFF4C02286F36DE5C5D98 /* RenameBranchDialog.swift */,
 				B22A7BCA8F63051E6D842055 /* RepositoryImportService.swift */,
+				2C64FC8AD8A0F87A9B854ABD /* RunOnPicker.swift */,
 				8ABF9DCBFBADA31EF623FA30 /* SSHConnectionAssistant.swift */,
 				0FA3C5D49DC1B6AB83479412 /* SSHHostPicker.swift */,
 				3790CACE965BC5005DA5A51B /* SSHHostSuggestions.swift */,
@@ -8317,6 +8320,7 @@
 				7B85B033B476943E77867BA3 /* RootView.swift in Sources */,
 				4D7E849E3B439F8D64AA3355 /* RunActivityPill.swift in Sources */,
 				9D44907038BDD7DBB5E6EE2F /* RunFailureBriefSection.swift in Sources */,
+				48BB5A386361120C172E99D2 /* RunOnPicker.swift in Sources */,
 				2FDCA875B675BEC539556D73 /* RunReportTabView.swift in Sources */,
 				8FFCF48B49FA5F790692A39C /* RunScheduleEditorView.swift in Sources */,
 				AA69A96A8A26844CC6A47F09 /* RunScriptDialog.swift in Sources */,

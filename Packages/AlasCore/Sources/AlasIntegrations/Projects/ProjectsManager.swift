@@ -213,6 +213,14 @@ public final class ProjectsManager {
         applyWorktreeOrdering(projectId: primaryId)
     }
 
+    /// Remembers where New Worktree last created in `projectId`'s group, on its primary.
+    public func setLastRunOnHost(projectId: String, host: String?) {
+        guard let linked = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let primaryId = projects[linked].linkedProjectId ?? projectId
+        guard let idx = projects.firstIndex(where: { $0.id == primaryId }) else { return }
+        projects[idx].lastRunOnHost = host
+    }
+
     /// Makes every record linked to `primaryId` a standalone project again.
     public func unlinkAll(from primaryId: String) {
         for index in projects.indices where projects[index].linkedProjectId == primaryId {
