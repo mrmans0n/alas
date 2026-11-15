@@ -557,6 +557,17 @@ if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePa
         }
     }
 }
+#if os(Linux)
+// A host unpacked from the Linux tarball updates itself from the latest release.
+if waitsForLock, let executablePath, let root = HostSelfUpdate.linuxInstallRoot(executablePath: executablePath) {
+    host.selfUpdate = {
+        try await HostSelfUpdate.upgradeLinuxInstall(root: root)
+        if executableWasReplaced() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { stop() } }
+        }
+    }
+}
+#endif
 
 print(socket.path)
 fflush(nil)
