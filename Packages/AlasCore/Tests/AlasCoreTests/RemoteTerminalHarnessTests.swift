@@ -12,6 +12,8 @@ struct RemoteTerminalHarnessTests {
             ZmxSessionInfo(name: "gone", startDir: "/repo", pid: 501),
             ZmxSessionInfo(name: "launch", startDir: "/repo", pid: 601),
             ZmxSessionInfo(name: "ambiguous", startDir: "/repo", pid: 701),
+            ZmxSessionInfo(name: "ambiguous-launcher", startDir: "/repo", pid: 801),
+            ZmxSessionInfo(name: "shell-launcher", startDir: "/repo", pid: 901),
         ]
         let processes = """
         101 1 101 102 /bin/bash
@@ -30,9 +32,35 @@ struct RemoteTerminalHarnessTests {
         701 1 701 701 /bin/bash
         702 701 701 701 /usr/bin/claude
         703 701 701 701 /usr/bin/codex
+        801 1 801 802 /bin/bash
+        802 801 802 802 /usr/bin/wrapper
+        803 802 802 802 /usr/bin/claude
+        804 802 802 802 /usr/bin/codex
+        901 1 901 901 /bin/bash
+        902 901 901 901 /usr/bin/wrapper
+        903 902 901 901 /usr/bin/codex
         """
         #expect(RemoteTerminalHarness.detect(sessions: sessions, processTable: processes) == [
-            "claude": .claudeCode, "codex": .codex, "launch": .claudeCode,
+            "claude": .claudeCode, "codex": .codex, "launch": .claudeCode, "shell-launcher": .codex,
         ])
+    }
+
+    @Test(arguments: [
+        ("aifx", 102, "/home/user/.local/bin/claude", HarnessKind.claudeCode as HarnessKind?),
+        ("aifx", 102, "/home/user/.local/share/claude/versions/2.1.325 (deleted)", .claudeCode),
+        ("aifx", 103, "/home/user/.local/bin/claude", nil),
+        ("wrapper", 102, "/opt/codex/bin/codex", .codex),
+        ("wrapper", 102, "/usr/bin/vim", nil),
+    ])
+    func recognizesAgentsBehindLaunchersInTheForegroundGroup(
+        launcher: String, childGroup: Int, executable: String, expected: HarnessKind?
+    ) {
+        let sessions = [ZmxSessionInfo(name: "devpod", startDir: "/repo", pid: 101)]
+        let processes = """
+        101 1 101 102 /bin/zsh
+        102 101 102 102 /usr/bin/\(launcher)
+        103 102 \(childGroup) 102 \(executable)
+        """
+        #expect(RemoteTerminalHarness.detect(sessions: sessions, processTable: processes)["devpod"] == expected)
     }
 }

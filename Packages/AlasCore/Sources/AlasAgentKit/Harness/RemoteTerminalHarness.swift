@@ -19,7 +19,10 @@ public enum RemoteTerminalHarness {
             self.parent = parent
             self.group = group
             self.foregroundGroup = foregroundGroup
-            self.executable = String(columns[4])
+            // Linux appends this suffix when an update unlinks the running binary.
+            let path = columns[4]
+            let deletedSuffix = " (deleted)"
+            self.executable = String(path.hasSuffix(deletedSuffix) ? path.dropLast(deletedSuffix.count) : path)
         }
     }
 
@@ -27,13 +30,10 @@ public enum RemoteTerminalHarness {
         let rows = processTable.split(separator: "\n").compactMap(ProcessRow.init)
         let byPID = Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         let byParent = Dictionary(grouping: rows, by: \.parent)
-        func identify(_ row: ProcessRow) -> HarnessKind? {
-            if let kind = matchExecutable(row.executable) { return kind }
-            guard (row.executable as NSString).lastPathComponent == "node",
-                  byParent[row.pid]?.contains(where: {
-                      $0.group == row.group && HarnessDetector.matchKind(processName: ($0.executable as NSString).lastPathComponent) == .codex
-                  }) == true else { return nil }
-            return .codex
+        func foregroundChildren(of row: ProcessRow) -> [ProcessRow] {
+            byParent[row.pid, default: []].filter {
+                $0.group == row.group && $0.foregroundGroup == row.group
+            }
         }
 
         var agents: [String: HarnessKind] = [:]
@@ -41,15 +41,19 @@ public enum RemoteTerminalHarness {
             guard let shellPID = session.pid, let shell = byPID[shellPID],
                   shell.foregroundGroup > 0, let foreground = byPID[shell.foregroundGroup],
                   foreground.group == shell.foregroundGroup else { continue }
-            if let kind = identify(foreground) {
+            if let kind = matchExecutable(foreground.executable) {
                 agents[session.name] = kind
-            } else if foreground.pid == shellPID {
-                // Alas launches terminal agents through a noninteractive shell.
-                // With job control off, that shell and its child share the group.
-                let children = byParent[shellPID, default: []].filter { $0.group == foreground.group }
-                let kinds = Set(children.compactMap(identify))
-                if kinds.count == 1 { agents[session.name] = kinds.first }
+                continue
             }
+
+            let candidates = Set(foregroundChildren(of: foreground).flatMap { child -> [HarnessKind] in
+                if let kind = matchExecutable(child.executable) { return [kind] }
+                // A noninteractive zmx shell can share its foreground group
+                // with a launcher and the native executable it starts.
+                guard foreground.pid == shellPID else { return [] }
+                return foregroundChildren(of: child).compactMap { matchExecutable($0.executable) }
+            })
+            if candidates.count == 1 { agents[session.name] = candidates.first }
         }
         return agents
     }
