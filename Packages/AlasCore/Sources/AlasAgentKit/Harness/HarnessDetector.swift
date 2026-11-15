@@ -115,7 +115,7 @@ public final class HarnessDetector: @unchecked Sendable {
         return nil
     }
 
-    /// Resolve the executable basename of `pid` and try to match it.
+    /// Resolve the executable path of `pid` and try to identify its harness.
     public static func matchKind(pid: pid_t) -> HarnessKind? {
         // PROC_PIDPATHINFO_MAXSIZE = 4 * MAXPATHLEN = 4096; the constant is a C macro
         // not exported by the Swift Darwin overlay, so we use the literal value.
@@ -127,6 +127,13 @@ public final class HarnessDetector: @unchecked Sendable {
         // so decode up to the terminator rather than the whole fixed-size buffer.
         let path = String(decoding: pathBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         let basename = (path as NSString).lastPathComponent
+        // The native Claude installer exposes a symlink named claude, but proc_pidpath
+        // reports its version-numbered target under .local/share/claude/versions.
+        let directory = (path as NSString).deletingLastPathComponent
+        if directory.hasSuffix("/.local/share/claude/versions"),
+           basename.wholeMatch(of: /[0-9]+\.[0-9]+\.[0-9]+/) != nil {
+            return .claudeCode
+        }
         return matchKind(processName: basename)
     }
 
