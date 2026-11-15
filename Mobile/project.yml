@@ -108,6 +108,9 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
         AlasAppGroup: $(ALAS_APP_GROUP)
         AlasKeychainGroup: $(AppIdentifierPrefix)$(ALAS_APP_BUNDLE_ID).shared
+        # Same as the app: hosts are reached over ws:// at any origin, including tailnet hostnames.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
 
 schemes:
   AlasMobile:
