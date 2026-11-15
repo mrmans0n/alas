@@ -450,15 +450,40 @@ as a project of its own and use its own settings, which is today's behavior.
 - Verification: the build, the presentation test, and the moved ordering
   suites.
 
-## PR 2c: linked records everywhere else (outline)
+## PR 2c: `feat(remote): list linked SSH projects under their local project everywhere`
 
-- `primaryProjects` at the picker and list sites in the spec's "Hidden linked
-  records" section.
-- `settingsProject(for:)` at the "Settings inheritance" read sites.
-- CLI router "same primary" filter.
-- `ProjectSnapshot.linkedProjectId`.
-- "Reconnect to <label>".
-- `CONTEXT.md` terms.
+Start from `main` after #2516. The remaining items split in two:
+2c hides linked records from lists and folds them where a list groups by
+project; 2d moves settings to the primary and adds Reconnect.
+
+### Task 9: lists, the repo selector, the CLI and the wire
+
+- `RepoSelectorModel.emptyQueryRows`: sections are primaries only. Each
+  section lists its own worktrees followed by its linked records', and its
+  recents come from every member record. The RECENT section and filter mode
+  keep real project ids. Test `emptyQueryListsALinkedRecordsWorktreesUnderItsPrimary`
+  in `RepoSelectorModelTests`.
+- `AlasCLICommandRouter`: `worktree list` and `worktree switch` see the
+  origin's whole group (the primary plus its linked records). `new`,
+  `delete` and review overrides keep the caller's own record. Test
+  `listsTheWholeLinkedGroupFromARemoteWorktree` in
+  `AlasCLICommandRouterTests`, with a `linked:` fixture parameter.
+- `ProjectSnapshot.linkedProjectId`, additive and omitted when nil.
+- `primaryProjects` in `SpacesPane` membership and the run schedule
+  editor's project picker.
+- `CONTEXT.md`: Machine and Linked Project, and the Execution Location
+  amendment. Run On lands with PR 3.
+- Left as they are, with rulings in the ledger: New Worktree's repository
+  picker and its issue attachment (PR 3 replaces them with Run on),
+  `ChangesPane` gg modes (settings move in 2d), `WorktreesPane` archived
+  lists (archives belong to the record), and Workspace dialogs (an SSH
+  Workspace needs its SSH Projects as members).
+
+## PR 2d: settings from the primary, and Reconnect (outline)
+
+- `settingsProject(for:)` at the "Settings inheritance" read sites, and
+  `ChangesPane` lists primaries.
+- "Reconnect to <label>" on linked rows.
 
 ## PR 3: `feat(remote): choose where a new worktree runs` (outline)
 
