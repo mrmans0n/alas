@@ -156,6 +156,8 @@ private final class InotifyTree: @unchecked Sendable {
     private var source: DispatchSourceRead?
     private var directories: [Int32: String] = [:]
     private var pending: [String] = []
+    /// Events were dropped since the last batch: the next one is nil, "anything may have changed".
+    private var overflowed = false
     private var flushScheduled = false
     private var warnedAboutLimit = false
 
@@ -233,11 +235,11 @@ private final class InotifyTree: @unchecked Sendable {
     private func handle(_ event: inotify_event, name: String) {
         if event.mask & UInt32(IN_Q_OVERFLOW) != 0 {
             // Events were dropped, directories created meanwhile among them: watch
-            // the trees again, and report the roots so callers refresh everything.
+            // the trees again, and tell callers anything may have changed.
             for root in roots {
                 addTree(root.resolved)
-                pending.append(root.resolved)
             }
+            overflowed = true
             return
         }
         guard let directory = directories[event.wd] else { return }
@@ -264,14 +266,15 @@ private final class InotifyTree: @unchecked Sendable {
     }
 
     private func scheduleFlush() {
-        guard !pending.isEmpty, !flushScheduled else { return }
+        guard !pending.isEmpty || overflowed, !flushScheduled else { return }
         flushScheduled = true
         queue.asyncAfter(deadline: .now() + latency) { [weak self] in
             guard let self, source != nil else { return }
             flushScheduled = false
             let paths = pending.map(given)
             pending.removeAll()
-            handler(paths)
+            defer { overflowed = false }
+            handler(overflowed ? nil : paths)
         }
     }
 }
