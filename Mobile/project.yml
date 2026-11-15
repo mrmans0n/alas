@@ -12,6 +12,9 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
+    # The app and its extension must match; scripts/ios-testflight.sh raises the build number per upload.
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
 
 packages:
   AlasCore:
@@ -29,6 +32,7 @@ targets:
       Release: ../Config/AlasMobile-Release.xcconfig
     sources:
       - path: Sources
+      - path: Resources/Assets.xcassets
       # Shared with the Mac: the frame visual aid fragments are wrapped in.
       - path: ../Alas/Resources/VisualAid/frame.html
         buildPhase: resources
@@ -43,6 +47,7 @@ targets:
       base:
         PRODUCT_NAME: Alas
         TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: AlasMobile.entitlements
       properties:
@@ -55,6 +60,10 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: $(ALAS_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Only TLS and signing (CryptoKit/swift-crypto): exempt, so uploads skip the compliance question.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
@@ -103,6 +112,8 @@ targets:
       path: NotificationService/Info.plist
       properties:
         CFBundleDisplayName: $(ALAS_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
