@@ -1169,15 +1169,23 @@ extension ProjectsManagerTests {
 
     private static let devbox = RemotePath.virtual(host: "devbox", realPath: "/srv/r")
 
-    @Test func settingsComeFromThePrimary() {
-        let manager = ProjectsManager(persistedProjects: [
-            Self.linkProject("L", path: "/l"),
-            Self.linkProject("R", path: Self.devbox, host: "devbox", linkedTo: "L"),
-        ])
-        #expect(manager.settingsProject(for: "R")?.id == "L")
-        #expect(manager.settingsProject(for: "L")?.id == "L")
+    @Test func linkedRecordsFollowThePrimarysSettings() throws {
+        var local = Self.linkProject("L", path: "/l")
+        local.ggMode = .on
+        var remote = Self.linkProject("R", path: Self.devbox, host: "devbox", linkedTo: "L")
+        remote.ggMode = .off
+        let manager = ProjectsManager(persistedProjects: [local, remote])
         #expect(manager.primaryProjects.map(\.id) == ["L"])
         #expect(manager.linkedProjects(of: "L").map(\.id) == ["R"])
+        func record() throws -> ProjectConfig { try #require(manager.projects.first { $0.id == "R" }) }
+        #expect(try record().ggMode == .on)
+
+        manager.updateProject(id: "L", update: .init(name: "Local", icon: local.icon, worktreeBranchTemplate: "nacho/{name}"))
+        manager.setGGMode(projectId: "L", mode: .auto)
+
+        #expect(try record().worktreeBranchTemplate == "nacho/{name}")
+        #expect(try record().ggMode == .auto)
+        #expect(try record().name == "R")
     }
 
     struct LinkCase: CustomTestStringConvertible, Sendable {

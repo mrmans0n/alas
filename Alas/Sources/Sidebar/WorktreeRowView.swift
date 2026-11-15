@@ -222,6 +222,7 @@ struct WorktreeRowView: View {
     var isHighlighted = false
     var machineBadge: WorktreeRowPresentation.MachineBadge?
     var onRemoveLinkedCheckout: () -> Void = {}
+    var onReconnectMachine: () -> Void = {}
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
     @State private var hovering = false
@@ -939,6 +940,9 @@ struct WorktreeRowView: View {
             Button("Reveal in Finder", action: onRevealInFinder)
         }
         if let machineBadge {
+            if machineBadge.state != .online {
+                Button("Reconnect to \(machineBadge.label)", action: onReconnectMachine)
+            }
             Button("Remove \(machineBadge.label) Checkout from Alas…", action: onRemoveLinkedCheckout)
         }
         Divider()
