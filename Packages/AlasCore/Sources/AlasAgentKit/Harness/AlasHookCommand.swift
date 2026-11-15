@@ -9,7 +9,7 @@ public enum AlasHookCommand: Sendable {
     public static let ownershipSentinel = "# alas-managed-hook"
 
     private static let envCheck =
-        #"[ -n "${ALAS_SOCKET_PATH:-}" ] && [ -n "${ALAS_SESSION_ID:-}" ]"#
+        #"[ -n "${ALAS_SOCKET_PATH:-}${ALAS_HOOK_EVENT_FILE:-}" ] && [ -n "${ALAS_SESSION_ID:-}" ]"#
 
     public static func isManagedCommand(_ command: String) -> Bool {
         command.hasSuffix(ownershipSentinel)
@@ -24,7 +24,7 @@ public enum AlasHookCommand: Sendable {
         precondition(!events.isEmpty, "compositeCommand needs at least one event")
 
         if events.count == 1, !forwardStdinAsBody {
-            return managed(envelopePipeline(event: events[0], agent: agent), stdoutResponse: stdoutResponse)
+            return managed("{ \(envelopePipeline(event: events[0], agent: agent)); }", stdoutResponse: stdoutResponse)
         }
 
         // When forwardStdinAsBody is true, the LAST event carries the body and
@@ -60,10 +60,26 @@ public enum AlasHookCommand: Sendable {
         "'\(value.replacingOccurrences(of: "'", with: #"'\''"#))'"
     }
 
+    // Remote hooks publish the latest foreground state atomically. The SSH
+    // poll reads this file on the host and never forwards the local CLI socket.
+    private static let eventSink = #"""
+    if [ -n "${ALAS_HOOK_EVENT_FILE:-}" ]; then
+        (
+            umask 077
+            mkdir -p "${ALAS_HOOK_EVENT_FILE%/*}" || exit 1
+            tmp=$(mktemp "$ALAS_HOOK_EVENT_FILE.XXXXXX") || exit 1
+            trap 'rm -f "$tmp"' EXIT
+            cat >"$tmp" && mv -f "$tmp" "$ALAS_HOOK_EVENT_FILE"
+        )
+    else
+        /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH"
+    fi
+    """#
+
     private static func envelopePipeline(event: ActivityEvent, agent: AgentKind) -> String {
         let envelope =
             #"{"v":1,"event":"\#(event.rawValue)","agent":"\#(agent.rawValue)","session_id":"%s","pid":%s}"#
-        return #"printf '\#(envelope)\n' "$ALAS_SESSION_ID" "$PPID" | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH""#
+        return #"printf '\#(envelope)\n' "$ALAS_SESSION_ID" "$PPID" | \#(eventSink)"#
     }
 
     /// Python script that `bodyEnvelopePipeline` invokes. Reads the cursor
@@ -104,6 +120,6 @@ public enum AlasHookCommand: Sendable {
         // still starting, so a slow (cold or loaded) interpreter delivered
         // nothing and the body-bearing idle/awaiting-input event was lost.
         let script = bodyEnvelopePythonScript(event: event, agent: agent)
-        return #"envelope=$(printf '%s' "$payload" | /usr/bin/python3 -c '\#(script)' "$PPID" 2>/dev/null) && printf '%s\n' "$envelope" | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH""#
+        return #"envelope=$(printf '%s' "$payload" | /usr/bin/python3 -c '\#(script)' "$PPID" 2>/dev/null) && printf '%s\n' "$envelope" | \#(eventSink)"#
     }
 }

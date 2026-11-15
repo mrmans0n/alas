@@ -26,7 +26,19 @@ public enum RemoteTerminalHarness {
         }
     }
 
+    struct Snapshot: Sendable {
+        var agents: [String: HarnessKind] = [:]
+        var hooks: [String: AgentHookEvent] = [:]
+    }
+
     static func detect(sessions: [ZmxSessionInfo], processTable: String) -> [String: HarnessKind] {
+        snapshot(sessions: sessions, processTable: processTable).agents
+    }
+
+    static func snapshot(
+        sessions: [ZmxSessionInfo], processTable: String,
+        hookOutput: String = "", namesByID: [String: String] = [:]
+    ) -> Snapshot {
         let rows = processTable.split(separator: "\n").compactMap(ProcessRow.init)
         let byPID = Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         let byParent = Dictionary(grouping: rows, by: \.parent)
@@ -36,13 +48,15 @@ public enum RemoteTerminalHarness {
             }
         }
 
-        var agents: [String: HarnessKind] = [:]
+        var result = Snapshot()
+        var groupsByName: [String: Int] = [:]
         for session in sessions {
             guard let shellPID = session.pid, let shell = byPID[shellPID],
                   shell.foregroundGroup > 0, let foreground = byPID[shell.foregroundGroup],
                   foreground.group == shell.foregroundGroup else { continue }
+            groupsByName[session.name] = foreground.group
             if let kind = matchExecutable(foreground.executable) {
-                agents[session.name] = kind
+                result.agents[session.name] = kind
                 continue
             }
 
@@ -53,9 +67,26 @@ public enum RemoteTerminalHarness {
                 guard foreground.pid == shellPID else { return [] }
                 return foregroundChildren(of: child).compactMap { matchExecutable($0.executable) }
             })
-            if candidates.count == 1 { agents[session.name] = candidates.first }
+            if candidates.count == 1 { result.agents[session.name] = candidates.first }
         }
-        return agents
+        for line in hookOutput.split(separator: "\n") {
+            let fields = line.split(separator: "\t", maxSplits: 1)
+            guard fields.count == 2, fields[1].utf8.count <= 8192 else { continue }
+            let id = String(fields[0])
+            guard let name = namesByID[id], let group = groupsByName[name],
+                  let hook = try? AgentHookEvent.decode(from: Data(fields[1].utf8)),
+                  hook.version == 1, hook.sessionId == id,
+                  let pid = hook.pid, let process = byPID[Int(pid)],
+                  process.group == group, process.foregroundGroup == group,
+                  result.agents[name]?.asAgentKind == hook.agent else { continue }
+            switch hook.event {
+            case .attached, .busy, .awaitingInput, .permissionRequest, .idle:
+                result.hooks[id] = hook
+            case .backgroundStarted, .backgroundEnded, .detached:
+                break
+            }
+        }
+        return result
     }
 
     private static func matchExecutable(_ path: String) -> HarnessKind? {
@@ -74,7 +105,16 @@ public enum RemoteTerminalHarness {
     /// One batch SSH request per host. On Linux, comm can truncate executable
     /// names, so resolve the executable link for foreground jobs when available.
     public static func observe(host: String) async throws -> [String: HarnessKind] {
+        try await observeSnapshot(host: host, namesByID: [:]).agents
+    }
+
+    static func observeSnapshot(host: String, namesByID: [String: String]) async throws -> Snapshot {
         let marker = "__ALAS_REMOTE_PROCESS_TABLE__"
+        let hookMarker = "__ALAS_REMOTE_HOOK_MAILBOXES__"
+        let mailboxReads = namesByID.keys.sorted().compactMap { id -> String? in
+            guard let path = RemoteTerminalScript.hookMailboxPath(sessionID: id) else { return nil }
+            return #"if [ -f "\#(path)" ]; then printf '%s\t' \#(SSHCommand.shellQuote(id)); head -c 8193 "\#(path)"; printf '\n'; fi"#
+        }.joined(separator: "\n")
         let list = RemoteTerminalScript.zmxBatchCommand(["ls"])
         let command = #"""
         sessions=$( (\#(list)) ) || exit 1
@@ -89,6 +129,8 @@ public enum RemoteTerminalHarness {
                 printf '%s %s %s %s %s\n' "$pid" "$parent" "$group" "$foreground" "$executable"
             done
         }
+        printf '%s\n' '\#(hookMarker)'
+        \#(mailboxReads)
         """#
         let result = try await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 5)
         guard result.exitCode == 0,
@@ -96,7 +138,12 @@ public enum RemoteTerminalHarness {
             throw CocoaError(.fileReadUnknown)
         }
         let sessions = ZmxClient.parseSessionInfos(String(result.stdout[..<boundary.lowerBound]))
-        return detect(sessions: sessions, processTable: String(result.stdout[boundary.upperBound...]))
+        let tail = result.stdout[boundary.upperBound...]
+        let sections = tail.components(separatedBy: hookMarker + "\n")
+        return snapshot(
+            sessions: sessions, processTable: sections[0],
+            hookOutput: sections.count == 2 ? sections[1] : "", namesByID: namesByID
+        )
     }
 }
 
@@ -106,6 +153,7 @@ public final class RemoteTerminalHarnessMonitor {
     public init() {}
 
     private var namesByHost: [String: [String: String]] = [:]
+    private var lastHookByID: [String: AgentHookEvent] = [:]
     private var tasks: [String: Task<Void, Never>] = [:]
 
     public func register(sessionID: String, host: String, name: String, harness: HarnessService) {
@@ -113,10 +161,20 @@ public final class RemoteTerminalHarnessMonitor {
         guard tasks[host] == nil else { return }
         tasks[host] = Task { [weak self, weak harness] in
             while !Task.isCancelled {
-                let detected = try? await RemoteTerminalHarness.observe(host: host)
-                guard !Task.isCancelled, let names = self?.namesByHost[host], let harness else { return }
+                guard let subscribed = self?.namesByHost[host] else { return }
+                let snapshot = try? await RemoteTerminalHarness.observeSnapshot(host: host, namesByID: subscribed)
+                guard !Task.isCancelled, let self, let names = self.namesByHost[host], let harness else { return }
                 for (sessionID, name) in names {
-                    harness.recordHarnessDetection(sessionId: sessionID, kind: detected?[name])
+                    let hook = snapshot?.hooks[sessionID]
+                    let prior = self.lastHookByID[sessionID]
+                    if hook == nil, prior != nil {
+                        harness.forgetSession(sessionID)
+                    }
+                    harness.recordHarnessDetection(sessionId: sessionID, kind: snapshot?.agents[name])
+                    if let hook, hook != prior {
+                        harness.socketServer.onEvent?(hook)
+                    }
+                    self.lastHookByID[sessionID] = hook
                 }
                 try? await Task.sleep(for: .seconds(5))
             }
@@ -125,7 +183,11 @@ public final class RemoteTerminalHarnessMonitor {
 
     public func unregister(sessionID: String, host: String, harness: HarnessService) {
         guard namesByHost[host]?.removeValue(forKey: sessionID) != nil else { return }
-        harness.recordHarnessDetection(sessionId: sessionID, kind: nil)
+        if lastHookByID.removeValue(forKey: sessionID) != nil {
+            harness.forgetSession(sessionID)
+        } else {
+            harness.recordHarnessDetection(sessionId: sessionID, kind: nil)
+        }
         if namesByHost[host]?.isEmpty == true {
             namesByHost.removeValue(forKey: host)
             tasks.removeValue(forKey: host)?.cancel()
