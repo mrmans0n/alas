@@ -1153,4 +1153,71 @@ extension ProjectsManagerTests {
         #expect(mgr.isMain(mainWorktree, in: project))
         #expect(!mgr.isMain(featureWorktree, in: project))
     }
+
+    // MARK: - Linked projects
+
+    private static func linkProject(
+        _ id: String, path: String, host: String? = nil, kind: ProjectKind = .git, linkedTo: String? = nil
+    ) -> ProjectConfig {
+        var project = ProjectConfig(
+            id: id, name: id, path: path, color: "blue", addedAt: Date(timeIntervalSince1970: 0),
+            host: host, kind: kind
+        )
+        project.linkedProjectId = linkedTo
+        return project
+    }
+
+    private static let devbox = RemotePath.virtual(host: "devbox", realPath: "/srv/r")
+
+    @Test func settingsComeFromThePrimary() {
+        let manager = ProjectsManager(persistedProjects: [
+            Self.linkProject("L", path: "/l"),
+            Self.linkProject("R", path: Self.devbox, host: "devbox", linkedTo: "L"),
+        ])
+        #expect(manager.settingsProject(for: "R")?.id == "L")
+        #expect(manager.settingsProject(for: "L")?.id == "L")
+        #expect(manager.primaryProjects.map(\.id) == ["L"])
+        #expect(manager.linkedProjects(of: "L").map(\.id) == ["R"])
+    }
+
+    struct LinkCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let record: String
+        let primary: String
+        let links: Bool
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        LinkCase(name: "local record", record: "L2", primary: "L", links: false),
+        LinkCase(name: "folder record", record: "RF", primary: "L", links: false),
+        LinkCase(name: "hosted primary", record: "R2", primary: "R3", links: false),
+        LinkCase(name: "folder primary", record: "R2", primary: "LF", links: false),
+        LinkCase(name: "host already linked", record: "R3", primary: "L", links: false),
+        LinkCase(name: "valid pair", record: "R2", primary: "L", links: true),
+    ])
+    func linkRefusesInvalidPairs(_ row: LinkCase) {
+        let manager = ProjectsManager(persistedProjects: [
+            Self.linkProject("L", path: "/l"),
+            Self.linkProject("L2", path: "/l2"),
+            Self.linkProject("LF", path: "/lf", kind: .folder),
+            Self.linkProject("R", path: Self.devbox, host: "devbox", linkedTo: "L"),
+            Self.linkProject("R2", path: RemotePath.virtual(host: "mini", realPath: "/r"), host: "mini"),
+            Self.linkProject("R3", path: RemotePath.virtual(host: "devbox", realPath: "/r3"), host: "devbox"),
+            Self.linkProject("RF", path: RemotePath.virtual(host: "mini", realPath: "/f"), host: "mini", kind: .folder),
+        ])
+        manager.link(row.record, to: row.primary)
+        let linked = manager.projects.first { $0.id == row.record }?.linkedProjectId
+        #expect(linked == (row.links ? row.primary : nil))
+    }
+
+    @Test func removingThePrimaryUnlinksItsRecords() {
+        let manager = ProjectsManager(persistedProjects: [
+            Self.linkProject("L", path: "/l"),
+            Self.linkProject("R", path: Self.devbox, host: "devbox", linkedTo: "L"),
+        ])
+        manager.removeProject(id: "L")
+        #expect(manager.projects.first?.linkedProjectId == nil)
+        #expect(manager.primaryProjects.map(\.id) == ["R"])
+    }
 }
