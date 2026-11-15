@@ -130,6 +130,18 @@ struct TranscriptScreen: View {
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 }
             }
+            .toolbar {
+                if let worktreeId = session.summary?.worktreeId,
+                   registry.hub.supports(PeerConsoleCapability.phoneV1, on: hostID) {
+                    ToolbarItem(placement: .primaryAction) {
+                        NavigationLink {
+                            TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
+                        } label: {
+                            Label("Terminals", systemImage: "terminal")
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }
             .alert("Rename Session", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
