@@ -44,7 +44,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         [.banner, .list, .sound]
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    /// The completion-handler form, called back on the main thread: UIKit asserts on the main thread when it
+    /// runs, and the async form's thunk calls it from wherever the task finished, which aborts the app.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+        nonisolated(unsafe) let response = response
+        Task { @MainActor in
+            await Self.handle(response)
+            completionHandler()
+        }
+    }
+
+    @MainActor private static func handle(_ response: UNNotificationResponse) async {
         let alas = response.notification.request.content.userInfo["alas"] as? [String: Any]
         let serverId = alas?["serverId"] as? String
         let sessionId = alas?["sessionId"] as? String
@@ -54,13 +65,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let request = alas?["request"] as? String
             var answered = false
             if let request {
-                answered = await Self.answerInBackground(serverId: serverId, sessionId: sessionId, request: request,
+                answered = await answerInBackground(serverId: serverId, sessionId: sessionId, request: request,
                                                          allow: action == "allow")
             }
-            if !answered { await Self.postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
+            if !answered { await postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
             return
         }
-        await Self.openTapped(serverId: serverId, sessionId: sessionId)
+        await openTapped(serverId: serverId, sessionId: sessionId)
     }
 
     @MainActor private static func openTapped(serverId: String?, sessionId: String?) async {
