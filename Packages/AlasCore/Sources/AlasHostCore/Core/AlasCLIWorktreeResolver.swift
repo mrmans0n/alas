@@ -15,21 +15,18 @@ public enum AlasCLIWorktreeResolver {
         case ambiguous([String])
     }
 
-    /// How `rows` names this Mac to a caller on a Machine.
-    static let localMachine = "local"
-
     public static func rows(worktrees: [Worktree], currentWorktreeId: String) -> [String] {
         let labels = worktrees.map(\.branch)
         let width = max(labels.map(\.count).max() ?? 0, 1) + 4
         // Paths on the caller's machine print as that machine sees them; others carry their
-        // host, or `local` for this Mac, so `resolve` can reach them from any machine.
+        // host, or an empty one for this Mac (no SSH host is empty), so `resolve` can reach them.
         let here = worktrees.first { $0.id == currentWorktreeId }.flatMap { RemotePath.split($0.path.path)?.host }
         return worktrees.map { worktree in
             let marker = worktree.id == currentWorktreeId ? "*" : " "
             let label = worktree.branch.padding(toLength: width, withPad: " ", startingAt: 0)
             let path = worktree.path.path
             let host = RemotePath.split(path)?.host
-            let shown = host == here ? RemotePath.realPath(path) : "\(host ?? localMachine):\(RemotePath.realPath(path))"
+            let shown = host == here ? RemotePath.realPath(path) : "\(host ?? ""):\(RemotePath.realPath(path))"
             return "\(marker) \(label)\(shown)"
         }
     }
@@ -37,11 +34,15 @@ public enum AlasCLIWorktreeResolver {
     public static func resolve(target: String, worktrees: [Worktree]) -> Result {
         var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
-        // `host:/path` or `local:/path`, as `rows` prints another machine's worktree.
-        if let colon = trimmed.firstIndex(of: ":"), trimmed[trimmed.index(after: colon)...].hasPrefix("/"),
-           case let host = String(trimmed[..<colon]), RemotePath.isValidHost(host) {
+        // `host:/path`, or `:/path` for this Mac, as `rows` prints another machine's worktree.
+        if let colon = trimmed.firstIndex(of: ":"), trimmed[trimmed.index(after: colon)...].hasPrefix("/") {
+            let host = String(trimmed[..<colon])
             let path = String(trimmed[trimmed.index(after: colon)...])
-            trimmed = host == localMachine ? path : RemotePath.virtual(host: host, realPath: path)
+            if host.isEmpty {
+                trimmed = path
+            } else if RemotePath.isValidHost(host) {
+                trimmed = RemotePath.virtual(host: host, realPath: path)
+            }
         }
 
         // Absolute paths match a worktree root exactly, and never fall
