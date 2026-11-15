@@ -162,6 +162,8 @@ private final class InotifyTree: @unchecked Sendable {
     private var source: DispatchSourceRead?
     private var directories: [Int32: String] = [:]
     private var pending: [String] = []
+    /// Events were dropped since the last batch: the next one is nil, "anything may have changed".
+    private var overflowed = false
     private var flushScheduled = false
     private var warnedAboutLimit = false
 
@@ -210,6 +212,13 @@ private final class InotifyTree: @unchecked Sendable {
         }
     }
 
+    private func removeTree(_ path: String) {
+        for (wd, directory) in directories where directory == path || directory.hasPrefix(path + "/") {
+            inotify_rm_watch(fd, wd)
+            directories[wd] = nil
+        }
+    }
+
     private func addWatch(_ path: String) -> Bool {
         let wd = inotify_add_watch(fd, path, Self.mask | UInt32(IN_ONLYDIR) | UInt32(IN_DONT_FOLLOW))
         guard wd >= 0 else {
@@ -243,11 +252,11 @@ private final class InotifyTree: @unchecked Sendable {
     private func handle(_ event: inotify_event, name: String) {
         if event.mask & UInt32(IN_Q_OVERFLOW) != 0 {
             // Events were dropped, directories created meanwhile among them: watch
-            // the trees again, and report the roots so callers refresh everything.
+            // the trees again, and tell callers anything may have changed.
             for root in roots {
                 addTree(root.resolved)
-                pending.append(root.resolved)
             }
+            overflowed = true
             return
         }
         guard let directory = directories[event.wd] else { return }
@@ -257,6 +266,11 @@ private final class InotifyTree: @unchecked Sendable {
         }
         let path = name.isEmpty ? directory : directory + "/" + name
         pending.append(path)
+        // A folder moved away keeps its watches, which would follow it out of the
+        // tree; drop them. A move within the tree adds them back at the new path.
+        if event.mask & UInt32(IN_ISDIR) != 0, event.mask & UInt32(IN_MOVED_FROM) != 0 {
+            removeTree(path)
+        }
         let createdDirectory = event.mask & UInt32(IN_ISDIR) != 0
             && event.mask & UInt32(IN_CREATE | IN_MOVED_TO) != 0
         if createdDirectory, recursive {
@@ -274,14 +288,15 @@ private final class InotifyTree: @unchecked Sendable {
     }
 
     private func scheduleFlush() {
-        guard !pending.isEmpty, !flushScheduled else { return }
+        guard !pending.isEmpty || overflowed, !flushScheduled else { return }
         flushScheduled = true
         queue.asyncAfter(deadline: .now() + latency) { [weak self] in
             guard let self, source != nil else { return }
             flushScheduled = false
             let paths = pending.map(given)
             pending.removeAll()
-            handler(paths)
+            defer { overflowed = false }
+            handler(overflowed ? nil : paths)
         }
     }
 }

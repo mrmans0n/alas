@@ -198,8 +198,9 @@ public final class ProjectGitWatcher {
         }
         guard let worktreeRoot = resolvedWorktreeRoot else { return }
         stream = FileEventStream(paths: [gitDir.path], fileEvents: true, queue: Self.eventQueue) { [weak self] paths in
-            guard let paths else { return }
-            let batch = ProjectGitWatcher.classifyStreamEvents(paths, gitDir: gitDir, worktreeRoot: worktreeRoot)
+            // Nil when events were lost (an inotify overflow): refresh everything.
+            let batch = paths.map { ProjectGitWatcher.classifyStreamEvents($0, gitDir: gitDir, worktreeRoot: worktreeRoot) }
+                ?? ProjectGitWatcherStreamBatch(sawRevision: true, sawStackMetadata: true, sawTopology: true)
             guard batch.hasChanges else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
