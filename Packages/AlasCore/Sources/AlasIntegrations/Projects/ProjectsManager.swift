@@ -923,9 +923,18 @@ public final class ProjectsManager {
         let clampedDestination = min(max(toIndex, 1), rows.count)
         rows.insert(moving, at: clampedDestination)
 
+        // Rows of a linked record that has not loaded yet keep their place
+        // after the id they followed before.
+        var order = rows.map(\.id)
+        let previous = projects[projectIndex].worktreeOrder
+        let isPending = pendingLinkedRowCheck(primaryId: projectId)
+        for (offset, id) in previous.enumerated() where isPending(id) && !order.contains(id) {
+            let anchor = previous[..<offset].last { order.contains($0) }
+            order.insert(id, at: anchor.flatMap { order.firstIndex(of: $0) }.map { $0 + 1 } ?? 0)
+        }
         projects[projectIndex].worktreeOrderIsManual = true
         projects[projectIndex].worktreeOrder = normalizedWorktreeOrder(
-            rows.map(\.id),
+            order,
             rows: rows,
             project: projects[projectIndex]
         )
@@ -1299,10 +1308,7 @@ public final class ProjectsManager {
         let nonMainIds = Set(rows.filter { !isPinnedMain($0, project: project) }.map(\.id))
         // A linked record whose rows have not loaded yet keeps its ids, so
         // the merged order survives the local rows loading first.
-        let pendingHosts = Set(linkedProjects(of: project.id).filter { worktreesByProject[$0.id] == nil }.compactMap(\.host))
-        func isPending(_ id: String) -> Bool {
-            RemotePath.split(id).map { pendingHosts.contains($0.host) } ?? false
-        }
+        let isPending = pendingLinkedRowCheck(primaryId: project.id)
         var seen: Set<String> = []
         var normalized: [String] = []
 
@@ -1335,5 +1341,12 @@ public final class ProjectsManager {
     /// record's main checkout sorts with the rest of its primary's group.
     private func isPinnedMain(_ worktree: Worktree, project: ProjectConfig) -> Bool {
         worktree.projectId == project.id && isMainWorktree(worktree, project: project)
+    }
+
+    /// Whether a worktree id belongs to a record linked to `primaryId` whose
+    /// rows have not loaded yet, so the primary's order must keep it.
+    private func pendingLinkedRowCheck(primaryId: String) -> (String) -> Bool {
+        let hosts = Set(linkedProjects(of: primaryId).filter { worktreesByProject[$0.id] == nil }.compactMap(\.host))
+        return { id in RemotePath.split(id).map { hosts.contains($0.host) } ?? false }
     }
 }

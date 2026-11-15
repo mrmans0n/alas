@@ -157,4 +157,29 @@ struct ProjectLinkTests {
         #expect(manager.visibleWorktrees(includingLinkedTo: "L").map(\.id)
             == [localMain.id, localFeature.id, remoteFeature.id, remoteMain.id])
     }
+
+    @MainActor
+    @Test func reorderingBeforeRemoteRowsLoadKeepsTheirPlace() {
+        let localMain = Self.row("/l", in: "L")
+        let first = Self.row("/l-wts/a", in: "L")
+        let second = Self.row("/l-wts/b", in: "L")
+        let remoteFeature = Self.row(Self.devbox + "-wts/r", in: "R")
+        var primary = Self.project("L", path: "/l")
+        primary.worktreeOrder = [remoteFeature.id, first.id, second.id]
+        primary.worktreeOrderIsManual = true
+        let manager = ProjectsManager(persistedProjects: [
+            primary,
+            Self.project("R", path: Self.devbox, host: "devbox", linkedTo: "L"),
+        ])
+        for row in [localMain, first, second] {
+            manager.insertOptimisticWorktree(row)
+            manager.setOperationState(for: row, state: nil)
+        }
+        manager.reorderWorktree(projectId: "L", movingId: second.id, destinationId: first.id)
+        manager.insertOptimisticWorktree(remoteFeature)
+        manager.setOperationState(for: remoteFeature, state: nil)
+
+        #expect(manager.visibleWorktrees(includingLinkedTo: "L").map(\.id)
+            == [localMain.id, remoteFeature.id, second.id, first.id])
+    }
 }
