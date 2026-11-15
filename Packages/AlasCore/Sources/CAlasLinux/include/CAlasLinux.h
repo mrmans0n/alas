@@ -9,4 +9,11 @@
 // The uid of a Unix socket's peer (SO_PEERCRED); 0 on success, -1 with errno.
 int alas_peer_uid(int fd, unsigned int *uid);
 
+// posix_spawn_file_actions_addclosefrom_np, a GNU extension older glibc
+// headers only declare under _GNU_SOURCE; `actions` is a posix_spawn_file_actions_t.
+int alas_spawn_add_closefrom(void *actions, int from);
+
+// posix_spawn_file_actions_addchdir_np, likewise a GNU extension.
+int alas_spawn_add_chdir(void *actions, const char *path);
+
 int alas_renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags);

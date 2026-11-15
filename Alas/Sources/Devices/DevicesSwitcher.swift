@@ -19,6 +19,14 @@ struct DevicesSwitcher: View {
                 }
                 ForEach(state.simulatorRows) { item($0) }
             }
+            if !state.androidRows.isEmpty || state.androidNote != nil {
+                Section("Android") {
+                    if let note = state.androidNote {
+                        Text(note)
+                    }
+                    ForEach(state.androidRows) { item($0) }
+                }
+            }
             if !state.vmRows.isEmpty {
                 Section("This worktree's VMs") {
                     ForEach(state.vmRows) { item($0) }

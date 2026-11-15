@@ -76,6 +76,18 @@ import Testing
         #expect((RemotePushRelay.validated(url: url, token: token) != nil) == valid)
     }
 
+    @Test(arguments: [
+        // A phone that names no kinds gets what it got before kinds existed.
+        (nil, ["permission", "input"]),
+        ([], []),
+        // Unknown kinds are dropped.
+        (["finished", "everything"], ["finished"]),
+    ] as [([String]?, Set<String>)])
+    func relayWantsTheKindsThePhoneNamed(kinds: [String]?, wanted: Set<String>) throws {
+        let relay = try #require(RemotePushRelay.validated(url: "https://r.example/push", token: "t", kinds: kinds))
+        #expect(Set(["permission", "input", "finished"].filter(relay.wants)) == wanted)
+    }
+
     @Test func deviceWithoutPushRelayDecodesNil() throws {
         let json = #"{"id":"d","name":"n","tokenHash":"h","createdAt":0}"#
         #expect(try JSONDecoder().decode(RemoteDevice.self, from: Data(json.utf8)).pushRelay == nil)
@@ -145,6 +157,7 @@ enum RemoteWireSamples {
         .permissionDecision(sessionId: "s1", requestId: 7, optionId: "allow", persistScope: "session"),
         .pushRegistration(relayURL: "https://relay.example/push", relayToken: "tok"),
         .pushRegistration(relayURL: "https://relay.example/push", relayToken: nil),
+        .pushRegistration(relayURL: "https://relay.example/push", relayToken: "tok", kinds: ["finished", "permission"]),
         .questionAnswer(sessionId: "s1", requestId: 8, answers: [
             RemoteQuestionAnswer(questionId: "q", selectedOptionIds: ["a", "b"]),
         ]),

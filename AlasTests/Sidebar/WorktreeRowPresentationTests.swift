@@ -4,6 +4,19 @@ import Testing
 @testable import Alas
 
 struct WorktreeRowPresentationTests {
+    /// The prefix ends at the last slash; a name without one is all leaf.
+    @Test(arguments: [
+        ("nacho/refactor-transcript", "nacho/", "refactor-transcript"),
+        ("team/nacho/fix", "team/nacho/", "fix"),
+        ("main", "", "main"),
+        ("odd/", "", "odd/"),
+    ])
+    func branchNameSplitsAtLastSlash(title: String, prefix: String, leaf: String) {
+        let parts = WorktreeRowPresentation.nameParts(title)
+        #expect(parts.prefix == prefix)
+        #expect(parts.leaf == leaf)
+    }
+
     /// A plain file count is the only state without a coloured dot.
     @Test(arguments: [
         (HarnessService.AggregatedState?.some(.running), WorktreeDirtyState.clean, true),

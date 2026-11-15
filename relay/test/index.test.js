@@ -61,6 +61,7 @@ test("bad bodies and routes", async () => {
   assert.equal(await status(post("/register", "not json")), 400);
   assert.equal(await status(post("/register", "x".repeat(5000))), 400);
   assert.equal(await status(post("/push", { ...push(relayToken), kind: "nope" })), 400);
+  assert.equal(await status(post("/push", { ...push(relayToken), kind: "clear", status: "finished" })), 400);
   assert.equal(await status(post("/push", { ...push(relayToken), collapseId: "c".repeat(65) })), 400);
   assert.equal(await status(post("/push", { ...push(relayToken), collapseId: "bad\nid" })), 400);
   const { collapseId, ...noCollapse } = push(relayToken);

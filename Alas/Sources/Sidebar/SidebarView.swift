@@ -314,7 +314,8 @@ struct SidebarView: View {
                                                 reachability: host.map { RemoteHostStatusStore.shared.reachability(for: $0) } ?? .unknown
                                             )
                                         },
-                                        onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) }
+                                        onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) },
+                                        onReconnectMachine: { wt in state.reconnectMachine(projectId: wt.projectId) }
                                     )
                                 }
                                 if let nativePeerSessions = state.nativePeerSessions {

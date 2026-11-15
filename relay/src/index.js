@@ -34,7 +34,9 @@ async function register(request, env) {
 async function push(request, env) {
   const b = await readJSON(request);
   if (!b || !str(b.relayToken, 1024) || !["attention", "clear"].includes(b.kind) || !(typeof b.collapseId === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(b.collapseId))
-    || !str(b.serverId, 128) || !str(b.sessionId, 128) || !["awaitingPermission", "awaitingInput"].includes(b.status)) {
+    || !str(b.serverId, 128) || !str(b.sessionId, 128)
+    // A finished turn only ever alerts; there is nothing to clear for it.
+    || !(["awaitingPermission", "awaitingInput"].includes(b.status) || (b.status === "finished" && b.kind === "attention"))) {
     return new Response("bad request", { status: 400 });
   }
   const opened = await open(env.RELAY_SECRET, b.relayToken);

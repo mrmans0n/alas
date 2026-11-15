@@ -14,7 +14,15 @@ final class PushRegistrar {
     }
 
     private(set) var relayToken: String?
-    /// Called when `relayToken` changes, so the hub can resend it to hosts.
+    /// The `RemotePushKind`s to be alerted for, on every host.
+    var kinds: Set<String> {
+        didSet {
+            guard kinds != oldValue else { return }
+            defaults.set(Array(kinds), forKey: Self.kindsKey)
+            onTokenChange?()
+        }
+    }
+    /// Called when `relayToken` or `kinds` changes, so the hub can resend them to hosts.
     @ObservationIgnored var onTokenChange: (() -> Void)?
     @ObservationIgnored private weak var hub: HostHub?
     @ObservationIgnored private let defaults = UserDefaults(suiteName: AppGroup.id) ?? .standard
@@ -23,6 +31,7 @@ final class PushRegistrar {
     /// registering an unchanged token would still hand every host a "new" one.
     private static let apnsTokenKey = "pushAPNsToken"
     private static let registeredAtKey = "pushRegisteredAt"
+    private static let kindsKey = "pushKinds"
     /// How long a relay token is reused for an unchanged APNs token. Rotating the relay's secret
     /// invalidates every token, and only the relay knows that, so each phone re-registers this often.
     private static let reregisterAfter: TimeInterval = 24 * 60 * 60
@@ -30,6 +39,7 @@ final class PushRegistrar {
     init(hub: HostHub) {
         self.hub = hub
         relayToken = defaults.string(forKey: Self.tokenKey)
+        kinds = (defaults.stringArray(forKey: Self.kindsKey)).map(Set.init) ?? RemotePushKind.defaults
     }
 
     /// Asks for permission and registers, once a host is paired. Call again
@@ -108,6 +118,8 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         let stale = await center.deliveredNotifications().compactMap { note -> String? in
             let id = note.request.identifier
+            // A finished turn's alert is news, not a wait: it stays until the user clears it.
+            guard (note.request.content.userInfo["alas"] as? [String: Any])?["status"] as? String != "finished" else { return nil }
             let origin = (note.request.content.userInfo["alas"] as? [String: Any])?["serverId"] as? String
             return (listed.contains(id) || origin.map(origins.contains) == true) && !waiting.contains(id) ? id : nil
         }

@@ -40,9 +40,18 @@ enum DeviceScreenshot {
         return file
     }
 
+    /// A PNG the device made itself, such as `adb exec-out screencap -p`'s.
+    static func savePNGToDesktop(_ png: Data, kind: String, deviceName: String, now: Date = .now) throws -> URL {
+        let file = try desktopFile(kind, deviceName: deviceName, extension: "png", now: now)
+        try png.write(to: file, options: .withoutOverwriting)
+        return file
+    }
+
     /// Moves a finished screen recording to the Desktop, named like screenshots.
-    static func moveRecordingToDesktop(_ recording: URL, deviceName: String, now: Date = .now) throws -> URL {
-        let file = try desktopFile("Simulator Recording", deviceName: deviceName, extension: "mov", now: now)
+    static func moveRecordingToDesktop(
+        _ recording: URL, deviceName: String, kind: String = "Simulator Recording", now: Date = .now
+    ) throws -> URL {
+        let file = try desktopFile(kind, deviceName: deviceName, extension: recording.pathExtension, now: now)
         try FileManager.default.moveItem(at: recording, to: file)
         return file
     }

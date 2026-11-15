@@ -22,6 +22,19 @@ func launchctl(_ arguments: String...) -> Int32 {
     return process.terminationStatus
 }
 
+/// Runs `systemctl --user` with `arguments`, its output discarded, and returns its status.
+@discardableResult
+func systemctlUser(_ arguments: String...) -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["systemctl", "--user"] + arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return -1 }
+    process.waitUntilExit()
+    return process.terminationStatus
+}
+
 /// The `config`, `peers`, `project`, `restart` and `setup` commands. The project operations
 /// go through the running host's socket when one serves the profile, and
 /// through a host booted in this process when none does.
@@ -358,6 +371,16 @@ enum HostCommands {
     /// Restarts the launch agent's host. `afterSaving`, a host run in a
     /// terminal is no failure: the settings are saved, and it says how to apply them.
     static func restart(afterSaving: Bool = false) throws {
+        #if os(Linux)
+        let unit = HostSystemdUnit(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
+        if FileManager.default.fileExists(atPath: unit.unitURL.path), systemctlUser("is-active", "--quiet", unit.name) == 0 {
+            guard systemctlUser("restart", unit.name) == 0 else {
+                throw HostCommandError("systemctl could not restart \(unit.name)")
+            }
+            print("Restarted.")
+            return
+        }
+        #else
         let agent = HostLaunchAgent(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
         let service = "gui/\(getuid())/\(agent.label)"
         if FileManager.default.fileExists(atPath: agent.plistURL.path), launchctl("print", service) == 0 {
@@ -367,11 +390,12 @@ enum HostCommands {
             print("Restarted.")
             return
         }
+        #endif
         switch DataDirectoryHolder.current() {
         case .host where afterSaving:
-            print("Saved. The host is not running as a launch agent; stop it (Ctrl-C) and start it again to apply.")
+            print("Saved. The host is not running as a launch agent or service; stop it (Ctrl-C) and start it again to apply.")
         case .host, .unknown:
-            throw HostCommandError("The host is not running as a launch agent; stop it (Ctrl-C) and start it again.")
+            throw HostCommandError("The host is not running as a launch agent or service; stop it (Ctrl-C) and start it again.")
         case .none, .app:
             print("No host is running.")
         }

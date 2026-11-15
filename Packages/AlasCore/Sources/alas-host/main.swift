@@ -22,7 +22,7 @@ usage: alas-host [--wait-for-lock]
        alas-host restart
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
-(default: ~/Library/Application Support/Alas) on its local socket, and prints
+(default: ~/Library/Application Support/Alas, ~/.local/share/Alas on Linux) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
 and prints its address, with the web client of the Alas.app it ships in, of
 the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
@@ -45,9 +45,10 @@ revoking its access, through the running host when one serves the profile.
 so this host's agents can delegate there, and nothing else: the Mac grants
 this host a token limited to delegated work. The two must reach each other.
 
-`alas-host install-agent` installs and starts a launchd agent that runs this
-executable with --wait-for-lock at login, and restarts it after a crash;
-`uninstall-agent` stops and removes it. Each profile has its own agent.
+`alas-host install-agent` installs and starts a launchd agent (a systemd user
+unit on Linux) that runs this executable with --wait-for-lock at login, and
+restarts it after a crash; `uninstall-agent` stops and removes it. Each
+profile has its own agent.
 
 `alas-host config` reads and changes the host's settings in the profile's
 app.json; the running host applies a change once restarted. `alas-host project`
@@ -114,6 +115,35 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     }
     guard let started else { fail("cannot locate this executable") }
     let executable = URL(fileURLWithPath: started).standardizedFileURL
+    #if os(Linux)
+    let unit = HostSystemdUnit(executable: executable)
+    if arguments == ["uninstall-agent"] {
+        systemctlUser("disable", "--now", unit.name)
+        do {
+            if FileManager.default.fileExists(atPath: unit.unitURL.path) {
+                try FileManager.default.removeItem(at: unit.unitURL)
+            }
+        } catch {
+            fail("cannot remove \(unit.unitURL.path): \(error.localizedDescription)")
+        }
+        systemctlUser("daemon-reload")
+        print("removed \(unit.unitURL.path)")
+        exit(0)
+    }
+    do {
+        try FileManager.default.createDirectory(at: unit.logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unit.unitURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(unit.unitText.utf8).write(to: unit.unitURL, options: .atomic)
+    } catch {
+        fail("cannot write \(unit.unitURL.path): \(error.localizedDescription)")
+    }
+    guard systemctlUser("daemon-reload") == 0, systemctlUser("enable", "--now", unit.name) == 0 else {
+        fail("systemctl --user could not start \(unit.name) from \(unit.unitURL.path)")
+    }
+    print("installed \(unit.unitURL.path)")
+    print("To keep it serving while you are logged out: loginctl enable-linger \(NSUserName())")
+    exit(0)
+    #else
     let agent = HostLaunchAgent(executable: executable)
     let domain = "gui/\(getuid())"
     // 3 (ESRCH) is an agent that is not loaded: there is nothing to stop.
@@ -146,6 +176,7 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     }
     print("installed \(agent.plistURL.path)")
     exit(0)
+    #endif
 }
 let waitsForLock = arguments == ["--wait-for-lock"]
 if !arguments.isEmpty, !waitsForLock {
@@ -526,6 +557,17 @@ if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePa
         }
     }
 }
+#if os(Linux)
+// A host unpacked from the Linux tarball updates itself from the latest release.
+if waitsForLock, let executablePath, let root = HostSelfUpdate.linuxInstallRoot(executablePath: executablePath) {
+    host.selfUpdate = {
+        try await HostSelfUpdate.upgradeLinuxInstall(root: root)
+        if executableWasReplaced() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { stop() } }
+        }
+    }
+}
+#endif
 
 print(socket.path)
 fflush(nil)

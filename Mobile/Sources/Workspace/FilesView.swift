@@ -70,7 +70,7 @@ private struct FileTreeRow: View {
             if node.isSubmodule {
                 Text("submodule").font(.caption).foregroundStyle(.secondary)
             } else if let badge = node.badge {
-                Text(badge).font(.caption).foregroundStyle(.secondary)
+                StatusBadge(status: badge)
             }
         }
         .padding(.leading, CGFloat(depth) * 14)

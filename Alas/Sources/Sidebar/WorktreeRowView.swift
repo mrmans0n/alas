@@ -222,6 +222,7 @@ struct WorktreeRowView: View {
     var isHighlighted = false
     var machineBadge: WorktreeRowPresentation.MachineBadge?
     var onRemoveLinkedCheckout: () -> Void = {}
+    var onReconnectMachine: () -> Void = {}
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
     @State private var hovering = false
@@ -471,14 +472,9 @@ struct WorktreeRowView: View {
         HStack(spacing: scale.space[2]) {
             leadingGlyph(status: status, worktreeStatus: worktreeStatus)
                 .frame(width: Self.glyphSlotWidth)
-            Text(worktree.title)
+            branchName
                 .font(isSelected ? scale.emphasisFont : scale.bodyFont)
-                .foregroundColor(theme.color(branchColorToken))
-                // The selected row may wrap, so the branch you are on reads in full.
-                .lineLimit(isSelected ? 2 : 1)
-                // Sibling branches differ at the end, so that is what survives.
-                .truncationMode(.middle)
-                // The full name, for when the middle is cut.
+                // The full name, for when part of it is cut.
                 .help(worktree.title)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if isBranchNamePending, !isNamingBranch {
@@ -503,6 +499,25 @@ struct WorktreeRowView: View {
             }
         }
         .frame(minHeight: HarnessSessionBadge.diameter)
+    }
+
+    /// The shared prefix is dim, and shows only when the whole name fits on
+    /// one line. Otherwise it is dropped so the part that tells siblings
+    /// apart keeps the room; the selected row may wrap it to a second line.
+    private var branchName: some View {
+        let parts = WorktreeRowPresentation.nameParts(worktree.title)
+        let leaf = Text(parts.leaf).foregroundColor(theme.color(branchColorToken))
+        return ViewThatFits(in: .horizontal) {
+            if !parts.prefix.isEmpty {
+                (Text(parts.prefix).foregroundColor(theme.color("fg-faint")) + leaf)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            leaf
+                .lineLimit(isSelected ? 2 : 1)
+                // Sibling branches differ at the end, so that is what survives.
+                .truncationMode(.middle)
+        }
     }
 
     /// A row's branch or home icon, unless agent state or a conflict takes over.
@@ -548,6 +563,7 @@ struct WorktreeRowView: View {
     private var timeLabel: some View {
         Text(WorktreeRowPresentation.compactAge(since: worktree.lastActivity, now: Date()))
             .monospacedDigit()
+            .foregroundColor(rowColor("fg-faint"))
             .fixedSize()
             .help(relative(worktree.lastActivity))
     }
@@ -681,13 +697,13 @@ struct WorktreeRowView: View {
         let upstreamOnNameLine = WorktreeRowPresentation.upstreamItemsAtRest(upstreamItems)
         return HStack(spacing: scale.space[2]) {
             if let status, noteLeads {
-                statusNote(status)
+                statusNote(status, leads: true)
             }
             PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
             stackSummaryView
             workspaceCheckoutButton
             if let status {
-                if !noteLeads { statusNote(status) }
+                if !noteLeads { statusNote(status, leads: false) }
             } else if let commits = visibleBranchCommits {
                 commitCount(commits, label: "\(commits.count) commit\(commits.count == 1 ? "" : "s")")
             }
@@ -736,8 +752,9 @@ struct WorktreeRowView: View {
         .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
     }
 
-    private func statusNote(_ status: StatusPresentation) -> some View {
+    private func statusNote(_ status: StatusPresentation, leads: Bool) -> some View {
         Text(status.note)
+            .fontWeight(leads ? .semibold : nil)
             .foregroundColor(rowColor(status.colorToken))
             .fixedSize()
     }
@@ -939,6 +956,9 @@ struct WorktreeRowView: View {
             Button("Reveal in Finder", action: onRevealInFinder)
         }
         if let machineBadge {
+            if machineBadge.state == .offline {
+                Button("Reconnect to \(machineBadge.label)", action: onReconnectMachine)
+            }
             Button("Remove \(machineBadge.label) Checkout from Alas…", action: onRemoveLinkedCheckout)
         }
         Divider()

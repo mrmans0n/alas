@@ -247,8 +247,8 @@ final class HostHub {
     }
 
     private func sendPushRegistration(to id: UUID) {
-        guard let token = registrar?.relayToken, capabilities[id]?.contains(PushRelayCapability.v1) == true else { return }
-        send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: token), to: id)
+        guard let registrar, let token = registrar.relayToken, capabilities[id]?.contains(PushRelayCapability.v1) == true else { return }
+        send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: token, kinds: registrar.kinds.sorted()), to: id)
     }
 
     private func sendPushRegistrationToOnlineHosts() {
