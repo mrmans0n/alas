@@ -113,6 +113,7 @@
 		0EC2E8C6E5E00DD040CC4847 /* AppStateCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */; };
 		0F118A7F54315A836A169B89 /* GGStackCreateModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70BDCB22C2FDC36F6022ADB3 /* GGStackCreateModeTests.swift */; };
 		0F31C765837B1560F3671BB9 /* ACPSymbolHoverPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E5F1EF8C0CEE1DD78AE8BC /* ACPSymbolHoverPreview.swift */; };
+		0F3AE3E8674A133F2279E049 /* LatestReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BA1BBA4CE306C7D09AAAA9 /* LatestReply.swift */; };
 		0F556F82FA5BF1E8D50096E2 /* RemoteConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3066B2C18213B0105D32213F /* RemoteConfigTests.swift */; };
 		0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */; };
 		0FD892082365E7FCFD0526F3 /* MarkdownFenceEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB90EF05C6A486F35ACD0E1B /* MarkdownFenceEditing.swift */; };
@@ -3131,6 +3132,7 @@
 		906D92F7AD84F313508D9CFD /* ACPComposerShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerShell.swift; sourceTree = "<group>"; };
 		90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatLayoutTests.swift; sourceTree = "<group>"; };
 		90A3C6694C4027DE1A26EC59 /* SSHCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCommandTests.swift; sourceTree = "<group>"; };
+		90BA1BBA4CE306C7D09AAAA9 /* LatestReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestReply.swift; sourceTree = "<group>"; };
 		90C6EEE1477262DFA7B30B0C /* DiffReviewBatchLoading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewBatchLoading.swift; sourceTree = "<group>"; };
 		90D74C28EB7B8C3CBC53994D /* MergeAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeAgent.swift; sourceTree = "<group>"; };
 		90E25D0520B813E8AC9A7174 /* RemoteTerminalLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalLaunchTests.swift; sourceTree = "<group>"; };
@@ -5083,6 +5085,7 @@
 				E3681AB08B42D970C2E49A68 /* AndroidSocket.swift */,
 				FE7B9B6C8188A30C96FEA46A /* AndroidStreamClient.swift */,
 				F6CF5FD0C7165B1E492FE6CD /* H264Decoder.swift */,
+				90BA1BBA4CE306C7D09AAAA9 /* LatestReply.swift */,
 			);
 			path = Android;
 			sourceTree = "<group>";
@@ -8196,6 +8199,7 @@
 				1FF8740B9EC9939426BE5690 /* LSPServerLeaseSet.swift in Sources */,
 				B68E69A96932F5577612CF5F /* LSPServerStatusDetail.swift in Sources */,
 				E3AB9E6A83E2A8C89A5E5CC5 /* LSPStatusPill.swift in Sources */,
+				0F3AE3E8674A133F2279E049 /* LatestReply.swift in Sources */,
 				6866301B0A6F1F7488819B98 /* LineEnding.swift in Sources */,
 				AE13F552411B32C39DDC2C7B /* LinuxGoldenImage.swift in Sources */,
 				93909386539CDA15733FAF0B /* LinuxGoldenInstaller.swift in Sources */,

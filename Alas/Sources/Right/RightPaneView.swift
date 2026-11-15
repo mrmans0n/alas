@@ -313,6 +313,8 @@ struct RightPaneView: View {
         if case .android(let target, .ready) = tabState.stage, let device = target.device {
             return AnyView(AndroidActions(device: device, pane: state.androidPane, recorder: state.deviceRecorder) {
                 Task {
+                    // Saves a recording before the device goes.
+                    await state.deviceRecorder.simulatorStopped(udid: device.serial)
                     await state.androidPane.shutDown(device)
                     // Back to the AVD's row, to boot it again.
                     rps.devicesSelection = target.avdName.map { .android(AndroidListing.avdID($0)) }

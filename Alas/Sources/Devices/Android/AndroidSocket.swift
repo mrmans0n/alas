@@ -76,8 +76,11 @@ final class AndroidSocket: @unchecked Sendable {
         }
     }
 
-    func write(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { _ in })
+    /// `onError` runs on the socket's queue when the write fails.
+    func write(_ data: Data, onError: @escaping @Sendable (String) -> Void) {
+        connection.send(content: data, completion: .contentProcessed { error in
+            if let error { onError("The screen stopped taking input: \(error.localizedDescription)") }
+        })
     }
 
     func close() {
@@ -98,9 +101,11 @@ enum AndroidStreamConnector {
         isolation: isolated (any Actor)? = #isolation,
         attempts: Int = 100,
         pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(100)) },
+        stop: () -> Bool = { false },
         attempt: () async throws -> Socket?
     ) async throws -> Socket {
         for _ in 0..<attempts {
+            if stop() { throw CancellationError() }
             if let socket = try? await attempt() { return socket }
             try await pause()
         }

@@ -2086,6 +2086,8 @@ final class AppState {
             await self?.vmManager.stopAll()
             // simctl would record on after Alas quits; this also saves your recordings.
             await self?.madeDeviceRecorder?.stopAll()
+            // Takes down the scrcpy servers and their adb forwards.
+            await self?.androidStreams.stopAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()

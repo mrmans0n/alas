@@ -22,7 +22,9 @@ final class AndroidScreenSession {
     private var controlSocket: AndroidSocket?
     private let log = ServerLog()
     private var stopped = false
-    private var clipboardWaiter: CheckedContinuation<String?, Never>?
+    private let clipboard = LatestReply<String>()
+    /// Removes the adb forward; awaited when Alas quits.
+    private var forwardRemoval: Task<Void, Never>?
 
     init(serial: String, control: AndroidControl, serverJar: URL) {
         self.serial = serial
@@ -36,25 +38,30 @@ final class AndroidScreenSession {
             _ = try? await control.adb(serial, ["shell", "pkill", "-f", "com.genymobile.scrcpy.Server"])
             // The server deletes itself when it exits, so it is pushed every time.
             _ = try await control.adb(serial, ["push", serverJar.path, Self.devicePath], timeout: 60)
+            // Stopped while starting: anything acquired from here on is torn down.
+            guard !stopped else { return }
             let scid = String(format: "%08x", UInt32.random(in: 1...0x7FFF_FFFF))
             let port = try await control.adb(serial, ["forward", "tcp:0", "localabstract:scrcpy_\(scid)"])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let number = UInt16(port) else { throw AndroidControlError("adb didn't forward a port.") }
             self.port = port
+            guard !stopped else { return tearDown() }
             server = try launchServer(scid: scid)
-            let video = try await AndroidStreamConnector.connect { try await AndroidSocket.openAnswered(port: number) }
-            let controlSocket = try await AndroidSocket.open(port: number)
-            guard !stopped else {
-                video.close()
-                controlSocket.close()
-                return
+            let video = try await AndroidStreamConnector.connect(stop: { [weak self] in self?.stopped ?? true }) {
+                try await AndroidSocket.openAnswered(port: number)
             }
             self.video = video
+            let controlSocket = try await AndroidSocket.open(port: number)
             self.controlSocket = controlSocket
+            guard !stopped else { return tearDown() }
             _ = try await video.read(exactly: 64) // the device's name
             startPumps(video: video, control: controlSocket)
         } catch {
-            fail("The screen couldn't start: \(error.localizedDescription)")
+            if stopped {
+                tearDown()
+            } else {
+                fail("The screen couldn't start: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -64,27 +71,22 @@ final class AndroidScreenSession {
         tearDown()
     }
 
+    /// Stops, and waits until the adb forward is gone.
+    func stopAndWait() async {
+        stop()
+        await forwardRemoval?.value
+    }
+
     func send(_ message: Data) {
-        controlSocket?.write(message)
+        controlSocket?.write(message) { [weak self] reason in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.fail(reason) } }
+        }
     }
 
     /// Asks the device to copy its selection and returns it; nil after 2 s.
     func copyClipboard() async -> String? {
         guard controlSocket != nil else { return nil }
-        clipboardArrived(nil)
-        return await withCheckedContinuation { continuation in
-            clipboardWaiter = continuation
-            send(ScrcpyControl.getClipboard(copy: true))
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
-                self?.clipboardArrived(nil)
-            }
-        }
-    }
-
-    private func clipboardArrived(_ text: String?) {
-        clipboardWaiter?.resume(returning: text)
-        clipboardWaiter = nil
+        return await clipboard.request(timeout: .seconds(2)) { send(ScrcpyControl.getClipboard(copy: true)) }
     }
 
     private func launchServer(scid: String) throws -> Process {
@@ -122,9 +124,15 @@ final class AndroidScreenSession {
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.fail(reason) } }
             }
         ).start()
-        AndroidControlPump(socket: control) { [weak self] text in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.clipboardArrived(text) } }
-        }.start()
+        AndroidControlPump(
+            socket: control,
+            onClipboard: { [weak self] text in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.clipboard.deliver(text) } }
+            },
+            onEnd: { [weak self] reason in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.fail(reason) } }
+            }
+        ).start()
     }
 
     private func fail(_ reason: String) {
@@ -134,16 +142,19 @@ final class AndroidScreenSession {
         onStop(log.tail.map { "\(reason)\n\($0)" } ?? reason)
     }
 
+    /// Safe to run again: a session stopped while starting runs it once more
+    /// for what it acquired afterwards.
     private func tearDown() {
         video?.close()
         controlSocket?.close()
         server?.terminationHandler = nil
         server?.terminate()
-        clipboardArrived(nil)
+        clipboard.cancel()
         if let port {
+            self.port = nil
             let control = self.control
             let serial = self.serial
-            Task { _ = try? await control.adb(serial, ["forward", "--remove", "tcp:\(port)"]) }
+            forwardRemoval = Task { _ = try? await control.adb(serial, ["forward", "--remove", "tcp:\(port)"]) }
         }
     }
 }
@@ -174,6 +185,8 @@ final class AndroidVideoPump: @unchecked Sendable {
     private let onSize: @Sendable (Int, Int) -> Void
     private let onFrame: @Sendable (IOSurface) -> Void
     private let onEnd: @Sendable (String) -> Void
+    /// The decoder couldn't take the stream's format or a key frame.
+    private var failed = false
 
     init(
         socket: AndroidSocket, onSize: @escaping @Sendable (Int, Int) -> Void,
@@ -193,6 +206,7 @@ final class AndroidVideoPump: @unchecked Sendable {
             case .success(let data):
                 do {
                     for event in try parser.feed(data) { handle(event) }
+                    if failed { return onEnd("The device's video couldn't be decoded.") }
                     start()
                 } catch {
                     onEnd("The device sent video Alas can't read.")
@@ -206,29 +220,37 @@ final class AndroidVideoPump: @unchecked Sendable {
         case .session(let width, let height):
             onSize(width, height)
         case .config(let config):
-            decoder.configure(config)
-        case .frame(let payload, _):
+            if !decoder.configure(config) { failed = true }
+        case .frame(let payload, let keyFrame):
             guard let image = decoder.decode(payload),
-                  let surface = CVPixelBufferGetIOSurface(image)?.takeUnretainedValue() else { return }
+                  let surface = CVPixelBufferGetIOSurface(image)?.takeUnretainedValue() else {
+                // A key frame starts the picture over; without it the screen stays blank.
+                if keyFrame { failed = true }
+                return
+            }
             onFrame(surface)
         }
     }
 }
 
-/// Reads the control socket's device messages: the clipboard after ⌘C.
+/// Reads the control socket's device messages: the clipboard after ⌘C. Its
+/// end ends the session, since input goes through the same socket.
 final class AndroidControlPump: @unchecked Sendable {
     private let socket: AndroidSocket
     private var parser = ScrcpyDeviceMessageParser()
     private let onClipboard: @Sendable (String) -> Void
+    private let onEnd: @Sendable (String) -> Void
 
-    init(socket: AndroidSocket, onClipboard: @escaping @Sendable (String) -> Void) {
+    init(socket: AndroidSocket, onClipboard: @escaping @Sendable (String) -> Void, onEnd: @escaping @Sendable (String) -> Void) {
         self.socket = socket
         self.onClipboard = onClipboard
+        self.onEnd = onEnd
     }
 
     func start() {
         socket.receive { [self] result in
-            guard case .success(let data) = result, let messages = try? parser.feed(data) else { return }
+            guard case .success(let data) = result else { return onEnd("The screen stopped taking input.") }
+            guard let messages = try? parser.feed(data) else { return onEnd("The device sent a message Alas can't read.") }
             for case .clipboard(let text) in messages { onClipboard(text) }
             start()
         }

@@ -13,9 +13,10 @@ final class H264Decoder {
         if let session { VTDecompressionSessionInvalidate(session) }
     }
 
-    /// A config packet (SPS and PPS); a new one, after a rotation, replaces the session.
-    func configure(_ config: Data) {
-        guard let sets = H264AnnexB.parameterSets(config) else { return }
+    /// A config packet (SPS and PPS); a new one, after a rotation, replaces the
+    /// session. False when the decoder can't take it.
+    func configure(_ config: Data) -> Bool {
+        guard let sets = H264AnnexB.parameterSets(config) else { return false }
         if let session { VTDecompressionSessionInvalidate(session) }
         session = nil
         format = nil
@@ -33,7 +34,7 @@ final class H264Decoder {
                 )
             }
         }
-        guard status == noErr, let format else { return }
+        guard status == noErr, let format else { return false }
         let attributes: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
@@ -42,9 +43,10 @@ final class H264Decoder {
         guard VTDecompressionSessionCreate(
             allocator: nil, formatDescription: format, decoderSpecification: nil,
             imageBufferAttributes: attributes as CFDictionary, outputCallback: nil, decompressionSessionOut: &session
-        ) == noErr else { return }
+        ) == noErr else { return false }
         self.format = format
         self.session = session
+        return true
     }
 
     /// The image for one frame's Annex B payload; nil before a config, or when it doesn't decode.
@@ -67,9 +69,11 @@ final class H264Decoder {
             sampleTimingArray: nil, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample
         ) == noErr, let sample else { return nil }
         let output = DecodedImage()
-        VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) { status, _, image, _, _ in
+        let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) {
+            status, _, image, _, _ in
             if status == noErr { output.image = image }
         }
+        guard status == noErr else { return nil }
         VTDecompressionSessionWaitForAsynchronousFrames(session)
         return output.image
     }

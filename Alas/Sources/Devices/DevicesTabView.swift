@@ -22,7 +22,6 @@ struct DevicesTabView: View {
             await model.pollWhileVisible()
         }
         .task {
-            state.androidPane.checkSDK()
             guard state.androidPane.control != nil else { return }
             await state.androidPane.pollWhileVisible()
         }

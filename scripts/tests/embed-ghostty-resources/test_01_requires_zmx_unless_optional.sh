@@ -49,6 +49,9 @@ echo "Cua Driver 0.0.0-test" > "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt"
 echo 0.0.0-test > "${srcroot}/.build/cua-driver/current"
 mkdir -p "${srcroot}/ThirdParty/cua-driver"
 echo "Cua Driver third-party notices" > "${srcroot}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt"
+mkdir -p "${srcroot}/.build/scrcpy"
+echo "scrcpy server jar" > "${srcroot}/.build/scrcpy/scrcpy-server"
+echo "scrcpy licence" > "${srcroot}/.build/scrcpy/LICENSE"
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"
@@ -97,6 +100,8 @@ test -x "${resources}/alas-vm-guest-linux/alas-vm-guest-linux"
 test -x "${resources}/alas-vm-guest-linux/cua-driver"
 cmp "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt" "${resources}/alas-vm-guest-linux/CUA-DRIVER-LICENSE.txt"
 cmp "${srcroot}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt" "${resources}/alas-vm-guest-linux/THIRD-PARTY-NOTICES.txt"
+cmp "${srcroot}/.build/scrcpy/scrcpy-server" "${resources}/scrcpy/scrcpy-server"
+cmp "${srcroot}/.build/scrcpy/LICENSE" "${resources}/scrcpy/LICENSE"
 
 # Xcode can report undefined_arch for the parent target while ARCHS still
 # names the single requested slice. Resource embedding must select that same

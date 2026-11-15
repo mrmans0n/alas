@@ -15,11 +15,16 @@ protocol DeviceScreenSource: AnyObject {
     func key(udid: String, usage: UInt32, down: Bool)
     /// A scroll over `point`, in wheel steps.
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double)
+    /// A held key repeated on the Mac.
+    func keyRepeat(udid: String, usage: UInt32)
 }
 
 extension DeviceScreenSource {
     /// Simulators take scrolls as drags; they ignore the wheel.
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double) {}
+
+    /// Simulators repeat a held key themselves.
+    func keyRepeat(udid: String, usage: UInt32) {}
 }
 
 extension SimulatorStreamClient: DeviceScreenSource {}

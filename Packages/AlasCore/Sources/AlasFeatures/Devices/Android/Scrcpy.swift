@@ -113,8 +113,18 @@ public enum ScrcpyControl {
         Data([8, copy ? 1 : 0])
     }
 
+    /// The most clipboard text scrcpy v5.0.1 accepts, in UTF-8 bytes.
+    public static let clipboardTextLimit = 262_130
+
+    /// Text past `clipboardTextLimit` is cut at a character boundary.
     public static func setClipboard(sequence: UInt64, text: String, paste: Bool) -> Data {
-        let utf8 = Data(text.utf8)
+        var utf8 = Data(text.utf8)
+        if utf8.count > clipboardTextLimit {
+            var end = clipboardTextLimit
+            // Back off continuation bytes (10xxxxxx) to the start of a character.
+            while end > 0, utf8[end] & 0xC0 == 0x80 { end -= 1 }
+            utf8 = utf8.prefix(end)
+        }
         var data = Data([9])
         data.append(be: sequence)
         data.append(paste ? 1 : 0)

@@ -8,9 +8,8 @@ import Observation
 @MainActor
 @Observable
 final class AndroidPaneModel {
-    /// The user's SDK; nil until `checkSDK()`, and when there is none.
-    private(set) var control: AndroidControl?
-    private(set) var sdkChecked = false
+    /// The user's SDK, found when Alas starts; nil when there is none.
+    let control: AndroidControl? = AndroidSDK.locate().map(AndroidControl.init)
     private(set) var devices: [AndroidDevice]?
     private(set) var avds: [String] = []
     private(set) var listError: String?
@@ -23,15 +22,8 @@ final class AndroidPaneModel {
 
     static let noSDK = "Install Android Studio or the SDK command-line tools to use Android devices"
 
-    func checkSDK() {
-        guard !sdkChecked else { return }
-        control = AndroidSDK.locate().map(AndroidControl.init)
-        sdkChecked = true
-    }
-
     /// What the Devices tab lists; nil while the first list loads.
     var listing: AndroidListing? {
-        guard sdkChecked else { return nil }
         guard control != nil else { return AndroidListing(devices: [], avds: [], bootingAVDs: [], note: Self.noSDK) }
         if let listError { return AndroidListing(devices: [], avds: [], bootingAVDs: [], note: listError) }
         guard let devices else { return nil }
@@ -59,9 +51,10 @@ final class AndroidPaneModel {
 
     func boot(avd: String) async {
         guard let control else { return }
+        // A second Boot while the first runs would start the AVD twice.
+        guard bootingAVDs.insert(avd).inserted else { return }
         let id = AndroidListing.avdID(avd)
         errors[id] = nil
-        bootingAVDs.insert(avd)
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("alas-emulator-\(avd).log")
         do {
             let emulator = try control.launchEmulator(avd: avd, log: log)

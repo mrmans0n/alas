@@ -22,6 +22,8 @@ final class AndroidStreamClient: DeviceScreenSource {
     @ObservationIgnored private var subscriptions = StreamSubscriptions()
     @ObservationIgnored private var lastFrames: [String: DeviceFrame] = [:]
     @ObservationIgnored private var metaStates: [String: AndroidMetaState] = [:]
+    /// How many times each held key has repeated, by device.
+    @ObservationIgnored private var keyRepeats: [String: [UInt32: Int32]] = [:]
     @ObservationIgnored private var clipboardSequence: UInt64 = 0
 
     init(
@@ -37,7 +39,9 @@ final class AndroidStreamClient: DeviceScreenSource {
     ) -> UUID {
         let token = UUID()
         screens[udid, default: [:]][token] = Screen(onFrame: onFrame, onStop: onStop)
-        if subscriptions.add(udid) == .start { start(udid) }
+        // A stream that stopped starts again for a new screen (Retry), however
+        // many screens still watch it.
+        if subscriptions.add(udid) == .start || sessions[udid] == nil { start(udid) }
         return token
     }
 
@@ -49,6 +53,7 @@ final class AndroidStreamClient: DeviceScreenSource {
             lastFrames[udid] = nil
             videoSizes[udid] = nil
             metaStates[udid] = nil
+            keyRepeats[udid] = nil
         }
     }
 
@@ -67,9 +72,26 @@ final class AndroidStreamClient: DeviceScreenSource {
 
     func key(udid: String, usage: UInt32, down: Bool) {
         guard let session = sessions[udid] else { return }
+        keyRepeats[udid]?[usage] = nil
         metaStates[udid, default: AndroidMetaState()].update(hidUsage: usage, down: down)
         guard let keycode = AndroidKeys.keycode(forHIDUsage: usage) else { return }
         session.send(ScrcpyControl.keycode(down ? .down : .up, keycode: keycode, metastate: metaStates[udid]?.value ?? 0))
+    }
+
+    /// Android repeats a held key only when told: each repeat is another down
+    /// with a higher count.
+    func keyRepeat(udid: String, usage: UInt32) {
+        guard let session = sessions[udid], let keycode = AndroidKeys.keycode(forHIDUsage: usage) else { return }
+        let count = (keyRepeats[udid]?[usage] ?? 0) + 1
+        keyRepeats[udid, default: [:]][usage] = count
+        session.send(ScrcpyControl.keycode(.down, keycode: keycode, repeat: count, metastate: metaStates[udid]?.value ?? 0))
+    }
+
+    /// Ends every stream and waits for its adb forward to go, for quitting.
+    func stopAll() async {
+        let running = Array(sessions.values)
+        sessions = [:]
+        for session in running { await session.stopAndWait() }
     }
 
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double) {

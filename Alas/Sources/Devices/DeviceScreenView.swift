@@ -309,8 +309,12 @@ final class DeviceScreenNSView: NSView {
             super.keyDown(with: event)
             return
         }
-        // Repeats come back nil: the simulator repeats a held key itself.
-        if let key = heldKeys.keyDown(event.keyCode, command: false) { sendKey(key) }
+        // Repeats come back nil: a simulator repeats a held key itself; others are told.
+        if let key = heldKeys.keyDown(event.keyCode, command: false) {
+            sendKey(key)
+        } else if event.isARepeat, let udid, let usage = HIDKeyboardUsage.usage(forKeyCode: event.keyCode) {
+            client?.keyRepeat(udid: udid, usage: usage)
+        }
     }
 
     override func keyUp(with event: NSEvent) {

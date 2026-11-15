@@ -32,16 +32,18 @@ public struct AndroidControl: Sendable {
         var devices = AndroidDevice.parseList(try await adb(nil, ["devices", "-l"]))
         for index in devices.indices where devices[index].state == .ready {
             let serial = devices[index].serial
-            if let previous = known[serial], previous.state == .ready, previous.release != nil {
+            // Each detail is kept once read; one that failed is asked again.
+            if let previous = known[serial], previous.state == .ready {
                 devices[index].avdName = previous.avdName
                 devices[index].release = previous.release
-                continue
             }
-            if devices[index].isEmulator {
+            if devices[index].isEmulator, devices[index].avdName == nil {
                 devices[index].avdName = (try? await adb(serial, ["emu", "avd", "name"])).flatMap(AndroidDevice.parseAVDName)
             }
-            devices[index].release = (try? await adb(serial, ["shell", "getprop", "ro.build.version.release"]))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if devices[index].release == nil {
+                devices[index].release = (try? await adb(serial, ["shell", "getprop", "ro.build.version.release"]))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
         return devices
     }

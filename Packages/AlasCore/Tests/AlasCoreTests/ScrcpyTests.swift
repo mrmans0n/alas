@@ -62,6 +62,16 @@ struct ScrcpyTests {
             == Self.bytes([0x09, 1, 2, 3, 4, 5, 6, 7, 8, 1, 0, 0, 0, 0x0D]) + Data("hello, world!".utf8))
     }
 
+    /// scrcpy refuses clipboard text over 262,130 UTF-8 bytes; longer text is
+    /// cut at a character boundary.
+    @Test func clipboardTextIsCutToWhatScrcpyAccepts() throws {
+        let text = String(repeating: "a", count: 262_129) + "é" + "tail"
+        let message = ScrcpyControl.setClipboard(sequence: 1, text: text, paste: true)
+        let length = Int(message[10]) << 24 | Int(message[11]) << 16 | Int(message[12]) << 8 | Int(message[13])
+        #expect(length == 262_129)
+        #expect(message.count == 14 + length)
+    }
+
     // scrcpy v5.0.1's app/tests/test_device_msg_deserialize.c, fed in two pieces.
     @Test func deviceMessagesParseAcrossReads() throws {
         var parser = ScrcpyDeviceMessageParser()
@@ -81,7 +91,7 @@ struct ScrcpyTests {
 
     @Test(arguments: [
         (UInt32(0x04), Int32(29)), (0x1D, 54), (0x1E, 8), (0x27, 7), (0x28, 66), (0x2A, 67), (0x2C, 62),
-        (0x4F, 22), (0x52, 19), (0xE1, 59), (0x3A, 131),
+        (0x4F, 22), (0x52, 19), (0xE1, 59), (0x3A, 131), (0x58, 160),
     ] as [(UInt32, Int32)])
     func hidUsagesMapToAndroidKeycodes(usage: UInt32, keycode: Int32) {
         #expect(AndroidKeys.keycode(forHIDUsage: usage) == keycode)
