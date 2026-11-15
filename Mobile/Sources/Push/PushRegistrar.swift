@@ -84,14 +84,18 @@ final class PushRegistrar {
         onTokenChange?()
     }
 
-    /// Removes delivered alerts whose session a current list shows and
-    /// not waiting, on any host. Catches clear pings iOS never delivered.
+    /// Removes delivered alerts whose session a current list shows and not
+    /// waiting, on any host, or whose own Mac's current list no longer has it.
+    /// Catches clear pings iOS never delivered.
     func reconcile() async {
         guard let hub else { return }
         var waiting = Set<String>()
         var listed = Set<String>()
+        /// Macs whose own live list is in: a session missing from it is gone.
+        var origins = Set<String>()
         for host in hub.hosts {
             guard let list = hub.freshSessions(of: host.id) else { continue }
+            if let serverId = host.serverId { origins.insert(serverId) }
             for session in list {
                 guard let origin = session.serverId ?? host.serverId else { continue }
                 let id = session.serverId.map { session.id.dropFirst($0.count + 1) } ?? Substring(session.id)
@@ -104,7 +108,8 @@ final class PushRegistrar {
         let center = UNUserNotificationCenter.current()
         let stale = await center.deliveredNotifications().compactMap { note -> String? in
             let id = note.request.identifier
-            return listed.contains(id) && !waiting.contains(id) ? id : nil
+            let origin = (note.request.content.userInfo["alas"] as? [String: Any])?["serverId"] as? String
+            return (listed.contains(id) || origin.map(origins.contains) == true) && !waiting.contains(id) ? id : nil
         }
         if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
     }
