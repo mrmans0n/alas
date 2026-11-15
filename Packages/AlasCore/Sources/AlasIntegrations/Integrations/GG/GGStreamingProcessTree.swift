@@ -209,7 +209,7 @@ public final class GGStreamingProcessTree: @unchecked Sendable {
         let scanner = Process()
         scanner.executableURL = URL(fileURLWithPath: "/bin/ps")
         scanner.arguments = ["eww", "-axo", "pid=,command="]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         scanner.standardOutput = pipe
         scanner.standardError = FileHandle.nullDevice
         do {

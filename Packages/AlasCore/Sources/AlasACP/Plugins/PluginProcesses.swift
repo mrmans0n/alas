@@ -237,8 +237,8 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
     private let output: PluginProcessOutput
     private var process: SpawnedProcess!
     /// Held for as long as the handle: a pipe's read end closes when the pipe goes.
-    private let out = Pipe()
-    private let err = Pipe()
+    private let out = Pipe.closingOnExec()
+    private let err = Pipe.closingOnExec()
     private let lock = NSLock()
     private var openPipes = 2
     private var exitStatus: Int32?
@@ -253,7 +253,7 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
         output: PluginProcessOutput
     ) throws {
         self.output = output
-        let input = stdin == nil ? nil : Pipe()
+        let input = stdin == nil ? nil : Pipe.closingOnExec()
         for (stream, pipe) in [out, err].enumerated() {
             pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let data = handle.availableData

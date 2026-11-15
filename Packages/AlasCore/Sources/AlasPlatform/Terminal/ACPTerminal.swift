@@ -119,7 +119,7 @@ public final class ACPTerminal: ChangeTracking {
         // tail). Per ACP `outputByteLimit` contract.
         self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
 
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         self.pipe = pipe
 
         let weakSelf = WeakBox(self)
@@ -287,7 +287,7 @@ public final class ACPTerminal: ChangeTracking {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
         proc.arguments = ["-o", "pid=,ppid=", "-ax"]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         let data: Data
@@ -372,7 +372,7 @@ public final class ACPTerminal: ChangeTracking {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
         proc.arguments = ["-o", "pid=,pgid=", "-ax"]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         let data: Data

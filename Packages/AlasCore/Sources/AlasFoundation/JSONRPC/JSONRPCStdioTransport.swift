@@ -70,8 +70,8 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     var beforeProcessPublicationForTesting: (@Sendable () -> Void)?
     private let stdin: Pipe
     private let frameWriter: JSONRPCFrameWriter
-    private let stdout = Pipe()
-    private let stderr = Pipe()
+    private let stdout = Pipe.closingOnExec()
+    private let stderr = Pipe.closingOnExec()
     private let framing: JSONRPCFraming
     private let terminationScope: JSONRPCProcessTerminationScope
     private var contentLengthFramer = JSONRPCFramer()
@@ -103,7 +103,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         replaceEnv: Bool = false,
         terminationScope: JSONRPCProcessTerminationScope = .processTree
     ) {
-        let input = Pipe()
+        let input = Pipe.closingOnExec()
         self.stdin = input
         self.frameWriter = JSONRPCFrameWriter { framed in try input.fileHandleForWriting.write(contentsOf: framed) }
         // A closed adapter pipe is a factual write error, never a process-wide
@@ -402,7 +402,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
         proc.arguments = ["-o", "pid=,ppid=", "-ax"]
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         let data: Data

@@ -165,8 +165,8 @@ public final class ContentSearcher: Sendable {
             }
         }
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         // Capture stderr to a small bounded buffer. We drain concurrently
         // so a chatty rg (warnings, debug noise) can't fill the pipe and

@@ -29,8 +29,8 @@ public struct SubprocessRunner: Sendable {
         process.arguments = args
         process.environment = env
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
+        let stdoutPipe = Pipe.closingOnExec()
+        let stderrPipe = Pipe.closingOnExec()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 

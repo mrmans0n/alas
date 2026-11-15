@@ -180,12 +180,12 @@ public final class LSPInstaller {
         env["PATH"] = augmentedPATH(base: env["PATH"])
         process.environment = env
 
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         process.standardOutput = pipe
         process.standardError = pipe
         // No interactive stdin — close after launch so any prompting installer
         // fails fast instead of hanging.
-        let stdinPipe = Pipe()
+        let stdinPipe = Pipe.closingOnExec()
         process.standardInput = stdinPipe
 
         // Capture our identity-at-spawn-time. The readability/termination

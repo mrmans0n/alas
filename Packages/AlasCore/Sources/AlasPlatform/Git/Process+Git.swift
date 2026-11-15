@@ -74,9 +74,9 @@ extension Process {
         if let env { process.environment = env }
 
         let stdinWriter = stdin.map(StdinPipeWriter.init)
-        let inputPipe = stdinWriter.map { _ in childPipe() }
-        let outPipe = childPipe()
-        let errPipe = childPipe()
+        let inputPipe = stdinWriter.map { _ in Pipe.closingOnExec() }
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         if let inputPipe { process.standardInput = inputPipe } else { process.neverPromptsOnStandardInput() }
         process.standardOutput = outPipe
         process.standardError = errPipe
@@ -365,8 +365,8 @@ extension Process {
         if let cwd = invocation.cwd { process.currentDirectoryURL = cwd }
         if let env = invocation.env { process.environment = env }
 
-        let outPipe = childPipe()
-        let errPipe = childPipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -480,8 +480,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = childPipe()
-        let errPipe = childPipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -622,8 +622,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = childPipe()
-        let errPipe = childPipe()
+        let outPipe = Pipe.closingOnExec()
+        let errPipe = Pipe.closingOnExec()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -715,18 +715,6 @@ extension Process {
 }
 
 private let maximumFoundationProcessArgumentCount = 4096
-
-/// A pipe whose ends close on exec. On Linux, Foundation's `Process` picks the
-/// descriptors a child closes by scanning `/proc/self/fd` before it spawns, so
-/// a pipe made concurrently leaks into that child; a long-lived one then holds
-/// the write end and this call never sees EOF. The child still gets its own
-/// ends: `dup2` onto 0, 1 and 2 clears the flag.
-private func childPipe() -> Pipe {
-    let pipe = Pipe()
-    _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
-    _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
-    return pipe
-}
 
 /// Stops reading a pipe from inside its readability handler and closes the read
 /// end: nothing else closes it on Linux, so each call would keep the descriptor

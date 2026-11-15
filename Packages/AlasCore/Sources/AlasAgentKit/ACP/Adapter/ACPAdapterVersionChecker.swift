@@ -248,9 +248,9 @@ public struct ACPAdapterVersionChecker: Sendable {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
         proc.environment = ACPProcessEnvironment.augmented()
-        let out = Pipe()
+        let out = Pipe.closingOnExec()
         proc.standardOutput = out
-        proc.standardError = Pipe()
+        proc.standardError = Pipe.closingOnExec()
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(status: Int32, stdout: String), Error>) in

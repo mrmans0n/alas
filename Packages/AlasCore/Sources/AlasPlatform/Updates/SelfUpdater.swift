@@ -210,10 +210,10 @@ public final class SelfUpdater {
         env["PATH"] = augmentedPATH(base: env["PATH"])
         process.environment = env
 
-        let pipe = Pipe()
+        let pipe = Pipe.closingOnExec()
         process.standardOutput = pipe
         process.standardError = pipe
-        let stdinPipe = Pipe()
+        let stdinPipe = Pipe.closingOnExec()
         process.standardInput = stdinPipe
 
         let existingLogLines = logLines

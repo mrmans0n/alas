@@ -123,13 +123,13 @@ public final class AlasMCPHTTPSupervisor {
         process.arguments = arguments(port: port)
         process.environment = environment
 
-        let stdoutPipe = Pipe()
+        let stdoutPipe = Pipe.closingOnExec()
         process.standardOutput = stdoutPipe
         // Close-on-exec on both ends before anything else can spawn, so no
         // other child (broker, agent, terminal) inherits the write end and
         // keeps the server alive after the app is gone. The child still gets
         // the read end as its stdin: dup2 clears the flag on fd 0.
-        let parentLink = Pipe()
+        let parentLink = Pipe.closingOnExec()
         _ = fcntl(parentLink.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
         _ = fcntl(parentLink.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
         process.standardInput = parentLink

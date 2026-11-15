@@ -87,8 +87,8 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// end sentinel, whatever the shell's exit status, or past `timeout`, and
     /// then everything left in the shell's session is killed.
     private static func runShellAndGetEnvironment(shell: String, interactive: Bool) async -> [String: String]? {
-        let output = Pipe()
-        let errors = Pipe()
+        let output = Pipe.closingOnExec()
+        let errors = Pipe.closingOnExec()
         // NUL-separated, so values may contain newlines.
         let script = #"printf '%s' "\#(sentinelStart)"; /usr/bin/env -0; printf '%s' "\#(sentinelEnd)""#
         guard let child = try? SpawnedProcess(
