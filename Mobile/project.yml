@@ -41,6 +41,14 @@ targets:
       base:
         PRODUCT_NAME: Alas
         TARGETED_DEVICE_FAMILY: "1"
+    entitlements:
+      path: AlasMobile.entitlements
+      properties:
+        aps-environment: $(ALAS_APS_ENVIRONMENT)
+        com.apple.security.application-groups:
+          - $(ALAS_APP_GROUP)
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER).shared
     info:
       path: Sources/Info.plist
       properties:
@@ -55,6 +63,12 @@ targets:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Alas connects to your Macs on this network.
         NSCameraUsageDescription: Scan a pairing code from your Mac.
+        UIBackgroundModes:
+          - remote-notification
+        AlasPushRelayURL: $(ALAS_PUSH_RELAY_URL)
+        AlasPushEnvironment: $(ALAS_APS_ENVIRONMENT)
+        AlasAppGroup: $(ALAS_APP_GROUP)
+        AlasKeychainGroup: $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER).shared
 
 schemes:
   AlasMobile:

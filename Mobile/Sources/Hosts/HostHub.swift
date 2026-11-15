@@ -45,6 +45,7 @@ final class HostHub {
 
     init(store: HostStore = HostStore()) {
         self.store = store
+        store.migrateIfNeeded()
         hosts = store.load()
         for host in hosts {
             sessionLists[host.id] = listCache.load(host.id)

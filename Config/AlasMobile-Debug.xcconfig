@@ -4,3 +4,7 @@ ALAS_DISPLAY_NAME = Alas Dev
 CODE_SIGN_STYLE = Automatic
 // Optional, gitignored: a development team for device builds.
 #include? "AlasMobile-Local.xcconfig"
+// Empty keeps push off; write a URL as https:/$()/host because xcconfig treats // as a comment.
+ALAS_PUSH_RELAY_URL =
+ALAS_APS_ENVIRONMENT = development
+ALAS_APP_GROUP = group.io.nlopez.alas.dev
