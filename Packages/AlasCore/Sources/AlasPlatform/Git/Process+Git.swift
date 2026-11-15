@@ -74,9 +74,9 @@ extension Process {
         if let env { process.environment = env }
 
         let stdinWriter = stdin.map(StdinPipeWriter.init)
-        let inputPipe = stdinWriter.map { _ in Pipe() }
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let inputPipe = stdinWriter.map { _ in childPipe() }
+        let outPipe = childPipe()
+        let errPipe = childPipe()
         if let inputPipe { process.standardInput = inputPipe } else { process.neverPromptsOnStandardInput() }
         process.standardOutput = outPipe
         process.standardError = errPipe
@@ -170,13 +170,9 @@ extension Process {
         // we cap the wait at 2s to bound a worst-case stuck handler.
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        _ = await (outClosed, errClosed)
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
-        // Nothing else closes the read ends on Linux: each call would keep two
-        // descriptors open for the life of the process.
-        try? outPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
+        let (outEOF, errEOF) = await (outClosed, errClosed)
+        closeReadEnd(of: outPipe, sawEOF: outEOF)
+        closeReadEnd(of: errPipe, sawEOF: errEOF)
 
         let timedOut = timeoutState.didTimeOut
         if timedOut {
@@ -369,8 +365,8 @@ extension Process {
         if let cwd = invocation.cwd { process.currentDirectoryURL = cwd }
         if let env = invocation.env { process.environment = env }
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = childPipe()
+        let errPipe = childPipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -392,8 +388,12 @@ extension Process {
                 terminateProcessWithEscalation(process)
             }
         }
+        let errAccum = ByteAccumulatorData()
         errPipe.fileHandleForReading.readabilityHandler = { handle in
-            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
+            if handle.availableData.isEmpty {
+                handle.readabilityHandler = nil
+                errAccum.markClosed()
+            }
         }
 
         do {
@@ -419,13 +419,11 @@ extension Process {
         }
         watchdog.cancel()
 
-        _ = await outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
-        // Nothing else closes the read ends on Linux: each call would keep two
-        // descriptors open for the life of the process.
-        try? outPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
+        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        let (outEOF, errEOF) = await (outClosed, errClosed)
+        closeReadEnd(of: outPipe, sawEOF: outEOF)
+        closeReadEnd(of: errPipe, sawEOF: errEOF)
 
         return outAccum.snapshot().prefix(maxBytes)
     }
@@ -488,8 +486,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = childPipe()
+        let errPipe = childPipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -559,13 +557,9 @@ extension Process {
 
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        _ = await (outClosed, errClosed)
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
-        // Nothing else closes the read ends on Linux: each call would keep two
-        // descriptors open for the life of the process.
-        try? outPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
+        let (outEOF, errEOF) = await (outClosed, errClosed)
+        closeReadEnd(of: outPipe, sawEOF: outEOF)
+        closeReadEnd(of: errPipe, sawEOF: errEOF)
 
         if timedOutFlag.value {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
@@ -634,8 +628,8 @@ extension Process {
         if let env { process.environment = env }
         process.neverPromptsOnStandardInput()
 
-        let outPipe = Pipe()
-        let errPipe = Pipe()
+        let outPipe = childPipe()
+        let errPipe = childPipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -707,13 +701,9 @@ extension Process {
 
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
-        _ = await (outClosed, errClosed)
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
-        // Nothing else closes the read ends on Linux: each call would keep two
-        // descriptors open for the life of the process.
-        try? outPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
+        let (outEOF, errEOF) = await (outClosed, errClosed)
+        closeReadEnd(of: outPipe, sawEOF: outEOF)
+        closeReadEnd(of: errPipe, sawEOF: errEOF)
 
         if timedOutFlag.value, let timeout {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
@@ -731,6 +721,28 @@ extension Process {
 }
 
 private let maximumFoundationProcessArgumentCount = 4096
+
+/// A pipe whose ends close on exec. On Linux, Foundation's `Process` picks the
+/// descriptors a child closes by scanning `/proc/self/fd` before it spawns, so
+/// a pipe made concurrently leaks into that child; a long-lived one then holds
+/// the write end and this call never sees EOF. The child still gets its own
+/// ends: `dup2` onto 0, 1 and 2 clears the flag.
+private func childPipe() -> Pipe {
+    let pipe = Pipe()
+    _ = fcntl(pipe.fileHandleForReading.fileDescriptor, F_SETFD, FD_CLOEXEC)
+    _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETFD, FD_CLOEXEC)
+    return pipe
+}
+
+/// Drops a pipe's read handler and, once the child side reached EOF, closes the
+/// read end: nothing else closes it on Linux, so each call would keep the
+/// descriptor for the life of the process. A pipe still open (a grandchild
+/// kept the write end) may have a handler blocked in `availableData` on the
+/// handle's queue, and `close()` syncs onto that queue, so it stays open.
+private func closeReadEnd(of pipe: Pipe, sawEOF: Bool) {
+    pipe.fileHandleForReading.readabilityHandler = nil
+    if sawEOF { try? pipe.fileHandleForReading.close() }
+}
 
 private func validateLaunchConfiguration(executable: String, args: [String], cwd: URL?) throws {
     guard FileManager.default.isExecutableFile(atPath: executable) else {
