@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UserNotifications)
 import UserNotifications
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform

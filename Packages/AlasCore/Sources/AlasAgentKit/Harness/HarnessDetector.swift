@@ -116,12 +116,12 @@ public final class HarnessDetector: @unchecked Sendable {
 
     /// Identify the foreground executable or the Codex binary behind its npm launcher.
     public static func matchKind(pid: pid_t) -> HarnessKind? {
-        guard let path = executablePath(pid: pid) else { return nil }
+        guard let path = ProcessTable.executablePath(of: pid) else { return nil }
         let basename = (path as NSString).lastPathComponent
         if let kind = matchKind(processName: basename) { return kind }
 
-        // The native Claude installer exposes a symlink named claude, but proc_pidpath
-        // reports its version-numbered target under .local/share/claude/versions.
+        // The native Claude installer exposes a symlink named claude, but the
+        // executable path is its version-numbered target under .local/share/claude/versions.
         let directory = (path as NSString).deletingLastPathComponent
         if directory.hasSuffix("/.local/share/claude/versions"),
            basename.wholeMatch(of: /[0-9]+\.[0-9]+\.[0-9]+/) != nil {
@@ -139,27 +139,11 @@ public final class HarnessDetector: @unchecked Sendable {
         guard group > 0 else { return false }
         // The npm launcher spawns one native binary. Bound the scan so an
         // unrelated Node workload cannot make each poll walk a large tree.
-        var children = [pid_t](repeating: 0, count: 32)
-        let count = children.withUnsafeMutableBufferPointer { buffer in
-            proc_listchildpids(pid, buffer.baseAddress, Int32(buffer.count * MemoryLayout<pid_t>.stride))
-        }
-        guard count > 0 else { return false }
-        return children.prefix(Int(count)).contains { child in
-            guard child > 0, getpgid(child) == group,
-                  let path = executablePath(pid: child) else { return false }
+        return ProcessTable.children(of: pid).prefix(32).contains { child in
+            guard getpgid(child) == group,
+                  let path = ProcessTable.executablePath(of: child) else { return false }
             return matchKind(processName: (path as NSString).lastPathComponent) == .codex
         }
-    }
-
-    private static func executablePath(pid: pid_t) -> String? {
-        // PROC_PIDPATHINFO_MAXSIZE = 4 * MAXPATHLEN = 4096; the constant is a C macro
-        // not exported by the Swift Darwin overlay, so we use the literal value.
-        let maxPathSize = 4 * Int(MAXPATHLEN)   // 4096
-        var pathBuf = [CChar](repeating: 0, count: maxPathSize)
-        let len = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-        guard len > 0 else { return nil }
-        // proc_pidpath NUL-terminates the path.
-        return String(decoding: pathBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     public init() {}

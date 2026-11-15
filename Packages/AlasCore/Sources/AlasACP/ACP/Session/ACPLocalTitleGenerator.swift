@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -68,6 +70,7 @@ public enum ACPLocalTitleGenerator: Sendable {
     }
 
     public static func generateWithFoundationModel(from candidate: String) async -> String? {
+        #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return nil }
         guard let prompt = prompt(for: candidate), !Task.isCancelled else { return nil }
 
@@ -82,6 +85,9 @@ public enum ACPLocalTitleGenerator: Sendable {
         } catch {
             return nil
         }
+        #else
+        return nil
+        #endif
     }
 }
 

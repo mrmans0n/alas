@@ -1,3 +1,5 @@
+// Dictation is macOS-only.
+#if canImport(Speech)
 @preconcurrency import AVFoundation
 import AudioToolbox
 import Foundation
@@ -629,3 +631,4 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
 
     public init() {}
 }
+#endif

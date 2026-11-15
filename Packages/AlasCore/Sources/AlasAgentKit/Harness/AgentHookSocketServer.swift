@@ -446,6 +446,12 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     /// still reads the reply, and looks the same as a closed one to a read or `poll`. Nothing is
     /// written, so no SIGPIPE either.
     static func clientLeft(_ clientFD: Int32) -> Bool {
+        #if !canImport(Darwin)
+        // Linux: a client that only half-closed raises POLLRDHUP; one that closed raises POLLHUP.
+        var entry = pollfd(fd: clientFD, events: Int16(POLLOUT), revents: 0)
+        guard poll(&entry, 1, 0) == 1 else { return false }
+        return entry.revents & Int16(POLLHUP | POLLERR) != 0
+        #else
         let queue = kqueue()
         guard queue >= 0 else { return false }
         defer { close(queue) }
@@ -456,6 +462,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         var immediately = timespec(tv_sec: 0, tv_nsec: 0)
         guard kevent(queue, &change, 1, &event, 1, &immediately) == 1 else { return false }
         return event.flags & UInt16(EV_EOF) != 0
+        #endif
     }
 
     private static func payloadKind(_ data: Data) -> String? {

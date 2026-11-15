@@ -186,47 +186,15 @@ public final class AlasMCPHTTPSupervisor {
     }
 
     nonisolated private static func childPIDs(of parent: pid_t) -> [pid_t] {
-        var capacity = 1024
-        while capacity <= 65536 {
-            var pids = [pid_t](repeating: 0, count: capacity)
-            let count = pids.withUnsafeMutableBufferPointer { buffer in
-                proc_listchildpids(parent, buffer.baseAddress, Int32(capacity * MemoryLayout<pid_t>.stride))
-            }
-            guard count > 0 else { return [] }
-            if Int(count) < capacity {
-                return pids.prefix(Int(count)).filter { $0 > 0 }
-            }
-            capacity *= 2
-        }
-        return []
+        ProcessTable.children(of: parent)
     }
 
     nonisolated private static func executablePath(of pid: pid_t) -> String? {
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
-        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        ProcessTable.executablePath(of: pid)
     }
 
-    /// A process's argv from `KERN_PROCARGS2`: argc, the exec path, padding,
-    /// then argc NUL-terminated strings.
     nonisolated private static func arguments(of pid: pid_t) -> [String]? {
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
-        var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
-        let argc = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
-        var index = MemoryLayout<Int32>.size
-        while index < size, buffer[index] != 0 { index += 1 }
-        while index < size, buffer[index] == 0 { index += 1 }
-        var argv: [String] = []
-        while argv.count < Int(argc), index < size {
-            let start = index
-            while index < size, buffer[index] != 0 { index += 1 }
-            argv.append(String(decoding: buffer[start..<index], as: UTF8.self))
-            index += 1
-        }
-        return argv
+        ProcessTable.arguments(of: pid)
     }
 
     public nonisolated static func environment(

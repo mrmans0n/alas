@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(JavaScriptCore)
 import JavaScriptCore
+#endif
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -105,6 +107,7 @@ public struct PluginDelivery: Sendable {
     }
 }
 
+#if canImport(JavaScriptCore)
 // Private, but exported unchanged by JavaScriptCore since 2014. The watchdog is the only way to stop a
 // running script; its termination exception cannot be caught by the script.
 private typealias ShouldTerminate = @convention(c) (JSContextRef?, UnsafeMutableRawPointer?) -> Bool
@@ -321,3 +324,19 @@ public final class PluginRuntime: @unchecked Sendable {
         }
     }
 }
+#else
+/// Plugins run on JavaScriptCore, which only Apple platforms have, so none load here.
+public final class PluginRuntime: Sendable {
+    private init() {}
+
+    public static func load(
+        source: Data, limits: PluginLimits, tabCount: Int = 0, canvasPanels: Set<String> = []
+    ) async throws -> PluginRuntime {
+        throw PluginRuntimeError.instantiation("plugins need JavaScriptCore, which this platform doesn't have")
+    }
+
+    public func handle(_ message: Data) async throws -> PluginDelivery {
+        PluginDelivery()
+    }
+}
+#endif

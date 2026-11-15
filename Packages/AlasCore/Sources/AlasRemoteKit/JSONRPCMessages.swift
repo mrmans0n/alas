@@ -130,22 +130,12 @@ public struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
         if let value = value as? AnyCodable { return value.canonicalValue }
         if value is NSNull { return .null }
         if let value = value as? NSNumber {
-            #if canImport(Darwin)
-            let cfValue = value as CFNumber
-            if CFGetTypeID(cfValue) == CFBooleanGetTypeID() {
+            if value.isJSONBoolean {
                 return .bool(value.boolValue)
             }
-            if CFNumberIsFloatType(cfValue) {
+            if ["f", "d"].contains(String(cString: value.objCType)) {
                 return .double(value.doubleValue)
             }
-            #else
-            // No CFBoolean here; JSONSerialization's booleans report type "c".
-            switch String(cString: value.objCType) {
-            case "c", "B": return .bool(value.boolValue)
-            case "f", "d": return .double(value.doubleValue)
-            default: break
-            }
-            #endif
             return .int(value.intValue)
         }
         if let value = value as? Bool { return .bool(value) }
