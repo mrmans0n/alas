@@ -205,3 +205,110 @@ repair and passed reviewer recheck afterward. The acquisition, workflow,
 AlasHelper and AlasCLI shell harnesses pass. Scoped SwiftFormat, Rustfmt with the
 crate's 2024 edition, shell syntax and `git diff --check` pass. Hosted CI remains
 unverified for this branch.
+
+## November 15 follow-up
+
+A follow-up examined 596 workflow runs created November 8–15, including main
+and pull requests. The audit includes failed runs discovered during the follow-up.
+Formatting, dependency compatibility, Linux-port source assertions, and missing
+artifacts downstream of failed builds were classified separately from test flakes.
+
+The recurring core session timeouts above now have a reproduced cause. Each
+`AgentHookSocketServer` occupied a dispatch worker permanently in `poll`, even
+while idle. Running 256 copies of each of the three affected session scenarios
+exhausted the process's dispatch thread limit. A sample showed 513 total threads,
+including 512 listener workers, while the main actor was idle. The workload was
+still stalled after two minutes.
+
+The listener now uses nonblocking socket readiness callbacks and a timer for
+rebinding. The same 768 cases passed without a concurrency cap in 28.597 seconds;
+a sample showed 99 threads and no listener blocked in `poll`. A regression with
+two listeners sharing one serial queue failed the original implementation with
+its existing five-second client timeout and passed the repair in 0.001 seconds.
+The 17-test socket suite also passed, including automatic socket restoration.
+Independent review checked descriptor ownership, cancellation, rebinding,
+retention, and the Linux path without finding a blocking issue.
+
+That workload exposed a separate fixture race in `sessionVerbsDriveAnAgent`:
+answering a permission resumes the policy continuation, but the mock records the
+agent response on a later actor turn. The test now awaits that observable write.
+A final Xcode 26.6 core run passed 1,400 tests in 150 suites in 28.472 seconds.
+No test deadlines were increased and no concurrency cap was retained.
+
+The new harness detector fixture also reproduced a local launch failure: macOS
+killed the copied child executable before detection. Signing the copy before
+launch repaired both parameter variants. The original failed in isolation, and
+the repaired suite and full core target passed.
+
+The native process-cleanup failure in run 43544571018 happened before its cleanup
+assertion: the fixture required its first output event to be a complete stdout
+PID line. It now collects stdout through the newline, tolerates intervening
+stderr, and kills the process on early exits. A controlled stderr-first probe
+passed ten variants with the repaired reader.
+
+The same run's first browser test exceeded an automation deadline after 5.675
+seconds while WebKit was starting. Its log does not identify the timed-out
+command. The fixture now loads its page before exercising timed automation,
+while retaining a real automation navigation and every DOM assertion. This
+separates fixture startup from the behavior under test; startup as the historical
+timeout's cause remains an inference.
+
+Native verification passed 39 tests across the complete socket and browser
+suites. Both individual process and browser cases then passed ten fresh-process
+repetitions. The initial individual-process selector matched no tests; the
+repetition run used its exact Swift Testing identifier with parentheses and
+confirmed both tests executed in each of ten distinct app processes.
+
+The first native builds required restoring GhosttyKit and rebuilding local Rust
+proc-macro artifacts with Xcode 26.6's linker after Xcode 27 produced malformed
+LINKEDIT data. Those failures occurred before test execution and required no
+tracked build changes. Scoped SwiftFormat and `git diff --check` passed.
+
+The rerun audit also inspected all 33 earlier attempts of 30 retried workflow
+runs, including runs whose final conclusion was green. It found two additional
+current failures hidden by successful retries; the other historical failures
+match the repairs above or the original audit's existing fixes.
+
+- Run 43703700192, attempt 1: the CLI's stalled HTTP reader test called
+  `read_to_string` through EOF. A rejected ninth connection receives a complete
+  503 response before the server closes its unread request; TCP can then report
+  a reset. Five of eight controlled probes observed that exact sequence. The
+  fixture now reads the server's declared Content-Length. A regression rejects
+  a truncated body followed by reset while accepting a complete one; it failed
+  with the EOF reader and passes with framing. All 11 MCP concurrency tests pass, and the exact historical stalled-reader
+  case passed 20 consecutive repetitions.
+- Run 43680036141, attempt 1: the broker startup diagnostic test failed to spawn
+  its shell fixture with Linux `ETXTBSY`. A parallel fork can retain a writable
+  script descriptor until exec, even after the writer closes it, as documented
+  in [Rust issue 114554](https://github.com/rust-lang/rust/issues/114554).
+  Fixtures now run through `/bin/sh` and do not need executable permissions.
+  The old direct launch failed a controlled nonexecutable-script check; the
+  interpreter launch passed all 32 broker crash-recovery tests in 8.28 seconds.
+  This Darwin host cannot reproduce Linux errno 26 itself.
+
+Both Rust changes received independent review. They change fixture behavior,
+not production retry policies, deadlines, or test parallelism.
+
+The Helper file's Rustfmt check still reports the same pre-existing formatting
+differences as HEAD. Comparing normalized check output confirmed that this
+change adds no formatting differences; the file was not reformatted wholesale.
+
+The final CLI target also passed all 11 tests with CI's pinned Rust 1.97.0 and
+`--locked`. The broker target used Rust 1.96.1. The relevant commands were:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer swift test --package-path Packages/AlasCore --scratch-path /tmp/alas-core-xcode266
+DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer CARGO_TARGET_DIR=/tmp/alas-cli-ci-flake-target rustup run 1.97.0 cargo test --locked --manifest-path AlasCLI/Cargo.toml -p alas --test mcp_preview_concurrency
+DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer CARGO_TARGET_DIR=/tmp/alas-helper-flake-target rustup run 1.96.1 cargo test --manifest-path AlasHelper/Cargo.toml --test acp_broker_crash_recovery
+```
+
+Native verification used `xcodebuild -project Alas.xcodeproj -scheme Alas
+-destination 'platform=macOS' -skipPackagePluginValidation -skipMacroValidation`
+with `-only-testing AlasTests/AgentHookSocketServerTests` and
+`-only-testing AlasTests/WebPreviewAutomationBrowserTests` for the complete
+39-test selection. The subsequent `test-without-building` invocation selected
+`AlasTests/PluginHostTests/stoppingAProcessStopsWhatItStarted()` and
+`AlasTests/WebPreviewAutomationBrowserTests/inspectClickTypeScrollAndCaptureUseRealDOMAndOpaqueElementReferences()`
+with `-test-iterations 10 -test-repetition-relaunch-enabled YES`.
+
+These are local results. No hosted CI result is claimed for this branch.
