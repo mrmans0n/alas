@@ -101,6 +101,13 @@ public enum SimulatorControl {
         )
     }
 
+    /// Runs serve-sim's accessibility settings helper inside the simulator and returns what it printed.
+    static func accessibilityHelper(udid: String, helper: URL, _ arguments: [String]) async throws -> String {
+        let result = try await Process.run(xcrun, args: ["simctl", "spawn", udid, helper.path] + arguments)
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+        return result.stdout
+    }
+
     public static func privacy(
         udid: String, action: SimulatorPrivacyAction, service: SimulatorPrivacyService, bundleID: String
     ) async throws {

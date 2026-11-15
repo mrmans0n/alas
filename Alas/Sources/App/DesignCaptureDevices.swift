@@ -100,6 +100,13 @@ enum DesignCaptureDevices {
             [SimulatorApp(bundleID: "io.example.lantern", name: "Lantern"), SimulatorApp(bundleID: "io.example.lantern.beta", name: "Lantern Beta")]
         }
         func isInstalled(udid: String, bundleID: String) async -> Bool { true }
+        private static let accessibility = SimulatorAccessibility(
+            voiceOver: .value(false), reduceMotion: .value(true), buttonShapes: .value(false),
+            reduceTransparency: .value(false), colorFilter: .value(.none), liquidGlass: .value(.clear))
+        func accessibility(udid: String) async throws -> SimulatorAccessibility { Self.accessibility }
+        func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+            Self.accessibility
+        }
     }
 
     private struct FakeLogs: SimulatorLogsControl {

@@ -23,7 +23,7 @@ struct DeviceSnapshotTests {
         #expect(snapshot.elements.map(\.role) == ["button", "cell", "search field"])
         #expect(snapshot.elements[0] == DeviceElement(
             ref: "s1e1", role: "button", label: "Maps", value: "Widget", id: "Maps",
-            x: 24, y: 88, width: 168, height: 191, enabled: true
+            x: 24, y: 88, width: 168, height: 191, enabled: true, isControl: true
         ))
     }
 

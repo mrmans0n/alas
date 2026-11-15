@@ -26,6 +26,51 @@ struct SimulatorSettingsTests {
             == #"{"appearance":"light","increase_contrast":false,"text_size":"unsupported"}"#)
     }
 
+    @Test(arguments: [
+        (#"{"reduce-motion":"on","show-borders":"off","reduce-transparency":"on","voiceover":"off","color-filter":"red-green","liquid-glass":"tinted"}"#,
+         SimulatorAccessibility(
+             voiceOver: .value(false), reduceMotion: .value(true), buttonShapes: .value(false),
+             reduceTransparency: .value(true), colorFilter: .value(.redGreen), liquidGlass: .value(.tinted)
+         )),
+        // An older runtime without Liquid Glass, and a value this version doesn't know.
+        (#"{"reduce-motion":"off","show-borders":"on","reduce-transparency":"off","voiceover":"on","color-filter":"sepia"}"#,
+         SimulatorAccessibility(
+             voiceOver: .value(true), reduceMotion: .value(false), buttonShapes: .value(true),
+             reduceTransparency: .value(false), colorFilter: .unknown, liquidGlass: .unknown
+         )),
+    ] as [(String, SimulatorAccessibility)])
+    func accessibilityStatusParsesEachKey(status: String, expected: SimulatorAccessibility) throws {
+        #expect(try SimulatorAccessibility.parse(Data((status + "\n").utf8)) == expected)
+    }
+
+    @Test func accessibilityStatusThatIsNotAnObjectIsUnreadable() {
+        #expect(throws: SimulatorAccessibilityError.unreadable) {
+            try SimulatorAccessibility.parse(Data("sim-ax-settings: missing symbol".utf8))
+        }
+    }
+
+    @Test func accessibilityReadBackJSONUsesTheToolsKeys() throws {
+        let read = SimulatorAccessibility(
+            voiceOver: .value(true), reduceMotion: .value(false), buttonShapes: .unknown,
+            reduceTransparency: .value(false), colorFilter: .value(.grayscale), liquidGlass: .value(.clear)
+        )
+        let data = try JSONSerialization.data(withJSONObject: read.json, options: .sortedKeys)
+        #expect(String(decoding: data, as: UTF8.self) == #"{"button_shapes":"unknown","color_filter":"grayscale","liquid_glass":"clear","reduce_motion":false,"reduce_transparency":false,"voiceover":true}"#)
+    }
+
+    @Test func anAccessibilityChangeSetsOnlyItsKeysInAFixedOrder() {
+        let change = SimulatorAccessibilityChange(voiceOver: false, colorFilter: .blueYellow, liquidGlass: .tinted)
+        #expect(change.helperArguments == [
+            ["set", "voiceover", "off"], ["set", "color-filter", "blue-yellow"], ["set", "liquid-glass", "tinted"],
+        ])
+        #expect(SimulatorAccessibilityChange().isEmpty)
+    }
+
+    @Test func accessibilityWithoutTheHelperFailsSayingSo() async {
+        let settings = LiveSimulatorSettings(accessibilityHelper: nil)
+        await #expect(throws: SimulatorAccessibilityError.helperMissing) { try await settings.accessibility(udid: "U") }
+    }
+
     @Test func appListKeepsOnlyTheUsersAppsByName() throws {
         let plist: [String: Any] = [
             "com.apple.Preferences": ["ApplicationType": "System", "CFBundleDisplayName": "Settings"],

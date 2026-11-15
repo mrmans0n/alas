@@ -42,6 +42,8 @@ public enum DeviceCommand: Equatable, Sendable {
     case launch(udid: String, bundleID: String, diff: Bool = true)
     /// At least one of the three is set.
     case setAppearance(udid: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?)
+    /// At least one setting is set.
+    case setAccessibility(udid: String, change: SimulatorAccessibilityChange)
     case setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction)
     /// Nil clears the simulated location.
     case setLocation(udid: String, location: SimulatorLocation?)
@@ -70,6 +72,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .install: "device_install"
         case .launch: "device_launch"
         case .setAppearance: "device_set_appearance"
+        case .setAccessibility: "device_set_accessibility"
         case .setPermission: "device_set_permission"
         case .setLocation: "device_set_location"
         case .push: "device_push"
@@ -86,7 +89,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .list: nil
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
              .tap(let udid, _, _, _), .swipe(let udid, _, _, _, _), .type(let udid, _, _, _), .button(let udid, _, _, _),
-             .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _),
+             .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _), .setAccessibility(let udid, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _, _),
              .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _):
             udid
@@ -114,6 +117,12 @@ public enum DeviceCommand: Equatable, Sendable {
         var appearance: String?
         var text_size: String?
         var increase_contrast: Bool?
+        var voiceover: Bool?
+        var reduce_motion: Bool?
+        var button_shapes: Bool?
+        var reduce_transparency: Bool?
+        var color_filter: String?
+        var liquid_glass: String?
         var service: String?
         var action: String?
         var latitude: Double?
@@ -139,6 +148,9 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_install": ["udid", "app_path"],
         "device_launch": ["udid", "bundle_id", "diff"],
         "device_set_appearance": ["udid", "appearance", "text_size", "increase_contrast"],
+        "device_set_accessibility": [
+            "udid", "voiceover", "reduce_motion", "button_shapes", "reduce_transparency", "color_filter", "liquid_glass",
+        ],
         "device_set_permission": ["udid", "bundle_id", "service", "action"],
         "device_set_location": ["udid", "latitude", "longitude", "clear"],
         "device_push": ["udid", "bundle_id", "payload"],
@@ -238,6 +250,15 @@ public enum DeviceCommand: Equatable, Sendable {
             return .setAppearance(
                 udid: try udid(), appearance: appearance, textSize: textSize, increaseContrast: params.increase_contrast
             )
+        case "device_set_accessibility":
+            let change = SimulatorAccessibilityChange(
+                voiceOver: params.voiceover, reduceMotion: params.reduce_motion, buttonShapes: params.button_shapes,
+                reduceTransparency: params.reduce_transparency,
+                colorFilter: try params.color_filter.map { try enumValue(SimulatorColorFilter.self, $0) },
+                liquidGlass: try params.liquid_glass.map { try enumValue(SimulatorLiquidGlass.self, $0) }
+            )
+            guard !change.isEmpty else { throw AlasCLIRequestError.malformed }
+            return .setAccessibility(udid: try udid(), change: change)
         case "device_set_permission":
             guard let service = params.service.flatMap(SimulatorPrivacyService.init(rawValue:)),
                   let action = params.action.flatMap(SimulatorPrivacyAction.init(rawValue:))
