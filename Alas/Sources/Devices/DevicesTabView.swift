@@ -80,7 +80,11 @@ struct DevicesTabView: View {
         }
         return VMDeviceCard(
             guest: guest, status: status,
-            driver: VMDriverStatus.make(driver: driver, agentName: agentName, now: now), now: now,
+            driver: VMDriverStatus.make(
+                driver: driver, agentName: agentName, now: now,
+                waiting: state.vmHolds.waiting(recordID).map { state.computerUseAgentName($0) }
+            ),
+            now: now,
             onOpen: { state.openVirtualMachine(in: worktree, guest: guest) },
             onTakeOver: { Task { await state.takeOverVM(recordID: recordID) } },
             onHandBack: { state.handBackVM(recordID: recordID) }

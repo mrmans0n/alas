@@ -1889,6 +1889,10 @@ pub const VM_RUN_DEFAULT_TIMEOUT_SECONDS: u32 = 120;
 /// timed-out reply arrives before the connection gives up.
 const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
 
+/// How long the app holds a `vm_run` while the user drives the VM, before it
+/// runs: the connection waits that out too, so the command keeps its budget.
+const VM_RUN_HOLD: Duration = Duration::from_secs(50);
+
 /// How long `dispatch` waits for the reply to `command`.
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
@@ -1903,6 +1907,7 @@ pub fn read_timeout(command: &Command) -> Duration {
             Duration::from_secs(u64::from(
                 timeout_seconds.unwrap_or(VM_RUN_DEFAULT_TIMEOUT_SECONDS),
             )) + VM_RUN_REPLY_GRACE
+                + VM_RUN_HOLD
         }
         _ => READ_TIMEOUT,
     }
@@ -2829,8 +2834,9 @@ mod tests {
             timeout_seconds,
             vm: None,
         };
-        assert_eq!(read_timeout(&run(None)), Duration::from_secs(150));
-        assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(630));
+        // The command's own bound, the reply grace, and up to 50 s held while the user drives the VM.
+        assert_eq!(read_timeout(&run(None)), Duration::from_secs(200));
+        assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(680));
         assert_eq!(read_timeout(&Command::VmStatus { vm: None }), READ_TIMEOUT);
     }
 

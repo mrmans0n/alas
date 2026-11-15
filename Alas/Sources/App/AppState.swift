@@ -348,6 +348,8 @@ final class AppState {
     @ObservationIgnored var vmPendingResumes: [String: Set<String>] = [:]
     /// The VMs the user took over, by registry id, with the sessions each take over stopped.
     var vmTakeOvers = VMTakeOvers()
+    /// Agent calls to a VM the user drives, waiting for hand back.
+    @ObservationIgnored let vmHolds = HeldCalls()
     /// The registry ids of the VMs the user took over; agent calls to them are refused.
     var vmTakenOver: Set<String> { vmTakeOvers.recordIDs }
     /// The last agent call forwarded to each VM, by registry id, for who drives it. Observed per

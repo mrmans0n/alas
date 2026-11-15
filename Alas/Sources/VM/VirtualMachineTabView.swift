@@ -354,7 +354,10 @@ struct VirtualMachineTabView: View {
 
     private func runningStatusBar(at date: Date, canUpdateHelper: Bool) -> some View {
         let current = driver(at: date)
-        let status = VMDriverStatus.make(driver: current, agentName: agentName(current), now: date)
+        let status = VMDriverStatus.make(
+            driver: current, agentName: agentName(current), now: date,
+            waiting: state.vmHolds.waiting(recordID).map { state.computerUseAgentName($0) }
+        )
         let helperNote = canUpdateHelper ? ["helper needs an update"] : []
         let setupNote = state.vmSetupScriptsRunning.contains(recordID) ? ["running the setup script"] : []
         let pausing = vms.pausing.contains(recordID)
