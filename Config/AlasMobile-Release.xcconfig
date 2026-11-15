@@ -1,4 +1,6 @@
 PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas
+// The extension's own id derives from this, and its keychain group is the app's.
+ALAS_APP_BUNDLE_ID = io.nlopez.alas
 ALAS_DISPLAY_NAME = Alas
 CODE_SIGN_STYLE = Automatic
 // Optional, gitignored: a development team for device builds.

@@ -1475,7 +1475,7 @@ public final class RemoteSessionGateway {
         }
     }
 
-    private static let visualAidToolName = "Visual aid"
+    private static let visualAidToolName = RemotePushAlert.visualAidToolName
 
     private static func remoteToolCall(
         _ call: ACPMessage.ToolCall,

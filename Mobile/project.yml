@@ -37,6 +37,8 @@ targets:
         product: AlasRemoteKit
       - package: Markdown
         product: Markdown
+      - target: AlasNotificationService
+        embed: true
     settings:
       base:
         PRODUCT_NAME: Alas
@@ -69,6 +71,43 @@ targets:
         AlasPushEnvironment: $(ALAS_APS_ENVIRONMENT)
         AlasAppGroup: $(ALAS_APP_GROUP)
         AlasKeychainGroup: $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER).shared
+
+  AlasNotificationService:
+    type: app-extension
+    platform: iOS
+    configFiles:
+      Debug: ../Config/AlasMobile-Debug.xcconfig
+      Release: ../Config/AlasMobile-Release.xcconfig
+    sources:
+      - path: NotificationService
+      - path: Sources/Hosts/HostStore.swift
+      - path: Sources/Hosts/PhoneProtocol.swift
+    dependencies:
+      - package: AlasCore
+        product: AlasRemoteKit
+    settings:
+      base:
+        PRODUCT_NAME: AlasNotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: $(ALAS_APP_BUNDLE_ID).NotificationService
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
+    # Reads the app's shared storage, so it carries the app's group ids.
+    entitlements:
+      path: NotificationService.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - $(ALAS_APP_GROUP)
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(ALAS_APP_BUNDLE_ID).shared
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: $(ALAS_DISPLAY_NAME)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        AlasAppGroup: $(ALAS_APP_GROUP)
+        AlasKeychainGroup: $(AppIdentifierPrefix)$(ALAS_APP_BUNDLE_ID).shared
 
 schemes:
   AlasMobile:

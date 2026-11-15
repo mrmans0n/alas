@@ -1,5 +1,7 @@
 // Debug builds install next to the released app as "Alas Dev".
 PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas.dev
+// The extension's own id derives from this, and its keychain group is the app's.
+ALAS_APP_BUNDLE_ID = io.nlopez.alas.dev
 ALAS_DISPLAY_NAME = Alas Dev
 CODE_SIGN_STYLE = Automatic
 // Optional, gitignored: a development team for device builds.
