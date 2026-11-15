@@ -216,7 +216,8 @@ struct RemoteServerPane: View {
                         ForEach(state.remotePairing.devices) { device in
                             let liveCount = connected[device.id] ?? 0
                             let seen = device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
-                            let desc = liveCount > 0 ? "Connected now (\(liveCount)); \(seen)" : seen
+                            let status = liveCount > 0 ? "Connected now (\(liveCount)); \(seen)" : seen
+                            let desc = device.pushRelay != nil ? status + ". Notifications" : status
                             let prefix = device.kind == .alasInstance ? "Alas peer. " : ""
                             SettingsRow(
                                 name: device.name,

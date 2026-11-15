@@ -253,6 +253,15 @@ public final class RemoteSessionGateway {
                 action: action,
                 content: content
             )
+        case .pushRegistration(let url, let token):
+            // Only a full-scope device's own phone may point pings anywhere;
+            // anything invalid is dropped like other malformed verbs.
+            guard case .remotePeer(let deviceID)? = caller else { break }
+            if token == nil {
+                delegationPairing?.setPushRelay(nil, for: deviceID)
+            } else if let relay = RemotePushRelay.validated(url: url, token: token) {
+                delegationPairing?.setPushRelay(relay, for: deviceID)
+            }
         case .takeOver(let id):
             try? await sessions?.takeOver(id, caller: hostCaller)
             // Takeover mostly changes the lease, not the transcript: following

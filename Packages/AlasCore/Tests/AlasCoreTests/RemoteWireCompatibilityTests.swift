@@ -24,6 +24,51 @@ import Testing
     }
 }
 
+@Suite struct PushRelayRegistrationTests {
+    @Test func registrationWireShapeOmitsANilToken() throws {
+        func json(_ token: String?) throws -> [String: String] {
+            let data = try JSONEncoder().encode(RemoteClientMessage.pushRegistration(relayURL: "https://r.example", relayToken: token))
+            return try JSONDecoder().decode([String: String].self, from: data)
+        }
+        #expect(try json("t") == ["type": "pushRegistration", "relayURL": "https://r.example", "relayToken": "t"])
+        #expect(try json(nil) == ["type": "pushRegistration", "relayURL": "https://r.example"])
+    }
+
+    @Test(arguments: [
+        ("https://r.example/push", "t", true),
+        ("http://r.example/push", "t", false),
+        ("not a url", "t", false),
+        ("https://r.example/push", "", false),
+        ("https://r.example/" + String(repeating: "a", count: 512), "t", false),
+        ("https://r.example/push", String(repeating: "a", count: 1025), false),
+    ])
+    func relayValidationEnforcesSchemeAndCaps(url: String, token: String, valid: Bool) {
+        #expect((RemotePushRelay.validated(url: url, token: token) != nil) == valid)
+    }
+
+    @Test func deviceWithoutPushRelayDecodesNil() throws {
+        let json = #"{"id":"d","name":"n","tokenHash":"h","createdAt":0}"#
+        #expect(try JSONDecoder().decode(RemoteDevice.self, from: Data(json.utf8)).pushRelay == nil)
+    }
+
+    @MainActor @Test func pushRelaySurvivesReloadAndNilClearsIt() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("devices.json")
+        FileDeviceStore(url: url).save([RemoteDevice(id: "d1", name: "Phone", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil)])
+        let relay = try #require(RemotePushRelay.validated(url: "https://r.example/push", token: "t"))
+
+        RemotePairingService(store: FileDeviceStore(url: url)).setPushRelay(relay, for: "d1")
+        let reloaded = RemotePairingService(store: FileDeviceStore(url: url))
+        #expect(reloaded.pushRelays.map(\.deviceID) == ["d1"])
+        #expect(reloaded.pushRelays.first?.relay == relay)
+
+        reloaded.setPushRelay(nil, for: "d1")
+        #expect(RemotePairingService(store: FileDeviceStore(url: url)).pushRelays.isEmpty)
+    }
+}
+
 private extension JSONEncoder {
     static var sorted: JSONEncoder {
         let encoder = JSONEncoder()
@@ -68,6 +113,8 @@ enum RemoteWireSamples {
             attachments: [RemoteAttachment(name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")],
             intent: "queue", mentions: [RemoteMention(kind: RemoteMention.file, value: "a/b.swift", name: "b.swift")]),
         .permissionDecision(sessionId: "s1", requestId: 7, optionId: "allow", persistScope: "session"),
+        .pushRegistration(relayURL: "https://relay.example/push", relayToken: "tok"),
+        .pushRegistration(relayURL: "https://relay.example/push", relayToken: nil),
         .questionAnswer(sessionId: "s1", requestId: 8, answers: [
             RemoteQuestionAnswer(questionId: "q", selectedOptionIds: ["a", "b"]),
         ]),
