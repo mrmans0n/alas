@@ -92,8 +92,12 @@ private struct ChangeList: View {
                 titleVisibility: .visible, presenting: discarding
             ) { paths in
                 Button("Discard", role: .destructive) { run(.discard(paths: paths)) }
-            } message: { _ in
-                Text("This can't be undone.")
+            } message: { paths in
+                // The host restores the whole file from HEAD, staged edits included.
+                let staged = Set(reply.staged.map(\.path))
+                Text(paths.contains(where: staged.contains)
+                    ? "Its staged changes are discarded too. This can't be undone."
+                    : "This can't be undone.")
             }
             .alert("Couldn't do that", isPresented: Binding { error != nil } set: { if !$0 { error = nil } }) {
                 Button("OK", role: .cancel) {}
@@ -145,7 +149,8 @@ private struct ChangeList: View {
                         HStack {
                             Text(section.title)
                             Spacer()
-                            if canGit, let stage = section.stage {
+                            // A truncated list doesn't name every file, so "all" would not be all.
+                            if canGit, !reply.truncated, let stage = section.stage {
                                 let paths = section.files.map(\.path)
                                 Button(stage == "staged" ? "Unstage All" : "Stage All") {
                                     run(stage == "staged" ? .unstage(paths: paths) : .stage(paths: paths))

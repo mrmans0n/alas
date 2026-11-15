@@ -200,10 +200,11 @@ final class SessionWorkspace {
     // MARK: Git
 
     /// The session's own worktree on its host, which git actions name. A session a gateway relays
-    /// lives on another Mac, whose worktrees this connection can't name.
+    /// lives on another Mac, whose worktrees this connection can't name; nor can it name one in an
+    /// SSH project, whose summary carries a display path (`host:/repo`), not the stored one.
     private var gitTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
         guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
-              let projectID = summary.projectId, let worktree = summary.worktree else { return nil }
+              let projectID = summary.projectId, let worktree = summary.worktree, worktree.path.hasPrefix("/") else { return nil }
         return (projectID, worktree)
     }
 
@@ -218,9 +219,12 @@ final class SessionWorkspace {
         guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
         let id = hub.nextHostRequestId()
         gitRunning = change
+        // Listen until the answer comes, even if the screen that asked has gone.
+        let hold = activate()
         defer {
             gitRunning = nil
             refreshChanges()
+            hold.cancel()
         }
         send(.host(RemoteGitRequest.message(id: id, projectID: target.projectID, path: target.worktree.path,
                                             branch: target.worktree.branch, change: change)))
