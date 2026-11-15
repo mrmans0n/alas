@@ -294,8 +294,8 @@ struct ACPPermissionCard: View {
             // says what is being asked for.
             if let kind = content.kind {
                 Text(kind)
-                    .font(scale.metaFont)
-                    .foregroundStyle(theme.color("fg-dim"))
+                    .font(scale.meta.font(weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
             }
 
             if let server = content.mcpServerName {
@@ -315,7 +315,7 @@ struct ACPPermissionCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
-        .background(theme.color("accent").opacity(0.14))
+        .background(theme.color("accent").opacity(0.22))
     }
 
     /// The actual `Allow … ?` body. Title (e.g. the command) sits on its

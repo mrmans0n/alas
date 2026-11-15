@@ -572,14 +572,12 @@ struct ACPComposer: View {
                     mirrorToolbar
                 } else {
                     ViewThatFits(in: .horizontal) {
-                        // The paste offer is timely and the key hints are always true,
-                        // so the key hints give way first.
+                        // The key hints live in the placeholder; only the timely
+                        // paste offer joins the row.
                         if showsPasteImageHint {
-                            expandedToolbar(showPasteHint: true, showShortcuts: true)
-                            expandedToolbar(showPasteHint: true, showShortcuts: false)
+                            expandedToolbar(showPasteHint: true)
                         }
-                        expandedToolbar(showPasteHint: false, showShortcuts: true)
-                        expandedToolbar(showPasteHint: false, showShortcuts: false)
+                        expandedToolbar(showPasteHint: false)
                         twoRowToolbar
                         compactToolbar
                     }
@@ -677,7 +675,8 @@ struct ACPComposer: View {
             onSchedule: { actions.submitWithIntent?(.schedule($0)) },
             queueBadgeCount: session.visibleQueueCount,
             queueByDefault: sendOnEnter,
-            nativeSteering: session.canSteerRunningTurn
+            nativeSteering: session.canSteerRunningTurn,
+            defersToApproval: session.transcript.pendingPermission != nil
         )
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
@@ -685,11 +684,10 @@ struct ACPComposer: View {
 
     /// Split by job: what goes into the prompt on the left, what configures
     /// the next turn in one tray on the right, then the action on its own.
-    private func expandedToolbar(showPasteHint: Bool, showShortcuts: Bool) -> some View {
+    private func expandedToolbar(showPasteHint: Bool) -> some View {
         HStack(spacing: scale.space[3]) {
             inputTools
             if showPasteHint { pasteImageHint }
-            if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
             sessionInfo
             configurationCluster
@@ -758,9 +756,14 @@ struct ACPComposer: View {
             }
         }
         .padding(scale.space[0])
+        // A visible tray, so the switches and pickers read as one group.
         .background(
             RoundedRectangle(cornerRadius: scale.radius.medium + scale.space[0])
-                .fill(theme.color("bg-3").opacity(0.35))
+                .fill(theme.color("bg-3").opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: scale.radius.medium + scale.space[0])
+                .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
         )
     }
 
@@ -813,16 +816,6 @@ struct ACPComposer: View {
     private var visibleAuthStatus: ACPAuthStatus? {
         guard let status = session.authStatus, status.kind != .none else { return nil }
         return status
-    }
-
-    private var shortcutHint: some View {
-        HStack(spacing: 6) {
-            kbdLabel("⏎")
-            Text("send").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
-            kbdLabel("⇧⏎")
-            Text("newline").font(scale.captionFont).foregroundStyle(theme.color("fg-muted"))
-        }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func kbdLabel(_ s: String) -> some View {
