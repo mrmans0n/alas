@@ -152,12 +152,15 @@ struct SpacesManagerTests {
                 ]
             )
         )
-        let projects = [project("p1"), project("p2")]
+        // A linked record is never a member; it follows its primary.
+        var linked = project("r1")
+        linked.linkedProjectId = "p1"
+        let projects = [project("p1"), linked, project("p2")]
 
         let active = manager.activeProjects(from: projects)
         let pruned = manager.pruneMissingProjects(validProjectIds: Set(projects.map(\.id)))
 
-        #expect(active.map(\.id) == ["p2", "p1"])
+        #expect(active.map(\.id) == ["p2", "p1", "r1"])
         #expect(pruned)
         #expect(manager.activeSpace?.projectIds == ["p2", "p1"])
     }
