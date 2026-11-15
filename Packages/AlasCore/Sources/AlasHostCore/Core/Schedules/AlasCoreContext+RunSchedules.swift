@@ -150,6 +150,12 @@ extension AlasCoreContext {
                 ?? SessionsAPI(core: self).defaultAgent(projectID: project.id, worktreeRoot: root)
             else { return (nil, "No agent is configured to launch for \(project.name).") }
             let speaksACP = ACPLaunchCatalog.spec(for: agentID) != nil
+            if let refusal = RunSchedulePresentation.headlessRefusal(
+                composition: composition, runsScript: false, projectName: project.name,
+                projectHost: project.host, agentSpeaksACP: speaksACP
+            ) {
+                return (agentID, refusal)
+            }
             if !speaksACP {
                 let agent = environment.agent(id: agentID)
                 guard let agent, agent.isEnabled, agent.supportsTerminal else {
@@ -159,17 +165,12 @@ extension AlasCoreContext {
                     return (agentID, "\(agent.displayName) runs in a terminal, which this host can't start: it needs zmx and a bash or zsh login shell.")
                 }
             }
-            return (agentID, RunSchedulePresentation.headlessRefusal(
-                composition: composition,
-                projectName: project.name,
-                projectHost: project.host,
-                agentSpeaksACP: speaksACP
-            ))
+            return (agentID, nil)
         }
-        // The project's host first: an SSH project's default agent may not
-        // resolve at all, which would otherwise read as no agent configured.
+        // A script first: on an SSH project it is refused before any worktree is made.
         if let refusal = RunSchedulePresentation.headlessRefusal(
-            composition: nil, projectName: project.name, projectHost: project.host, agentSpeaksACP: false
+            composition: nil, runsScript: schedule.scriptKey != nil, projectName: project.name,
+            projectHost: project.host, agentSpeaksACP: false
         ) {
             return refuse(refusal, in: originWorktree)
         }

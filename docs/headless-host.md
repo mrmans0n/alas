@@ -330,9 +330,13 @@ profile fires on the host, and a script run gets a run console. A terminal
 agent gets a console too, named after the agent, which a paired Mac can open
 from the worktree's terminals. The host types the schedule's prompt there once
 it sees the agent running, as the app does, and leaves it unsent when the
-schedule asks for review. A schedule for an SSH project, or a chat agent's
-schedule that leaves its prompt for review, fails each time with the reason;
-those run only in the app. Shepherd records of
+schedule asks for review. A chat agent's schedule that leaves its prompt for
+review fails each time with the reason; it runs only in the app. On an SSH
+project the host starts chat agents, and makes a schedule's new worktree, on
+the project's machine as the app does; a script or a terminal agent there
+fails with the reason, because the host has no terminal on that machine. Its
+chat sessions share the profile's server id with the app, which the host
+assigns at start when the profile has none. Shepherd records of
 SSH-project worktrees are left untouched for the app. Shepherd and schedule
 settings are read when the host starts: run `alas-host restart` after changing
 them. Their alerts go to paired Macs, which show them as banners.
@@ -401,4 +405,4 @@ so the agent runs at standard priority.
 ## What it does not do yet
 
 - **Linux.** The host is macOS only.
-- **SSH-project schedules.** They run only in the app.
+- **SSH-project scripts and terminal agents.** Their schedules run only in the app.

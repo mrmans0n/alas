@@ -705,19 +705,22 @@ struct RunSchedulerTests {
     }
 
     @Test(arguments: [
-        (RunScheduleComposition?.none, String?.none, true, String?.none), // local script only
-        (.none, "mini.local", true, "app is on mini.local; schedules there run only in the app."),
-        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, false, nil), // typed into its console
-        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, true,
+        (RunScheduleComposition?.none, true, String?.none, true, String?.none), // local script only
+        (.none, true, "mini.local", true, "app is on mini.local; its scripts run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), false, "mini.local", false,
+         "app is on mini.local; its terminal agents run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), false, "mini.local", true, nil), // a chat agent reaches it
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), false, nil, false, nil), // typed into its console
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), false, nil, true,
          "The schedule leaves its prompt for review; it runs only in the app."),
-        (.some(.init(prompt: "  ", sendsPromptAutomatically: false)), nil, true, nil), // opens the agent only
-        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, true, nil),
+        (.some(.init(prompt: "  ", sendsPromptAutomatically: false)), false, nil, true, nil), // opens the agent only
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), false, nil, true, nil),
     ])
     func aHostRefusesOnlyTheSchedulesItCannotRunUnattended(
-        composition: RunScheduleComposition?, host: String?, speaksACP: Bool, reason: String?
+        composition: RunScheduleComposition?, runsScript: Bool, host: String?, speaksACP: Bool, reason: String?
     ) {
         #expect(RunSchedulePresentation.headlessRefusal(
-            composition: composition, projectName: "app", projectHost: host,
+            composition: composition, runsScript: runsScript, projectName: "app", projectHost: host,
             agentSpeaksACP: speaksACP
         ) == reason)
     }
@@ -758,12 +761,12 @@ struct RunSchedulerTests {
     }
 
     /// A schedule the host cannot run is refused, reported, and leaves no
-    /// worktree behind; an SSH project says so even with no agent resolving there.
+    /// worktree behind; an SSH project's script says so even with no agent resolving there.
     @Test(arguments: [
-        (String?.none, String?.some("no-such-agent"), "no-such-agent isn't turned on in this host's profile."),
-        ("mini.local", nil, "app is on mini.local; schedules there run only in the app."),
+        (String?.none, String?.some("no-such-agent"), String?.none, "no-such-agent isn't turned on in this host's profile."),
+        ("mini.local", nil, "build", "app is on mini.local; its scripts run only in the app."),
     ])
-    func aRefusedScheduleCreatesNoWorktree(host: String?, agentID: String?, reason: String) async {
+    func aRefusedScheduleCreatesNoWorktree(host: String?, agentID: String?, scriptKey: String?, reason: String) async {
         var project = ProjectConfig(id: "p", name: "app", path: "/srv/repo", color: "blue", addedAt: .distantPast)
         project.host = host
         let projects = ProjectsManager(persistedProjects: [project])
@@ -777,7 +780,7 @@ struct RunSchedulerTests {
         var reported: [String] = []
         core.harness.notifications.notificationAdder = { reported.append($0.content.body) }
         let schedule = RunSchedule(
-            name: "nightly", target: .project(id: "p"), scriptKey: nil, trigger: .interval(seconds: 3_600),
+            name: "nightly", target: .project(id: "p"), scriptKey: scriptKey, trigger: .interval(seconds: 3_600),
             composition: RunScheduleComposition(agentId: agentID, prompt: "Go")
         )
 

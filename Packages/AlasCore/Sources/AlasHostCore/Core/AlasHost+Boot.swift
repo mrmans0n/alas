@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -8,6 +9,8 @@ import AlasAgents
 import AlasIntegrations
 import AlasACP
 import AlasAgentKit
+
+private let hostBootLogger = Logger(subsystem: "io.nlopez.alas", category: "HostBoot")
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {
@@ -67,6 +70,16 @@ extension AlasHost {
         let store = PersistenceStore()
         var projects = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) ?? ProjectsFile(projects: [])
         var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
+        // An SSH project's chat session claims its agent as this profile's
+        // machine, as the app does, so the host needs the id with Remote off too.
+        if config.remote.ensureServerId() {
+            let serverId = config.remote.serverId
+            do {
+                try HostProfileWrite.update { $0.remote.serverId = serverId }
+            } catch {
+                hostBootLogger.error("Could not save the server id: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         var spaces = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         RemotePathMigration.complete(
             projectsFile: &projects, config: &config, spaces: &spaces, saving: store,
