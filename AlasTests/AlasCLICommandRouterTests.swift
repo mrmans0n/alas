@@ -378,6 +378,16 @@ struct AlasCLICommandRouterTests {
         #expect(response == .ok)
     }
 
+    @Test func switchTakesAListedHostQualifiedPath() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let remoteMain = Self.worktree(branch: "main", path: RemotePath.virtual(host: "devbox", realPath: "/srv/repo"), projectId: "r1")
+        let router = Self.router(origin: current, visibleWorktrees: [current, remoteMain], linked: ["r1": "p1"])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "devbox:/srv/repo"))))
+
+        #expect(response == .ok)
+    }
+
     @Test func returnsWorktreeResolutionErrors() async throws {
         let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let first = Self.worktree(branch: "feature/a", path: "/tmp/a", projectId: "p1")

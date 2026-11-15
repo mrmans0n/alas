@@ -30,8 +30,13 @@ public enum AlasCLIWorktreeResolver {
     }
 
     public static func resolve(target: String, worktrees: [Worktree]) -> Result {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
+        // `host:/path`, as `rows` prints another machine's worktree.
+        if let colon = trimmed.firstIndex(of: ":"), trimmed[trimmed.index(after: colon)...].hasPrefix("/"),
+           case let host = String(trimmed[..<colon]), RemotePath.isValidHost(host) {
+            trimmed = RemotePath.virtual(host: host, realPath: String(trimmed[trimmed.index(after: colon)...]))
+        }
 
         // Absolute paths match a worktree root exactly, and never fall
         // through to branch/prefix matching.
