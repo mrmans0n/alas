@@ -312,7 +312,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     }
 
     private func acceptAndHandle(socketFD: Int32) {
-        let clientFD = accept(socketFD, nil, nil)
+        let clientFD = acceptClosingOnExec(socketFD)
         guard clientFD >= 0 else { return }
 
         // Darwin may inherit the listening socket's nonblocking flag.
@@ -569,7 +569,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
     private static let bindLock = NSLock()
 
     private static func createSocket(path: String) -> Int32 {
-        let socketFD = socket(AF_UNIX, streamSocketType, 0)
+        let socketFD = streamSocket(AF_UNIX)
         guard socketFD >= 0 else { return -1 }
 
         let flags = fcntl(socketFD, F_GETFL)

@@ -67,6 +67,32 @@ public var streamSocketType: Int32 {
     #endif
 }
 
+/// A stream socket that closes on exec. On Linux, Foundation's `Process`
+/// picks the descriptors a child closes by scanning `/proc/self/fd` before it
+/// spawns, so a socket made concurrently would leak into that child and stay
+/// open, or keep its port, for the child's life. macOS spawns with
+/// `POSIX_SPAWN_CLOEXEC_DEFAULT`.
+public func streamSocket(_ family: Int32) -> Int32 {
+    #if canImport(Glibc)
+    socket(family, streamSocketType | Int32(SOCK_CLOEXEC.rawValue), 0)
+    #else
+    socket(family, streamSocketType, 0)
+    #endif
+}
+
+/// `accept(2)` whose connection closes on exec, for the reason `streamSocket`
+/// gives.
+public func acceptClosingOnExec(_ listener: Int32) -> Int32 {
+    let fd = accept(listener, nil, nil)
+    #if canImport(Glibc)
+    // ponytail: not atomic (Glibc's module hides accept4); a spawn between the
+    // two calls can still inherit the connection. Import accept4 via a C shim
+    // if that window ever shows up.
+    if fd >= 0 { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }
+    #endif
+    return fd
+}
+
 /// Renames that refuse to replace an existing entry (`exclusive`) or that
 /// atomically exchange two (`swap`): `renameatx_np` on macOS, `renameat2`
 /// on Linux. Returns 0, or -1 with `errno` set.

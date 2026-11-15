@@ -52,7 +52,7 @@ public final class HostSocketServer: @unchecked Sendable {
         }
         // Holding the lock, whatever is at the path is a dead host's.
         unlink(path)
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         guard fd >= 0, Self.withAddress(path, { bind(fd, $0, $1) }) == 0,
               chmod(path, 0o600) == 0, listen(fd, 16) == 0
         else {
@@ -94,7 +94,7 @@ public final class HostSocketServer: @unchecked Sendable {
 
     private func acceptLoop() {
         while !stopped {
-            let client = accept(listenFD, nil, nil)
+            let client = acceptClosingOnExec(listenFD)
             guard client >= 0 else {
                 switch Self.afterAcceptFailure(errno: errno) {
                 case .retry: continue
@@ -137,7 +137,7 @@ public final class HostSocketServer: @unchecked Sendable {
 
     /// Whether something accepts connections at `path` now.
     static func connect(to path: String) -> Bool {
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         guard fd >= 0 else { return false }
         defer { close(fd) }
         return withAddress(path) { Foundation.connect(fd, $0, $1) } == 0
@@ -146,7 +146,7 @@ public final class HostSocketServer: @unchecked Sendable {
     /// Sends one request to the host serving `path` and waits for its
     /// answer, for a command-line client that asks once and exits.
     public static func request(_ request: HostRequest, at path: String = defaultPath()) throws -> HostResponse {
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         guard fd >= 0 else { throw POSIXError(.EBADF) }
         defer { close(fd) }
         guard withAddress(path, { Foundation.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }

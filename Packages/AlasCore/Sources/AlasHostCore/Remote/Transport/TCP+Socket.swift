@@ -203,7 +203,7 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
         guard let address = addresses.first else {
             return onState?(.failed(POSIXError(.ECONNREFUSED))) ?? ()
         }
-        let fd = socket(address.family, streamSocketType, 0)
+        let fd = streamSocket(address.family)
         guard fd >= 0 else { return dial(addresses.dropFirst()) }
         let handle = SocketHandle(fd: fd)
         let result = address.withSockaddr { Foundation.connect(fd, $0, $1) }
@@ -283,7 +283,7 @@ final class SocketTCPListener: TCPListener, @unchecked Sendable {
             _ = bound.0.watch(.read, queue: queue) { [weak self] in
                 guard let self, let handle = self.handle else { return }
                 while true {
-                    let client = accept(handle.fd, nil, nil)
+                    let client = acceptClosingOnExec(handle.fd)
                     guard client >= 0 else { return }
                     onConnection(SocketTCPStream(fd: client))
                 }
@@ -317,7 +317,7 @@ final class SocketTCPListener: TCPListener, @unchecked Sendable {
     }
 
     private func bind(_ address: SocketAddress) throws -> (SocketHandle, UInt16) {
-        let fd = socket(address.family, streamSocketType, 0)
+        let fd = streamSocket(address.family)
         guard fd >= 0 else { throw Self.posixError() }
         let handle = SocketHandle(fd: fd)
         var on: Int32 = 1

@@ -349,7 +349,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         withUnsafeMutableBytes(of: &address.sun_path) { raw in
             raw.copyBytes(from: pathBytes)
         }
-        let fd = socket(AF_UNIX, streamSocketType, 0)
+        let fd = streamSocket(AF_UNIX)
         guard fd >= 0 else { throw ConnectError.unavailable(errno: errno) }
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
