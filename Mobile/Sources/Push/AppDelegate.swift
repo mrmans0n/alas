@@ -102,7 +102,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let snapshots = session.snapshotsReceived
         func wait(until done: () -> Bool) async -> Bool {
             while !done() {
-                guard ContinuousClock.now < deadline else { return false }
+                // A cancelled sleep returns at once: without the check this would spin the main actor.
+                guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
                 try? await Task.sleep(for: .milliseconds(100))
             }
             return true
@@ -164,7 +165,7 @@ extension HostHub {
         connectAll()
         while true {
             if let route = route(serverId: serverId, sessionId: sessionId) { return route }
-            if ContinuousClock.now >= deadline || hosts.allSatisfy({ freshSessions(of: $0.id) != nil }) { return nil }
+            if ContinuousClock.now >= deadline || Task.isCancelled || hosts.allSatisfy({ freshSessions(of: $0.id) != nil }) { return nil }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
