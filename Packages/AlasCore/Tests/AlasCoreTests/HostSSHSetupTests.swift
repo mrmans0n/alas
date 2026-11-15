@@ -378,4 +378,21 @@ struct HostSSHSetupTests {
         #expect(HostSelfUpdate.cask(executablePath: "/Applications/Alas.app/Contents/Resources/alas-host/alas-host") == "alas")
         #expect(HostSelfUpdate.version(executablePath: app.path + "/Contents/Resources/alas-host/alas-host") == "0.41.0")
     }
+
+    /// A host unpacked from the Linux tarball runs the release its VERSION
+    /// names, and updates from the latest release's tarball for its architecture.
+    @Test func aHostFromTheLinuxTarballKnowsItsReleaseAndFindsTheNextOne() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)/opt/alas")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent().deletingLastPathComponent()) }
+        let executable = root.appendingPathComponent("alas-host/alas-host").path
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("alas-host"), withIntermediateDirectories: true)
+        #expect(HostSelfUpdate.linuxInstallRoot(executablePath: executable) == nil)
+        try "0.42.0\n".write(to: root.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        #expect(HostSelfUpdate.linuxInstallRoot(executablePath: executable)?.path == root.path)
+        #expect(HostSelfUpdate.version(executablePath: executable) == "0.42.0")
+
+        let release = Data(#"{"assets":[{"name":"alas-host-0.43.0-arm64.zip","browser_download_url":"https://e/1"},{"name":"alas-host-0.43.0-linux-x86_64.tar.gz","browser_download_url":"https://e/2"},{"name":"alas-host-0.43.0-linux-aarch64.tar.gz","browser_download_url":"https://e/3"}]}"#.utf8)
+        #expect(HostSelfUpdate.linuxAsset(in: release, architecture: "aarch64")?.absoluteString == "https://e/3")
+        #expect(HostSelfUpdate.linuxAsset(in: release, architecture: "riscv64") == nil)
+    }
 }
