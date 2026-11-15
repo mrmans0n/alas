@@ -211,6 +211,7 @@ public final class RemoteTerminalHarnessMonitor {
 
     private var namesByHost: [String: [String: String]] = [:]
     private var lastHookByID: [String: AgentHookEvent] = [:]
+    /// Panes whose mailbox the last answered poll accepted, i.e. their agent is in the foreground.
     private var foregroundHookIDs: Set<String> = []
     /// Panes a poll has answered for. A mailbox already there on the first answer is restored state.
     private var observedIDs: Set<String> = []
