@@ -9,6 +9,9 @@ import AlasAgents
 public enum RemoteDeviceKind: String, Codable, Equatable, Sendable {
     case browser
     case alasInstance
+    /// The native iOS app. Unlike the web client it renders no host-supplied
+    /// script with access to its connection, so it is served terminals.
+    case phone
 }
 
 /// What another Mac's agents may do on this one. Each value includes the one before it.

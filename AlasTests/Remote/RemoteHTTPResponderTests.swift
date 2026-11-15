@@ -114,6 +114,17 @@ struct RemoteHTTPResponderTests {
         #expect(out.contains(#""token":"#))
     }
 
+    /// Only the native app's claim makes a phone, which is served terminals; anything else is a browser.
+    @Test(arguments: [(#","client":"ios""#, RemoteDeviceKind.phone), ("", .browser), (#","client":"web""#, .browser)])
+    func pairRecordsTheClientKind(client: String, kind: RemoteDeviceKind) throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"phone"\#(client)}"#.utf8)
+        let out = text(makeResponder(pairing: pairing).response(for: request("POST", "/pair", origin: privateOrigin), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 200 OK"))
+        #expect(try #require(pairing.devices.first).kind == kind)
+    }
+
     @Test func failedPairStillCarriesCORSHeaders() {
         let out = text(makeResponder().response(for: request("POST", "/pair", origin: privateOrigin), body: Data(#"{"code":"NOPE","deviceName":"x"}"#.utf8)))
         #expect(out.hasPrefix("HTTP/1.1 401 Unauthorized"))

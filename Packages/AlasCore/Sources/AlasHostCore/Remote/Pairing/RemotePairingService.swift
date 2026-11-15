@@ -77,8 +77,9 @@ public final class RemotePairingService {
     }
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
-    public func redeem(code: String, deviceName: String) throws -> String {
-        try redeemCore(code: code, deviceName: deviceName, kind: .browser, peerServerId: nil).token
+    /// `kind` is the client's claim: `.browser` or `.phone`.
+    public func redeem(code: String, deviceName: String, kind: RemoteDeviceKind = .browser) throws -> String {
+        try redeemCore(code: code, deviceName: deviceName, kind: kind == .phone ? .phone : .browser, peerServerId: nil).token
     }
 
     /// Same exchange for another Alas instance. Existing records for the same
