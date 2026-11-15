@@ -750,13 +750,21 @@ final class AppState {
     /// Screen recordings of simulators, yours and agents'. Made on first use,
     /// which also deletes agents' recordings older than a week.
     @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {
-        let recorder = DeviceRecorder { udid, file in try LiveScreenRecording(udid: udid, file: file) }
+        let recorder = DeviceRecorder { [weak self] udid, file in
+            if let control = self?.androidPane.control, self?.androidPane.devices?.contains(where: { $0.serial == udid }) == true {
+                return try AndroidScreenRecording(control: control, serial: udid, file: file)
+            }
+            return try LiveScreenRecording(udid: udid, file: file)
+        }
         devicePane.onShutDown = { [weak recorder] udid in Task { await recorder?.simulatorStopped(udid: udid) } }
         // Your recordings go to the Desktop once written: after Stop, a shutdown, or quitting.
         recorder.onUserRecordingEnded = { [weak self] udid, finished in
-            let name = self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
+            let android = self?.androidPane.devices?.first { $0.serial == udid }
+            let name = android?.title ?? self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
             do {
-                return try DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
+                return try DeviceScreenshot.moveRecordingToDesktop(
+                    finished.file, deviceName: name, kind: android == nil ? "Simulator Recording" : "Android Recording"
+                )
             } catch {
                 // Not lost: show where it is.
                 NSWorkspace.shared.activateFileViewerSelecting([finished.file])
