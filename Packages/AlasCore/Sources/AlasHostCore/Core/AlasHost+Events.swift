@@ -624,7 +624,11 @@ final class HostEventSource {
             manager.willChange.observe(changed).store(in: &sessionSignals)
             manager.summaryWillChange.observe(changed).store(in: &sessionSignals)
             for runner in manager.runners.values {
-                runner.session.transcript.$streamingState.signal.observe { _ in changed() }.store(in: &sessionSignals)
+                let transcript = runner.session.transcript
+                transcript.$streamingState.signal.observe { _ in changed() }.store(in: &sessionSignals)
+                // A question during a turn changes the reported state without changing the turn's.
+                transcript.$pendingQuestion.signal.observe { _ in changed() }.store(in: &sessionSignals)
+                transcript.$pendingUserInputs.signal.observe { _ in changed() }.store(in: &sessionSignals)
             }
         }
     }

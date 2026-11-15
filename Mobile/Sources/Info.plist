@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AlasAppGroup</key>
+	<string>$(ALAS_APP_GROUP)</string>
+	<key>AlasKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER).shared</string>
+	<key>AlasPushEnvironment</key>
+	<string>$(ALAS_APS_ENVIRONMENT)</string>
+	<key>AlasPushRelayURL</key>
+	<string>$(ALAS_PUSH_RELAY_URL)</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -36,6 +44,10 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

@@ -138,8 +138,14 @@ extension AlasCoreContext {
     /// A session's state as Remote clients see it: waiting for its user
     /// while a relayed notice asks for input and no turn runs.
     func reportedStreamingState(of sessionID: String, live: ACPSession.StreamingState?) -> ACPSession.StreamingState? {
-        guard let waiting = noticeAwaitingClears[sessionID] else { return live }
+        let waiting = noticeAwaitingClears[sessionID]
+        guard live == .streaming || waiting != nil else { return live }
         let transcript = sessionManagers.values.lazy.compactMap { $0.liveSession(for: sessionID) }.first?.transcript
+        // A question asked during a turn leaves it streaming, yet the agent waits on its user.
+        if live == .streaming, let transcript, transcript.pendingQuestion != nil || transcript.hasBlockingUserInput {
+            return .awaitingInput
+        }
+        guard let waiting else { return live }
         guard let transcript, waiting.transcript === transcript else {
             // The session was dropped, and may have come back as another:
             // nothing watches for its next prompt any more.

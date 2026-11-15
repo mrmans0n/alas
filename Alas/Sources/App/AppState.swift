@@ -7183,7 +7183,10 @@ final class AppState {
             self?.harness.socketServer.linkSession(leafId: leafId)
         }
         terminal.socketReleaseHandler = { [weak self] leafId in
-            self?.harness.socketServer.unlinkSession(leafId: leafId)
+            guard let self else { return }
+            self.harness.socketServer.unlinkSession(leafId: leafId)
+            // Every close ends here, including leaves whose tab was never shown.
+            self.remoteTerminalHarness.unregister(sessionID: leafId, harness: self.harness)
         }
         terminal.onSessionRegistered = { [weak self] session in
             guard let self else { return }
@@ -7194,9 +7197,6 @@ final class AppState {
         }
         terminal.onSessionUnregistered = { [weak self] session in
             guard let self else { return }
-            if let host = session.remoteHost {
-                self.remoteTerminalHarness.unregister(sessionID: session.id, host: host, harness: self.harness)
-            }
             self.checkpointWriterLeases.release(sessionID: session.id, instanceID: self.instanceId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
@@ -7497,6 +7497,7 @@ final class AppState {
                     guard case .terminal(let state) = tab else { continue }
                     for leaf in state.root.leaves() {
                         _ = harness.socketServer.linkSession(leafId: leaf.id)
+                        watchPersistedRemoteLeaf(leaf.id, owner: .worktree(worktree.id), host: project.host)
                     }
                 }
             }
@@ -7507,9 +7508,20 @@ final class AppState {
                 guard case .terminal(let state) = tab else { continue }
                 for leaf in state.root.leaves() {
                     _ = harness.socketServer.linkSession(leafId: leaf.id)
+                    watchPersistedRemoteLeaf(leaf.id, owner: owner, host: checkout.executionLocation.sshHost)
                 }
             }
         }
+    }
+
+    /// SSH panes report from their host, so a persisted one is polled before its tab is
+    /// shown. `socketReleaseHandler` stops it with the leaf; a live surface keeps its own
+    /// registration, which may carry a legacy session name.
+    private func watchPersistedRemoteLeaf(_ leafId: String, owner: SessionOwnerID, host: String?) {
+        guard let host, config.terminal.keepSessionsAlive, terminal.registry.session(for: leafId) == nil else { return }
+        remoteTerminalHarness.register(
+            sessionID: leafId, host: host, name: ZmxSessionName.derive(owner: owner, leafId: leafId), harness: harness
+        )
     }
 
     /// Shared orchestration coordinator: the CLI/MCP router, the manager

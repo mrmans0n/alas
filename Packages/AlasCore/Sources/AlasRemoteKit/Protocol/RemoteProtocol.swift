@@ -290,6 +290,11 @@ public struct RemoteBooleanOption: Codable, Equatable, Sendable {
     }
 }
 
+/// The hello capability of a host that takes a phone's `pushRegistration`.
+public enum PushRelayCapability {
+    public static let v1 = "push.relay.v1"
+}
+
 /// Client → server. `type` discriminates. The first generic parameter is this message's own `.host` payload and the second is the `.peerHost` payload; the Mac pins them via the typealiases in AlasHostCore.
 public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, ServerHost: Codable & Equatable & Sendable>: Equatable, Sendable {
     /// Sent by Alas peer connections after the server's `hello`. Browsers
@@ -327,6 +332,10 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
         content: [String: ACPElicitationValue]?
     )
     case takeOver(sessionId: String)
+    /// Hands the host the push relay it posts this phone's attention pings
+    /// to; a nil token unregisters. Sent only to hosts that advertise
+    /// `PushRelayCapability.v1`.
+    case pushRegistration(relayURL: String, relayToken: String?)
     /// Opens a stored session as a tab on the host; see `PeerSessionTabsCapability`.
     case openSessionTab(sessionId: String)
     /// Closes the host's tab for a session, keeping it in recent history.
@@ -393,7 +402,7 @@ public enum RemoteClientMessageOf<ClientHost: Codable & Equatable & Sendable, Se
 }
 
 extension RemoteClientMessageOf: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, capabilities, sha, visualId, selectedOptionIds, note, console, portForward, host, peerHost, repoHook, relayURL, relayToken }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -463,6 +472,10 @@ extension RemoteClientMessageOf: Codable {
             )
         case "takeOver":
             self = .takeOver(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "pushRegistration":
+            self = .pushRegistration(
+                relayURL: try c.decode(String.self, forKey: .relayURL),
+                relayToken: try c.decodeIfPresent(String.self, forKey: .relayToken))
         case "openSessionTab":
             self = .openSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "closeSessionTab":
@@ -654,6 +667,10 @@ extension RemoteClientMessageOf: Codable {
         case .takeOver(let s):
             try c.encode("takeOver", forKey: .type)
             try c.encode(s, forKey: .sessionId)
+        case .pushRegistration(let url, let token):
+            try c.encode("pushRegistration", forKey: .type)
+            try c.encode(url, forKey: .relayURL)
+            try c.encodeIfPresent(token, forKey: .relayToken)
         case .openSessionTab(let s):
             try c.encode("openSessionTab", forKey: .type)
             try c.encode(s, forKey: .sessionId)
