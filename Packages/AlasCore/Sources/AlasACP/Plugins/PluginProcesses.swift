@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -325,20 +324,20 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
         let rootRunning = lock.withLock { exitStatus == nil } && process.isRunning
         if rootRunning {
             track(ACPTerminal.collectChildDescendants(of: pid))
-            _ = Darwin.kill(-pid, signal)
-            _ = Darwin.kill(pid, signal)
+            _ = Foundation.kill(-pid, signal)
+            _ = Foundation.kill(pid, signal)
         }
         for descendant in ACPTerminal.currentlyMatching(lock.withLock { descendants }) {
-            _ = Darwin.kill(descendant.pid, signal)
+            _ = Foundation.kill(descendant.pid, signal)
         }
     }
 
     /// After the root exits: its group, whose id cannot be reused while any member is left, and every tracked
     /// descendant that is still the same process.
     private func signalLeftovers(_ signal: Int32, of pid: pid_t) {
-        _ = Darwin.kill(-pid, signal)
+        _ = Foundation.kill(-pid, signal)
         for descendant in ACPTerminal.currentlyMatching(lock.withLock { descendants }) {
-            _ = Darwin.kill(descendant.pid, signal)
+            _ = Foundation.kill(descendant.pid, signal)
         }
     }
 }

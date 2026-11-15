@@ -1,5 +1,4 @@
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -662,7 +661,7 @@ public actor WorktreeCheckpointStore {
     private func blobIdentity(_ reference: CheckpointBlobReference, layout: Layout) throws -> VerifiedBlobIdentity {
         let blob = blobURL(reference, layout: layout)
         var attributes = stat()
-        guard Darwin.lstat(blob.path, &attributes) == 0 else {
+        guard Foundation.lstat(blob.path, &attributes) == 0 else {
             if errno == ENOENT { throw CheckpointStoreError.blobNotFound }
             throw CheckpointFileSystemError.posix(operation: "lstat", code: errno)
         }
@@ -703,7 +702,7 @@ public actor WorktreeCheckpointStore {
         let temporary = parent.appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
         let sourceHandle = try FileHandle(forReadingFrom: source)
         defer { try? sourceHandle.close() }
-        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
+        let descriptor = Foundation.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
         guard descriptor >= 0 else { throw CheckpointFileSystemError.posix(operation: "open", code: errno) }
         var descriptorIsOpen = true
 
@@ -721,17 +720,17 @@ public actor WorktreeCheckpointStore {
             guard byteCount == reference.byteCount, hash == reference.sha256 else {
                 throw CheckpointStoreError.blobDoesNotMatchReference
             }
-            guard Darwin.fchmod(descriptor, mode) == 0 else { throw CheckpointFileSystemError.posix(operation: "fchmod", code: errno) }
+            guard Foundation.fchmod(descriptor, mode) == 0 else { throw CheckpointFileSystemError.posix(operation: "fchmod", code: errno) }
             if durability != .none {
-                guard Darwin.fsync(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "fsync", code: errno) }
+                guard Foundation.fsync(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "fsync", code: errno) }
             }
-            guard Darwin.close(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "close", code: errno) }
+            guard Foundation.close(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "close", code: errno) }
             descriptorIsOpen = false
-            guard Darwin.rename(temporary.path, destination.path) == 0 else { throw CheckpointFileSystemError.posix(operation: "rename", code: errno) }
+            guard Foundation.rename(temporary.path, destination.path) == 0 else { throw CheckpointFileSystemError.posix(operation: "rename", code: errno) }
             if durability == .fileAndDirectory { try fileSystem.synchronizeDirectory(parent) }
         } catch {
-            if descriptorIsOpen { _ = Darwin.close(descriptor) }
-            _ = Darwin.unlink(temporary.path)
+            if descriptorIsOpen { _ = Foundation.close(descriptor) }
+            _ = Foundation.unlink(temporary.path)
             throw error
         }
     }
@@ -741,7 +740,7 @@ public actor WorktreeCheckpointStore {
             var remaining = raw.count
             var pointer = raw.baseAddress
             while remaining > 0 {
-                let written = Darwin.write(descriptor, pointer, remaining)
+                let written = Foundation.write(descriptor, pointer, remaining)
                 guard written > 0 else { throw CheckpointFileSystemError.posix(operation: "write", code: errno) }
                 remaining -= written
                 pointer = pointer?.advanced(by: written)
@@ -898,7 +897,7 @@ public actor WorktreeCheckpointStore {
 
     private func isPhysicalDirectory(_ url: URL) throws -> Bool {
         var attributes = stat()
-        guard Darwin.lstat(url.path, &attributes) == 0 else {
+        guard Foundation.lstat(url.path, &attributes) == 0 else {
             if errno == ENOENT { return false }
             throw CheckpointFileSystemError.posix(operation: "lstat", code: errno)
         }

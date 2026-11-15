@@ -1,6 +1,5 @@
 import AlasPlatform
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 
 /// Reads a plan review's negotiated plan file on the session's host.

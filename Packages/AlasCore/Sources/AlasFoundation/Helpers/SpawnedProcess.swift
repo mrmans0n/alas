@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// A child process started with `posix_spawn`, by default leading its own process group from the start:
@@ -45,14 +44,21 @@ public final class SpawnedProcess: @unchecked Sendable {
         newProcessGroup: Bool = true, newSession: Bool = false, stdin: Pipe?, stdout: Pipe, stderr: Pipe,
         onExit: @escaping @Sendable (pid_t, Termination) -> Void
     ) throws {
+        #if canImport(Darwin)
         var attributes: posix_spawnattr_t?
+        var flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+        let setSession = POSIX_SPAWN_SETSID
+        #else
+        var attributes = posix_spawnattr_t()
+        var flags = Int32(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+        let setSession: Int32 = 0x80 // glibc's POSIX_SPAWN_SETSID, which Swift doesn't import
+        #endif
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        var flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
         if newSession {
-            flags |= POSIX_SPAWN_SETSID
+            flags |= setSession
         } else if newProcessGroup {
-            flags |= POSIX_SPAWN_SETPGROUP
+            flags |= Int32(POSIX_SPAWN_SETPGROUP)
             posix_spawnattr_setpgroup(&attributes, 0)
         }
         posix_spawnattr_setflags(&attributes, Int16(flags))
@@ -63,7 +69,11 @@ public final class SpawnedProcess: @unchecked Sendable {
         sigfillset(&allSignals)
         posix_spawnattr_setsigdefault(&attributes, &allSignals)
 
+        #if canImport(Darwin)
         var actions: posix_spawn_file_actions_t?
+        #else
+        var actions = posix_spawn_file_actions_t()
+        #endif
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
         if let stdin {
@@ -74,6 +84,10 @@ public final class SpawnedProcess: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&actions, stdout.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, stderr.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
         if let directory { posix_spawn_file_actions_addchdir_np(&actions, directory.path) }
+        #if !canImport(Darwin)
+        // Linux has no POSIX_SPAWN_CLOEXEC_DEFAULT: after the dups above, close everything past the standard streams.
+        posix_spawn_file_actions_addclosefrom_np(&actions, 3)
+        #endif
 
         let argv = ([executable.path] + arguments).map { strdup($0) } + [nil]
         let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -112,9 +126,14 @@ public final class SpawnedProcess: @unchecked Sendable {
             waited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT)
         } while waited == -1 && errno == EINTR
         // Nothing else reaps this pid; should something have, the exit is still reported so no waiter hangs.
-        let termination: Termination = switch waited == 0 ? info.si_code : -1 {
-        case CLD_EXITED: .exit(info.si_status)
-        case CLD_KILLED, CLD_DUMPED: .signal(info.si_status)
+        #if canImport(Darwin)
+        let exitStatus = info.si_status
+        #else
+        let exitStatus = info._sifields._sigchld.si_status
+        #endif
+        let termination: Termination = switch waited == 0 ? Int(info.si_code) : -1 {
+        case Int(CLD_EXITED): .exit(exitStatus)
+        case Int(CLD_KILLED), Int(CLD_DUMPED): .signal(exitStatus)
         default: .exit(-1)
         }
         let callback = lock.withLock {

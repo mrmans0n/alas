@@ -1,9 +1,13 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto")
+/// Apple's SDKs ship an `SQLite3` module; Linux gets the system library through `CSQLite`.
+let sqlite: Target.Dependency = .target(name: "CSQLite", condition: .when(platforms: [.linux]))
+
 /// The modules below the agent ones, which each agent module depends on.
 let base: [Target.Dependency] = [
-    "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode",
+    crypto, sqlite, "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode",
 ]
 
 let package = Package(
@@ -17,24 +21,28 @@ let package = Package(
     dependencies: [
         // Keep in step with the app's pin in project.yml.
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", exact: "0.25.0"),
+        // CryptoKit on Apple platforms (it re-exports it), BoringSSL on Linux.
+        // Keep in step with the app's resolved pin.
+        .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2"),
     ],
     targets: [
         // The modules AlasCore is split into, bottom to top; see
         // docs/plans/2026-10-20-alascore-modules.md. AlasCore re-exports them.
         // Foundation, CryptoKit and Observation only: the remote wire types
         // the iOS app shares with the Mac. Must build for iOS.
-        .target(name: "AlasRemoteKit"),
+        .target(name: "AlasRemoteKit", dependencies: [crypto]),
+        .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
         .target(
             name: "AlasFoundation",
-            dependencies: ["AlasRemoteKit"],
+            dependencies: ["AlasRemoteKit", crypto, sqlite],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
-        .target(name: "AlasModel", dependencies: ["AlasFoundation"]),
-        .target(name: "AlasPlatform", dependencies: ["AlasFoundation", "AlasModel"]),
-        .target(name: "AlasFeatures", dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform"]),
+        .target(name: "AlasModel", dependencies: [crypto, "AlasFoundation"]),
+        .target(name: "AlasPlatform", dependencies: [crypto, "AlasFoundation", "AlasModel"]),
+        .target(name: "AlasFeatures", dependencies: [crypto, sqlite, "AlasFoundation", "AlasModel", "AlasPlatform"]),
         .target(
             name: "AlasIntegrations",
-            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures"]
+            dependencies: [crypto, "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures"]
         ),
         .target(
             name: "AlasCode",

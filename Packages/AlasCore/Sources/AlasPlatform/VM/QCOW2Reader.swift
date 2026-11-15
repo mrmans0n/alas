@@ -1,5 +1,4 @@
 import Compression
-import Darwin
 import Foundation
 
 // The header layout, L1/L2 lookup, zero-cluster handling and compressed-cluster
@@ -196,7 +195,7 @@ public struct QCOW2Reader {
     }
 
     private static func open(_ path: String, _ flags: Int32, mode: mode_t = 0) throws -> Int32 {
-        let fd = Darwin.open(path, flags | O_CLOEXEC, mode)
+        let fd = Foundation.open(path, flags | O_CLOEXEC, mode)
         guard fd >= 0 else { throw QCOW2ReaderError.io(operation: "open", errno: errno) }
         return fd
     }

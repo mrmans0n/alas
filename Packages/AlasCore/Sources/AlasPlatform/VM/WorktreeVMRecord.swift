@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 public enum VMGuestOS: String, Codable, Sendable {

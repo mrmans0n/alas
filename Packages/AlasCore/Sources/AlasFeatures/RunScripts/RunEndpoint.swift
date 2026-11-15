@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -137,7 +136,7 @@ public enum RunPortProbe: Sendable {
     private static func isIPv4PortInUse(_ port: Int) -> Bool {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
-        defer { Darwin.close(descriptor) }
+        defer { Foundation.close(descriptor) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -154,7 +153,7 @@ public enum RunPortProbe: Sendable {
     private static func isIPv6PortInUse(_ port: Int) -> Bool {
         let descriptor = socket(AF_INET6, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
-        defer { Darwin.close(descriptor) }
+        defer { Foundation.close(descriptor) }
         var address = sockaddr_in6()
         address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
         address.sin6_family = sa_family_t(AF_INET6)

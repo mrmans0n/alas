@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// One transcript message as sent to the web client. `text` carries the

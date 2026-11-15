@@ -1,5 +1,4 @@
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -128,7 +127,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     public func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
         let leaf = try validateRelativePath(relativePath, under: root)
         var attributes = stat()
-        guard Darwin.lstat(leaf.path, &attributes) == 0 else {
+        guard Foundation.lstat(leaf.path, &attributes) == 0 else {
             if errno == ENOENT { return nil }
             throw posixError("lstat")
         }
@@ -146,22 +145,22 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
     public func regularFileReference(root: URL, relativePath: String) throws -> CheckpointBlobReference {
         let leaf = try validateRelativePath(relativePath, under: root)
-        let descriptor = Darwin.open(leaf.path, O_RDONLY | O_NOFOLLOW)
+        let descriptor = Foundation.open(leaf.path, O_RDONLY | O_NOFOLLOW)
         guard descriptor >= 0 else {
             // Swapped for a symlink since the caller's lstat: retry the capture.
             if errno == ELOOP { throw CheckpointSnapshotError.stateChanged }
             throw posixError("open")
         }
-        defer { _ = Darwin.close(descriptor) }
+        defer { _ = Foundation.close(descriptor) }
         var attributes = stat()
-        guard Darwin.fstat(descriptor, &attributes) == 0 else { throw posixError("fstat") }
+        guard Foundation.fstat(descriptor, &attributes) == 0 else { throw posixError("fstat") }
         guard isRegular(attributes) else { throw CheckpointFileSystemError.unsupportedLeaf }
 
         var hasher = SHA256()
         var byteCount: Int64 = 0
         var buffer = [UInt8](repeating: 0, count: Int(min(1024 * 1024, max(attributes.st_size, 1))))
         while true {
-            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            let count = Foundation.read(descriptor, &buffer, buffer.count)
             if count == 0 { break }
             if count < 0 {
                 if errno == EINTR { continue }
@@ -194,7 +193,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         for component in components.dropLast() {
             parent.appendPathComponent(String(component), isDirectory: true)
             var attributes = stat()
-            guard Darwin.lstat(parent.path, &attributes) == 0 else {
+            guard Foundation.lstat(parent.path, &attributes) == 0 else {
                 if errno == ENOENT { break }
                 throw posixError("lstat")
             }
@@ -214,7 +213,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
     public func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
         try requireSafeParent(of: url)
-        guard Darwin.mkdir(url.path, mode) == 0 else { throw posixError("mkdir") }
+        guard Foundation.mkdir(url.path, mode) == 0 else { throw posixError("mkdir") }
         try synchronizeDirectory(url.deletingLastPathComponent())
     }
 
@@ -225,23 +224,23 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     public func write(_ data: Data, to url: URL, mode: mode_t, durability: CheckpointWriteDurability) throws {
         try requireSafeParent(of: url)
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
-        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
+        let descriptor = Foundation.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
         guard descriptor >= 0 else { throw posixError("open") }
         var descriptorIsOpen = true
 
         do {
             try writeAll(data, descriptor: descriptor)
-            guard Darwin.fchmod(descriptor, mode) == 0 else { throw posixError("fchmod") }
+            guard Foundation.fchmod(descriptor, mode) == 0 else { throw posixError("fchmod") }
             if durability != .none {
-                guard Darwin.fsync(descriptor) == 0 else { throw posixError("fsync") }
+                guard Foundation.fsync(descriptor) == 0 else { throw posixError("fsync") }
             }
-            guard Darwin.close(descriptor) == 0 else { throw posixError("close") }
+            guard Foundation.close(descriptor) == 0 else { throw posixError("close") }
             descriptorIsOpen = false
-            guard Darwin.rename(temporary.path, url.path) == 0 else { throw posixError("rename") }
+            guard Foundation.rename(temporary.path, url.path) == 0 else { throw posixError("rename") }
             if durability == .fileAndDirectory { try synchronizeDirectory(url.deletingLastPathComponent()) }
         } catch {
-            if descriptorIsOpen { _ = Darwin.close(descriptor) }
-            _ = Darwin.unlink(temporary.path)
+            if descriptorIsOpen { _ = Foundation.close(descriptor) }
+            _ = Foundation.unlink(temporary.path)
             throw error
         }
     }
@@ -251,7 +250,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         guard !target.contains(0) else { throw CheckpointFileSystemError.invalidSymlinkTarget }
         let bytes = Array(target) + [0]
         let result = bytes.withUnsafeBufferPointer { pointer in
-            Darwin.symlink(pointer.baseAddress!.withMemoryRebound(to: CChar.self, capacity: bytes.count) { $0 }, url.path)
+            Foundation.symlink(pointer.baseAddress!.withMemoryRebound(to: CChar.self, capacity: bytes.count) { $0 }, url.path)
         }
         guard result == 0 else { throw posixError("symlink") }
         try synchronizeDirectory(url.deletingLastPathComponent())
@@ -265,7 +264,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         guard sourceDirectory.st_dev == destinationDirectory.st_dev else {
             throw CheckpointFileSystemError.unsafePath
         }
-        guard Darwin.rename(source.path, destination.path) == 0 else { throw posixError("rename") }
+        guard Foundation.rename(source.path, destination.path) == 0 else { throw posixError("rename") }
         try synchronizeDirectory(destination.deletingLastPathComponent())
     }
 
@@ -279,8 +278,8 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         let sourceDirectory = try lstat(at: source.deletingLastPathComponent())
         let destinationDirectory = try lstat(at: destination.deletingLastPathComponent())
         guard sourceDirectory.st_dev == destinationDirectory.st_dev else { throw CheckpointFileSystemError.unsafePath }
-        guard Darwin.link(source.path, destination.path) == 0 else { throw posixError("link") }
-        guard Darwin.unlink(source.path) == 0 else { throw posixError("unlink") }
+        guard Foundation.link(source.path, destination.path) == 0 else { throw posixError("link") }
+        guard Foundation.unlink(source.path) == 0 else { throw posixError("unlink") }
         if synchronizingParent { try synchronizeDirectory(destination.deletingLastPathComponent()) }
     }
 
@@ -290,13 +289,13 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
     public func removeIfPresent(_ url: URL, synchronizingParent: Bool) throws {
         try requireSafeParent(of: url)
-        if Darwin.unlink(url.path) == 0 {
+        if Foundation.unlink(url.path) == 0 {
             if synchronizingParent { try synchronizeDirectory(url.deletingLastPathComponent()) }
             return
         }
         if errno == ENOENT { return }
         if errno == EISDIR || errno == EPERM {
-            guard Darwin.rmdir(url.path) == 0 else { throw posixError("rmdir") }
+            guard Foundation.rmdir(url.path) == 0 else { throw posixError("rmdir") }
             if synchronizingParent { try synchronizeDirectory(url.deletingLastPathComponent()) }
             return
         }
@@ -319,10 +318,10 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
     public func synchronizeDirectory(_ url: URL) throws {
         try requireSafeDirectoryTree(at: url)
-        let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY)
+        let descriptor = Foundation.open(url.path, O_RDONLY | O_DIRECTORY)
         guard descriptor >= 0 else { throw posixError("open") }
-        defer { _ = Darwin.close(descriptor) }
-        guard Darwin.fsync(descriptor) == 0 else { throw posixError("fsync") }
+        defer { _ = Foundation.close(descriptor) }
+        guard Foundation.fsync(descriptor) == 0 else { throw posixError("fsync") }
     }
 
     private func requireSafeParent(of url: URL) throws {
@@ -344,14 +343,14 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     private func readData(at url: URL) throws -> Data {
-        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW)
+        let descriptor = Foundation.open(url.path, O_RDONLY | O_NOFOLLOW)
         guard descriptor >= 0 else { throw posixError("open") }
-        defer { _ = Darwin.close(descriptor) }
+        defer { _ = Foundation.close(descriptor) }
 
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            let count = Foundation.read(descriptor, &buffer, buffer.count)
             if count == 0 { return result }
             if count < 0 {
                 if errno == EINTR { continue }
@@ -365,7 +364,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         var capacity = max(initialSize + 1, 256)
         while true {
             var buffer = [UInt8](repeating: 0, count: capacity)
-            let count = Darwin.readlink(url.path, &buffer, buffer.count)
+            let count = Foundation.readlink(url.path, &buffer, buffer.count)
             guard count >= 0 else { throw posixError("readlink") }
             if count < buffer.count { return Data(buffer[0 ..< Int(count)]) }
             capacity *= 2
@@ -377,7 +376,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         try data.withUnsafeBytes { rawBuffer in
             while offset < rawBuffer.count {
                 let pointer = rawBuffer.baseAddress!.advanced(by: offset)
-                let count = Darwin.write(descriptor, pointer, rawBuffer.count - offset)
+                let count = Foundation.write(descriptor, pointer, rawBuffer.count - offset)
                 if count < 0 {
                     if errno == EINTR { continue }
                     throw posixError("write")
@@ -389,7 +388,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
     private func lstat(at url: URL) throws -> stat {
         var attributes = stat()
-        guard Darwin.lstat(url.path, &attributes) == 0 else { throw posixError("lstat") }
+        guard Foundation.lstat(url.path, &attributes) == 0 else { throw posixError("lstat") }
         return attributes
     }
 

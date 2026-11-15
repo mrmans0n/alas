@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -207,8 +206,8 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         }
         for entry in entries where entry.hasPrefix("sock-") || entry.hasPrefix(".sock-") {
             let path = "\(directory)/\(entry)"
-            var linkStat = Darwin.stat()
-            guard Darwin.lstat(path, &linkStat) == 0,
+            var linkStat = Foundation.stat()
+            guard Foundation.lstat(path, &linkStat) == 0,
                   (linkStat.st_mode & S_IFMT) == S_IFLNK,
                   access(path, F_OK) != 0
             else { continue }
@@ -290,8 +289,8 @@ public final class AgentHookSocketServer: @unchecked Sendable {
             // in-process server shares the pid path) or sits in a directory
             // the checks below would refuse anyway; fighting over it would
             // make two live servers take the path from each other forever.
-            var st = Darwin.stat()
-            guard Darwin.lstat(bindPath, &st) != 0 else { return nil }
+            var st = Foundation.stat()
+            guard Foundation.lstat(bindPath, &st) != 0 else { return nil }
             // The same `rm` removes an isolated profile's runtime root
             // (`/tmp/alas-<uid>-<hash>`), and another user could recreate it.
             if let runtimeRoot {
@@ -536,7 +535,7 @@ public final class AgentHookSocketServer: @unchecked Sendable {
             guard let base = buffer.baseAddress else { return }
             var written = 0
             while written < data.count {
-                let result = Darwin.write(clientFD, base.advanced(by: written), data.count - written)
+                let result = Foundation.write(clientFD, base.advanced(by: written), data.count - written)
                 if result < 0 {
                     if errno == EINTR { continue }
                     return

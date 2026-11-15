@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 public enum JSONRPCFraming: Sendable {
@@ -48,15 +47,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         }
     }
 
-    private struct ProcessStartTime: Hashable, Sendable {
-        let seconds: Int64
-        let microseconds: Int64
-
-        public init(seconds: Int64, microseconds: Int64) {
-            self.seconds = seconds
-            self.microseconds = microseconds
-        }
-    }
+    private typealias ProcessStartTime = ProcessTable.StartTime
 
     private struct ProcessIdentity: Sendable {
         let parentPid: pid_t
@@ -100,7 +91,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     /// still belongs to the same process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
-    private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
+    private var descendantForkSources: [pid_t: ForkWatch] = [:]
 
     public let incoming: AsyncStream<Incoming>
 
@@ -117,7 +108,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         self.frameWriter = JSONRPCFrameWriter { framed in try input.fileHandleForWriting.write(contentsOf: framed) }
         // A closed adapter pipe is a factual write error, never a process-wide
         // SIGPIPE that could kill the app before its attempt becomes uncertain.
-        _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        NoSigPipe.pipe(input.fileHandleForWriting.fileDescriptor)
         self.framing = framing
         self.terminationScope = terminationScope
         var cont: AsyncStream<Incoming>.Continuation!
@@ -185,7 +176,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
                 // Last chance to reach same-group descendants that were
                 // spawned after the most recent tracker tick. Later shutdown
                 // paths avoid group signaling once the root pid can be stale.
-                _ = Darwin.kill(-pid, SIGTERM)
+                _ = Foundation.kill(-pid, SIGTERM)
             }
             self.refreshLock.lock()
             self.lock.lock()
@@ -196,7 +187,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             self.cancelDescendantForkObservers()
             if self.terminationScope == .processTree {
                 for d in Self.currentlyMatching(cachedTargets) {
-                    _ = Darwin.kill(d.pid, SIGTERM)
+                    _ = Foundation.kill(d.pid, SIGTERM)
                 }
             }
             self.frameWriter.close()
@@ -272,20 +263,20 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             // signaling, while descendants are still parented to root.
             let cachedTargets = targets
             let liveDescendants = Set(Self.collectDescendants(of: pid))
-            _ = Darwin.kill(-pid, SIGTERM)
-            _ = Darwin.kill(pid, SIGTERM)
+            _ = Foundation.kill(-pid, SIGTERM)
+            _ = Foundation.kill(pid, SIGTERM)
             for d in liveDescendants {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
             for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants)) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
         } else {
             // Root has already exited: the process group may have been
             // reused by an unrelated process, so we only signal cached
             // descendants whose process identity still matches.
             for d in Self.currentlyMatching(targets) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
         }
 
@@ -318,14 +309,9 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         lock.unlock()
         if alreadyWatching { return }
 
-        let source = DispatchSource.makeProcessSource(
-            identifier: pid,
-            eventMask: .fork,
-            queue: .global(qos: .utility)
-        )
-        source.setEventHandler { [weak self] in
+        guard let source = ForkWatch.start(pid: pid, queue: .global(qos: .utility), handler: { [weak self] _ in
             self?.refreshOrphanSet()
-        }
+        }) else { return }
         lock.lock()
         if descendantForkSources[pid] == nil, !rootHasExited {
             descendantForkSources[pid] = source
@@ -468,21 +454,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     }
 
     private static func childPids(of parent: pid_t) -> [pid_t] {
-        var capacity = 16
-        while capacity <= 4096 {
-            var pids = [pid_t](repeating: 0, count: capacity)
-            let pidCount = pids.withUnsafeMutableBufferPointer { buffer in
-                proc_listchildpids(parent, buffer.baseAddress,
-                                   Int32(capacity * MemoryLayout<pid_t>.stride))
-            }
-            guard pidCount > 0 else { return [] }
-            let count = min(capacity, Int(pidCount))
-            if count < capacity {
-                return Array(pids.prefix(count)).filter { $0 > 0 }
-            }
-            capacity *= 2
-        }
-        return []
+        ProcessTable.children(of: parent)
     }
 
     private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
@@ -504,18 +476,6 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     /// data rather than a locale/timezone-formatted, second-precision
     /// wall-clock string.
     private static func processIdentity(of pid: pid_t) -> ProcessIdentity? {
-        var info = proc_bsdinfo()
-        let size = MemoryLayout<proc_bsdinfo>.stride
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            pointer.withMemoryRebound(to: UInt8.self, capacity: size) { rebound in
-                proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, rebound, Int32(size))
-            }
-        }
-        guard result == Int32(size) else { return nil }
-        return ProcessIdentity(
-            parentPid: pid_t(info.pbi_ppid),
-            startedAt: ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
-                                        microseconds: Int64(info.pbi_start_tvusec))
-        )
+        ProcessTable.entry(of: pid).map { ProcessIdentity(parentPid: $0.parentPID, startedAt: $0.startTime) }
     }
 }

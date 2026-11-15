@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 public struct ReviewIdentity: Codable, Equatable, Hashable, Sendable {

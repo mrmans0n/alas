@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// Stops session daemons started by a zmx that predates the frozen (v1) IPC.
@@ -120,7 +119,7 @@ public enum ZmxPreFreezeMigration {
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
         accepts: @escaping @Sendable (String) -> Bool = { acceptsConnections(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
-        signal: @escaping @Sendable (_ pid: Int32, _ signal: Int32) -> Void = { _ = Darwin.kill($0, $1) },
+        signal: @escaping @Sendable (_ pid: Int32, _ signal: Int32) -> Void = { _ = Foundation.kill($0, $1) },
         isAlive: @escaping @Sendable (Int32) -> Bool = { processExists($0) },
         processStart: @escaping @Sendable (Int32) -> ProcessStart? = { startTime(ofProcess: $0) },
         exitTimeout: DispatchTimeInterval = .seconds(2)
@@ -186,7 +185,7 @@ public enum ZmxPreFreezeMigration {
     /// Whether `pid` names a live process: `kill(pid, 0)` succeeds, or fails
     /// for a reason other than `ESRCH` (such as `EPERM`).
     public static func processExists(_ pid: Int32) -> Bool {
-        Darwin.kill(pid, 0) == 0 || errno != ESRCH
+        Foundation.kill(pid, 0) == 0 || errno != ESRCH
     }
 
     /// When the process `pid` names started; nil when there is none or its

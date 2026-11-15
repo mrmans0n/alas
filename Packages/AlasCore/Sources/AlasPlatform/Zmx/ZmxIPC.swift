@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -355,12 +354,12 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         guard fd >= 0 else { throw ConnectError.unavailable(errno: errno) }
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                Foundation.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard result == 0 else {
             let code = errno
-            Darwin.close(fd)
+            Foundation.close(fd)
             throw ConnectError.unavailable(errno: code)
         }
         return ZmxIPCSocket(fd: fd)
@@ -374,7 +373,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         return data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
-                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                let n = Foundation.write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n > 0 {
                     offset += n
                 } else if n < 0, errno == EINTR {
@@ -391,7 +390,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
     public func read(maxLength: Int = 64 * 1024) -> Data? {
         var chunk = [UInt8](repeating: 0, count: maxLength)
         while true {
-            let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, maxLength) }
+            let n = chunk.withUnsafeMutableBytes { Foundation.read(fd, $0.baseAddress, maxLength) }
             if n >= 0 { return Data(chunk[0..<n]) }
             if errno != EINTR { return nil }
         }
@@ -476,7 +475,7 @@ public final class ZmxIPCSocket: @unchecked Sendable {
             guard deadline.uptimeNanoseconds > now else { return false }
             let remaining = deadline.uptimeNanoseconds - now
             let milliseconds = Int32(clamping: (remaining + 999_999) / 1_000_000)
-            let result = Darwin.poll(&descriptor, 1, milliseconds)
+            let result = Foundation.poll(&descriptor, 1, milliseconds)
             if result > 0 { return true }
             if result == 0 { return false }
             if errno != EINTR { return false }
@@ -485,10 +484,10 @@ public final class ZmxIPCSocket: @unchecked Sendable {
 
     /// Unblocks a pending `read` and stops further I/O.
     public func shutdown() {
-        _ = Darwin.shutdown(fd, SHUT_RDWR)
+        _ = Foundation.shutdown(fd, SHUT_RDWR)
     }
 
     deinit {
-        Darwin.close(fd)
+        Foundation.close(fd)
     }
 }

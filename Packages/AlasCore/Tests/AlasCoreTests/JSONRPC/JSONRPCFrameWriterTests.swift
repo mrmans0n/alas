@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 import Synchronization
 import Testing
 import AlasCore

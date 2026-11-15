@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import Testing
 @testable import AlasCore
