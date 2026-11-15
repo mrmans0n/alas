@@ -109,7 +109,8 @@ struct ElicitationFormView: View {
                     } else {
                         items = multiple ? items + [option.value] : [option.value]
                     }
-                    inputs[field.key] = items.isEmpty ? nil : .selection(items)
+                    // An emptied multiple choice stays an explicit empty answer; a single one goes back to unset.
+                    inputs[field.key] = items.isEmpty && !multiple ? nil : .selection(items)
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: multiple ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle"))
