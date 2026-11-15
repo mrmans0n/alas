@@ -1,8 +1,8 @@
 import AlasCore
 import SwiftUI
 
-/// The selected simulator's settings: display, an app's permissions and
-/// notifications, location and URLs. Reads its values each time it opens.
+/// The selected simulator's settings: display, accessibility, an app's
+/// permissions and notifications, location and URLs. Reads its values each time it opens.
 /// Changes take the simulator's input turn, so they never land in the middle
 /// of an agent's call.
 struct DeviceSettingsPopover: View {
@@ -14,6 +14,8 @@ struct DeviceSettingsPopover: View {
 
     @State private var display: SimulatorDisplaySettings?
     @State private var displayError: String?
+    @State private var accessibility: SimulatorAccessibility?
+    @State private var accessibilityError: String?
     @State private var apps: [SimulatorApp] = []
     @State private var appID: String?
     @State private var service = SimulatorPrivacyService.photos
@@ -34,6 +36,8 @@ struct DeviceSettingsPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space[4]) {
             section("Display") { displayRows }
+            Divider()
+            section("Accessibility") { accessibilityRows }
             Divider()
             section("App") { appRows }
             Divider()
@@ -136,6 +140,68 @@ struct DeviceSettingsPopover: View {
         Task {
             let ran = await control.whileUserHoldsInput(udid: udid) { await body() }
             if !ran { report("An agent is driving this simulator. Take over to change it.") }
+        }
+    }
+
+    // MARK: Accessibility
+
+    @ViewBuilder
+    private var accessibilityRows: some View {
+        if let accessibility {
+            toggleRow("VoiceOver", accessibility.voiceOver) { SimulatorAccessibilityChange(voiceOver: $0) }
+            toggleRow("Reduce Motion", accessibility.reduceMotion) { SimulatorAccessibilityChange(reduceMotion: $0) }
+            toggleRow("Button Shapes", accessibility.buttonShapes) { SimulatorAccessibilityChange(buttonShapes: $0) }
+            toggleRow("Reduce Transparency", accessibility.reduceTransparency) {
+                SimulatorAccessibilityChange(reduceTransparency: $0)
+            }
+            row("Color filter", supported: accessibility.colorFilter) {
+                Picker("", selection: Binding(
+                    get: { if case .value(let value) = accessibility.colorFilter { value } else { .none } },
+                    set: { value in changeAccessibility(SimulatorAccessibilityChange(colorFilter: value)) }
+                )) {
+                    ForEach(SimulatorColorFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+            row("Liquid Glass", supported: accessibility.liquidGlass) {
+                Picker("", selection: Binding(
+                    get: { if case .value(let value) = accessibility.liquidGlass { value } else { .clear } },
+                    set: { value in changeAccessibility(SimulatorAccessibilityChange(liquidGlass: value)) }
+                )) {
+                    Text("Clear").tag(SimulatorLiquidGlass.clear)
+                    Text("Tinted").tag(SimulatorLiquidGlass.tinted)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 120)
+            }
+        } else if accessibilityError == nil {
+            ProgressView().controlSize(.small)
+        }
+        if let accessibilityError { note(accessibilityError, tone: "warn") }
+    }
+
+    private func toggleRow(
+        _ title: String, _ value: SimulatorReadBack<Bool>, change: @escaping (Bool) -> SimulatorAccessibilityChange
+    ) -> some View {
+        row(title, supported: value) {
+            Toggle("", isOn: Binding(get: { value == .value(true) }, set: { changeAccessibility(change($0)) }))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+        }
+    }
+
+    /// Applies an accessibility change and shows what the helper read back.
+    private func changeAccessibility(_ change: SimulatorAccessibilityChange) {
+        mutate(report: { accessibilityError = $0 }) {
+            do {
+                accessibility = try await settings.setAccessibility(udid: udid, change)
+                accessibilityError = nil
+            } catch {
+                accessibilityError = error.localizedDescription
+            }
         }
     }
 
@@ -285,6 +351,12 @@ struct DeviceSettingsPopover: View {
             display = try await settings.display(udid: udid)
         } catch {
             displayError = error.localizedDescription
+        }
+        // Separately, so a missing helper doesn't hide the display settings.
+        do {
+            accessibility = try await settings.accessibility(udid: udid)
+        } catch {
+            accessibilityError = error.localizedDescription
         }
         apps = (try? await settings.userApps(udid: udid)) ?? []
         if appID == nil || !apps.contains(where: { $0.bundleID == appID }) { appID = apps.first?.bundleID }

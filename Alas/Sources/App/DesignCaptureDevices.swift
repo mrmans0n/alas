@@ -185,7 +185,7 @@ enum DesignCaptureDevices {
 
         var body: some View {
             DeviceSettingsPopover(udid: DesignCaptureDevices.phone.udid, settings: FakeSettings(), control: control)
-                .frame(height: 560, alignment: .top)
+                .frame(height: 780, alignment: .top)
                 .background(theme.color("bg-2"))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
