@@ -102,6 +102,20 @@ struct HostStore {
         try? JSONEncoder().encode(hosts).write(to: fileURL, options: .atomic)
     }
 
+    /// Forgotten hosts that may still push to this phone; their tokens stay
+    /// until each is told to stop. Kept apart from `hosts.json`, so nothing
+    /// lists them.
+    var unregisterURL: URL { fileURL.deletingLastPathComponent().appending(path: "pending-unregister.json") }
+
+    func loadPendingUnregister() -> [PairedHost] {
+        (try? Data(contentsOf: unregisterURL)).flatMap { try? JSONDecoder().decode([PairedHost].self, from: $0) } ?? []
+    }
+
+    func savePendingUnregister(_ hosts: [PairedHost]) {
+        try? FileManager.default.createDirectory(at: unregisterURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(hosts).write(to: unregisterURL, options: .atomic)
+    }
+
     func token(for id: UUID) -> String? {
         var query = Self.query(for: id)
         query[kSecReturnData as String] = true

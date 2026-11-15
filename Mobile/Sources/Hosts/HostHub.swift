@@ -36,6 +36,9 @@ final class HostHub {
     @ObservationIgnored private var capabilities: [UUID: Set<String>] = [:]
 
     @ObservationIgnored private var connections: [UUID: PhoneConnection] = [:]
+    /// Forgotten hosts still to be told to stop pushing, and their connections.
+    @ObservationIgnored private var pendingUnregister: [PairedHost]
+    @ObservationIgnored private var unregisterConnections: [UUID: PhoneConnection] = [:]
     @ObservationIgnored private var listeners: [UUID: [UUID: @MainActor (PhoneServerMessage) -> Void]] = [:]
     /// Holders per session per host. The host keeps one follow per socket, so
     /// only the last holder's release may unsubscribe.
@@ -54,6 +57,7 @@ final class HostHub {
         self.store = store
         store.migrateIfNeeded()
         hosts = store.load()
+        pendingUnregister = store.loadPendingUnregister()
         for host in hosts {
             sessionLists[host.id] = listCache.load(host.id)
         }
@@ -106,8 +110,12 @@ final class HostHub {
     }
 
     func forget(_ id: UUID) {
-        if state(of: id) == .online, registrar?.relayToken != nil, capabilities[id]?.contains(PushRelayCapability.v1) == true {
-            send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: nil), to: id)
+        // Online or not, the host may hold this phone's relay token: keep its
+        // token until it is told to drop it, or it pushes forever.
+        let pushes = registrar?.relayToken != nil
+        if pushes, let host = hosts.first(where: { $0.id == id }) {
+            pendingUnregister.append(host)
+            store.savePendingUnregister(pendingUnregister)
         }
         connections.removeValue(forKey: id)?.disconnect()
         hosts.removeAll { $0.id == id }
@@ -118,7 +126,7 @@ final class HostHub {
         listeners[id] = nil
         subscriptions[id] = nil
         store.save(hosts)
-        store.deleteToken(for: id)
+        if pushes { unregisterPending() } else { store.deleteToken(for: id) }
         let cache = listCache
         cacheSeq += 1
         let seq = cacheSeq
@@ -130,12 +138,65 @@ final class HostHub {
         for connection in connections.values {
             connection.connect()
         }
+        unregisterPending()
     }
 
     func disconnectAll() {
         for connection in connections.values {
             connection.disconnect()
         }
+        for connection in unregisterConnections.values {
+            connection.disconnect()
+        }
+        unregisterConnections = [:]
+    }
+
+    /// Connects each forgotten host still owed an unregister. Retried on every
+    /// `connectAll()` until the host hears it or refuses this phone.
+    private func unregisterPending() {
+        for host in pendingUnregister where unregisterConnections[host.id] == nil {
+            guard let token = store.token(for: host.id) else {
+                dropPendingUnregister(host.id)
+                continue
+            }
+            let id = host.id
+            let connection = PhoneConnection(
+                origins: host.origins, lastOrigin: host.lastOrigin, token: token,
+                expectedServerId: host.serverId, expectedPublicKey: host.publicKey
+            ) { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case .hello(_, _, _, _, let capabilities, _):
+                    self.capabilities[id] = Set(capabilities)
+                case .stateChanged(.online):
+                    guard self.capabilities[id]?.contains(PushRelayCapability.v1) == true else { return dropPendingUnregister(id) }
+                    unregisterConnections[id]?.send(.pushRegistration(relayURL: PushRegistrar.relayURL, relayToken: nil))
+                    // ponytail: `send` reports no completion; a second is ample for one small frame.
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(1))
+                        self?.dropPendingUnregister(id)
+                    }
+                case .stateChanged(.idle), .stateChanged(.connecting), .stateChanged(.offline):
+                    break
+                case .stateChanged:
+                    // Refused or not the Mac it was: it will never hear this, nor push with this pairing.
+                    dropPendingUnregister(id)
+                default:
+                    break
+                }
+            }
+            unregisterConnections[id] = connection
+            connection.connect()
+        }
+    }
+
+    private func dropPendingUnregister(_ id: UUID) {
+        unregisterConnections.removeValue(forKey: id)?.disconnect()
+        capabilities[id] = nil
+        guard pendingUnregister.contains(where: { $0.id == id }) else { return }
+        pendingUnregister.removeAll { $0.id == id }
+        store.savePendingUnregister(pendingUnregister)
+        store.deleteToken(for: id)
     }
 
     func send(_ message: PhoneClientMessage, to id: UUID) {
