@@ -60,11 +60,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if !answered { await Self.postCouldntAnswer(serverId: serverId, sessionId: sessionId, title: response.notification.request.content.title) }
             return
         }
-        await MainActor.run {
-            var route: SessionRoute?
-            if let serverId, let sessionId { route = Self.hub?.route(serverId: serverId, sessionId: sessionId) }
-            if let open = Self.open { open(route) } else { Self.pending.append(route) }
+        await Self.openTapped(serverId: serverId, sessionId: sessionId)
+    }
+
+    @MainActor private static func openTapped(serverId: String?, sessionId: String?) async {
+        var route: SessionRoute?
+        if let serverId, let sessionId {
+            route = await hub?.route(serverId: serverId, sessionId: sessionId, before: .now + .seconds(5))
         }
+        if let open { open(route) } else { pending.append(route) }
     }
 
     /// The actions do not open the app, so iOS may run this with the app in the background and its
@@ -84,7 +88,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// Answers the session's pending permission once, if it is the request `request` names, taking over
     /// the writer lease when the Mac holds it, and waits until it resolves.
     @MainActor private static func answer(serverId: String, sessionId: String, request: String, allow: Bool) async -> Bool {
-        guard let hub, let registry, let route = hub.route(serverId: serverId, sessionId: sessionId) else { return false }
+        let deadline = ContinuousClock.now + .seconds(25)
+        guard let hub, let registry,
+              let route = await hub.route(serverId: serverId, sessionId: sessionId, before: deadline) else { return false }
         // What a session already following the online host shows is current; anything else waits for a snapshot
         // sent after this began, since the one it holds may predate a disconnect.
         let wasLive = hub.state(of: route.hostID) == .online
@@ -92,8 +98,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let (session, token) = registry.acquire(hostID: route.hostID, sessionId: route.sessionId)
         defer { token.cancel() }
         let snapshots = session.snapshotsReceived
-        hub.connectAll()
-        let deadline = ContinuousClock.now + .seconds(25)
         func wait(until done: () -> Bool) async -> Bool {
             while !done() {
                 guard ContinuousClock.now < deadline else { return false }
@@ -150,5 +154,16 @@ extension HostHub {
         let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
         return hosts.first { host in sessions(of: host.id).contains { $0.id == namespaced } }
             .map { SessionRoute(hostID: $0.id, sessionId: namespaced) }
+    }
+
+    /// `route`, after connecting: a peer session created while the phone was away is only in a
+    /// gateway's live list. Gives up at `deadline`, or once every host sent a live list without it.
+    func route(serverId: String, sessionId: String, before deadline: ContinuousClock.Instant) async -> SessionRoute? {
+        connectAll()
+        while true {
+            if let route = route(serverId: serverId, sessionId: sessionId) { return route }
+            if ContinuousClock.now >= deadline || hosts.allSatisfy({ freshSessions(of: $0.id) != nil }) { return nil }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
     }
 }
