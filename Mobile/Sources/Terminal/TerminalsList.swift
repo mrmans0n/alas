@@ -73,6 +73,12 @@ struct TerminalsList: View {
             hub.send(.console(.list), to: hostID)
         }
         .onDisappear { listener = nil }
+        // A new link knows nothing of the old one's consoles or pending open: list again, and stop
+        // waiting on an answer that went with the old socket.
+        .onChange(of: hub.onlineCount(of: hostID)) {
+            opening = nil
+            if listener != nil { hub.send(.console(.list), to: hostID) }
+        }
     }
 
     private func open() {
