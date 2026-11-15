@@ -45,6 +45,7 @@ struct HostLaunchAgentTests {
         #expect(everyday.unitText.contains("ExecStart=\"/opt/alas host/alas-host\" --wait-for-lock\n"))
         #expect(everyday.unitText.contains("ConditionPathExists=/opt/alas host/alas-host\n"))
         #expect(everyday.unitText.contains("Restart=always\n"))
+        #expect(everyday.unitText.contains("KillMode=process\n"))
         #expect(!everyday.unitText.contains("Environment="))
 
         let root = URL(fileURLWithPath: "/tmp/alas-e2e", isDirectory: true)

@@ -40,6 +40,10 @@ public struct HostSystemdUnit: Equatable, Sendable {
             // Restarted whenever it ends, including after an upgrade replaces the executable.
             "Restart=always",
             "RestartSec=2",
+            // Stop only the host: the default kills the whole cgroup, console
+            // daemons (zmx and their shells) included, so consoles would not
+            // survive a restart or update.
+            "KillMode=process",
             "StandardOutput=append:\(logURL.path)",
             "StandardError=append:\(logURL.path)",
         ]
