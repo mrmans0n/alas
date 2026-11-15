@@ -229,8 +229,9 @@ struct NewWorktreeDialog: View {
         }
         .task(id: projectId) { await refreshRunOn() }
         .onChange(of: runOnHost) { _, _ in
-            // The machine decides which agents can run there.
+            // The machine decides which agents can run there, and whether gg pins the base.
             applyLaunchDefaults(for: projectId)
+            if let pinned = stackPinnedBase { base = pinned }
             refreshAutoNamePlaceholder()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -779,7 +780,6 @@ struct NewWorktreeDialog: View {
         // Read now: the dialog stays editable while the create runs.
         let primaryId = projectId
         let chosenHost = runOnHost
-        let branchRepoPath = state.worktreeProjects.first { $0.id == primaryId }?.path ?? project.path
         cancelNameSuggestion()
         createTask?.cancel()
         createTask = Task { @MainActor in
@@ -789,7 +789,8 @@ struct NewWorktreeDialog: View {
                 // temporary name rather than failing the create.
                 let refs = try? await Process.git(
                     ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-                    cwd: URL(fileURLWithPath: branchRepoPath)
+                    // The chosen checkout; a Machine's path runs over SSH.
+                    cwd: URL(fileURLWithPath: project.path)
                 )
                 // The dialog stays editable meanwhile, so every input below is
                 // read after this point, from the same state.
