@@ -295,17 +295,18 @@ struct ACPInputField: NSViewRepresentable {
         )
     }
 
-    /// When busy, the placeholder advertises whichever action ⏎ will
-    /// trigger under the current settings — so a user who inverted the
+    /// The composer's key hints live here, not in the toolbar, so they show
+    /// only while there is nothing typed. When busy, the placeholder
+    /// advertises whichever action ⏎ will trigger under the current settings — so a user who inverted the
     /// shortcut sees the selected action and the adapter's actual behavior.
     static func placeholder(for state: ACPSession.StreamingState,
                             sendOnEnter: Bool, nativeSteering: Bool = false) -> String {
         switch state {
-        case .idle: return "Plan, ask, or build — type / for commands"
+        case .idle: return "Plan, ask, or build — type / for commands, ⇧⏎ for a new line"
         case .sending, .streaming, .awaitingPermission, .awaitingInput:
             return sendOnEnter
-                ? "Queue a follow-up… (⌥⏎ to \(steeringActionTitle(nativeSteering: nativeSteering).lowercased()))"
-                : "\(steeringActionTitle(nativeSteering: nativeSteering))… (⌥⏎ to queue)"
+                ? "Queue a follow-up… (⌥⏎ to \(steeringActionTitle(nativeSteering: nativeSteering).lowercased()), ⇧⏎ for a new line)"
+                : "\(steeringActionTitle(nativeSteering: nativeSteering))… (⌥⏎ to queue, ⇧⏎ for a new line)"
         }
     }
 
