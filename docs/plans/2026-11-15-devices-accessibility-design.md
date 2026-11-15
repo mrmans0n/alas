@@ -100,8 +100,9 @@ follow-ups ("VoiceOver, reduce motion and an accessibility overlay").
 - Hovering an element shows a small card: role, label, value and id.
 - Elements of the types `DeviceSnapshot` keeps without a label (button, text,
   secure and search fields, switch, slider, cell, link, tab: its
-  `interactiveTypes`, made public for this) and that have no label are
-  outlined in the warning colour, and their card says "No label: VoiceOver
+  `interactiveTypes`) that have no label are outlined in the warning colour.
+  Elements keep only their role description, so parsing records the type as
+  `DeviceElement.isControl` for this. Their card says "No label: VoiceOver
   reads its type only." Other elements are outlined in a neutral colour.
 - Refresh: about 1 s after the user's last click or key, when the
   orientation changes, and with a refresh button. A read takes 0.4–1.8 s, so
