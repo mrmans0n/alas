@@ -211,6 +211,7 @@ public final class RemoteTerminalHarnessMonitor {
 
     private var namesByHost: [String: [String: String]] = [:]
     private var lastHookByID: [String: AgentHookEvent] = [:]
+    private var foregroundHookIDs: Set<String> = []
     /// Panes a poll has answered for. A mailbox already there on the first answer is restored state.
     private var observedIDs: Set<String> = []
     private var tasks: [String: Task<Void, Never>] = [:]
@@ -240,21 +241,23 @@ public final class RemoteTerminalHarnessMonitor {
         for (sessionID, name) in current where asked[sessionID] == name {
             let hook = snapshot.hooks[sessionID]
             let prior = lastHookByID[sessionID]
-            if hook == nil, prior != nil {
+            if hook == nil, foregroundHookIDs.remove(sessionID) != nil {
                 harness.forgetSession(sessionID)
             }
             harness.recordHarnessDetection(sessionId: sessionID, kind: snapshot.agents[name])
-            if let hook, hook != prior {
-                if observedIDs.contains(sessionID) {
+            if let hook {
+                let returnedToForeground = foregroundHookIDs.insert(sessionID).inserted
+                if observedIDs.contains(sessionID), hook != prior {
                     harness.socketServer.onEvent?(hook)
-                } else if let state = Self.restoredState(hook.event) {
-                    // Shown without notifying: the event happened before this app saw the pane.
+                } else if returnedToForeground, let state = Self.restoredState(hook.event) {
+                    // Restore an existing mailbox without replaying its side effects.
                     harness.setExternalActivity(
                         sessionId: sessionID, agent: hook.agent, state: state, body: hook.body, isSnapshot: true
                     )
                 }
+                // A temporary loss of foreground eligibility must not erase this event.
+                lastHookByID[sessionID] = hook
             }
-            lastHookByID[sessionID] = hook
             observedIDs.insert(sessionID)
         }
     }
@@ -273,6 +276,7 @@ public final class RemoteTerminalHarnessMonitor {
         guard let host = namesByHost.first(where: { $0.value[sessionID] != nil })?.key else { return }
         namesByHost[host]?.removeValue(forKey: sessionID)
         observedIDs.remove(sessionID)
+        foregroundHookIDs.remove(sessionID)
         if lastHookByID.removeValue(forKey: sessionID) != nil {
             harness.forgetSession(sessionID)
         } else {

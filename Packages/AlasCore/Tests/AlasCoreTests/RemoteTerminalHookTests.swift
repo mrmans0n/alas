@@ -29,30 +29,6 @@ struct RemoteTerminalHookTests {
         }
     }
 
-    @Test func mailboxEventsMustComeFromTheRegisteredForegroundGroup() throws {
-        let id = UUID().uuidString
-        let session = ZmxSessionInfo(name: "one", startDir: "/repo", pid: 100)
-        let processes = """
-        100 1 100 101 /bin/bash
-        101 100 101 101 /usr/bin/claude
-        102 100 102 101 /usr/bin/claude
-        """
-        for (pid, envelopeID, agent, matches) in [
-            (101, id, "claude", true), (102, id, "claude", false),
-            (101, "other", "claude", false), (101, id, "codex", false),
-        ] {
-            let event = """
-            {"v":1,"event":"awaiting_input","agent":"\(agent)","session_id":"\(envelopeID)","pid":\(pid)}
-            """
-            let snapshot = RemoteTerminalHarness.snapshot(
-                sessions: [session], processTable: processes,
-                hookOutput: "\(id)\t\(event)", namesByID: [id: "one"]
-            )
-            #expect(snapshot.agents["one"] == .claudeCode)
-            #expect((snapshot.hooks[id]?.event == .awaitingInput) == matches)
-        }
-    }
-
     @Test func onlyPersistentSSHTerminalsExportMailboxEnvironment() {
         let id = UUID().uuidString
         let persistent = RemoteTerminalScript.attachScript(
@@ -121,5 +97,39 @@ struct RemoteTerminalHookTests {
 
         monitor.apply(snapshot, asked: names, current: names, harness: harness)
         #expect(delivered.isEmpty)
+    }
+
+    @MainActor // RemoteTerminalHarnessMonitor is main-actor isolated.
+    @Test(arguments: [false, true])
+    func returningForegroundMailboxOnlyDeliversNewEvents(changedWhileAway: Bool) {
+        let id = UUID().uuidString
+        let names = [id: "alas-pane"]
+        let harness = HarnessService()
+        var delivered: [ActivityEvent] = []
+        var restored: [ActivityState] = []
+        harness.socketServer.onEvent = { delivered.append($0.event) }
+        harness.onActivityTransition = { transition in
+            if transition.isSnapshot, let state = transition.state {
+                restored.append(state)
+            }
+        }
+        let monitor = RemoteTerminalHarnessMonitor()
+        let idle = RemoteTerminalHarness.Snapshot(
+            agents: ["alas-pane": .claudeCode], hooks: [id: hook(.idle, id: id)]
+        )
+
+        monitor.apply(idle, asked: names, current: names, harness: harness)
+        monitor.apply(.init(agents: [:], hooks: [:]), asked: names, current: names, harness: harness)
+        #expect(harness.activityBySession[id] == nil)
+
+        var foreground = idle
+        if changedWhileAway {
+            foreground.hooks[id] = hook(.awaitingInput, id: id)
+        }
+        monitor.apply(foreground, asked: names, current: names, harness: harness)
+        monitor.apply(foreground, asked: names, current: names, harness: harness)
+
+        #expect(delivered == (changedWhileAway ? [.awaitingInput] : []))
+        #expect(restored == (changedWhileAway ? [.idle] : [.idle, .idle]))
     }
 }
