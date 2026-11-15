@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import os
 import AlasFoundation
@@ -145,7 +144,7 @@ public final class HostSocketServer: @unchecked Sendable {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
-        return withAddress(path) { Darwin.connect(fd, $0, $1) } == 0
+        return withAddress(path) { Foundation.connect(fd, $0, $1) } == 0
     }
 
     /// Sends one request to the host serving `path` and waits for its
@@ -154,7 +153,7 @@ public final class HostSocketServer: @unchecked Sendable {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.EBADF) }
         defer { close(fd) }
-        guard withAddress(path, { Darwin.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }
+        guard withAddress(path, { Foundation.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }
         var line = try JSONEncoder().encode(HostClientMessage(id: 1, request: request))
         line.append(UInt8(ascii: "\n"))
         let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
@@ -239,7 +238,7 @@ final class HostSocketConnection: @unchecked Sendable {
                 data.withUnsafeBytes { buffer in
                     var offset = 0
                     while offset < buffer.count {
-                        let written = Darwin.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                        let written = Foundation.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
                         if written < 0 {
                             if errno == EINTR { continue }
                             return

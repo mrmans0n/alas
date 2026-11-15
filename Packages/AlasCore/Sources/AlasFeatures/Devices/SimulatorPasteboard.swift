@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 /// An app's "Paste from Other Apps" permission on a simulator, from its
 /// `TCC.db`. Pasting with ⌘V sent as HID keys needs it: iOS doesn't count the

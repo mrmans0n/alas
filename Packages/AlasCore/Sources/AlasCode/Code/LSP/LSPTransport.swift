@@ -70,7 +70,7 @@ public final class LSPTransport: @unchecked Sendable {
     /// still belongs to the same process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
-    private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
+    private var descendantForkSources: [pid_t: ForkWatch] = [:]
 
     public let incoming: AsyncStream<Incoming>
 
@@ -130,7 +130,7 @@ public final class LSPTransport: @unchecked Sendable {
                 // Last chance to reach same-group descendants that were
                 // spawned after the most recent tracker tick. Later shutdown
                 // paths avoid group signaling once the root pid can be stale.
-                _ = Darwin.kill(-pid, SIGTERM)
+                _ = Foundation.kill(-pid, SIGTERM)
             }
             self.refreshLock.lock()
             self.lock.lock()
@@ -140,7 +140,7 @@ public final class LSPTransport: @unchecked Sendable {
             self.refreshLock.unlock()
             self.cancelDescendantForkObservers()
             for d in Self.currentlyMatching(cachedTargets) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
             self.drainStderr()
             self.continuation?.yield(.exited(termination))
@@ -177,7 +177,7 @@ public final class LSPTransport: @unchecked Sendable {
         var drained = Data()
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         while drained.count < limit {
-            let count = Darwin.read(descriptor, &chunk, chunk.count)
+            let count = Foundation.read(descriptor, &chunk, chunk.count)
             if count > 0 {
                 drained.append(chunk, count: count)
             } else if count < 0, errno == EINTR {
@@ -216,20 +216,20 @@ public final class LSPTransport: @unchecked Sendable {
             // signaling, while descendants are still parented to root.
             let cachedTargets = targets
             let liveDescendants = Set(Self.collectDescendants(of: pid))
-            _ = Darwin.kill(-pid, SIGTERM)
-            _ = Darwin.kill(pid, SIGTERM)
+            _ = Foundation.kill(-pid, SIGTERM)
+            _ = Foundation.kill(pid, SIGTERM)
             for d in liveDescendants {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
             for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants)) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
         } else {
             // Root has already exited: the process group may have been
             // reused by an unrelated process, so we only signal cached
             // descendants whose process identity still matches.
             for d in Self.currentlyMatching(targets) {
-                _ = Darwin.kill(d.pid, SIGTERM)
+                _ = Foundation.kill(d.pid, SIGTERM)
             }
         }
 
@@ -262,14 +262,9 @@ public final class LSPTransport: @unchecked Sendable {
         lock.unlock()
         if alreadyWatching { return }
 
-        let source = DispatchSource.makeProcessSource(
-            identifier: pid,
-            eventMask: .fork,
-            queue: .global(qos: .utility)
-        )
-        source.setEventHandler { [weak self] in
+        guard let source = ForkWatch.start(pid: pid, queue: .global(qos: .utility), handler: { [weak self] _ in
             self?.refreshOrphanSet()
-        }
+        }) else { return }
         lock.lock()
         if descendantForkSources[pid] == nil, !rootHasExited {
             descendantForkSources[pid] = source

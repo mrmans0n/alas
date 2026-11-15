@@ -1,6 +1,6 @@
 import Foundation
 import Network
-import CryptoKit
+import Crypto
 import AlasFoundation
 import AlasModel
 import AlasPlatform

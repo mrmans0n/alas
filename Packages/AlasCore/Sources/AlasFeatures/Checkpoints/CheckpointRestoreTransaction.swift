@@ -1,5 +1,4 @@
-import Darwin
-import CryptoKit
+import Crypto
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -462,7 +461,7 @@ public struct CheckpointRestoreTransaction: Sendable {
                 durable.pendingIndexLock = candidate
                 try persist(durable)
                 try faultInjector.hit(.afterIndexLockIntentJournaled)
-                guard Darwin.link(candidate.path, lock.path) == 0 else {
+                guard Foundation.link(candidate.path, lock.path) == 0 else {
                     try? fileSystem.removeIfPresent(URL(fileURLWithPath: candidate.path))
                     durable = beforeIntent
                     try persist(durable)
@@ -548,15 +547,15 @@ public struct CheckpointRestoreTransaction: Sendable {
         let name = ".alas-checkpoint-index-\(operationID.uuidString.lowercased())-\(UUID().uuidString.lowercased())"
         let candidate = index.deletingLastPathComponent().appendingPathComponent(name)
         _ = try fileSystem.list(candidate.deletingLastPathComponent())
-        let descriptor = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        let descriptor = Foundation.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { throw posix("create index candidate") }
-        defer { _ = Darwin.close(descriptor) }
+        defer { _ = Foundation.close(descriptor) }
         do {
             try bytes.withUnsafeBytes { buffer in
                 var offset = 0
                 let chunkSize = max(1, buffer.count / 2)
                 while offset < buffer.count {
-                    let count = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: offset), min(chunkSize, buffer.count - offset))
+                    let count = Foundation.write(descriptor, buffer.baseAddress!.advanced(by: offset), min(chunkSize, buffer.count - offset))
                     if count < 0 && errno == EINTR { continue }
                     guard count > 0 else { throw posix("write index candidate") }
                     let firstWrite = offset == 0
@@ -565,7 +564,7 @@ public struct CheckpointRestoreTransaction: Sendable {
                 }
             }
             try faultInjector.hit(.beforeIndexCandidateSync)
-            guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync index candidate") }
+            guard Foundation.fsync(descriptor) == 0 else { throw posix("fsync index candidate") }
             try fileSystem.synchronizeDirectory(candidate.deletingLastPathComponent())
             let identity = try indexIdentity(at: candidate)
             guard identity.checksum == digest(bytes) else { throw CheckpointRestoreError.invalidJournal }
@@ -580,11 +579,11 @@ public struct CheckpointRestoreTransaction: Sendable {
         let name = ".alas-checkpoint-index-lock-\(operationID.uuidString.lowercased())-\(UUID().uuidString.lowercased())"
         let candidate = index.deletingLastPathComponent().appendingPathComponent(name)
         _ = try fileSystem.list(candidate.deletingLastPathComponent())
-        let descriptor = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        let descriptor = Foundation.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { throw posix("create index lock candidate") }
-        defer { _ = Darwin.close(descriptor) }
+        defer { _ = Foundation.close(descriptor) }
         do {
-            guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync index lock candidate") }
+            guard Foundation.fsync(descriptor) == 0 else { throw posix("fsync index lock candidate") }
             try fileSystem.synchronizeDirectory(candidate.deletingLastPathComponent())
             let identity = try indexIdentity(at: candidate)
             guard identity.checksum == digest(Data()) else { throw CheckpointRestoreError.invalidJournal }
@@ -597,7 +596,7 @@ public struct CheckpointRestoreTransaction: Sendable {
 
     private func indexIdentity(at url: URL) throws -> CheckpointRestoreJournal.IndexLockCandidate {
         var attributes = stat()
-        guard Darwin.lstat(url.path, &attributes) == 0, attributes.st_mode & S_IFMT == S_IFREG else {
+        guard Foundation.lstat(url.path, &attributes) == 0, attributes.st_mode & S_IFMT == S_IFREG else {
             throw CheckpointRestoreError.blocked(.indexLock)
         }
         return .init(path: url.path, checksum: digest(try fileSystem.fileData(url)),
@@ -667,7 +666,7 @@ public struct CheckpointRestoreTransaction: Sendable {
 
     private func isPhysicalDirectory(_ url: URL) throws -> Bool {
         var attributes = stat()
-        guard Darwin.lstat(url.path, &attributes) == 0 else {
+        guard Foundation.lstat(url.path, &attributes) == 0 else {
             if errno == ENOENT { return false }
             throw CheckpointFileSystemError.posix(operation: "lstat", code: errno)
         }
@@ -710,7 +709,7 @@ public struct CheckpointRestoreTransaction: Sendable {
         _ = try fileSystem.list(destination.deletingLastPathComponent())
         // Exclusive rename also refuses a new file that appeared after the last
         // fingerprint check. Both leaves remain recoverable on failure.
-        guard Darwin.renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw posix("rename leaf") }
+        guard Foundation.renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw posix("rename leaf") }
         try fileSystem.synchronizeDirectory(source.deletingLastPathComponent())
         try fileSystem.synchronizeDirectory(destination.deletingLastPathComponent())
     }
@@ -720,7 +719,7 @@ public struct CheckpointRestoreTransaction: Sendable {
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue else { return }
         // The move into this path that always follows syncs the same parent.
-        guard Darwin.rmdir(url.path) == 0 else { throw posix("rmdir empty restore directory") }
+        guard Foundation.rmdir(url.path) == 0 else { throw posix("rmdir empty restore directory") }
     }
 
     private func stagingName(_ path: String, journal: CheckpointRestoreJournal) throws -> String {
@@ -763,7 +762,7 @@ public struct CheckpointRestoreTransaction: Sendable {
 
     private func exists(_ url: URL) throws -> Bool {
         var attributes = stat()
-        if Darwin.lstat(url.path, &attributes) == 0 { return true }
+        if Foundation.lstat(url.path, &attributes) == 0 { return true }
         if errno == ENOENT { return false }
         throw posix("lstat")
     }

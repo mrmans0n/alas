@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -58,7 +57,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         }
         guard fd >= 0, bound == 0, listen(fd, 1) == 0 else {
             let code = errno
-            if fd >= 0 { Darwin.close(fd) }
+            if fd >= 0 { Foundation.close(fd) }
             try? FileManager.default.removeItem(atPath: directory)
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
@@ -101,9 +100,9 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         let fd = connection
         lock.unlock()
         guard first else { return }
-        Darwin.shutdown(listener, SHUT_RDWR)
-        Darwin.close(listener)
-        if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) }
+        Foundation.shutdown(listener, SHUT_RDWR)
+        Foundation.close(listener)
+        if fd >= 0 { Foundation.shutdown(fd, SHUT_RDWR) }
         try? FileManager.default.removeItem(atPath: directory)
     }
 
@@ -126,7 +125,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         }
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         while true {
-            let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            let n = buffer.withUnsafeMutableBytes { Foundation.read(fd, $0.baseAddress, $0.count) }
             if n > 0 {
                 onInput(Data(buffer[0..<n]))
             } else if n < 0, errno == EINTR {
@@ -137,7 +136,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         }
         writes.sync {
             lock.withLock { connection = -1 }
-            Darwin.close(fd)
+            Foundation.close(fd)
         }
     }
 
@@ -145,7 +144,7 @@ public final class PeerConsoleBridge: @unchecked Sendable {
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
-                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                let n = Foundation.write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n > 0 { offset += n } else if n < 0, errno == EINTR { continue } else { return }
             }
         }

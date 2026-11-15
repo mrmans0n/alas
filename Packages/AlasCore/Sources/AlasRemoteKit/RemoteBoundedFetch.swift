@@ -19,6 +19,9 @@ import Foundation
 public func boundedFetch(_ request: URLRequest, session: URLSession = .shared, maxBytes: Int) async throws -> (Data, HTTPURLResponse) {
     try await withThrowingTaskGroup(of: (Data, HTTPURLResponse).self) { group in
         group.addTask {
+            #if canImport(FoundationNetworking)
+            return try await BoundedDataTask(request: request, configuration: session.configuration, maxBytes: maxBytes).run()
+            #else
             let (stream, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             var data = Data()
@@ -27,6 +30,7 @@ public func boundedFetch(_ request: URLRequest, session: URLSession = .shared, m
                 if data.count > maxBytes { throw URLError(.dataLengthExceedsMaximum) }
             }
             return (data, http)
+            #endif
         }
         group.addTask {
             try await Task.sleep(nanoseconds: UInt64(request.timeoutInterval * 1_000_000_000))
@@ -34,5 +38,79 @@ public func boundedFetch(_ request: URLRequest, session: URLSession = .shared, m
         }
         defer { group.cancelAll() }
         return try await group.next()!
+    }
+}
+
+/// Linux's URLSession has no `bytes(for:)`; a delegate sees each chunk as it
+/// arrives instead and cancels the task once the cap is passed. Built on
+/// every platform so its tests run everywhere; only Linux uses it.
+final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let request: URLRequest
+    private let configuration: URLSessionConfiguration
+    private let maxBytes: Int
+    private let lock = NSLock()
+    private var data = Data()
+    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    /// A result that arrived before `run()` installed its continuation (the
+    /// caller was cancelled as it started), kept so that `run()` still returns.
+    private var early: Result<(Data, HTTPURLResponse), Error>?
+
+    init(request: URLRequest, configuration: URLSessionConfiguration, maxBytes: Int) {
+        self.request = request
+        self.configuration = configuration
+        self.maxBytes = maxBytes
+    }
+
+    func run() async throws -> (Data, HTTPURLResponse) {
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let task = session.dataTask(with: request)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let pending = lock.withLock {
+                    if self.early == nil { self.continuation = continuation }
+                    return self.early
+                }
+                if let pending {
+                    continuation.resume(with: pending)
+                } else if Task.isCancelled {
+                    finish(.failure(CancellationError()))
+                } else {
+                    task.resume()
+                }
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        let over = lock.withLock {
+            data.append(chunk)
+            return data.count > maxBytes
+        }
+        if over {
+            finish(.failure(URLError(.dataLengthExceedsMaximum)))
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            finish(.failure(error))
+        } else if let http = task.response as? HTTPURLResponse {
+            finish(.success((lock.withLock { data }, http)))
+        } else {
+            finish(.failure(URLError(.badServerResponse)))
+        }
+    }
+
+    private func finish(_ result: Result<(Data, HTTPURLResponse), Error>) {
+        let continuation = lock.withLock {
+            defer { self.continuation = nil }
+            if self.continuation == nil, self.early == nil { self.early = result }
+            return self.continuation
+        }
+        continuation?.resume(with: result)
     }
 }

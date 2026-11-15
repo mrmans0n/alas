@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// On-disk layout of a VM: a directory of fixed-name files. Golden images are

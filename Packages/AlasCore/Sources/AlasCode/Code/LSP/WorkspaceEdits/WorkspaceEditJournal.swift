@@ -66,11 +66,11 @@ public final class WorkspaceEditJournal {
         try handle.close() }
         catch { try? handle.close()
         throw error }
-        guard Darwin.rename(temporary.path, url(record.id).path) == 0 else { throw POSIXError(.EIO) }
-        let directory = Darwin.open(root.path, O_RDONLY)
+        guard Foundation.rename(temporary.path, url(record.id).path) == 0 else { throw POSIXError(.EIO) }
+        let directory = Foundation.open(root.path, O_RDONLY)
         guard directory >= 0 else { throw POSIXError(.EIO) }
-        defer { Darwin.close(directory) }
-        guard Darwin.fsync(directory) == 0 else { throw POSIXError(.EIO) }
+        defer { Foundation.close(directory) }
+        guard Foundation.fsync(directory) == 0 else { throw POSIXError(.EIO) }
     }
 
     public func record(_ id: UUID) throws -> Record {

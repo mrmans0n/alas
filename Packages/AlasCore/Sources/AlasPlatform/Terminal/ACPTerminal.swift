@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -197,8 +196,8 @@ public final class ACPTerminal: ChangeTracking {
         // before any cleanup signal is sent.
         let rootAliveAtKill = !rootExitState.hasExited
         if rootAliveAtKill {
-            _ = Darwin.kill(-pid, SIGTERM)
-            _ = Darwin.kill(pid, SIGTERM)
+            _ = Foundation.kill(-pid, SIGTERM)
+            _ = Foundation.kill(pid, SIGTERM)
         }
         let strongSelf = StrongBox(self)
         Task.detached(priority: .utility) {
@@ -237,12 +236,12 @@ public final class ACPTerminal: ChangeTracking {
         if rootAlive {
             // Root is alive → process group signal reaches the whole
             // tree, no identity check needed.
-            _ = Darwin.kill(-rootPid, signal)
-            _ = Darwin.kill(rootPid, signal)
-            for d in descendants { _ = Darwin.kill(d.pid, signal) }
+            _ = Foundation.kill(-rootPid, signal)
+            _ = Foundation.kill(rootPid, signal)
+            for d in descendants { _ = Foundation.kill(d.pid, signal) }
         } else {
             for d in Self.currentlyMatching(descendants) {
-                _ = Darwin.kill(d.pid, signal)
+                _ = Foundation.kill(d.pid, signal)
             }
         }
     }

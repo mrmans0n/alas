@@ -1,5 +1,4 @@
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 import AlasFoundation
 
@@ -150,10 +149,10 @@ public struct AlasProfile: Equatable, Sendable {
     /// Owner-only but untraversable modes (`0600`, `0500`) are tightened so
     /// the directory stays usable for sockets.
     public static func prepareOwnerOnlyDirectory(_ path: String, ownerUid: uid_t) -> Bool {
-        var st = Darwin.stat()
-        if Darwin.lstat(path, &st) != 0 {
+        var st = Foundation.stat()
+        if Foundation.lstat(path, &st) != 0 {
             guard mkdir(path, 0o700) == 0 else { return false }
-            guard Darwin.lstat(path, &st) == 0 else { return false }
+            guard Foundation.lstat(path, &st) == 0 else { return false }
         }
         guard (st.st_mode & S_IFMT) == S_IFDIR,
               st.st_uid == ownerUid,

@@ -1,5 +1,5 @@
 import Foundation
-import CryptoKit
+import Crypto
 import AlasFoundation
 import AlasModel
 import AlasPlatform
