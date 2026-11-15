@@ -51,6 +51,9 @@ private final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecke
     private let lock = NSLock()
     private var data = Data()
     private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    /// A result that arrived before `run()` installed its continuation (the
+    /// caller was cancelled as it started), kept so that `run()` still returns.
+    private var early: Result<(Data, HTTPURLResponse), Error>?
 
     init(request: URLRequest, configuration: URLSessionConfiguration, maxBytes: Int) {
         self.request = request
@@ -64,8 +67,17 @@ private final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecke
         let task = session.dataTask(with: request)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.withLock { self.continuation = continuation }
-                task.resume()
+                let pending = lock.withLock {
+                    if self.early == nil { self.continuation = continuation }
+                    return self.early
+                }
+                if let pending {
+                    continuation.resume(with: pending)
+                } else if Task.isCancelled {
+                    finish(.failure(CancellationError()))
+                } else {
+                    task.resume()
+                }
             }
         } onCancel: {
             task.cancel()
@@ -96,6 +108,7 @@ private final class BoundedDataTask: NSObject, URLSessionDataDelegate, @unchecke
     private func finish(_ result: Result<(Data, HTTPURLResponse), Error>) {
         let continuation = lock.withLock {
             defer { self.continuation = nil }
+            if self.continuation == nil, self.early == nil { self.early = result }
             return self.continuation
         }
         continuation?.resume(with: result)
