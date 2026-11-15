@@ -86,6 +86,7 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     }
 
     func start(queue: DispatchQueue, onState: @escaping @Sendable (TCPStreamState) -> Void) {
+        guard !cancelled else { return }
         self.queue = queue
         self.onState = onState
         queue.async { [self] in
@@ -137,7 +138,14 @@ final class SocketTCPStream: TCPStream, @unchecked Sendable {
     }
 
     func cancel() {
-        queue?.async { [self] in
+        guard let queue else {
+            // Not started (a connection refused at accept): nothing else holds its descriptor.
+            guard !cancelled else { return }
+            cancelled = true
+            if case .accepted(let fd) = origin { Foundation.close(fd) }
+            return
+        }
+        queue.async { [self] in
             guard !cancelled else { return }
             cancelled = true
             sends.removeAll()
