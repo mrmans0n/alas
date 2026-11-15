@@ -24,6 +24,10 @@ struct DeviceScreenView: NSViewRepresentable {
     var onCopy: () -> Void = {}
     /// The interface orientation of the frames changed.
     var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
+    /// The pointer over the screen, in top-left-origin view points; nil when it leaves.
+    var onHover: ((CGPoint?) -> Void)?
+    /// The user finished a click, drag or key press on the simulator.
+    var onUserInput: () -> Void = {}
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
@@ -34,6 +38,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onPaste = onPaste
         view.onCopy = onCopy
         view.onOrientation = onOrientation
+        view.onHover = onHover
+        view.onUserInput = onUserInput
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -47,6 +53,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onPaste = onPaste
         view.onCopy = onCopy
         view.onOrientation = onOrientation
+        view.onHover = onHover
+        view.onUserInput = onUserInput
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -74,6 +82,8 @@ final class DeviceScreenNSView: NSView {
     var onPaste: () -> Void = {}
     var onCopy: () -> Void = {}
     var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
+    var onHover: ((CGPoint?) -> Void)?
+    var onUserInput: () -> Void = {}
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
     var allowsInput = true {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
@@ -248,6 +258,23 @@ final class DeviceScreenNSView: NSView {
         guard let last = lastTouch else { return }
         let point = location(event)
         send("end", geometry.clamped(x: point.x, y: point.y) ?? last)
+        onUserInput()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self
+        ))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onHover?(location(event))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(nil)
     }
 
     private func send(_ phase: String, _ touch: DeviceScreenPoint) {
@@ -289,6 +316,7 @@ final class DeviceScreenNSView: NSView {
     private func sendKey(_ key: HeldSimulatorKeys.Event) {
         guard let udid else { return }
         client?.key(udid: udid, usage: key.usage, down: key.down)
+        if !key.down { onUserInput() }
     }
 
     override func resignFirstResponder() -> Bool {
