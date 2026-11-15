@@ -27,6 +27,17 @@ Contrast, each showing the value the simulator reports back; privacy
 permissions and a test push notification for one of your installed apps; a
 simulated location, with a few preset places; and a URL or deep link to open.
 
+The settings also hold accessibility: VoiceOver, Reduce Motion, Button
+Shapes, Reduce Transparency, a color filter and the Liquid Glass look. Apps
+pick changes up while they run. With VoiceOver on, a click selects an element
+and a double click activates it.
+
+The accessibility button in the toolbar outlines the screen's accessibility
+elements over it. Hover one to see its role, label, value and id. Buttons,
+fields and other controls without a label are outlined in the warning color, since
+VoiceOver can only read their type. The outlines update a second after you
+click, type or rotate, and with Refresh.
+
 ⌘C and ⌘V work while the screen has focus. ⌘V pastes the Mac clipboard's
 text into the focused field; ⌘C copies the simulator's selection to the Mac
 clipboard. iOS only pastes from these keys when the app may paste without
@@ -115,6 +126,7 @@ tools from the built-in `alas` MCP server:
 | `device_install` | Installs a built `.app` on a booted simulator and returns its bundle ID. |
 | `device_launch` | Launches an installed app, ending a running copy first. |
 | `device_set_appearance` | Sets light or dark appearance, the text size and Increase Contrast, and returns what the simulator reports. |
+| `device_set_accessibility` | Turns VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look on or off, and returns what the simulator reports. |
 | `device_set_permission` | Grants, revokes or resets a privacy permission for an installed app. |
 | `device_set_location` | Sets or clears the simulated location. |
 | `device_push` | Sends a push notification to an installed app. |

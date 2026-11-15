@@ -168,9 +168,8 @@ iOS:
   buttons, and `device_record` for agents (`simctl io <udid> recordVideo`).
 - [x] Device logs: a Logs tab following the foreground app, crash report
   summaries, and `device_logs` for agents.
-- [ ] VoiceOver, reduce motion and an accessibility overlay. serve-sim's
-  accessibility settings helper (`Sources/SimAXSettings`, not yet vendored)
-  and the vendored `AccessibilityBridge`.
+- [x] VoiceOver, reduce motion and an accessibility overlay
+  (`2026-11-15-devices-accessibility-design.md`).
 
 Android (after phase 3):
 
