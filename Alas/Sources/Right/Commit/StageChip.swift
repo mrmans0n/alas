@@ -37,7 +37,6 @@ struct StageChip: View {
             }
             .frame(width: 20, height: 20)
             .contentShape(Rectangle())
-            .opacity(state != .unstaged || hovering ? 1.0 : 0.85)
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
@@ -64,7 +63,7 @@ struct StageChip: View {
         case .mixed:
             return hovering ? theme.color("fg") : theme.color("warn")
         case .unstaged:
-            return hovering ? theme.color("fg") : theme.color("fg-faint")
+            return hovering ? theme.color("fg") : theme.color("fg-dim")
         }
     }
 
@@ -92,7 +91,7 @@ struct StageChip: View {
         case .mixed:
             return hovering ? theme.color("fg-dim") : theme.color("warn").opacity(0.5)
         case .unstaged:
-            return hovering ? theme.color("fg-dim") : theme.color("line")
+            return hovering ? theme.color("fg-dim") : theme.color("fg-faint").opacity(0.7)
         }
     }
 
