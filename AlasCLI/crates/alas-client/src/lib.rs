@@ -467,22 +467,30 @@ pub enum DeviceCommand {
         udid: String,
         target: DeviceTarget,
         include_screenshot: bool,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     Swipe {
         udid: String,
         gesture: DeviceSwipe,
         duration_ms: u64,
         include_screenshot: bool,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     Type {
         udid: String,
         text: String,
         include_screenshot: bool,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     Button {
         udid: String,
         name: String,
         include_screenshot: bool,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     /// `app_path` is absolute.
     Install {
@@ -492,6 +500,8 @@ pub enum DeviceCommand {
     Launch {
         udid: String,
         bundle_id: String,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     /// At least one of the three is set.
     SetAppearance {
@@ -519,6 +529,8 @@ pub enum DeviceCommand {
     OpenUrl {
         udid: String,
         url: String,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     /// `bundle_id` None means the app in front.
     Logs {
@@ -538,6 +550,8 @@ pub enum DeviceCommand {
     Rotate {
         udid: String,
         orientation: String,
+        /// False skips settling and the diff of what changed.
+        diff: bool,
     },
     /// `action` is `start` or `stop`.
     Record {
@@ -568,6 +582,20 @@ pub enum DeviceSwipe {
 }
 
 impl DeviceCommand {
+    /// An input action told not to settle and diff.
+    pub fn skips_diff(&self) -> bool {
+        matches!(
+            self,
+            DeviceCommand::Tap { diff: false, .. }
+                | DeviceCommand::Swipe { diff: false, .. }
+                | DeviceCommand::Type { diff: false, .. }
+                | DeviceCommand::Button { diff: false, .. }
+                | DeviceCommand::Launch { diff: false, .. }
+                | DeviceCommand::OpenUrl { diff: false, .. }
+                | DeviceCommand::Rotate { diff: false, .. }
+        )
+    }
+
     /// Whether the app's reply carries a screenshot for the MCP bridge to lift out.
     pub fn includes_screenshot(&self) -> bool {
         match self {
@@ -1199,7 +1227,7 @@ pub fn build_request(
 
 fn device_request(command: &DeviceCommand) -> Request {
     use serde_json::{json, Value};
-    let (name, params) = match command {
+    let (name, mut params) = match command {
         DeviceCommand::List => ("device_list", json!({})),
         DeviceCommand::Open { udid } => ("device_open", json!({ "udid": udid })),
         DeviceCommand::Snapshot { udid, query, limit } => {
@@ -1214,6 +1242,7 @@ fn device_request(command: &DeviceCommand) -> Request {
             udid,
             target,
             include_screenshot,
+            ..
         } => {
             let mut params = json!({ "udid": udid, "include_screenshot": include_screenshot });
             match target {
@@ -1230,6 +1259,7 @@ fn device_request(command: &DeviceCommand) -> Request {
             gesture,
             duration_ms,
             include_screenshot,
+            ..
         } => {
             let mut params = json!({
                 "udid": udid,
@@ -1258,6 +1288,7 @@ fn device_request(command: &DeviceCommand) -> Request {
             udid,
             text,
             include_screenshot,
+            ..
         } => (
             "device_type",
             json!({ "udid": udid, "text": text, "include_screenshot": include_screenshot }),
@@ -1266,6 +1297,7 @@ fn device_request(command: &DeviceCommand) -> Request {
             udid,
             name,
             include_screenshot,
+            ..
         } => (
             "device_button",
             json!({ "udid": udid, "name": name, "include_screenshot": include_screenshot }),
@@ -1273,7 +1305,7 @@ fn device_request(command: &DeviceCommand) -> Request {
         DeviceCommand::Install { udid, app_path } => {
             ("device_install", json!({ "udid": udid, "app_path": app_path }))
         }
-        DeviceCommand::Launch { udid, bundle_id } => {
+        DeviceCommand::Launch { udid, bundle_id, .. } => {
             ("device_launch", json!({ "udid": udid, "bundle_id": bundle_id }))
         }
         DeviceCommand::SetAppearance {
@@ -1318,7 +1350,7 @@ fn device_request(command: &DeviceCommand) -> Request {
             "device_push",
             json!({ "udid": udid, "bundle_id": bundle_id, "payload": payload }),
         ),
-        DeviceCommand::OpenUrl { udid, url } => {
+        DeviceCommand::OpenUrl { udid, url, .. } => {
             ("device_open_url", json!({ "udid": udid, "url": url }))
         }
         DeviceCommand::Logs {
@@ -1352,13 +1384,19 @@ fn device_request(command: &DeviceCommand) -> Request {
             }
             ("device_clipboard", params)
         }
-        DeviceCommand::Rotate { udid, orientation } => {
+        DeviceCommand::Rotate {
+            udid, orientation, ..
+        } => {
             ("device_rotate", json!({ "udid": udid, "orientation": orientation }))
         }
         DeviceCommand::Record { udid, action } => {
             ("device_record", json!({ "udid": udid, "action": action }))
         }
     };
+    // Sent only when false, so the default request is unchanged.
+    if command.skips_diff() {
+        params["diff"] = json!(false);
+    }
     let mut request = Request::new(name);
     request.params = Some(params);
     request
@@ -2817,6 +2855,7 @@ mod tests {
         );
         assert_eq!(
             build(DeviceCommand::Tap {
+                diff: true,
                 udid: udid(),
                 target: DeviceTarget::Ref("s2e3".into()),
                 include_screenshot: true
@@ -2828,6 +2867,7 @@ mod tests {
         );
         assert_eq!(
             build(DeviceCommand::Tap {
+                diff: true,
                 udid: udid(),
                 target: DeviceTarget::Point { x: 120.5, y: 300.0 },
                 include_screenshot: false
@@ -2837,6 +2877,7 @@ mod tests {
         );
         assert_eq!(
             build(DeviceCommand::Swipe {
+                diff: true,
                 udid: udid(),
                 gesture: DeviceSwipe::Direction("up".into()),
                 duration_ms: 300,
@@ -2849,6 +2890,7 @@ mod tests {
         );
         assert_eq!(
             build(DeviceCommand::Type {
+                diff: true,
                 udid: udid(),
                 text: "Hi\n".into(),
                 include_screenshot: false
@@ -2868,6 +2910,7 @@ mod tests {
         );
         assert_eq!(
             build(DeviceCommand::Launch {
+                diff: true,
                 udid: udid(),
                 bundle_id: "com.example.hello".into()
             }),
@@ -2914,6 +2957,16 @@ mod tests {
             })
             .1,
             serde_json::json!({ "udid": "U-1" })
+        );
+        assert_eq!(
+            build(DeviceCommand::Button {
+                udid: udid(),
+                name: "home".into(),
+                include_screenshot: false,
+                diff: false
+            })
+            .1,
+            serde_json::json!({ "udid": "U-1", "name": "home", "include_screenshot": false, "diff": false })
         );
         assert_eq!(
             build(DeviceCommand::Record {

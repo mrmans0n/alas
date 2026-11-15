@@ -73,6 +73,9 @@ final class DeviceAgentControl {
     /// Calls waiting for the user to hand each simulator back, in arrival order.
     private var held: [String: [HeldCall]] = [:]
     @ObservationIgnored private var snapshots: [String: DeviceSnapshot] = [:]
+    /// The session that last received each device's screen: diffs are against
+    /// what the calling session saw, not another session's view.
+    @ObservationIgnored private var snapshotSessions: [String: String] = [:]
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var screenshotSizes: [String: (width: Double, height: Double)] = [:]
     @ObservationIgnored private var leases: [String: (token: UUID, release: Task<Void, Never>)] = [:]
@@ -264,20 +267,22 @@ final class DeviceAgentControl {
             return .text([Self.json(Self.describe(device))])
         case .snapshot(_, let query, let limit):
             do {
-                // Reserved before the await, so overlapping snapshots never share refs.
-                let generation = (generations[udid] ?? 0) + 1
-                generations[udid] = generation
-                let snapshot = try DeviceSnapshot.parse(try await input.describe(udid: udid), generation: generation)
+                let snapshot = try await takeSnapshot(udid)
                 // One that finishes after a newer snapshot doesn't replace it.
-                if (snapshots[udid]?.generation ?? 0) < generation { snapshots[udid] = snapshot }
+                if (snapshots[udid]?.generation ?? 0) < snapshot.generation {
+                    snapshots[udid] = snapshot
+                    // Only a whole screen is a baseline: a filtered one left elements out.
+                    let whole = (query ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                        && !snapshot.filtered(query: query, limit: limit).truncated
+                    snapshotSessions[udid] = whole ? sessionID : nil
+                }
                 return .text([snapshot.json(query: query, limit: limit)])
             } catch {
-                return .error(error.localizedDescription.hasPrefix("device_")
-                    ? error.localizedDescription : "device_unavailable: \(error.localizedDescription)")
+                return .error(Self.snapshotError(error))
             }
         case .screenshot:
             return await screenshot(udid)
-        case .tap(_, let target, let includeScreenshot):
+        case .tap(_, let target, let includeScreenshot, let diff):
             let point: DeviceScreenPoint
             switch resolve(target, udid: udid) {
             case .success(let resolved): point = resolved
@@ -286,8 +291,8 @@ final class DeviceAgentControl {
             input.touch(udid: udid, phase: "begin", point: point)
             await sleep(.milliseconds(50))
             input.touch(udid: udid, phase: "end", point: point)
-            return await finish(udid, includeScreenshot: includeScreenshot)
-        case .swipe(_, let gesture, let durationMs, let includeScreenshot):
+            return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
+        case .swipe(_, let gesture, let durationMs, let includeScreenshot, let diff):
             let from: DeviceScreenPoint
             let to: DeviceScreenPoint
             switch swipeEnds(gesture, udid: udid) {
@@ -309,18 +314,18 @@ final class DeviceAgentControl {
                 )
                 input.touch(udid: udid, phase: step == steps ? "end" : "move", point: current)
             }
-            return await finish(udid, includeScreenshot: includeScreenshot)
-        case .type(_, let text, let includeScreenshot):
+            return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
+        case .type(_, let text, let includeScreenshot, let diff):
             let runs = DeviceTextInput.runs(for: text)
             let total = runs.reduce(0) { $0 + $1.characterCount }
             var paste: DevicePasteboard.Paste?
             let stopped = await typeRuns(runs, total: total, udid: udid, paste: &paste)
             if let paste { await pasteboard.close(paste) }
             if let stopped { return stopped }
-            return await finish(udid, includeScreenshot: includeScreenshot)
-        case .button(_, let name, let includeScreenshot):
+            return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
+        case .button(_, let name, let includeScreenshot, let diff):
             input.button(udid: udid, name: name.rawValue)
-            return await finish(udid, includeScreenshot: includeScreenshot)
+            return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .install(_, let appPath):
             let app: SimulatorAppBundle
             do {
@@ -336,9 +341,10 @@ final class DeviceAgentControl {
                 return .error("device_install_failed: \(error.localizedDescription)")
             }
             return .text([Self.json(["bundle_id": app.bundleID, "name": app.name])])
-        case .launch(_, let bundleID):
+        case .launch(_, let bundleID, let diff):
             do {
-                return .text([Self.json(["pid": Int(try await launch(udid, bundleID))])])
+                let pid = Int(try await launch(udid, bundleID))
+                return .text([Self.json(await withDiff(["pid": pid], udid: udid, diff: diff, sessionID: sessionID))])
             } catch SimulatorLaunchError.notInstalled {
                 return Self.notInstalled(bundleID, on: device)
             } catch {
@@ -367,11 +373,13 @@ final class DeviceAgentControl {
                 try await settings.push(udid: udid, bundleID: bundleID, payload: Data(payload.utf8))
                 return .text([Self.json(["ok": true])])
             }
-        case .openURL(_, let url):
-            return await settingsCall {
+        case .openURL(_, let url, let diff):
+            do {
                 try await settings.openURL(udid: udid, url: url)
-                return .text([Self.json(["ok": true])])
+            } catch {
+                return .error("device_settings_failed: \(error.localizedDescription)")
             }
+            return .text([Self.json(await withDiff(["ok": true], udid: udid, diff: diff, sessionID: sessionID))])
         case .clipboard(_, let text):
             do {
                 try await pasteboard.write(udid: udid, text: text ?? "")
@@ -379,8 +387,8 @@ final class DeviceAgentControl {
             } catch {
                 return .error("device_clipboard_failed: \(error.localizedDescription)")
             }
-        case .rotate(_, let orientation):
-            return await rotate(udid, to: orientation)
+        case .rotate(_, let orientation, let diff):
+            return await rotate(udid, to: orientation, diff: diff, sessionID: sessionID)
         case .logs, .record:
             // Answered before the hold.
             return .error("device_unavailable: The call took the wrong path.")
@@ -389,7 +397,9 @@ final class DeviceAgentControl {
 
     /// Turns the device, then waits up to 2 s for a frame in the new
     /// orientation; an app that supports only portrait never sends one.
-    private func rotate(_ udid: String, to orientation: DeviceScreenOrientation) async -> AlasCLIResponse {
+    private func rotate(
+        _ udid: String, to orientation: DeviceScreenOrientation, diff: Bool, sessionID: String
+    ) async -> AlasCLIResponse {
         // The service rotates through the device's stream, which the lease just started.
         for _ in 0..<100 where input.lastFrame(udid: udid) == nil {
             await sleep(.milliseconds(50))
@@ -403,7 +413,8 @@ final class DeviceAgentControl {
             await sleep(.milliseconds(50))
         }
         let interface = input.lastFrame(udid: udid)?.orientation ?? .portrait
-        return .text([Self.json(["device": orientation.rawValue, "interface": interface.rawValue])])
+        let reply: [String: Any] = ["device": orientation.rawValue, "interface": interface.rawValue]
+        return .text([Self.json(await withDiff(reply, udid: udid, diff: diff, sessionID: sessionID))])
     }
 
     private func record(udid: String, start: Bool, sessionID: String) async -> AlasCLIResponse {
@@ -597,10 +608,94 @@ final class DeviceAgentControl {
         }
     }
 
-    private func finish(_ udid: String, includeScreenshot: Bool) async -> AlasCLIResponse {
-        guard includeScreenshot else { return .ok }
-        await sleep(.milliseconds(300))
-        return await screenshot(udid)
+    private func finish(_ udid: String, includeScreenshot: Bool, diff: Bool, sessionID: String) async -> AlasCLIResponse {
+        guard diff else {
+            guard includeScreenshot else { return .ok }
+            await sleep(.milliseconds(300))
+            return await screenshot(udid)
+        }
+        var reply = await diffReply(udid, sessionID: sessionID)
+        // Taken after settling, so it shows the screen the diff describes. The
+        // action already happened, so a failed screenshot is reported, not raised.
+        if includeScreenshot {
+            switch await screenshot(udid) {
+            case .text(let parts):
+                if let shot = (try? JSONSerialization.jsonObject(with: Data(parts.joined().utf8))) as? [String: Any] {
+                    reply.merge(shot) { current, _ in current }
+                }
+            case .error(let message):
+                reply["screenshot_error"] = message
+            default:
+                break
+            }
+        }
+        return .text([Self.json(reply)])
+    }
+
+    private func withDiff(_ reply: [String: Any], udid: String, diff: Bool, sessionID: String) async -> [String: Any] {
+        guard diff else { return reply }
+        return reply.merging(await diffReply(udid, sessionID: sessionID)) { current, _ in current }
+    }
+
+    // MARK: Settle and diff
+
+    /// Waits for the screen to settle, snapshots it, and diffs it with the
+    /// screen this session last received, whose refs carry over; another
+    /// session's last screen isn't one this agent knows, so it gets the whole
+    /// screen. The input already landed, so failures here are reported, not raised.
+    private func diffReply(_ udid: String, sessionID: String) async -> [String: Any] {
+        let settled = await settle(udid)
+        if userDriving(udid) { return ["settled": settled, "diff_error": "The user took over."] }
+        if Task.isCancelled { return ["settled": settled, "diff_error": "The call was cancelled."] }
+        do {
+            let next = try await takeSnapshot(udid)
+            let previous = snapshotSessions[udid] == sessionID ? snapshots[udid] : nil
+            let diff = DeviceSnapshotDiff(previous: previous, next: next)
+            let reply = diff.json()
+            if (snapshots[udid]?.generation ?? 0) < next.generation {
+                snapshots[udid] = diff.snapshot
+                // A truncated reply left elements out, so it is no baseline.
+                snapshotSessions[udid] = reply["truncated"] == nil ? sessionID : nil
+            }
+            return reply.merging(["settled": settled]) { current, _ in current }
+        } catch {
+            return ["settled": settled, "diff_error": Self.snapshotError(error)]
+        }
+    }
+
+    /// Polls frames every 50 ms until 6 in a row look the same (300 ms);
+    /// gives up after 60 polls (3 s). Counting polls keeps tests deterministic.
+    private func settle(_ udid: String) async -> Bool {
+        // Frames are compared with the first of the window, not the one before,
+        // so a slow fade's small steps don't add up to "settled".
+        var reference: DeviceFrameFingerprint?
+        var same = 0
+        for _ in 0..<60 {
+            await sleep(.milliseconds(50))
+            if userDriving(udid) || Task.isCancelled { return false }
+            guard let surface = input.lastFrame(udid: udid)?.surface,
+                  let print = DeviceFrameFingerprint(surface) else { continue }
+            if let reference, reference.matches(print) {
+                same += 1
+                if same >= 6 { return true }
+            } else {
+                reference = print
+                same = 0
+            }
+        }
+        return false
+    }
+
+    private func takeSnapshot(_ udid: String) async throws -> DeviceSnapshot {
+        // Reserved before the await, so overlapping snapshots never share refs.
+        let generation = (generations[udid] ?? 0) + 1
+        generations[udid] = generation
+        return try DeviceSnapshot.parse(try await input.describe(udid: udid), generation: generation)
+    }
+
+    private static func snapshotError(_ error: any Error) -> String {
+        error.localizedDescription.hasPrefix("device_")
+            ? error.localizedDescription : "device_unavailable: \(error.localizedDescription)"
     }
 
     // MARK: Targets

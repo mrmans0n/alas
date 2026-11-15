@@ -913,11 +913,15 @@ const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_sw
 /// The same refusal the app gives a device call while the setting is off.
 const DEVICE_DISABLED: &str = "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators.";
 
+/// How input actions report their effect.
+const DEVICE_DIFF_NOTE: &str = "Returns what changed on the screen once it settles: added and removed elements with refs, and changed values; or the whole screen when it changed completely. Refs of elements still on screen keep working. Pass diff: false to skip that.";
+
 const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. While they drive it, a call waits up to 50 seconds for them to hand it back; `device_user_active` means it is still theirs: try again later. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
     let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });
     let include_screenshot = json!({ "type": "boolean", "description": "Also return a screenshot taken after the action. Default: false." });
+    let diff = json!({ "type": "boolean", "description": "Return what changed on the screen once it settles. Default: true." });
     let coordinate = json!({ "type": "number", "minimum": 0 });
     vec![
         json!({
@@ -962,12 +966,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_tap",
-            "description": format!("Tap the simulator screen: on an element ref from the latest device_snapshot, or at x/y pixels in the latest device_screenshot. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Tap the simulator screen: on an element ref from the latest device_snapshot, or at x/y pixels in the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "ref": { "type": "string", "description": "An element ref such as s2e3. Use instead of x/y." },
                     "x": coordinate,
                     "y": coordinate,
@@ -978,12 +983,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_swipe",
-            "description": format!("Swipe on the simulator screen: a direction across the middle of the screen (up scrolls content up), or from one point to another in pixels of the latest device_screenshot. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Swipe on the simulator screen: a direction across the middle of the screen (up scrolls content up), or from one point to another in pixels of the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
                     "from_x": coordinate,
                     "from_y": coordinate,
@@ -997,12 +1003,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_type",
-            "description": format!("Type text into the focused field of the simulator. ASCII is typed as key presses on a US keyboard, and \\n presses Return; other characters, such as accents and emoji, are pasted. Tap the field first. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Type text into the focused field of the simulator. ASCII is typed as key presses on a US keyboard, and \\n presses Return; other characters, such as accents and emoji, are pasted. Tap the field first. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "text": { "type": "string", "minLength": 1, "maxLength": DEVICE_TYPE_MAX_BYTES },
                     "include_screenshot": include_screenshot
                 },
@@ -1011,12 +1018,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_button",
-            "description": format!("Press a hardware button on the simulator. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Press a hardware button on the simulator. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "name": { "type": "string", "enum": DEVICE_BUTTONS },
                     "include_screenshot": include_screenshot
                 },
@@ -1038,12 +1046,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_launch",
-            "description": format!("Launch an installed app on a booted simulator, ending a running copy first. Returns its pid. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Launch an installed app on a booted simulator, ending a running copy first. Returns its pid. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's bundle ID, from device_install." }
                 },
                 "required": ["udid", "bundle_id"]
@@ -1110,12 +1119,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_open_url",
-            "description": format!("Open a URL on the simulator: a web page in Safari, or a deep link into an app. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Open a URL on the simulator: a web page in Safari, or a deep link into an app. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "url": { "type": "string", "minLength": 1, "maxLength": 4096 }
                 },
                 "required": ["udid", "url"]
@@ -1154,12 +1164,13 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_rotate",
-            "description": format!("Turn the simulator to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Turn the simulator to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
+                    "diff": diff,
                     "orientation": { "type": "string", "enum": DEVICE_ORIENTATIONS }
                 },
                 "required": ["udid", "orientation"]
@@ -2083,11 +2094,12 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             }))
         }
         "device_tap" => {
-            reject_arguments(args, name, &["udid", "ref", "x", "y", "include_screenshot"])?;
+            reject_arguments(args, name, &["udid", "ref", "x", "y", "include_screenshot", "diff"])?;
             Ok(Command::Device(alas_client::DeviceCommand::Tap {
                 udid: required_limited_string(args, "udid", 64)?,
                 target: device_target(args)?,
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_swipe" => {
@@ -2103,6 +2115,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_y",
                     "duration_ms",
                     "include_screenshot",
+                    "diff",
                 ],
             )?;
             Ok(Command::Device(alas_client::DeviceCommand::Swipe {
@@ -2110,10 +2123,11 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 gesture: device_swipe(args)?,
                 duration_ms: optional_bounded_u64(args, "duration_ms", 50, 5000)?.unwrap_or(300),
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_type" => {
-            reject_arguments(args, name, &["udid", "text", "include_screenshot"])?;
+            reject_arguments(args, name, &["udid", "text", "include_screenshot", "diff"])?;
             let text = match args.get("text") {
                 Some(Value::String(text)) if !text.is_empty() && text.len() <= DEVICE_TYPE_MAX_BYTES => {
                     text.clone()
@@ -2128,16 +2142,18 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 udid: required_limited_string(args, "udid", 64)?,
                 text,
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_button" => {
-            reject_arguments(args, name, &["udid", "name", "include_screenshot"])?;
+            reject_arguments(args, name, &["udid", "name", "include_screenshot", "diff"])?;
             let button = optional_enum(args, "name", DEVICE_BUTTONS)?
                 .ok_or_else(|| "missing required argument 'name'".to_string())?;
             Ok(Command::Device(alas_client::DeviceCommand::Button {
                 udid: required_limited_string(args, "udid", 64)?,
                 name: button.to_string(),
                 include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_install" => {
@@ -2149,10 +2165,11 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             }))
         }
         "device_launch" => {
-            reject_arguments(args, name, &["udid", "bundle_id"])?;
+            reject_arguments(args, name, &["udid", "bundle_id", "diff"])?;
             Ok(Command::Device(alas_client::DeviceCommand::Launch {
                 udid: required_limited_string(args, "udid", 64)?,
                 bundle_id: required_limited_string(args, "bundle_id", 255)?,
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_set_appearance" => {
@@ -2216,7 +2233,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             }))
         }
         "device_open_url" => {
-            reject_arguments(args, name, &["udid", "url"])?;
+            reject_arguments(args, name, &["udid", "url", "diff"])?;
             let url = required_limited_string(args, "url", 4096)?;
             let has_scheme = url.split_once(':').is_some_and(|(scheme, _)| {
                 scheme.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -2228,6 +2245,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::OpenUrl {
                 udid: required_limited_string(args, "udid", 64)?,
                 url,
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_logs" => {
@@ -2261,12 +2279,13 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             }))
         }
         "device_rotate" => {
-            reject_arguments(args, name, &["udid", "orientation"])?;
+            reject_arguments(args, name, &["udid", "orientation", "diff"])?;
             let orientation = optional_enum(args, "orientation", DEVICE_ORIENTATIONS)?
                 .ok_or_else(|| "missing required argument 'orientation'".to_string())?;
             Ok(Command::Device(alas_client::DeviceCommand::Rotate {
                 udid: required_limited_string(args, "udid", 64)?,
                 orientation: orientation.into(),
+                diff: optional_bool(args, "diff")?.unwrap_or(true),
             }))
         }
         "device_record" => {
@@ -5109,6 +5128,7 @@ mod tests {
             },
             // So does a device call's, which the app may be holding for the user.
             Command::Device(alas_client::DeviceCommand::Type {
+                diff: true,
                 udid: "U".into(),
                 text: "hello".into(),
                 include_screenshot: false,
@@ -5255,6 +5275,7 @@ mod tests {
         assert_eq!(
             map("device_tap", json!({ "udid": "U", "ref": "s2e13" })).unwrap(),
             Command::Device(DeviceCommand::Tap {
+                diff: true,
                 udid: "U".into(),
                 target: DeviceTarget::Ref("s2e13".into()),
                 include_screenshot: false
@@ -5267,6 +5288,7 @@ mod tests {
             )
             .unwrap(),
             Command::Device(DeviceCommand::Tap {
+                diff: true,
                 udid: "U".into(),
                 target: DeviceTarget::Point { x: 10.0, y: 20.5 },
                 include_screenshot: true
@@ -5275,6 +5297,7 @@ mod tests {
         assert_eq!(
             map("device_swipe", json!({ "udid": "U", "direction": "up" })).unwrap(),
             Command::Device(DeviceCommand::Swipe {
+                diff: true,
                 udid: "U".into(),
                 gesture: DeviceSwipe::Direction("up".into()),
                 duration_ms: 300,
@@ -5284,6 +5307,7 @@ mod tests {
         assert_eq!(
             map("device_type", json!({ "udid": "U", "text": " " })).unwrap(),
             Command::Device(DeviceCommand::Type {
+                diff: true,
                 udid: "U".into(),
                 text: " ".into(),
                 include_screenshot: false
@@ -5309,6 +5333,7 @@ mod tests {
             )
             .unwrap(),
             Command::Device(DeviceCommand::Launch {
+                diff: true,
                 udid: "U".into(),
                 bundle_id: "com.example.hello".into()
             })
@@ -5354,8 +5379,18 @@ mod tests {
             })
         );
         assert_eq!(
+            map("device_button", json!({ "udid": "U", "name": "home", "diff": false })).unwrap(),
+            Command::Device(DeviceCommand::Button {
+                udid: "U".into(),
+                name: "home".into(),
+                include_screenshot: false,
+                diff: false
+            })
+        );
+        assert_eq!(
             map("device_rotate", json!({ "udid": "U", "orientation": "landscape_left" })).unwrap(),
             Command::Device(DeviceCommand::Rotate {
+                diff: true,
                 udid: "U".into(),
                 orientation: "landscape_left".into()
             })

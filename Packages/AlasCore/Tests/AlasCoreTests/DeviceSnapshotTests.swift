@@ -57,3 +57,79 @@ struct DeviceSnapshotTests {
         #expect(throws: DeviceSnapshotError.self) { try DeviceSnapshot.parse(Data("[]".utf8), generation: 1) }
     }
 }
+
+struct DeviceSnapshotDiffTests {
+    /// Elements as (role, label, value, y, enabled); refs number from 1 in the given generation.
+    private func snap(_ generation: Int, _ items: [(String, String, String?, Double, Bool)]) -> DeviceSnapshot {
+        DeviceSnapshot(
+            generation: generation, screenWidth: 402, screenHeight: 874,
+            elements: items.enumerated().map { index, item in
+                DeviceElement(
+                    ref: "s\(generation)e\(index + 1)", role: item.0, label: item.1, value: item.2, id: nil,
+                    x: 0, y: item.3, width: 402, height: 44, enabled: item.4
+                )
+            }
+        )
+    }
+
+    @Test func aChangedValueKeepsItsRef() {
+        let diff = DeviceSnapshotDiff(
+            previous: snap(1, [("textfield", "Name", "", 100, true), ("button", "Save", nil, 200, true)]),
+            next: snap(2, [("textfield", "Name", "Ada", 100, true), ("button", "Save", nil, 200, true)])
+        )
+        #expect(!diff.screenChanged)
+        #expect(diff.changed == [.init(ref: "s1e1", field: "value", from: "", to: "Ada")])
+        #expect(diff.snapshot.elements.map(\.ref) == ["s1e1", "s1e2"])
+    }
+
+    @Test func addedAndRemovedElements() {
+        let diff = DeviceSnapshotDiff(
+            previous: snap(1, [("button", "A", nil, 0, true), ("button", "B", nil, 50, true), ("button", "C", nil, 100, true)]),
+            next: snap(2, [("button", "A", nil, 0, true), ("button", "B", nil, 50, true), ("button", "D", nil, 100, true)])
+        )
+        #expect(diff.added.map(\.ref) == ["s2e3"])
+        #expect(diff.removed.map(\.ref) == ["s1e3"])
+        #expect(diff.snapshot.elements.map(\.ref) == ["s1e1", "s1e2", "s2e3"])
+    }
+
+    @Test func scrollingIsNotAChange() {
+        let diff = DeviceSnapshotDiff(
+            previous: snap(1, [("cell", "General", nil, 300, true), ("cell", "Privacy", nil, 350, true)]),
+            next: snap(2, [("cell", "General", nil, 200, true), ("cell", "Privacy", nil, 250, true)])
+        )
+        #expect(diff.added.isEmpty && diff.removed.isEmpty && diff.changed.isEmpty)
+        #expect(diff.snapshot.elements.map(\.y) == [200, 250])
+        #expect(diff.snapshot.elements.map(\.ref) == ["s1e1", "s1e2"])
+    }
+
+    @Test func elementsWithTheSameLabelPairInOrder() {
+        let diff = DeviceSnapshotDiff(
+            previous: snap(1, [("cell", "Row", nil, 0, true), ("cell", "Row", nil, 50, true), ("button", "Edit", nil, 90, true)]),
+            next: snap(2, [("cell", "Row", nil, -20, false), ("cell", "Row", nil, 30, true), ("button", "Edit", nil, 90, true)])
+        )
+        #expect(diff.changed == [.init(ref: "s1e1", field: "enabled", from: "true", to: "false")])
+    }
+
+    @Test func aNewScreenOrNoEarlierSnapshotGivesTheWholeScreen() {
+        let next = snap(2, [("button", "W", nil, 0, true), ("button", "X", nil, 50, true), ("button", "Y", nil, 100, true)])
+        let replaced = DeviceSnapshotDiff(
+            previous: snap(1, [("button", "A", nil, 0, true), ("button", "B", nil, 50, true), ("button", "Y", nil, 100, true)]),
+            next: next
+        )
+        #expect(replaced.screenChanged)
+        #expect(replaced.snapshot == next)
+        #expect(replaced.json()["elements"] as? [[String: Any]] != nil)
+        #expect(DeviceSnapshotDiff(previous: nil, next: next).screenChanged)
+    }
+
+    @Test func longListsAreTruncated() {
+        let many = (0..<250).map { ("button", "B\($0)", String?.none, Double($0), true) }
+        let diff = DeviceSnapshotDiff(
+            previous: snap(1, many.prefix(250).map { ($0.0, $0.1, $0.2, $0.3, $0.4) }),
+            next: snap(2, many + (0..<250).map { ("button", "N\($0)", String?.none, Double($0), true) })
+        )
+        let json = diff.json()
+        #expect((json["added"] as? [Any])?.count == 200)
+        #expect(json["truncated"] as? Bool == true)
+    }
+}

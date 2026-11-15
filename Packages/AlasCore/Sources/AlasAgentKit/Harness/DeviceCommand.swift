@@ -33,13 +33,13 @@ public enum DeviceCommand: Equatable, Sendable {
     case open(udid: String)
     case snapshot(udid: String, query: String?, limit: Int)
     case screenshot(udid: String)
-    case tap(udid: String, target: Target, includeScreenshot: Bool)
-    case swipe(udid: String, gesture: Swipe, durationMs: Int, includeScreenshot: Bool)
-    case type(udid: String, text: String, includeScreenshot: Bool)
-    case button(udid: String, name: Button, includeScreenshot: Bool)
+    case tap(udid: String, target: Target, includeScreenshot: Bool, diff: Bool = true)
+    case swipe(udid: String, gesture: Swipe, durationMs: Int, includeScreenshot: Bool, diff: Bool = true)
+    case type(udid: String, text: String, includeScreenshot: Bool, diff: Bool = true)
+    case button(udid: String, name: Button, includeScreenshot: Bool, diff: Bool = true)
     /// `appPath` is absolute; the MCP server resolves it against the worktree.
     case install(udid: String, appPath: String)
-    case launch(udid: String, bundleID: String)
+    case launch(udid: String, bundleID: String, diff: Bool = true)
     /// At least one of the three is set.
     case setAppearance(udid: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?)
     case setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction)
@@ -47,12 +47,12 @@ public enum DeviceCommand: Equatable, Sendable {
     case setLocation(udid: String, location: SimulatorLocation?)
     /// `payload` is the notification's JSON, with sorted keys.
     case push(udid: String, bundleID: String, payload: String)
-    case openURL(udid: String, url: String)
+    case openURL(udid: String, url: String, diff: Bool = true)
     /// `bundleID` nil means the app in front.
     case logs(udid: String, sinceSeconds: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int)
     /// `text` nil reads the pasteboard; otherwise it sets it.
     case clipboard(udid: String, text: String?)
-    case rotate(udid: String, orientation: DeviceScreenOrientation)
+    case rotate(udid: String, orientation: DeviceScreenOrientation, diff: Bool = true)
     /// `start` false stops the recording.
     case record(udid: String, start: Bool)
 
@@ -85,10 +85,10 @@ public enum DeviceCommand: Equatable, Sendable {
         switch self {
         case .list: nil
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
-             .tap(let udid, _, _), .swipe(let udid, _, _, _), .type(let udid, _, _), .button(let udid, _, _),
-             .install(let udid, _), .launch(let udid, _), .setAppearance(let udid, _, _, _),
-             .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _),
-             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _), .record(let udid, _):
+             .tap(let udid, _, _, _), .swipe(let udid, _, _, _, _), .type(let udid, _, _, _), .button(let udid, _, _, _),
+             .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _),
+             .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _, _),
+             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _):
             udid
         }
     }
@@ -124,6 +124,7 @@ public enum DeviceCommand: Equatable, Sendable {
         var level: String?
         var include_apple: Bool?
         var orientation: String?
+        var diff: Bool?
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -131,20 +132,20 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_open": ["udid"],
         "device_snapshot": ["udid", "query", "limit"],
         "device_screenshot": ["udid"],
-        "device_tap": ["udid", "ref", "x", "y", "include_screenshot"],
-        "device_swipe": ["udid", "direction", "from_x", "from_y", "to_x", "to_y", "duration_ms", "include_screenshot"],
-        "device_type": ["udid", "text", "include_screenshot"],
-        "device_button": ["udid", "name", "include_screenshot"],
+        "device_tap": ["udid", "ref", "x", "y", "include_screenshot", "diff"],
+        "device_swipe": ["udid", "direction", "from_x", "from_y", "to_x", "to_y", "duration_ms", "include_screenshot", "diff"],
+        "device_type": ["udid", "text", "include_screenshot", "diff"],
+        "device_button": ["udid", "name", "include_screenshot", "diff"],
         "device_install": ["udid", "app_path"],
-        "device_launch": ["udid", "bundle_id"],
+        "device_launch": ["udid", "bundle_id", "diff"],
         "device_set_appearance": ["udid", "appearance", "text_size", "increase_contrast"],
         "device_set_permission": ["udid", "bundle_id", "service", "action"],
         "device_set_location": ["udid", "latitude", "longitude", "clear"],
         "device_push": ["udid", "bundle_id", "payload"],
-        "device_open_url": ["udid", "url"],
+        "device_open_url": ["udid", "url", "diff"],
         "device_logs": ["udid", "since_seconds", "bundle_id", "level", "include_apple", "query", "limit"],
         "device_clipboard": ["udid", "text"],
-        "device_rotate": ["udid", "orientation"],
+        "device_rotate": ["udid", "orientation", "diff"],
         "device_record": ["udid", "action"],
     ]
 
@@ -157,6 +158,7 @@ public enum DeviceCommand: Equatable, Sendable {
         guard keys.isSubset(of: allowed) else { throw AlasCLIRequestError.malformed }
         let params = try AlasCLIRequest.decodeParamsIfPresent(Params.self, from: data) ?? Params()
         let includeScreenshot = params.include_screenshot ?? false
+        let diff = params.diff ?? true
 
         func udid() throws -> String {
             guard let udid = params.udid, !udid.isEmpty, udid.utf8.count <= 64 else { throw AlasCLIRequestError.malformed }
@@ -198,7 +200,7 @@ public enum DeviceCommand: Equatable, Sendable {
             case (nil, let x?, let y?): target = .point(x: x, y: y)
             default: throw AlasCLIRequestError.malformed
             }
-            return .tap(udid: try udid(), target: target, includeScreenshot: includeScreenshot)
+            return .tap(udid: try udid(), target: target, includeScreenshot: includeScreenshot, diff: diff)
         case "device_swipe":
             let points = [params.from_x, params.from_y, params.to_x, params.to_y]
             let gesture: Swipe
@@ -216,17 +218,17 @@ public enum DeviceCommand: Equatable, Sendable {
             }
             let duration = params.duration_ms ?? 300
             guard (50...5000).contains(duration) else { throw AlasCLIRequestError.malformed }
-            return .swipe(udid: try udid(), gesture: gesture, durationMs: duration, includeScreenshot: includeScreenshot)
+            return .swipe(udid: try udid(), gesture: gesture, durationMs: duration, includeScreenshot: includeScreenshot, diff: diff)
         case "device_type":
             guard let text = params.text, !text.isEmpty, text.utf8.count <= 4096 else { throw AlasCLIRequestError.malformed }
-            return .type(udid: try udid(), text: text, includeScreenshot: includeScreenshot)
+            return .type(udid: try udid(), text: text, includeScreenshot: includeScreenshot, diff: diff)
         case "device_install":
             guard let path = params.app_path, path.hasPrefix("/"), path.utf8.count <= 4096 else {
                 throw AlasCLIRequestError.malformed
             }
             return .install(udid: try udid(), appPath: path)
         case "device_launch":
-            return .launch(udid: try udid(), bundleID: try bundleID())
+            return .launch(udid: try udid(), bundleID: try bundleID(), diff: diff)
         case "device_set_appearance":
             let appearance = try params.appearance.map { try enumValue(SimulatorAppearance.self, $0) }
             let textSize = try params.text_size.map { try enumValue(SimulatorTextSize.self, $0) }
@@ -260,7 +262,7 @@ public enum DeviceCommand: Equatable, Sendable {
             guard let url = params.url, url.utf8.count <= 4096,
                   let scheme = URLComponents(string: url)?.scheme, !scheme.isEmpty
             else { throw AlasCLIRequestError.malformed }
-            return .openURL(udid: try udid(), url: url)
+            return .openURL(udid: try udid(), url: url, diff: diff)
         case "device_logs":
             let since = params.since_seconds ?? 60
             let limit = params.limit ?? 200
@@ -276,13 +278,13 @@ public enum DeviceCommand: Equatable, Sendable {
             return .clipboard(udid: try udid(), text: params.text)
         case "device_rotate":
             guard let orientation = params.orientation else { throw AlasCLIRequestError.malformed }
-            return .rotate(udid: try udid(), orientation: try enumValue(DeviceScreenOrientation.self, orientation))
+            return .rotate(udid: try udid(), orientation: try enumValue(DeviceScreenOrientation.self, orientation), diff: diff)
         case "device_record":
             guard let action = params.action, ["start", "stop"].contains(action) else { throw AlasCLIRequestError.malformed }
             return .record(udid: try udid(), start: action == "start")
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
-            return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot)
+            return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot, diff: diff)
         }
     }
 }

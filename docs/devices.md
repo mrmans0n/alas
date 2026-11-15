@@ -122,6 +122,13 @@ tools from the built-in `alas` MCP server:
 | `device_rotate` | Turns the device, and returns the device and interface orientations. |
 | `device_record` | Starts or stops a screen recording; stop returns the video's path. |
 
+Taps, swipes, typing, buttons, launching, opening URLs and rotating wait for
+the screen to settle and return what changed since the agent's last look:
+elements added and removed, and changed values, or the whole screen when it
+changed completely, as after navigating. Refs of elements still on screen
+keep working. On iOS's keyboard, typing relabels keys, so typing usually
+returns the whole screen.
+
 While an agent works on a simulator, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An
 agent's call made while you drive waits for you to hand the simulator back,

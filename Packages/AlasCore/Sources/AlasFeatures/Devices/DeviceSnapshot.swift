@@ -31,6 +31,16 @@ public struct DeviceElement: Equatable, Sendable {
     }
 }
 
+extension DeviceElement {
+    /// The same element under another ref.
+    public func withRef(_ ref: String) -> DeviceElement {
+        DeviceElement(
+            ref: ref, role: role, label: label, value: value, id: id,
+            x: x, y: y, width: width, height: height, enabled: enabled
+        )
+    }
+}
+
 public struct DeviceSnapshotError: Error, Equatable, LocalizedError {
     public let message: String
     public var errorDescription: String? { message }
@@ -45,6 +55,13 @@ public struct DeviceSnapshot: Equatable, Sendable {
     public let screenWidth: Double
     public let screenHeight: Double
     public let elements: [DeviceElement]
+
+    public init(generation: Int, screenWidth: Double, screenHeight: Double, elements: [DeviceElement]) {
+        self.generation = generation
+        self.screenWidth = screenWidth
+        self.screenHeight = screenHeight
+        self.elements = elements
+    }
 
     /// Element types worth a ref even without a label.
     private static let interactiveTypes: Set<String> = [
@@ -111,29 +128,36 @@ public struct DeviceSnapshot: Equatable, Sendable {
     /// The `device_snapshot` reply.
     public func json(query: String?, limit: Int) -> String {
         let (shown, truncated) = filtered(query: query, limit: limit)
-        // Whole points are precise enough to tap, and print without float noise.
-        func rounded(_ value: Double) -> Int { Int(value.rounded()) }
         let payload: [String: Any] = [
-            "screen": ["width": rounded(screenWidth), "height": rounded(screenHeight)],
-            "elements": shown.map { element -> [String: Any] in
-                var entry: [String: Any] = [
-                    "ref": element.ref,
-                    "role": element.role,
-                    "frame": [
-                        "x": rounded(element.x), "y": rounded(element.y),
-                        "width": rounded(element.width), "height": rounded(element.height),
-                    ],
-                ]
-                if let label = element.label { entry["label"] = label }
-                if let value = element.value { entry["value"] = value }
-                if let id = element.id { entry["id"] = id }
-                if !element.enabled { entry["enabled"] = false }
-                return entry
-            },
+            "screen": screenJSON,
+            "elements": shown.map(Self.elementJSON),
             "truncated": truncated,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
         return String(decoding: data, as: UTF8.self)
+    }
+
+    public var screenJSON: [String: Any] {
+        ["width": Int(screenWidth.rounded()), "height": Int(screenHeight.rounded())]
+    }
+
+    /// An element as `device_snapshot` lists it. Whole points are precise
+    /// enough to tap, and print without float noise.
+    public static func elementJSON(_ element: DeviceElement) -> [String: Any] {
+        func rounded(_ value: Double) -> Int { Int(value.rounded()) }
+        var entry: [String: Any] = [
+            "ref": element.ref,
+            "role": element.role,
+            "frame": [
+                "x": rounded(element.x), "y": rounded(element.y),
+                "width": rounded(element.width), "height": rounded(element.height),
+            ],
+        ]
+        if let label = element.label { entry["label"] = label }
+        if let value = element.value { entry["value"] = value }
+        if let id = element.id { entry["id"] = id }
+        if !element.enabled { entry["enabled"] = false }
+        return entry
     }
 
     private static func frame(of node: [String: Any]) -> (x: Double, y: Double, width: Double, height: Double)? {

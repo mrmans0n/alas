@@ -183,8 +183,8 @@ Android (after phase 3):
 
 Agents (phase 2 and after):
 
-- [ ] Settle-and-diff after each action, so agents see what changed without
-  a new snapshot.
+- [x] Settle-and-diff after each action, so agents see what changed without
+  a new snapshot (`2026-11-13-devices-settle-diff-design.md`).
 - [ ] Optional agent-device: when the user already has it installed, put it
   on the agent's PATH next to the native tools, for replay scripts, Metro and
   Expo integration, and profiling. Alas would not install or manage it.
