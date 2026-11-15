@@ -6,6 +6,7 @@ private enum AppTab { case worktrees, inbox, peers, search }
 struct AlasMobileApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @Environment(\.scenePhase) private var scenePhase
+    @State private var backgrounded = false
     @State private var hub: HostHub
     @State private var registry: SessionRegistry
     @State private var worktrees = WorktreesModel()
@@ -53,9 +54,15 @@ struct AlasMobileApp: App {
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {
                 case .active:
+                    // Links opened in the background, to answer from an alert, died when iOS suspended
+                    // the app but still look connecting: dial afresh, or they stay offline.
+                    if backgrounded { hub.disconnectAll() }
+                    backgrounded = false
                     hub.connectAll()
                     registrar.start()
-                case .background: hub.disconnectAll()
+                case .background:
+                    backgrounded = true
+                    hub.disconnectAll()
                 default: break
                 }
             }
