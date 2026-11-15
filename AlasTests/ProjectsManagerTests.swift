@@ -1191,6 +1191,11 @@ extension ProjectsManagerTests {
         manager.setGGMode(projectId: "R", mode: .off)
         #expect(manager.projects.first { $0.id == "L" }?.ggMode == .off)
         #expect(try record().ggMode == .off)
+
+        // Launch choices remembered when creating on either machine are the group's too.
+        manager.setWorktreeLaunchDefaults(projectId: "R", openAfterCreate: false, launcherMode: .terminal)
+        #expect(try manager.projects.first { $0.id == "L" }?.worktreeLaunchPreference == record().worktreeLaunchPreference)
+        #expect(try record().worktreeLaunchPreference?.openAfterCreate == false)
     }
 
     struct LinkCase: CustomTestStringConvertible, Sendable {

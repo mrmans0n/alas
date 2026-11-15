@@ -977,11 +977,15 @@ public final class ProjectsManager {
     }
 
     public func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
-        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard let linked = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        // Remembered on either machine, they are the group's, which the primary holds.
+        let primaryId = projects[linked].linkedProjectId ?? projectId
+        guard let idx = projects.firstIndex(where: { $0.id == primaryId }) else { return }
         projects[idx].setWorktreeLaunchPreference(.init(
             openAfterCreate: openAfterCreate,
             launcherMode: launcherMode
         ))
+        copySettings(toRecordsLinkedTo: primaryId)
     }
 
     @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
