@@ -118,6 +118,9 @@ struct RepoGroupView: View {
     /// left untouched so clearing the filter restores the tree exactly.
     var isFiltering = false
     var highlightedWorktreeId: String? = nil
+    /// Set for rows a linked record on another machine contributes.
+    var machineBadge: (Worktree) -> WorktreeRowPresentation.MachineBadge? = { _ in nil }
+    var onRemoveLinkedCheckout: (Worktree) -> Void = { _ in }
     @Environment(\.theme) var theme
     @Environment(\.designScale) private var scale
     @Environment(\.sidebarWorktreeDropTargets) private var dropTargets
@@ -299,7 +302,9 @@ struct RepoGroupView: View {
             onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
             pluginDecorations: pluginDecorations(wt),
             onRunPluginDecoration: onRunPluginDecoration,
-            isHighlighted: wt.id == highlightedWorktreeId
+            isHighlighted: wt.id == highlightedWorktreeId,
+            machineBadge: machineBadge(wt),
+            onRemoveLinkedCheckout: { onRemoveLinkedCheckout(wt) }
         )
         .draggable(wt.id)
         .modifier(WorktreeRowDropTarget(id: wt.id, targets: dropTargets) { draggedId in

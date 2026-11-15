@@ -77,7 +77,7 @@ struct SidebarView: View {
                                     spaceID: spaceID,
                                     isInteractive: spaceID == state.spacesManager.activeSpaceId
                                 ) { project in
-                                    let liveWorktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
+                                    let liveWorktrees = state.projectsManager.visibleWorktrees(includingLinkedTo: project.id)
                                     let landingSession = GGLandingStore.shared.sessions[project.id]
                                     let landingHostWorktreeId = landingSession.flatMap { session in
                                         AppState.landingHostWorktreeId(
@@ -102,7 +102,11 @@ struct SidebarView: View {
                                         // while it covers the center pane.
                                         selectedWorktreeId: state.nativePeerSessions?.coversCenterPane == true
                                             ? nil : state.selectedWorktreeId,
-                                        isMain: { wt in state.projectsManager.isMain(wt, in: project) },
+                                        // A linked record's row is main within its own record.
+                                        isMain: { wt in
+                                            state.projects.first { $0.id == wt.projectId }
+                                                .map { state.projectsManager.isMain(wt, in: $0) } ?? false
+                                        },
                                         upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
                                         onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
                                         isPullUpstreamInFlight: { wt in
@@ -302,7 +306,18 @@ struct SidebarView: View {
                                         },
                                         onRunPluginDecoration: { state.runPluginDecoration($0) },
                                         isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
-                                        highlightedWorktreeId: highlightedWorktreeId
+                                        highlightedWorktreeId: highlightedWorktreeId,
+                                        machineBadge: { wt in
+                                            let host = state.projects.first { $0.id == wt.projectId }?.host
+                                            return WorktreeRowPresentation.machineBadge(
+                                                rowProjectId: wt.projectId,
+                                                groupProjectId: project.id,
+                                                host: host,
+                                                machines: state.config.machines,
+                                                reachability: host.map { RemoteHostStatusStore.shared.reachability(for: $0) } ?? .unknown
+                                            )
+                                        },
+                                        onRemoveLinkedCheckout: { wt in onRemoveProject(wt.projectId) }
                                     )
                                 }
                                 if let nativePeerSessions = state.nativePeerSessions {
@@ -432,7 +447,7 @@ struct SidebarView: View {
             guard case .project(let projectId) = member else { return [] }
             return WorktreeSidebarFilter.apply(
                 worktreeFilter,
-                to: state.projectsManager.visibleWorktrees(projectId: projectId)
+                to: state.projectsManager.visibleWorktrees(includingLinkedTo: projectId)
             ).map(\.id)
         }
     }
