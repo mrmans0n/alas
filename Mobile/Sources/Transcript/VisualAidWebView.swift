@@ -174,8 +174,9 @@ final class VisualAidPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         webView.isUserInteractionEnabled = !locksNetworkAfterLoad
         // VoiceOver activation is the other way in. Both stay out until the network is shut.
         webView.accessibilityElementsHidden = locksNetworkAfterLoad
+        // Scrolling stays on so a page wider than the phone pans sideways. A scroll view only claims a pan in
+        // a direction it can scroll, so vertical swipes still move the transcript while the page fits its height.
         webView.scrollView.bounces = false
-        webView.scrollView.isScrollEnabled = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         if presentation == .embedded {
             // Part of the reply, not a card: nothing opaque behind the page, before or after it loads.
@@ -325,10 +326,8 @@ final class VisualAidPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
               let body = message.body as? [String: Any]
         else { return }
         if let height = body["height"] as? Double {
-            let shown = RemoteVisualAidWebPolicy.contentHeight(forContentHeight: height, presentation: presentation)
             // Taller than the card may grow: the page scrolls inside it instead.
-            webView.scrollView.isScrollEnabled = height > shown
-            onHeight(shown)
+            onHeight(RemoteVisualAidWebPolicy.contentHeight(forContentHeight: height, presentation: presentation))
         } else if let choice = body["choice"] as? String {
             guard acceptsInput else { return }
             onChoice(choice)
