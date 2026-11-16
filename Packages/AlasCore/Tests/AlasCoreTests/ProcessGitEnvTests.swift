@@ -5,6 +5,16 @@ import Testing
 @testable import AlasPlatform
 
 struct ProcessGitEnvTests {
+    /// A one-line stdin used to reach git through a dispatch thread: with the
+    /// pool busy, git waited on the open pipe until the watchdog killed it.
+    @Test func smallStdinReachesTheChildWhileDispatchThreadsAreBusy() async throws {
+        let release = DispatchSemaphore(value: 0)
+        for _ in 0..<200 { DispatchQueue.global(qos: .utility).async { release.wait() } }
+        defer { for _ in 0..<200 { release.signal() } }
+        let result = try await Process.run("/bin/cat", args: [], stdin: "HEAD:./icon.png\n", timeout: 5)
+        #expect(result.stdout == "HEAD:./icon.png\n")
+    }
+
     @Test(arguments: [
         (false, [String: String](), nil as String?, nil as String?, nil as String?),
         (true, [:], "0", "ssh -o BatchMode=yes", "never"),

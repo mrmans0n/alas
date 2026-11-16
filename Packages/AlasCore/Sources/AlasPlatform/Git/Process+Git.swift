@@ -899,6 +899,8 @@ private final class StdinPipeWriter: @unchecked Sendable {
     private var closed = false
     private weak var handle: FileHandle?
     private let chunkSize = 16 * 1024
+    /// One page: the smallest buffer a fresh pipe gets on macOS or Linux.
+    private static let unblockingWriteLimit = 4096
 
     init(_ stdin: String) {
         self.data = Data(stdin.utf8)
@@ -913,10 +915,14 @@ private final class StdinPipeWriter: @unchecked Sendable {
             return
         }
         handle = writeHandle
-        if data.isEmpty {
+        // Input that fits an empty pipe is written and closed here: through
+        // the writeability handler it waited on a dispatch thread, and on a
+        // loaded host git sat on the unclosed pipe past the watchdog.
+        if data.isEmpty || (data.count <= Self.unblockingWriteLimit && NoSigPipe.pipe(writeHandle.fileDescriptor)) {
             closed = true
             handle = nil
             lock.unlock()
+            try? writeHandle.write(contentsOf: data)
             try? writeHandle.close()
             return
         }
