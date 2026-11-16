@@ -25,11 +25,21 @@ final class SimulatorLogSource: DeviceLogSource {
     let hasAppleSubsystems = true
     private let udid: String
     private let tracker: () -> SimulatorForegroundTracker
+    private let lookUpExecutables: () async -> [String: String]
+    private let run: (SimulatorLogStream, SimulatorLogQuery) -> Void
     private var executables: [String: String] = [:]
+    /// Numbers starts, so one that resolves its app after a newer start is dropped.
+    private var startGeneration = 0
 
-    init(udid: String, tracker: @escaping () -> SimulatorForegroundTracker) {
+    init(
+        udid: String, tracker: @escaping () -> SimulatorForegroundTracker,
+        executables: (() async -> [String: String])? = nil,
+        run: ((SimulatorLogStream, SimulatorLogQuery) -> Void)? = nil
+    ) {
         self.udid = udid
         self.tracker = tracker
+        lookUpExecutables = executables ?? { (try? await SimulatorControl.appExecutables(udid: udid)) ?? [:] }
+        self.run = run ?? { stream, query in stream.start(udid: udid, query: query) }
     }
 
     func userApps() async -> [SimulatorApp] {
@@ -60,17 +70,22 @@ final class SimulatorLogSource: DeviceLogSource {
     }
 
     func start(_ stream: SimulatorLogStream, app: String?, level: SimulatorLogLevel, includeApple: Bool) async {
+        startGeneration += 1
+        let generation = startGeneration
         var executable: String?
         if let app {
             guard let found = await self.executable(for: app) else { return }
             executable = found
         }
-        stream.start(udid: udid, query: SimulatorLogQuery(executable: executable, level: level, includeApple: includeApple))
+        // A newer start (another level, app or toggle) came while this one looked up its app.
+        guard generation == startGeneration else { return }
+        run(stream, SimulatorLogQuery(executable: executable, level: level, includeApple: includeApple))
     }
 
     private func executable(for bundleID: String) async -> String? {
         if let known = executables[bundleID] { return known }
-        executables = (try? await SimulatorControl.appExecutables(udid: udid)) ?? executables
+        let found = await lookUpExecutables()
+        if !found.isEmpty { executables = found }
         return executables[bundleID]
     }
 

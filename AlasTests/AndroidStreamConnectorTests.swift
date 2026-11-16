@@ -132,3 +132,27 @@ struct AndroidLogSourceTests {
         stream.stop()
     }
 }
+
+@MainActor // SimulatorLogSource is main-actor isolated.
+struct SimulatorLogSourceTests {
+    /// A restart that resolves its app after a newer one must not replace the newer stream.
+    @Test func aSupersededStartIsDropped() async throws {
+        var lookups: [CheckedContinuation<[String: String], Never>] = []
+        var started: [SimulatorLogQuery] = []
+        let source = SimulatorLogSource(
+            udid: "U", tracker: { fatalError("unused") },
+            executables: { await withCheckedContinuation { lookups.append($0) } },
+            run: { _, query in started.append(query) }
+        )
+        let stream = SimulatorLogStream()
+        async let older: Void = source.start(stream, app: "com.example.hello", level: .default, includeApple: false)
+        try await eventually("first lookup", within: .seconds(5)) { lookups.count == 1 }
+        async let newer: Void = source.start(stream, app: "com.example.hello", level: .debug, includeApple: true)
+        try await eventually("second lookup", within: .seconds(5)) { lookups.count == 2 }
+        lookups[1].resume(returning: ["com.example.hello": "Hello"])
+        await newer
+        lookups[0].resume(returning: ["com.example.hello": "Hello"])
+        await older
+        #expect(started.map(\.level) == [.debug])
+    }
+}
