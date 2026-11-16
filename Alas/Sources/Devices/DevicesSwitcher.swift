@@ -86,11 +86,26 @@ struct DevicesSwitcher: View {
 /// The switcher's popover: a filter field over the sectioned device list,
 /// with arrow-key navigation and an inline Boot on shut-down rows. Modeled on
 /// `ACPSelectChip`'s dropdown.
-private struct DevicesSwitcherPanel: View {
+struct DevicesSwitcherPanel: View {
     let state: DevicesTabState
     let onSelect: (DevicesTarget) -> Void
     let onBoot: (DevicesTarget) -> Void
     let onClose: () -> Void
+
+    /// `query` and `hovered` seed the panel for design captures.
+    init(
+        state: DevicesTabState, query: String = "", hovered: DevicesTarget? = nil,
+        onSelect: @escaping (DevicesTarget) -> Void, onBoot: @escaping (DevicesTarget) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.state = state
+        self.onSelect = onSelect
+        self.onBoot = onBoot
+        self.onClose = onClose
+        _query = State(initialValue: query)
+        _highlight = State(initialValue: hovered)
+        _hoveredTarget = State(initialValue: hovered)
+    }
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -168,7 +183,7 @@ private struct DevicesSwitcherPanel: View {
         .onAppear {
             filterFocused = true
             // Start at the selected device, so arrows move from where the user is.
-            if let selected = state.selected, rows.contains(where: { $0.target == selected }) {
+            if highlight == nil, let selected = state.selected, rows.contains(where: { $0.target == selected }) {
                 highlight = selected
                 keyboardScrollTick &+= 1
             }

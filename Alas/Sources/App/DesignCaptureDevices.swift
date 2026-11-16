@@ -18,9 +18,10 @@ import SwiftUI
 /// - devices-empty: loading, no Xcode, no simulators, a shut-down simulator with a boot error,
 ///   booting, a VM that is not set up.
 /// - devices-settings: the simulator settings popover over scripted values.
+/// - devices-switcher: the switcher's popover open, as it opens, filtered, and hovering a shut-down row.
 @MainActor
 enum DesignCaptureDevices {
-    static let targets: Set<String> = ["devices", "devices-empty", "devices-settings"]
+    static let targets: Set<String> = ["devices", "devices-empty", "devices-settings", "devices-switcher"]
 
     /// A scripted simulator's UDID starts with this; no real one does.
     static let demoUDIDPrefix = "DEMO-SIM-"
@@ -54,6 +55,12 @@ enum DesignCaptureDevices {
                 let popover = SettingsPanel(control: makeControl())
                     .environment(\.theme, theme).environment(\.designScale, scale)
                 DesignCaptureWorkspace.present(popover)
+                return
+            }
+            if target == "devices-switcher" {
+                let gallery = Gallery(cells: switcherCells(), columns: 3, height: 470)
+                    .environment(\.theme, theme).environment(\.designScale, scale)
+                DesignCaptureWorkspace.present(gallery)
                 return
             }
             let control = makeControl()
@@ -154,6 +161,8 @@ enum DesignCaptureDevices {
     private struct Gallery: View {
         let cells: [Cell]
         let columns: Int
+        /// Cell height when not four columns.
+        var height: CGFloat = 300
         @Environment(\.theme) private var theme
 
         var body: some View {
@@ -173,7 +182,7 @@ enum DesignCaptureDevices {
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
                 VStack(spacing: 0) { cell.content }
-                    .frame(width: columns == 4 ? 340 : 360, height: columns == 4 ? 560 : 300)
+                    .frame(width: columns == 4 ? 340 : 360, height: columns == 4 ? 560 : height)
                     .background(theme.color("bg-1"))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
@@ -237,6 +246,44 @@ enum DesignCaptureDevices {
         .resolve(
             simulators: simulators, listError: listError, vms: vms, selection: selection, bootingUDIDs: booting,
             agentDriving: driving)
+    }
+
+    // MARK: - devices-switcher
+
+    private static func switcherCells() -> [Cell] {
+        func sim(_ id: String, _ name: String, _ runtime: String, _ state: SimulatorDevice.State = .shutdown) -> SimulatorDevice {
+            SimulatorDevice(udid: demoUDIDPrefix + id, name: name, runtimeName: runtime, state: state, deviceTypeIdentifier: "demo.phone")
+        }
+        let simulators = [
+            phone, air, pad, sim("SE", "iPhone 17", "iOS 26.5"),
+            sim("MINI", "iPad mini (A17 Pro)", "iOS 26.0"), sim("16E", "iPhone 16e", "iOS 26.0"),
+            sim("OLD", "iPhone 16 Pro", "iOS 18.6"), sim("OLDPAD", "iPad Air 11-inch (M2)", "iOS 18.6"),
+        ]
+        let emulator = AndroidDevice(
+            serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64", avdName: "Medium_Phone", release: "16")
+        let state = DevicesTabState.resolve(
+            simulators: simulators, listError: nil, vms: [.macOS: .stopped, .linux: .notCreated],
+            selection: .simulator(phone.udid), bootingUDIDs: [], agentDriving: [.android(emulator.serial)],
+            android: AndroidListing(devices: [emulator], avds: ["Medium_Phone", "Pixel_9", "Pixel_Tablet"], bootingAVDs: [], note: nil),
+            agentNames: [.android(emulator.serial): "Claude"]
+        )
+        func open(query: String = "", hovered: DevicesTarget? = nil) -> some View {
+            VStack(alignment: .leading, spacing: 6) {
+                DevicesSwitcher(state: state, onSelect: { _ in }, onBoot: { _ in })
+                DevicesSwitcherPanel(state: state, query: query, hovered: hovered, onSelect: { _ in }, onBoot: { _ in }, onClose: {})
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.gray.opacity(0.35), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        return [
+            Cell("open", open()),
+            Cell("filter \"ipad\"", open(query: "ipad")),
+            Cell("hover a shut-down simulator", open(hovered: .simulator(air.udid))),
+        ]
     }
 
     // MARK: - devices
