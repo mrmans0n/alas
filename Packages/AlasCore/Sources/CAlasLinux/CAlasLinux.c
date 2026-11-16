@@ -1,6 +1,7 @@
 #ifdef __linux__
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -31,6 +32,21 @@ int alas_spawn_add_chdir(void *actions, const char *path) {
     (void)actions; (void)path;
     return ENOSYS;
 #endif
+}
+
+int alas_replace_pipe_cloexec(int read_fd, int write_fd) {
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) != 0) return -1;
+    int result;
+    do { result = dup3(fds[0], read_fd, O_CLOEXEC); } while (result == -1 && errno == EINTR);
+    if (result != -1) {
+        do { result = dup3(fds[1], write_fd, O_CLOEXEC); } while (result == -1 && errno == EINTR);
+    }
+    int saved_errno = errno;
+    close(fds[0]);
+    close(fds[1]);
+    errno = saved_errno;
+    return result == -1 ? -1 : 0;
 }
 
 int alas_renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags) {

@@ -123,8 +123,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         try rawTransport.validateOrderedIntake(intake)
     }
 
-    /// Explicitly pulls a bounded replay page; raw frame consumption remains caller-owned.
-    public func replayRawBrokerEvents() async throws { try await rawTransport?.replay() }
+    /// Pulls a fresh replay page even when an older poll is in flight; consumption remains caller-owned.
+    public func replayRawBrokerEvents() async throws { try await rawTransport?.replay(requireFresh: true) }
 
     public func currentRawPendingRequests() async throws -> ACPBrokerPendingView {
         guard let rawTransport else { throw ACPClientError.notRunning }
@@ -310,6 +310,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
         onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
         onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)? = nil,
+        onReplayJoinedForTesting: (@Sendable () -> Void)? = nil,
         wireContext: ACPBrokerWireContext = .legacyV1
     ) {
         sessionUpdateProtocolVersion = wireContext == .rawV2 ? .v2 : .v1
@@ -318,7 +319,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
             params.wireContext = .rawV2
             params.expectedGeneration = initialBrokerGeneration
             let raw = ACPRawBrokerTransport(service: service, params: params, prefix: operationKeyPrefix,
-                acknowledged: initialAcknowledgedCursor, pollInterval: backgroundPollIdleIntervalNanoseconds, durable: onDurableStateChanged)
+                acknowledged: initialAcknowledgedCursor, pollInterval: backgroundPollIdleIntervalNanoseconds, durable: onDurableStateChanged,
+                onReplayJoinedForTesting: onReplayJoinedForTesting)
             rawTransport = raw
             incomingV2Updates = raw.updates
             incomingRawFrames = raw.frames

@@ -25,7 +25,12 @@ public final class ForkWatch: @unchecked Sendable {
             eventMask: watchExit ? [.fork, .exit] : .fork,
             queue: queue
         )
-        source.setEventHandler { [unowned source] in handler(source.data.contains(.exit)) }
+        source.setEventHandler { [weak source] in
+            // Cancellation may release the observer while an event is already
+            // being delivered. Hold the source only for that delivery.
+            guard let source else { return }
+            handler(source.data.contains(.exit))
+        }
         return ForkWatch(source: source)
         #else
         return nil
