@@ -120,8 +120,9 @@ private struct DevicesSwitcherPanel: View {
                         ForEach(listing.sections) { section in
                             sectionView(section, highlighted: highlighted)
                         }
-                        if listing.sections.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                            Text("No matches")
+                        if listing.sections.isEmpty {
+                            // Empty without a query: the simulator list is still loading.
+                            Text(query.trimmingCharacters(in: .whitespaces).isEmpty ? "Looking for devices…" : "No matches")
                                 .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-faint"))
                                 .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
