@@ -34,24 +34,28 @@ public struct HostTranscriptMessage: Codable, Equatable, Sendable {
     /// For a tool call, whether the payload holds only the start of its
     /// output, which the store keeps whole: nil when it holds all of it.
     public var truncated: Bool?
+    /// When the row was created, in epoch milliseconds; nil when unknown.
+    public var createdAt: Int64?
 
-    public init(index: Int, stableID: String, kind: String, payload: String, truncated: Bool? = nil) {
+    public init(index: Int, stableID: String, kind: String, payload: String, truncated: Bool? = nil, createdAt: Int64? = nil) {
         self.index = index
         self.stableID = stableID
         self.kind = kind
         self.payload = payload
         self.truncated = truncated
+        self.createdAt = createdAt
     }
 }
 
 extension HostTranscriptMessage {
     /// `message` at `index`, in the session store's encoding.
-    @MainActor init?(_ message: ACPMessage, at index: Int) {
+    @MainActor init?(_ message: ACPMessage, at index: Int, createdAt: Date?) {
         guard let payload = try? ACPMessageCodec.encode(message) else { return nil }
         let truncated: Bool? = if case .toolCall(let call) = message, call.isContentTruncated { true } else { nil }
         self.init(
             index: index, stableID: message.stableId, kind: message.kind,
-            payload: String(decoding: payload, as: UTF8.self), truncated: truncated
+            payload: String(decoding: payload, as: UTF8.self), truncated: truncated,
+            createdAt: createdAt.map { Int64($0.timeIntervalSince1970 * 1000) }
         )
     }
 }
@@ -175,7 +179,7 @@ final class FollowedSession {
             events.append(.transcript(owner: owner, id: id, delta: HostTranscriptDelta(
                 revision: current,
                 reset: changed == nil,
-                messages: indices.compactMap { Self.message(messages[$0], at: $0) },
+                messages: indices.compactMap { Self.message(messages[$0], at: $0, createdAt: transcript.createdAt(forMessageAt: $0)) },
                 messageCount: messages.count,
                 streamingState: state
             )))
@@ -228,7 +232,7 @@ final class FollowedSession {
         return Dictionary(requests.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
     }
 
-    private static func message(_ message: ACPMessage, at index: Int) -> HostTranscriptMessage? {
-        HostTranscriptMessage(message, at: index)
+    private static func message(_ message: ACPMessage, at index: Int, createdAt: Date?) -> HostTranscriptMessage? {
+        HostTranscriptMessage(message, at: index, createdAt: createdAt)
     }
 }

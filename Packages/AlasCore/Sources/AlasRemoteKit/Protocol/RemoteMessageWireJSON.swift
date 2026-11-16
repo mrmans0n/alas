@@ -20,6 +20,24 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     /// `ACPPromptCard` as JSON, shown in place of `text`, which stays the
     /// instruction the agent got. The key is left out when nil.
     public var card: String? = nil
+    /// `"commentary"` on an agent row the agent marked as commentary; the key is left out otherwise.
+    public var phase: String? = nil
+    /// When the row was created, in epoch milliseconds; the key is left out when unknown.
+    public var createdAt: Int64? = nil
+    /// A visible tool call's facts for the activity fold; the key is left out on other rows.
+    public var fold: Fold? = nil
+
+    public struct Fold: Codable, Equatable, Sendable {
+        /// Whether the call may join a run of quiet tool calls.
+        public let joins: Bool
+        /// An `ACPToolCallGroupSummary.Verb` raw value.
+        public let verb: String
+
+        public init(joins: Bool, verb: String) {
+            self.joins = joins
+            self.verb = verb
+        }
+    }
 
     public struct Image: Codable, Equatable, Sendable {
         public let uri: String
@@ -33,7 +51,8 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
 
     public init(
         stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
-        checkpointId: String? = nil, images: [Image]? = nil, card: String? = nil
+        checkpointId: String? = nil, images: [Image]? = nil, card: String? = nil,
+        phase: String? = nil, createdAt: Int64? = nil, fold: Fold? = nil
     ) {
         self.stableId = stableId
         self.kind = kind
@@ -44,6 +63,9 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         self.checkpointId = checkpointId
         self.images = images
         self.card = card
+        self.phase = phase
+        self.createdAt = createdAt
+        self.fold = fold
     }
 }
 
