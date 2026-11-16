@@ -27,6 +27,14 @@ import Testing
         #expect(result[0].worktrees.count == expected)
     }
 
+    @Test func aMachineCheckoutsSessionsJoinTheirLocalProjectsSection() {
+        var remote = wt("alas", "feature", path: "/m/feature")
+        remote.linkedProjectId = "p1"
+        let result = sections([session("s1"), session("s2", project: "p-mini", worktreeId: "w2", worktree: remote)])
+        #expect(result.count == 1)
+        #expect(result[0].worktrees.count == 2)
+    }
+
     @Test func worktreeKeyFallsBackToSessionIdWithoutPathOrId() {
         let bare = { (id: String) in
             RemoteSessionSummary(id: id, title: "t", agentId: "a", status: "idle", canDrive: false, projectId: nil, worktreeId: nil)

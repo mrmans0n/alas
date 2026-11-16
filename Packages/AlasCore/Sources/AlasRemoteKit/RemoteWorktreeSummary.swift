@@ -20,6 +20,9 @@ public struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     /// True for a folder project, which has no git and so no Changes. Sent
     /// only when true; nil (git, or an older host) keeps today's behavior.
     public var isFolder: Bool? = nil
+    /// The local project a Machine's checkout is listed under; nil for a
+    /// project of its own, and from a host before linked projects.
+    public var linkedProjectId: String? = nil
 
     public init(projectName: String, worktreeName: String, branch: String, path: String, metricsAvailable: Bool, comparisonRef: String?, commitCount: Int, changedFileCount: Int, addedLines: Int, deletedLines: Int, conflictCount: Int, isMain: Bool? = nil, createdAt: Double? = nil, lastActivity: Double? = nil, isFolder: Bool? = nil) {
         self.projectName = projectName

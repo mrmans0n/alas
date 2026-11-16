@@ -251,8 +251,10 @@ final class NewSessionModel {
             agents = all
             reconcileAgent()
         case .projectList(let all):
-            projects = all
-            if projectId == nil, let first = all.first { selectProject(first.id) }
+            // A Machine checkout is listed under its local project, which creates on the host.
+            let primaries = all.filter { $0.linkedProjectId == nil }
+            projects = primaries
+            if projectId == nil, let first = primaries.first { selectProject(first.id) }
         case .branchList(let id, let names, let preferred) where id == projectId:
             branches = .loaded(names: names, preferredBase: preferred)
             base = RemoteNewSession.preselectedBase(in: branches)

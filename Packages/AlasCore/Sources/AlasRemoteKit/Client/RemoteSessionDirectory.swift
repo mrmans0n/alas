@@ -46,7 +46,8 @@ public enum RemoteSessionDirectory {
         }
         var buckets: [String: SectionBucket] = [:]
         for s in sessions {
-            let project = s.projectId ?? s.worktree?.projectName ?? "Other"
+            // A Machine checkout's sessions join its local project's section.
+            let project = s.worktree?.linkedProjectId ?? s.projectId ?? s.worktree?.projectName ?? "Other"
             let sectionKey = "\(s.serverId ?? "")|\(project)"
             let worktreeKey = s.worktreeId ?? s.worktree?.path ?? s.id
             var section = buckets[sectionKey] ?? SectionBucket(title: s.worktree?.projectName ?? project, hostName: s.serverId == nil ? nil : s.serverName)

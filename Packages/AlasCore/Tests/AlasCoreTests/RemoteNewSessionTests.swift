@@ -54,6 +54,13 @@ struct RemoteNewSessionTests {
         #expect(RemoteNewSession.worktrees(options, projectId: "p", repoName: "alas").map(\.id) == expected)
     }
 
+    @Test func aMachineCheckoutsWorktreesBelongToTheirLocalProject() {
+        var remote = worktreeOption("w2", projectId: "p-mini")
+        remote.linkedProjectId = "p"
+        let options = [worktreeOption("w1", projectId: "p"), remote, worktreeOption("w3", projectId: "q")]
+        #expect(RemoteNewSession.worktrees(options, projectId: "p", repoName: "alas").map(\.id) == ["w1", "w2"])
+    }
+
     @Test func newSessionPreselectsTheSelectedWorktreeThenTheDefaultAgent() {
         let options = [worktreeOption("w1", projectId: "p"), worktreeOption("w2", projectId: "p")]
         #expect(RemoteNewSession.preselectedWorktreeId(in: options, selectedWorktreeId: "w2") == "w2")

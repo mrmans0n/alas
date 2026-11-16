@@ -64,7 +64,10 @@ public struct RemoteNewSession: Identifiable, Equatable {
     /// `projectId`, so those rows match on the repo's display name instead.
     public static func worktrees(_ all: [RemoteWorktreeOption], projectId: String?, repoName: String) -> [RemoteWorktreeOption] {
         all.filter { option in
-            if let projectId, let optionProjectId = option.projectId { return optionProjectId == projectId }
+            // A Machine checkout's worktrees are listed under its local project.
+            if let projectId, let optionProjectId = option.projectId {
+                return optionProjectId == projectId || option.linkedProjectId == projectId
+            }
             return option.projectName == repoName
         }
     }
