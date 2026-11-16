@@ -31,4 +31,29 @@ struct HostLaunchAgentTests {
         #expect(plist["EnvironmentVariables"] as? [String: String] == [AlasProfile.environmentKey: root.path])
         #expect(plist["StandardErrorPath"] as? String == root.appendingPathComponent("alas-host.log").path)
     }
+
+    /// On Linux the same host runs as a systemd user unit: restarted while its
+    /// executable exists, and an isolated profile's is its own and serves it.
+    @Test func theSystemdUnitRunsTheHostLikeTheAgent() throws {
+        let linuxHome = URL(fileURLWithPath: "/home/someone")
+        let everyday = HostSystemdUnit(
+            executable: URL(fileURLWithPath: "/opt/alas host/alas-host"),
+            profile: AlasProfile(appSupportOverride: nil, runtimeDirectory: nil), home: linuxHome, configHome: nil
+        )
+        #expect(everyday.name == "alas-host.service")
+        #expect(everyday.unitURL.path == "/home/someone/.config/systemd/user/alas-host.service")
+        #expect(everyday.unitText.contains("ExecStart=\"/opt/alas host/alas-host\" --wait-for-lock\n"))
+        #expect(everyday.unitText.contains("ConditionPathExists=/opt/alas host/alas-host\n"))
+        #expect(everyday.unitText.contains("Restart=always\n"))
+        #expect(everyday.unitText.contains("KillMode=process\n"))
+        #expect(!everyday.unitText.contains("Environment="))
+
+        let root = URL(fileURLWithPath: "/tmp/alas-e2e", isDirectory: true)
+        let profile = AlasProfile(appSupportOverride: root, runtimeDirectory: AlasProfile.runtimeDirectory(for: root, uid: 1000))
+        let isolated = HostSystemdUnit(executable: executable, profile: profile, home: linuxHome, configHome: "/xdg")
+        let hash = try #require(profile.runtimeDirectory?.lastPathComponent.components(separatedBy: "-").last)
+        #expect(isolated.unitURL.path == "/xdg/systemd/user/alas-host-\(hash).service")
+        #expect(isolated.unitText.contains("Environment=\"\(AlasProfile.environmentKey)=\(root.path)\"\n"))
+        #expect(isolated.unitText.contains("StandardError=append:\(root.appendingPathComponent("alas-host.log").path)\n"))
+    }
 }

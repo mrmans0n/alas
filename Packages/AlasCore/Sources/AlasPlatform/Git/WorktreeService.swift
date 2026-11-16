@@ -388,7 +388,8 @@ public struct WorktreeService: Sendable {
         branch: String,
         destination: URL,
         projectId: String,
-        requiresNewBranch: Bool = false
+        requiresNewBranch: Bool = false,
+        tracksBase: Bool = true
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid:
@@ -449,7 +450,7 @@ public struct WorktreeService: Sendable {
         if branchExists {
             args = ["worktree", "add", destination.path, branch]
         } else {
-            args = ["worktree", "add", destination.path, "-b", branch, base]
+            args = ["worktree", "add", destination.path, "-b", branch] + (tracksBase ? [] : ["--no-track"]) + [base]
         }
 
         let result = try await Process.git(args, cwd: repoPath)
@@ -486,7 +487,7 @@ public struct WorktreeService: Sendable {
         if branchNowExists {
             fallbackArgs = ["worktree", "add", destination.path, branch]
         } else {
-            fallbackArgs = ["worktree", "add", destination.path, "-b", branch, base]
+            fallbackArgs = ["worktree", "add", destination.path, "-b", branch] + (tracksBase ? [] : ["--no-track"]) + [base]
         }
 
         let fallbackResult = try await Process.git(

@@ -9,6 +9,9 @@ import AlasAgents
 public enum RemoteDeviceKind: String, Codable, Equatable, Sendable {
     case browser
     case alasInstance
+    /// The native iOS app. Unlike the web client it renders no host-supplied
+    /// script with access to its connection, so it is served terminals.
+    case phone
 }
 
 /// What another Mac's agents may do on this one. Each value includes the one before it.
@@ -41,10 +44,17 @@ public enum RemoteDeviceScope: String, Codable, Equatable, Sendable {
 public struct RemotePushRelay: Codable, Equatable, Sendable {
     public var url: URL
     public var token: String
+    /// The `RemotePushKind`s the phone wants; nil, from a phone that names none, is the defaults.
+    public var kinds: Set<String>?
 
-    public init(url: URL, token: String) {
+    public init(url: URL, token: String, kinds: Set<String>? = nil) {
         self.url = url
         self.token = token
+        self.kinds = kinds
+    }
+
+    public func wants(_ kind: String) -> Bool {
+        (kinds ?? RemotePushKind.defaults).contains(kind)
     }
 
     public static let maxURLBytes = 512
@@ -52,11 +62,13 @@ public struct RemotePushRelay: Codable, Equatable, Sendable {
 
     /// The relay a `pushRegistration` names, or nil when it is not an `https`
     /// URL within the caps or has no token.
-    public static func validated(url: String, token: String?) -> RemotePushRelay? {
+    public static func validated(url: String, token: String?, kinds: [String]? = nil) -> RemotePushRelay? {
         guard url.utf8.count <= maxURLBytes, let token, !token.isEmpty, token.utf8.count <= maxTokenBytes,
               let parsed = URL(string: url), parsed.scheme?.lowercased() == "https", parsed.host?.isEmpty == false
         else { return nil }
-        return RemotePushRelay(url: parsed, token: token)
+        // Unknown kinds are dropped, and a list too long to be honest is ignored.
+        let known: Set<String> = [RemotePushKind.permission, RemotePushKind.input, RemotePushKind.finished]
+        return RemotePushRelay(url: parsed, token: token, kinds: kinds.flatMap { $0.count <= 16 ? Set($0).intersection(known) : nil })
     }
 }
 

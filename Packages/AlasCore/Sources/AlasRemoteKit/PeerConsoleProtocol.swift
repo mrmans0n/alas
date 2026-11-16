@@ -20,10 +20,14 @@ public enum PeerConsoleCapability: Sendable {
     /// `openNeedsRepoHookApproval`. Clients send `.ask` only to these.
     public static let repoHookApprovalV1 = "peerConsoleRepoHookApproval.v1"
 
+    /// Advertised by hosts that serve consoles to a phone that paired as the
+    /// native app. Older hosts serve only Macs, so the phone gates on it.
+    public static let phoneV1 = "peerConsolePhone.v1"
+
     /// What a Mac running the app serves.
-    public static let appHost = [v1, terminateV1, openV1, repoHookApprovalV1]
+    public static let appHost = [v1, terminateV1, openV1, repoHookApprovalV1, phoneV1]
     /// What a headless host with zmx serves.
-    public static let headlessHost = [v1, terminateV1, openV1, resizeV1, repoHookApprovalV1]
+    public static let headlessHost = [v1, terminateV1, openV1, resizeV1, repoHookApprovalV1, phoneV1]
 }
 
 /// Why a host could not open a console for a peer. The message is shown to

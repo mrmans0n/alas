@@ -45,6 +45,12 @@ test("attention request", async () => {
   });
 });
 
+test("a finished turn says so instead of asking for attention", async () => {
+  const j = await apnsRequest({ ...body, status: "finished" }, opened("sandbox"), "JWT", 1_800_000_000).json();
+  assert.equal(j.aps.alert.body, "Finished its turn.");
+  assert.equal(j.alas.status, "finished");
+});
+
 test("clear request is a silent background push", async () => {
   const r = apnsRequest({ ...body, kind: "clear" }, opened("sandbox"), "JWT", 1_800_000_000);
   assert.equal(r.headers.get("apns-push-type"), "background");

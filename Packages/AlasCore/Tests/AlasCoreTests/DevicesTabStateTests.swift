@@ -18,6 +18,60 @@ struct DevicesTabStateTests {
         var testDescription: String { name }
     }
 
+    static let emulator = AndroidDevice(
+        serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64", avdName: "Medium_Phone", release: "16"
+    )
+    static let phone = AndroidDevice(serial: "R5CT", state: .unauthorized, model: nil)
+
+    private func resolve(
+        simulators: [SimulatorDevice]? = [off], vms: [VMGuestOS: VMDeviceStatus] = [:],
+        selection: DevicesTarget? = nil, android: AndroidListing?
+    ) -> DevicesTabState {
+        .resolve(
+            simulators: simulators, listError: nil, vms: vms, selection: selection,
+            bootingUDIDs: [], agentDriving: [], android: android
+        )
+    }
+
+    @Test func androidRowsListDevicesThenAVDsThatArentRunning() {
+        let state = resolve(android: AndroidListing(
+            devices: [Self.emulator, Self.phone, AndroidDevice(serial: "emulator-5556", state: .offline, model: nil)],
+            avds: ["Medium_Phone", "Pixel_9", "Tablet"], bootingAVDs: ["Tablet"], note: nil
+        ))
+        #expect(state.androidRows.map(\.target) == [
+            .android("emulator-5554"), .android("R5CT"), .android("avd:Pixel_9"), .android("avd:Tablet"),
+        ])
+        #expect(state.androidRows.map(\.title) == ["Medium Phone", "R5CT", "Pixel 9", "Tablet"])
+        #expect(state.androidRows.map(\.detail) == ["Android 16", "Allow USB debugging", "Shut down", "Booting"])
+        #expect(state.androidRows.map(\.tone) == [.live, .idle, .idle, .busy])
+    }
+
+    @Test func aSelectedAVDFollowsItsEmulatorOnceItRuns() {
+        let state = resolve(
+            selection: .android("avd:Medium_Phone"),
+            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone"], bootingAVDs: [], note: nil)
+        )
+        #expect(state.selected == .android("emulator-5554"))
+        #expect(state.stage == .android(
+            AndroidTarget(id: "emulator-5554", title: "Medium Phone", device: Self.emulator, avdName: "Medium_Phone"), .ready
+        ))
+    }
+
+    /// With no simulator booted, a ready Android device comes before a running VM.
+    @Test func aReadyAndroidDeviceIsTheDefaultWhenNoSimulatorIsBooted() {
+        let state = resolve(
+            vms: [.macOS: .running], android: AndroidListing(devices: [Self.emulator], avds: [], bootingAVDs: [], note: nil)
+        )
+        #expect(state.selected == .android("emulator-5554"))
+    }
+
+    @Test func withoutTheSDKTheSectionShowsItsNote() {
+        let note = "Install Android Studio or the SDK command-line tools to use Android devices"
+        let state = resolve(android: AndroidListing(devices: [], avds: [], bootingAVDs: [], note: note))
+        #expect(state.androidRows.isEmpty)
+        #expect(state.androidNote == note)
+    }
+
     private func resolve(_ c: Case) -> DevicesTabState {
         .resolve(
             simulators: c.simulators, listError: c.listError, vms: c.vms, selection: c.selection,

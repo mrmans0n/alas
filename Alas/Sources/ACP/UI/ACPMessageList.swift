@@ -126,6 +126,18 @@ struct ACPMessageList: View {
                 .padding(.trailing, showMinimap ? MinimapView.width : 0)
             }
         }
+        // Rows scrolling up meet the toolbar's hairline through a short fade,
+        // so a half-cut row reads as scrolled rather than covered.
+        .overlay(alignment: .top) {
+            if !backgroundIsMaterial {
+                LinearGradient(
+                    colors: [theme.color("bg-1"), theme.color("bg-1").opacity(0)],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: 16)
+                .allowsHitTesting(false)
+            }
+        }
         .background {
             if !backgroundIsMaterial {
                 LinearGradient(

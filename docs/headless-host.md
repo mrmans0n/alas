@@ -29,6 +29,30 @@ ships it. The two casks link the same command, so install one or the other. Outs
 Homebrew, the binary is inside the app at
 `Alas.app/Contents/Resources/alas-host/alas-host`.
 
+### On a Linux server
+
+Each release attaches `alas-host-<version>-linux-x86_64.tar.gz` and
+`-linux-aarch64.tar.gz`. They run on Ubuntu 22.04, Debian 12 and anything
+with that glibc or newer, and need libcurl, SQLite and zlib from the system
+(`apt install libcurl4 libsqlite3-0 zlib1g` on Debian and Ubuntu), plus git
+and whatever your agents need (Node for the ACP adapters):
+
+```bash
+mkdir -p ~/.local/opt/alas-host
+curl -fsSL https://github.com/mrmans0n/alas/releases/download/v<version>/alas-host-<version>-linux-$(uname -m).tar.gz \
+  | tar -xz -C ~/.local/opt/alas-host
+ln -s ~/.local/opt/alas-host/alas-host/alas-host ~/.local/bin/alas-host
+alas-host install-agent   # a systemd user service
+loginctl enable-linger "$USER"   # keep it serving while you are logged out
+```
+
+Its data directory is `~/.local/share/Alas`. Pair it from the Mac by address
+(the server's LAN or tailnet name; `alas-host pair` prints a link): Linux hosts
+are not advertised over Bonjour. A host installed this way updates itself from
+the latest release when a paired Mac asks it to. On Linux it has no VMs,
+computer use, simulators, dictation, plugins or Apple's on-device model; agents,
+consoles, run scripts, schedules, reviews and shepherds work as on a Mac.
+
 ### Set up from another Mac
 
 Alas can do all of the above, plus [Configure](#configure),
@@ -387,8 +411,9 @@ when its turn comes, and refused if the stack changed since the Mac read it.
 alas-host install-agent
 ```
 
-installs a launchd agent that starts the host at login, waiting while the app
-has the profile open, and restarts it if it stops. Its output goes to
+installs a launchd agent (a systemd user service on Linux) that starts the host
+at login, waiting while the app has the profile open, and restarts it if it
+stops. Its output goes to
 `alas-host.log` in the data directory. After an app or cask upgrade the agent
 restarts on the new version; once the app or cask is uninstalled, it stops.
 
@@ -404,5 +429,4 @@ so the agent runs at standard priority.
 
 ## What it does not do yet
 
-- **Linux.** The host is macOS only.
 - **SSH-project scripts and terminal agents.** Their schedules run only in the app.

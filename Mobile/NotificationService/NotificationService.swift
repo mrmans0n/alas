@@ -133,7 +133,12 @@ private final class Job {
 
     private func content() -> UNNotificationContent {
         guard let pending, let alert = RemotePushAlert.content(for: pending, sessionTitle: title),
-              let updated = original.mutableCopy() as? UNMutableNotificationContent else { return original }
+              let updated = original.mutableCopy() as? UNMutableNotificationContent else {
+            // Nothing pending, as after a finished turn: the relay's text stands, under the session's name.
+            guard let title, !title.isEmpty, let titled = original.mutableCopy() as? UNMutableNotificationContent else { return original }
+            titled.title = title
+            return titled
+        }
         updated.title = alert.title
         updated.body = alert.body
         // Allow and Deny answer only the request this names, so they never approve one the user did not see.

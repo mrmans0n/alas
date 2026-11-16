@@ -497,22 +497,54 @@ project; 2d moves settings to the primary and adds Reconnect.
   not online. It refreshes that record's worktrees, and the SSH traffic
   reports the machine's reachability.
 
-## PR 3: `feat(remote): choose where a new worktree runs` (outline)
+## PR 3a: `feat(remote): choose where a new worktree runs`
 
-- **Picker logic.** Add a pure `RunOnOptions.make(primary:linked:machines:reachability:)`
-  in core, with tests on order, the no-origin case, and preselection by
-  `lastRunOnHost` including a removed machine. Add
-  `ProjectConfig.lastRunOnHost`.
-- **Dialog.** Add a Run on picker in `NewWorktreeDialog`, in a new file. It
-  holds a separate `targetProjectId`, and `create()` passes it to
-  `state.createWorktree`. In this PR, rows that need setup are listed but
-  disabled.
-- **Pushed-base check.** Add a pure `BasePushState` decision. Add one
-  real-git integration test that uses a template repository with a bare
-  origin, covering pushed, ahead, and never pushed. Add the "Push <b> and
-  continue" button, reusing the push in `CommitPublishOperations`.
-- **`WorktreeCreateRequest.createsFromFetchedOrigin`.** `finishCreate`
-  always fetches, then creates from `origin/<b>`.
+### Task 11: Run on
+
+- `RunOnOptions.make(primary:hasOrigin:linked:machines:reachability:) -> [RunOnOption]`
+  and `preselectedHost(in:lastRunOnHost:)` in `AlasPlatform/SSH`. Rows: This
+  Mac; ready machines in Machines order, then unlisted hosts by name;
+  listed machines with no checkout as needs-setup, disabled until PR 4.
+  Without a normalizable origin only This Mac is enabled. Tests in
+  `RunOnOptionsTests`: order and kinds, no-origin, preselection
+  (nil, ready, removed, needs-setup, no-origin).
+- `ProjectConfig.lastRunOnHost`, set through
+  `ProjectsManager.setLastRunOnHost(projectId:host:)` on the primary after
+  a successful create.
+- `AppState.worktreeProjects` lists primaries only. A preset linked project
+  opens on its primary with its machine preselected.
+- `NewWorktreeDialog`: `runOnHost` picks the linked record as the create
+  target (`targetProject`). The branch list stays on the primary; gg
+  availability, agents, the path subtitle and the name collision check use
+  the target. `RunOnPicker` (new file) with "Add machine…" opening
+  Settings › Machines. The field shows only when there is more than This Mac.
+- `CONTEXT.md`: Run On.
+
+## PR 3b: `feat(remote): push the base before creating on a machine`
+
+**Files:** `Packages/AlasCore/Sources/AlasPlatform/Git/GitService+BasePush.swift`
+(new), `AlasCoreContext+WorktreeCreation.swift`, `AppState.swift`,
+`NewWorktreeDialog.swift`, tests in `AlasTests/WorktreeCreateFetchTests.swift`.
+
+- **`BasePushState`** (`.pushed`, `.notOnOrigin`, `.ahead(commits:)`) with
+  `notice(base:)`: "`<b>` isn't on origin" / "`<b>` has N commits that aren't
+  on origin".
+- **`GitService.basePushState(repoPath:base:)`**, run in the local primary: a
+  remote-tracking base (via `remoteForFetch`) is pushed; otherwise
+  `refs/remotes/origin/<b>` must exist and `rev-list --count origin/<b>..<b>`
+  must be 0.
+- **`GitService.pushBase(repoPath:base:)`**: `git push -u origin <b>`, never
+  forced; failures throw `pushFailureMessage`.
+- **`WorktreeCreateRequest.createsFromFetchedOrigin`**: `finishCreate` always
+  fetches and creates from `origin/<b>` (a remote-tracking base is fetched from
+  its own remote and used as is). `AppState.createWorktree` sets it when the
+  target project has a host.
+- **Dialog:** Create on a machine checks the base first; an unpushed base shows
+  the notice with **Push `<b>` and continue**, which pushes and re-runs Create.
+  A rejected push shows git's message and the dialog stays open.
+- **Tests:** `aBaseIsPushedOnceOriginHasEveryCommit` (pushed, ahead, never
+  pushed, remote-tracking, then `pushBase`) and
+  `aFetchedOriginCreationStartsFromOriginsBase`.
 
 ## PR 4: `feat(remote): set up a machine on first use` (outline)
 

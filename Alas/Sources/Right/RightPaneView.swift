@@ -309,9 +309,19 @@ struct RightPaneView: View {
     }
 
     private func devicesActions(rps: RightPaneState) -> AnyView? {
-        guard case .simulator(let device, let stage) = state.devicesTabState(
-            worktree: worktree, selection: rps.devicesSelection
-        ).stage else { return nil }
+        let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesSelection)
+        if case .android(let target, .ready) = tabState.stage, let device = target.device {
+            return AnyView(AndroidActions(device: device, pane: state.androidPane, recorder: state.deviceRecorder) {
+                Task {
+                    // Saves a recording before the device goes.
+                    await state.deviceRecorder.simulatorStopped(udid: device.serial)
+                    await state.androidPane.shutDown(device)
+                    // Back to the AVD's row, to boot it again.
+                    rps.devicesSelection = target.avdName.map { .android(AndroidListing.avdID($0)) }
+                }
+            })
+        }
+        guard case .simulator(let device, let stage) = tabState.stage else { return nil }
         return AnyView(DevicesActions(
             device: device, booted: stage == .booted, client: state.simulatorStreams, control: state.deviceControl,
             canChangeSettings: stage == .booted

@@ -26,6 +26,9 @@ struct WorktreesView: View {
     var onPairMac: () -> Void = {}
 
     @State private var path: [SessionRoute] = []
+    /// The session in the detail column, where there is room for one (iPad).
+    @State private var selected: SessionRoute?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var searchPresented: Bool
     @State private var newSessionPresented = false
 
@@ -41,7 +44,9 @@ struct WorktreesView: View {
     }
 
     private var filter: RemoteSessionFilter { model.filter }
-    private var query: String { model.query }
+    /// Only the Search tab searches; Worktrees always lists everything, under its filter.
+    private var isSearch: Bool { title == "Search" }
+    private var query: String { isSearch ? model.query : "" }
 
     private struct HostGroup: Identifiable {
         let host: RemoteSessionCatalog.Host
@@ -81,7 +86,42 @@ struct WorktreesView: View {
         let visible = scoped.map {
             HostGroup(host: $0, sections: RemoteSessionDirectory.filter($0.sections, by: filter, query: query))
         }.filter { !$0.sections.isEmpty }
-        NavigationStack(path: $path) {
+        if sizeClass == .regular {
+            NavigationSplitView {
+                directory(hosts: hosts, all: all, counts: counts, visible: visible)
+            } detail: {
+                // Its own stack, for the diffs and files a session pushes.
+                NavigationStack {
+                    if let selected {
+                        TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
+                    } else {
+                        ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
+                                               description: Text("Choose a session from the list."))
+                    }
+                }
+            }
+        } else {
+            NavigationStack(path: $path) {
+                directory(hosts: hosts, all: all, counts: counts, visible: visible)
+                    .navigationDestination(for: SessionRoute.self) { route in
+                        TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
+                    }
+            }
+        }
+    }
+
+    private func open(_ route: SessionRoute) {
+        if sizeClass == .regular {
+            selected = route
+        } else if path.last != route {
+            // A double tap must not push the same transcript twice.
+            path.append(route)
+        }
+    }
+
+    @ViewBuilder
+    private func directory(hosts: [RemoteSessionCatalog.Host], all: [RemoteRepoSection],
+                           counts: [RemoteSessionFilter: Int], visible: [HostGroup]) -> some View {
             Group {
                 if hub.hosts.isEmpty {
                     ContentUnavailableView {
@@ -106,7 +146,7 @@ struct WorktreesView: View {
                 }
             }
             .navigationTitle(title)
-            .searchable(text: $model.query, isPresented: $searchPresented)
+            .modifier(SearchField(enabled: isSearch, text: $model.query, presented: $searchPresented))
             .toolbar {
                 if hosts.count > 1 {
                     ToolbarItem(placement: .topBarLeading) {
@@ -122,15 +162,15 @@ struct WorktreesView: View {
             .sheet(isPresented: $newSessionPresented) {
                 NewSessionSheet(hub: hub) { route in
                     newSessionPresented = false
-                    path.append(route)
+                    open(route)
                 }
-            }
-            .navigationDestination(for: SessionRoute.self) { route in
-                TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: searchActive) { _, active in searchPresented = active }
             // A forgotten Mac's transcripts pop instead of reading as ended.
-            .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
+            .onChange(of: hub.hosts.map(\.id)) { _, ids in
+                path.removeAll { !ids.contains($0.hostID) }
+                if let selected, !ids.contains(selected.hostID) { self.selected = nil }
+            }
             .onChange(of: hosts.map(\.id), initial: true) { _, ids in
                 if let selected = model.selectedHost, !ids.contains(selected) { model.selectedHost = nil }
                 model.collapsedHosts.formIntersection(ids)
@@ -138,7 +178,6 @@ struct WorktreesView: View {
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }
-        }
     }
 
     private var revealingMatches: Bool {
@@ -161,11 +200,9 @@ struct WorktreesView: View {
                                     .padding(.top, 8)
                                     .accessibilityAddTraits(.isHeader)
                                 case .worktree(let entry):
-                                    WorktreeRow(entry: entry) { session in
+                                    WorktreeRow(entry: entry, selectedSessionId: selectedSessionID(in: entry, on: group.host)) { session in
                                         guard let target = group.host.route(for: session.id) else { return }
-                                        let route = SessionRoute(hostID: target.hostID, sessionId: target.sessionId)
-                                        // A double tap must not push the same transcript twice.
-                                        if path.last != route { path.append(route) }
+                                        open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
                                     }
                                 }
                             }
@@ -221,6 +258,14 @@ struct WorktreesView: View {
         .accessibilityValue(hosts.first { $0.id == model.selectedHost }?.name ?? "All hosts")
     }
 
+    private func selectedSessionID(in entry: RemoteWorktreeEntry, on host: RemoteSessionCatalog.Host) -> String? {
+        guard let selected else { return nil }
+        return entry.activeSessions.first { session in
+            guard let route = host.route(for: session.id) else { return false }
+            return selected == SessionRoute(hostID: route.hostID, sessionId: route.sessionId)
+        }?.id
+    }
+
     private func filterBar(_ counts: [RemoteSessionFilter: Int]) -> some View {
         Picker("Filter", selection: $model.filter) {
             Text("All \(counts[.all] ?? 0)").tag(RemoteSessionFilter.all)
@@ -232,5 +277,20 @@ struct WorktreesView: View {
         .glassEffect(.regular, in: Capsule())
         .padding(.horizontal, 24)
         .padding(.bottom, 4)
+    }
+}
+
+/// `searchable` on the Search tab only: the tab is the app's one search field.
+private struct SearchField: ViewModifier {
+    let enabled: Bool
+    @Binding var text: String
+    @Binding var presented: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, isPresented: $presented)
+        } else {
+            content
+        }
     }
 }

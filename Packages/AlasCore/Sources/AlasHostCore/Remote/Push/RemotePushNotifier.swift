@@ -118,14 +118,21 @@ final class RemotePushNotifier {
         guard !actions.isEmpty, !relays.isEmpty else { return }
         for action in actions {
             let body: [String: String]
+            /// The `RemotePushKind` a phone must want; nil goes to every phone.
+            let kind: String?
             switch action {
             case .attention(let key, let status):
                 body = Self.body(kind: "attention", key: key, status: status)
+                kind = status == "awaitingPermission" ? RemotePushKind.permission : RemotePushKind.input
             case .clear(let key):
-                // The relay wants a waiting status; send the one last pushed.
+                // The relay wants a waiting status; send the one last pushed. Silent, so every phone gets it.
                 body = Self.body(kind: "clear", key: key, status: before.status(of: key) ?? "awaitingInput")
+                kind = nil
+            case .finished(let key):
+                body = Self.body(kind: "attention", key: key, status: "finished")
+                kind = RemotePushKind.finished
             }
-            for (deviceID, relay) in relays { post(body, to: relay, deviceID: deviceID) }
+            for (deviceID, relay) in relays where kind.map(relay.wants) ?? true { post(body, to: relay, deviceID: deviceID) }
         }
     }
 

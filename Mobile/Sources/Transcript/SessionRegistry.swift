@@ -7,7 +7,7 @@ import Observation
 /// ponytail: closed sessions live for the app's life; evict idle ones if memory ever matters.
 @MainActor @Observable
 final class SessionRegistry {
-    @ObservationIgnored private let hub: HostHub
+    @ObservationIgnored let hub: HostHub
     @ObservationIgnored private var entries: [Key: (session: TranscriptSession, holders: Int)] = [:]
 
     @ObservationIgnored private var workspaces: [Key: SessionWorkspace] = [:]

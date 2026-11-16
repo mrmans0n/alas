@@ -16,6 +16,10 @@ _Avoid_: Host, peer
 A Project on a Machine connected to a primary local Project with the same git origin identity. It has no navigation entry of its own: its worktrees are listed under the primary, and it resolves Project settings from the primary.
 _Avoid_: Remote project, host setup
 
+**Run On**:
+The choice, made when creating a worktree, of the Project's location (this Mac or a Machine) the worktree is created in. An explicit choice never falls back to another location. A Machine creates from what is on origin, so its base must be pushed first.
+_Avoid_: Target, environment
+
 **Space**:
 An ordered sidebar visibility collection whose members are Projects or Workspaces.
 _Avoid_: Workspace, project group

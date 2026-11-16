@@ -5,6 +5,8 @@ import Foundation
 public enum DevicesTarget: Hashable, Sendable {
     case simulator(String)
     case vm(VMGuestOS)
+    /// An Android device by serial, or an AVD that isn't running as "avd:<name>".
+    case android(String)
 }
 
 /// Where a worktree's VM stands, as the Devices tab lists it.
@@ -13,6 +15,45 @@ public enum VMDeviceStatus: Equatable, Sendable {
     case paused(savedAt: Date)
     /// Another Alas process runs it; its label names that process.
     case runningElsewhere(label: String)
+}
+
+/// The Android devices the tab lists, or why there are none.
+public struct AndroidListing: Equatable, Sendable {
+    public let devices: [AndroidDevice]
+    /// Every AVD, running or not.
+    public let avds: [String]
+    public let bootingAVDs: Set<String>
+    /// Shown instead of rows: the SDK is missing, or adb failed.
+    public let note: String?
+
+    public init(devices: [AndroidDevice], avds: [String], bootingAVDs: Set<String>, note: String?) {
+        self.devices = devices
+        self.avds = avds
+        self.bootingAVDs = bootingAVDs
+        self.note = note
+    }
+
+    public static func avdID(_ name: String) -> String { "avd:" + name }
+}
+
+public enum AndroidStage: Equatable, Sendable {
+    case ready, booting, shutDown, unauthorized, offline
+}
+
+public struct AndroidTarget: Equatable, Sendable {
+    /// `DevicesTarget.android`'s value.
+    public let id: String
+    public let title: String
+    /// The connected device; nil for an AVD that isn't running.
+    public let device: AndroidDevice?
+    public let avdName: String?
+
+    public init(id: String, title: String, device: AndroidDevice?, avdName: String?) {
+        self.id = id
+        self.title = title
+        self.device = device
+        self.avdName = avdName
+    }
 }
 
 /// What the Devices tab shows: the switcher's rows and the stage below the toolbar.
@@ -44,12 +85,16 @@ public struct DevicesTabState: Equatable, Sendable {
         case noSimulators
         case simulator(SimulatorDevice, SimulatorStage)
         case vm(VMGuestOS, VMDeviceStatus)
+        case android(AndroidTarget, AndroidStage)
     }
 
     public let selected: DevicesTarget?
     public let simulatorRows: [Row]
     /// Shown in the switcher's Simulators section when it has no rows.
     public let simulatorsNote: String?
+    public let androidRows: [Row]
+    /// Shown in the switcher's Android section instead of rows.
+    public let androidNote: String?
     public let vmRows: [Row]
     public let stage: Stage
 
@@ -65,7 +110,8 @@ public struct DevicesTabState: Equatable, Sendable {
         vms: [VMGuestOS: VMDeviceStatus],
         selection: DevicesTarget?,
         bootingUDIDs: Set<String>,
-        agentDriving: Set<DevicesTarget>
+        agentDriving: Set<DevicesTarget>,
+        android: AndroidListing? = nil
     ) -> DevicesTabState {
         // A simctl error is a finished list with nothing in it.
         let listed = listError == nil ? simulators : []
@@ -90,12 +136,22 @@ public struct DevicesTabState: Equatable, Sendable {
             return Row(target: .vm(guest), title: title(of: guest), detail: detail(of: status), tone: tone)
         }
 
-        let chosen = choose(selection: selection, simulators: listed, vms: vms)
+        let androidEntries = Self.androidEntries(android)
+        let androidRows = androidEntries.map { entry in
+            Row(
+                target: .android(entry.target.id), title: entry.target.title,
+                detail: Self.detail(of: entry.stage, device: entry.target.device),
+                tone: entry.stage == .ready ? .live : entry.stage == .booting ? .busy : .idle
+            )
+        }
+        let chosen = choose(selection: selection, simulators: listed, vms: vms, android: androidEntries)
         let stage: Stage = switch chosen {
         case .simulator(let udid)?:
             listed?.first { $0.udid == udid }.map { .simulator($0, simulatorStage($0)) } ?? .loading
         case .vm(let guest)?:
             vms[guest].map { .vm(guest, $0) } ?? .loading
+        case .android(let id)?:
+            androidEntries.first { $0.target.id == id }.map { .android($0.target, $0.stage) } ?? .loading
         case nil:
             if let listError { .unavailable(listError) } else if listed == nil { .loading } else { .noSimulators }
         }
@@ -107,27 +163,75 @@ public struct DevicesTabState: Equatable, Sendable {
             nil
         }
         return DevicesTabState(
-            selected: chosen, simulatorRows: simulatorRows, simulatorsNote: note, vmRows: vmRows, stage: stage
+            selected: chosen, simulatorRows: simulatorRows, simulatorsNote: note,
+            androidRows: androidRows, androidNote: android?.note, vmRows: vmRows, stage: stage
         )
     }
 
     private static func choose(
-        selection: DevicesTarget?, simulators: [SimulatorDevice]?, vms: [VMGuestOS: VMDeviceStatus]
+        selection: DevicesTarget?, simulators: [SimulatorDevice]?, vms: [VMGuestOS: VMDeviceStatus],
+        android: [(target: AndroidTarget, stage: AndroidStage)]
     ) -> DevicesTarget? {
         switch selection {
         case .simulator(let udid)? where simulators?.contains(where: { $0.udid == udid }) == true:
             return selection
         case .vm(let guest)? where vms[guest] != nil:
             return selection
+        case .android(let id)? where android.contains(where: { $0.target.id == id }):
+            return selection
+        case .android(let id)? where id.hasPrefix("avd:"):
+            // The AVD booted: follow it to its emulator.
+            let name = String(id.dropFirst(4))
+            if let running = android.first(where: { $0.target.avdName == name && $0.target.device != nil }) {
+                return .android(running.target.id)
+            }
         default:
             break
         }
         if let booted = simulators?.first(where: { $0.state == .booted }) { return .simulator(booted.udid) }
+        if let ready = android.first(where: { $0.stage == .ready }) { return .android(ready.target.id) }
         if let running = guests.first(where: { vms[$0] == .running }) { return .vm(running) }
         // Still loading: wait for the list rather than settle on a stopped VM.
         guard let simulators else { return nil }
         if let first = simulators.first { return .simulator(first.udid) }
+        if let first = android.first { return .android(first.target.id) }
         return guests.first { vms[$0] != nil }.map { .vm($0) }
+    }
+
+    /// Connected devices first (emulators still coming up are left out), then
+    /// the AVDs that aren't running.
+    private static func androidEntries(_ listing: AndroidListing?) -> [(target: AndroidTarget, stage: AndroidStage)] {
+        guard let listing, listing.note == nil else { return [] }
+        let devices = listing.devices.filter { !($0.isEmulator && $0.state == .offline) }
+        var entries = devices.map { device -> (target: AndroidTarget, stage: AndroidStage) in
+            let stage: AndroidStage = switch device.state {
+            case .ready: device.avdName.map(listing.bootingAVDs.contains) == true ? .booting : .ready
+            case .unauthorized: .unauthorized
+            case .offline: .offline
+            }
+            return (AndroidTarget(id: device.serial, title: device.title, device: device, avdName: device.avdName), stage)
+        }
+        let running = Set(devices.compactMap(\.avdName))
+        entries += listing.avds.filter { !running.contains($0) }.map { name in
+            (
+                AndroidTarget(
+                    id: AndroidListing.avdID(name), title: name.replacingOccurrences(of: "_", with: " "),
+                    device: nil, avdName: name
+                ),
+                listing.bootingAVDs.contains(name) ? .booting : .shutDown
+            )
+        }
+        return entries
+    }
+
+    private static func detail(of stage: AndroidStage, device: AndroidDevice?) -> String {
+        switch stage {
+        case .ready: device?.release.map { "Android \($0)" } ?? "Android"
+        case .booting: "Booting"
+        case .shutDown: "Shut down"
+        case .unauthorized: "Allow USB debugging"
+        case .offline: "Offline"
+        }
     }
 
     private static func title(of guest: VMGuestOS) -> String {

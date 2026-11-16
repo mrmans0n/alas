@@ -98,6 +98,28 @@ If the helper stops, the screen says so and Retry starts it again. If
 `xcode-select` points at the Command Line Tools instead of Xcode, the tab
 says simulators need Xcode.
 
+## Android
+
+Android devices need the Android SDK: Android Studio, or the command-line
+tools with `platform-tools` and `emulator`. Alas finds it through
+`ANDROID_HOME`, `ANDROID_SDK_ROOT` or `~/Library/Android/sdk`, and installs
+nothing itself.
+
+The device switcher's Android section lists connected phones and running
+emulators, then the AVDs you can boot. Alas boots an AVD without the
+emulator's window; it keeps running after Alas quits, as simulators do. A
+phone shows once it's connected with USB debugging allowed.
+
+Click to tap, drag to swipe, scroll, and type while the screen has focus.
+The buttons beside the screen are Back, Home, Recents, Power, volume and
+rotation. ⌘V pastes the Mac clipboard's text into the focused field; ⌘C
+copies the device's selection. Drop an `.apk` on the screen to install and
+open it. The toolbar records up to 3 minutes of the screen and saves a
+screenshot, both to the Desktop, and shuts an emulator down.
+
+The screen streams with scrcpy's server, which Alas bundles and copies to
+the device each time it shows the screen.
+
 ## VMs
 
 A VM's screen opens in a center tab. In the Devices tab, its card says

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CAlasLinux)
+import CAlasLinux
+#endif
 
 /// A child process started with `posix_spawn`, by default leading its own process group from the start:
 /// `POSIX_SPAWN_SETPGROUP` sets the group before the child runs anything, so `kill(-pid, …)` reaches everything it
@@ -83,10 +86,16 @@ public final class SpawnedProcess: @unchecked Sendable {
         }
         posix_spawn_file_actions_adddup2(&actions, stdout.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, stderr.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
-        if let directory { posix_spawn_file_actions_addchdir_np(&actions, directory.path) }
+        if let directory {
+            #if canImport(Darwin)
+            posix_spawn_file_actions_addchdir_np(&actions, directory.path)
+            #else
+            _ = withUnsafeMutablePointer(to: &actions) { alas_spawn_add_chdir($0, directory.path) }
+            #endif
+        }
         #if !canImport(Darwin)
         // Linux has no POSIX_SPAWN_CLOEXEC_DEFAULT: after the dups above, close everything past the standard streams.
-        posix_spawn_file_actions_addclosefrom_np(&actions, 3)
+        _ = withUnsafeMutablePointer(to: &actions) { alas_spawn_add_closefrom($0, 3) }
         #endif
 
         let argv = ([executable.path] + arguments).map { strdup($0) } + [nil]

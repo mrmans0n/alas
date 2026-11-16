@@ -4,6 +4,7 @@ import SwiftUI
 /// One session's live transcript.
 struct TranscriptScreen: View {
     @Environment(SessionRegistry.self) private var registry
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let hostID: UUID
     let sessionId: String
     @State private var held: (session: TranscriptSession, token: ListenerToken)?
@@ -16,6 +17,8 @@ struct TranscriptScreen: View {
     @State private var showSettings = false
     @State private var renaming = false
     @State private var newTitle = ""
+    /// The worktree whose terminals are pushed from this screen.
+    @State private var terminalsWorktree: String?
 
     var body: some View {
         Group {
@@ -24,6 +27,11 @@ struct TranscriptScreen: View {
             } else {
                 Color(.systemBackground)
             }
+        }
+        // On the view that stays mounted: a destination owned by the conditional content would go
+        // with it.
+        .navigationDestination(item: $terminalsWorktree) { worktreeId in
+            TerminalsList(hub: registry.hub, hostID: hostID, worktreeId: worktreeId)
         }
         .onAppear {
             visible = true
@@ -37,7 +45,7 @@ struct TranscriptScreen: View {
             // its state first (DiffView's own onDisappear), and so a screen that came straight
             // back keeps what it holds.
             Task { @MainActor in
-                if visible || workspace?.hasPushedChild(screenID) == true { return }
+                if visible || terminalsWorktree != nil || workspace?.hasPushedChild(screenID) == true { return }
                 held = nil
                 workspaceToken = nil
             }
@@ -121,6 +129,9 @@ struct TranscriptScreen: View {
             .navigationTitle(session.summary?.title ?? "Session")
             .navigationSubtitle(subtitle(session))
             .navigationBarTitleDisplayMode(.inline)
+            // On the iPhone a conversation gets the whole screen, as in Messages; the composer takes the
+            // tab bar's place. Where the session sits beside its list (iPad), the tabs stay.
+            .toolbar(sizeClass == .compact ? .hidden : .automatic, for: .tabBar)
             .toolbarTitleMenu {
                 if !session.hasEnded {
                     Button("Rename…", systemImage: "pencil") {
@@ -128,6 +139,14 @@ struct TranscriptScreen: View {
                         renaming = true
                     }
                     Button("Session Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+                }
+            }
+            .toolbar {
+                if let worktreeId = session.summary?.worktreeId,
+                   registry.hub.supports(PeerConsoleCapability.phoneV1, on: hostID) {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Terminals", systemImage: "terminal") { terminalsWorktree = worktreeId }
+                    }
                 }
             }
             .sheet(isPresented: $showSettings) { SessionSettingsSheet(session: session) }

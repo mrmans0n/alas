@@ -732,6 +732,9 @@ final class AppState {
     let devicePane = DevicePaneModel()
     @ObservationIgnored
     let simulatorStreams = SimulatorStreamClient()
+    let androidPane = AndroidPaneModel()
+    /// Android screens, through scrcpy; the SDK comes from `androidPane`.
+    @ObservationIgnored lazy var androidStreams = AndroidStreamClient { [weak self] in self?.androidPane.control }
     /// Runs agents' `device_*` calls and tracks who drives each simulator.
     @ObservationIgnored lazy var deviceControl = DeviceAgentControl(
         input: simulatorStreams,
@@ -747,13 +750,21 @@ final class AppState {
     /// Screen recordings of simulators, yours and agents'. Made on first use,
     /// which also deletes agents' recordings older than a week.
     @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {
-        let recorder = DeviceRecorder { udid, file in try LiveScreenRecording(udid: udid, file: file) }
+        let recorder = DeviceRecorder { [weak self] udid, file in
+            if let control = self?.androidPane.control, self?.androidPane.devices?.contains(where: { $0.serial == udid }) == true {
+                return try AndroidScreenRecording(control: control, serial: udid, file: file)
+            }
+            return try LiveScreenRecording(udid: udid, file: file)
+        }
         devicePane.onShutDown = { [weak recorder] udid in Task { await recorder?.simulatorStopped(udid: udid) } }
         // Your recordings go to the Desktop once written: after Stop, a shutdown, or quitting.
         recorder.onUserRecordingEnded = { [weak self] udid, finished in
-            let name = self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
+            let android = self?.androidPane.devices?.first { $0.serial == udid }
+            let name = android?.title ?? self?.devicePane.devices?.first { $0.udid == udid }?.name ?? "Simulator"
             do {
-                return try DeviceScreenshot.moveRecordingToDesktop(finished.file, deviceName: name)
+                return try DeviceScreenshot.moveRecordingToDesktop(
+                    finished.file, deviceName: name, kind: android == nil ? "Simulator Recording" : "Android Recording"
+                )
             } catch {
                 // Not lost: show where it is.
                 NSWorkspace.shared.activateFileViewerSelecting([finished.file])
@@ -2080,6 +2091,8 @@ final class AppState {
             await self?.vmManager.stopAll()
             // simctl would record on after Alas quits; this also saves your recordings.
             await self?.madeDeviceRecorder?.stopAll()
+            // Takes down the scrcpy servers and their adb forwards.
+            await self?.androidStreams.stopAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
@@ -5053,6 +5066,8 @@ final class AppState {
         request.destinationAlreadyPrepared = destinationAlreadyPrepared
         request.runsStartupScripts = runStartup
         request.fetchesBaseFirst = config.worktrees.fetchRemoteBeforeCreate
+        // A machine's linked checkout; a standalone SSH project creates as it always has.
+        request.createsFromFetchedOrigin = project.host != nil && project.linkedProjectId != nil
         request.namesBranchFromFirstPrompt = namesBranchFromFirstPrompt
         request.ggWorktreeMode = ggWorktreeMode
         request.issueAttachment = issueAttachment
@@ -5643,7 +5658,7 @@ final class AppState {
         }
     }
 
-    private static func originURL(projectPath: String) async -> String? {
+    static func originURL(projectPath: String) async -> String? {
         guard let result = try? await Process.git(["remote", "get-url", "origin"], cwd: URL(fileURLWithPath: projectPath)),
               result.exitCode == 0
         else { return nil }
@@ -5884,7 +5899,9 @@ final class AppState {
     }
 
     /// Projects that can have worktrees: everything but folder projects.
-    var worktreeProjects: [ProjectConfig] { projects.filter { !$0.isFolder } }
+    /// Projects New Worktree offers. A linked SSH project is reached through
+    /// its primary's Run on picker instead.
+    var worktreeProjects: [ProjectConfig] { projectsManager.primaryProjects.filter { !$0.isFolder } }
 
     /// Resolved through the owning project: a git project and a folder project
     /// may register the same path.
