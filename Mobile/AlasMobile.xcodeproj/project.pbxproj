@@ -801,7 +801,7 @@
 			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 1.18.0;
+				minimumVersion = 1.99.3;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

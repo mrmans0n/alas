@@ -100,8 +100,7 @@ private struct TerminalSurface: UIViewRepresentable {
     }
 
     @MainActor
-    // SwiftTerm calls its delegate from the view, on the main thread.
-    final class Coordinator: NSObject, @preconcurrency TerminalViewDelegate {
+    final class Coordinator: NSObject, TerminalViewDelegate {
         let console: TerminalConsole
 
         init(console: TerminalConsole) { self.console = console }
