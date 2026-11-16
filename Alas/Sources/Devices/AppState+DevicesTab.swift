@@ -38,6 +38,9 @@ extension AppState {
         for device in devicePane.devices ?? [] {
             if case .agent = deviceControl.driver(udid: device.udid) { driving.insert(.simulator(device.udid)) }
         }
+        for device in androidPane.devices ?? [] {
+            if case .agent = deviceControl.driver(udid: device.serial) { driving.insert(.android(device.serial)) }
+        }
         let noTools = devicePane.simulatorToolsFound == false
         return .resolve(
             simulators: devicePane.simulatorToolsFound == nil ? nil : devicePane.devices,

@@ -65,6 +65,15 @@ struct DevicesTabStateTests {
         #expect(state.selected == .android("emulator-5554"))
     }
 
+    @Test func anAndroidDeviceAnAgentDrivesIsBusy() {
+        let state = DevicesTabState.resolve(
+            simulators: [Self.off], listError: nil, vms: [:], selection: nil, bootingUDIDs: [],
+            agentDriving: [.android("emulator-5554")],
+            android: AndroidListing(devices: [Self.emulator], avds: [], bootingAVDs: [], note: nil)
+        )
+        #expect(state.androidRows.map(\.tone) == [.busy])
+    }
+
     @Test func withoutTheSDKTheSectionShowsItsNote() {
         let note = "Install Android Studio or the SDK command-line tools to use Android devices"
         let state = resolve(android: AndroidListing(devices: [], avds: [], bootingAVDs: [], note: note))

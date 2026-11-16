@@ -131,8 +131,10 @@ As built:
 
 ## Phase 3 outline: Android
 
-Built as G (`2026-11-15-devices-android-design.md`); agent tools (H) and
-settings (I) follow.
+Built as G (`2026-11-15-devices-android-design.md`) and H, agent tools
+(`2026-11-16-devices-android-agents-design.md`); settings (I) follow. A
+faster Android tree than `uiautomator dump` (about 2 s) would need an
+on-device accessibility helper APK: a follow-up if agents find it slow.
 
 - Ship `scrcpy-server` v5.0.1 (Apache-2.0, 734 KB) in the app bundle. Push it
   with `adb`, read its H.264 video socket, decode with VideoToolbox into the

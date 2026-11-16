@@ -133,8 +133,10 @@ enum DesignCaptureDevices {
 
     private static func makeControl() -> DeviceAgentControl {
         DeviceAgentControl(
-            input: FakeInput(), devices: { [phone, air, pad] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard(), recorder: fakeRecorder())
+            backends: [SimulatorBackend(
+                input: FakeInput(), devices: { [phone, air, pad] }, boot: { _ in }, install: { _, _ in },
+                launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard())],
+            recorder: fakeRecorder())
     }
 
     // MARK: - Gallery
@@ -241,8 +243,10 @@ enum DesignCaptureDevices {
         let userDevice = SimulatorDevice(
             udid: demoUDIDPrefix + "USER", name: "iPhone 17", runtimeName: "iOS 26.5", state: .booted, deviceTypeIdentifier: "demo.phone")
         let userControl = DeviceAgentControl(
-            input: FakeInput(), devices: { [userDevice] }, boot: { _ in }, install: { _, _ in },
-            launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard(), recorder: fakeRecorder())
+            backends: [SimulatorBackend(
+                input: FakeInput(), devices: { [userDevice] }, boot: { _ in }, install: { _, _ in },
+                launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard())],
+            recorder: fakeRecorder())
         userControl.takeOver(udid: userDevice.udid)
         Task { _ = await userControl.perform(.button(udid: userDevice.udid, name: .home, includeScreenshot: false), sessionID: "demo-agent") }
         try? await Task.sleep(for: .milliseconds(300))

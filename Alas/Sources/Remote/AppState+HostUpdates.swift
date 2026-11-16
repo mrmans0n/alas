@@ -42,6 +42,55 @@ enum HostUpdateReminderPolicy {
     }
 }
 
+@MainActor
+enum PeerHostUpdate {
+    static let reconnectTimeoutMessage = """
+        The host disconnected during its update but did not reconnect with a usable host channel. \
+        The update could not be confirmed. On that machine, run `alas-host restart` and check \
+        the host logs if it stays offline. On macOS, also check for a blocked security prompt.
+        """
+
+    static func perform(
+        channel: PeerHostChannel,
+        reconnectedChannel: @MainActor () -> PeerHostChannel?,
+        restartTimeout: Duration = .seconds(90),
+        sleep: @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        now: @MainActor () -> ContinuousClock.Instant = { .now }
+    ) async -> String? {
+        // Homebrew may download a whole release; the SSH update allows it as long.
+        let response = await channel.request(.updateHost, timeout: .seconds(900))
+        switch response {
+        case .done:
+            // An unchanged installation answers without restarting.
+            return nil
+        case .failure(let error):
+            guard error == .failed(message: FederatedSessionsProvider.peerUnavailableMessage) else {
+                return PeerWorktreeRemoval.message(for: error)
+            }
+        default:
+            return "The host returned an unexpected response to its update request."
+        }
+
+        // A dropped request alone cannot confirm an upgrade. Require the same
+        // peer's replacement channel to finish its snapshot and subscription.
+        let deadline = now() + restartTimeout
+        while !Task.isCancelled {
+            if let replacement = reconnectedChannel(), replacement !== channel,
+               replacement.state != nil, replacement.isSubscribed {
+                return nil
+            }
+            let remaining = deadline - now()
+            guard remaining > .zero else { break }
+            do {
+                try await sleep(min(.milliseconds(250), remaining))
+            } catch {
+                return "Waiting for the host to reconnect was cancelled. The update could not be confirmed."
+            }
+        }
+        return reconnectTimeoutMessage
+    }
+}
+
 extension AppState {
     var hostUpdateReminders: [HostUpdateReminder] {
         HostUpdateReminderPolicy.reminders(
@@ -68,21 +117,24 @@ extension AppState {
         HostUpdateReminderPolicy.saveDismissals(hostUpdateDismissals)
     }
 
-    /// Asks the host to upgrade itself and restart; nil once it did, or a
-    /// message saying why it couldn't.
+    /// Asks the host to upgrade itself. A restarted host must reconnect with a
+    /// usable channel before the update is confirmed.
     func updateHostOverPeer(serverId: String) async -> String? {
-        guard let channel = nativePeerSessions?.hosts?.channel(for: serverId) else {
+        guard !hostUpdatesInFlight.contains(serverId) else {
+            return "An update for this host is already in progress."
+        }
+        guard let peer = remotePeers.peers.first(where: { $0.serverId == serverId }),
+              remotePeers.carriesSessions(peerId: peer.id),
+              let channel = nativePeerSessions?.hosts?.channel(for: serverId) else {
             return FederatedSessionsProvider.peerUnavailableMessage
         }
         hostUpdatesInFlight.insert(serverId)
         defer { hostUpdatesInFlight.remove(serverId) }
-        // Homebrew may download a whole release; the SSH update allows it as long.
-        let response = await channel.request(.updateHost, timeout: .seconds(900))
-        // A host the upgrade replaced restarts, dropping the connection
-        // before it answers; it comes back online on the new version.
-        guard case .failure(let error) = response,
-              error != .failed(message: FederatedSessionsProvider.peerUnavailableMessage) else { return nil }
-        return PeerWorktreeRemoval.message(for: error)
+        return await PeerHostUpdate.perform(channel: channel, reconnectedChannel: {
+            guard self.remotePeers.peers.contains(where: { $0.id == peer.id && $0.serverId == serverId }),
+                  self.remotePeers.carriesSessions(peerId: peer.id) else { return nil }
+            return self.nativePeerSessions?.hosts?.channel(for: serverId)
+        })
     }
 
     func updateHost(from reminder: HostUpdateReminder) {

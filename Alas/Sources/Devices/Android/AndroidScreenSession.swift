@@ -83,10 +83,10 @@ final class AndroidScreenSession {
         }
     }
 
-    /// Asks the device to copy its selection and returns it; nil after 2 s.
-    func copyClipboard() async -> String? {
+    /// The device's clipboard, after it copies its selection when `copy`; nil after 2 s.
+    func copyClipboard(copy: Bool) async -> String? {
         guard controlSocket != nil else { return nil }
-        return await clipboard.request(timeout: .seconds(2)) { send(ScrcpyControl.getClipboard(copy: true)) }
+        return await clipboard.request(timeout: .seconds(2)) { send(ScrcpyControl.getClipboard(copy: copy)) }
     }
 
     private func launchServer(scid: String) throws -> Process {

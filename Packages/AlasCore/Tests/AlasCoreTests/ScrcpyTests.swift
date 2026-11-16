@@ -57,6 +57,7 @@ struct ScrcpyTests {
                 0x7F, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x00, 0x01,
             ]))
         #expect(ScrcpyControl.backOrScreenOn(.up) == Self.bytes([0x04, 0x01]))
+        #expect(ScrcpyControl.injectText("hello, world!") == Self.bytes([0x01, 0, 0, 0, 0x0D]) + Data("hello, world!".utf8))
         #expect(ScrcpyControl.getClipboard(copy: true) == Self.bytes([0x08, 0x01]))
         #expect(ScrcpyControl.setClipboard(sequence: 0x0102_0304_0506_0708, text: "hello, world!", paste: true)
             == Self.bytes([0x09, 1, 2, 3, 4, 5, 6, 7, 8, 1, 0, 0, 0, 0x0D]) + Data("hello, world!".utf8))

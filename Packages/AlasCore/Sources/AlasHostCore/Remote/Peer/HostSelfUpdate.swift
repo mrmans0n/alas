@@ -1,4 +1,5 @@
 import Foundation
+import AlasModel
 import AlasPlatform
 import AlasRemoteKit
 
@@ -8,6 +9,99 @@ import AlasRemoteKit
 /// `alas` cask ships it inside `/Applications/Alas.app`.
 public enum HostSelfUpdate {
     static let appHostSuffix = "/Contents/Resources/alas-host/alas-host"
+
+    /// Coordinates file-watch notifications with an install that replaces
+    /// the running executable before all of its files are ready.
+    @MainActor
+    public final class Lifecycle {
+        private var isInstalling = false
+        private let wasReplaced: () -> Bool
+        private let restart: () async throws -> Void
+        private let stop: () -> Void
+
+        public init(
+            wasReplaced: @escaping () -> Bool,
+            restart: @escaping () async throws -> Void,
+            stop: @escaping () -> Void
+        ) {
+            self.wasReplaced = wasReplaced
+            self.restart = restart
+            self.stop = stop
+        }
+
+        public func executableChanged() {
+            if !isInstalling, wasReplaced() { stop() }
+        }
+
+        public func install(_ operation: () async throws -> Void) async throws {
+            guard !isInstalling else {
+                throw HostError.failed(message: "A host update is already in progress.")
+            }
+            isInstalling = true
+            defer { isInstalling = false }
+            try await operation()
+            if wasReplaced() {
+                try await restart()
+                stop()
+            }
+        }
+    }
+
+    /// Clear only this release's download prompt, after verifying every
+    /// executable against the release publisher. The full app is untouched.
+    static let prepareStandaloneInstallScript = """
+    executable=$1
+    verify=${2:-/usr/bin/codesign}
+    clear=${3:-/usr/bin/xattr}
+    while [ -L "$executable" ]; do
+        target=$(/usr/bin/readlink "$executable") || exit $?
+        case "$target" in
+            /*) executable=$target ;;
+            *) executable="$(dirname "$executable")/$target" ;;
+        esac
+    done
+    executable="$(cd "$(dirname "$executable")" && pwd -P)/$(basename "$executable")"
+    case "$executable" in
+        */Caskroom/alas-host/*/alas-host/alas-host) ;;
+        *) echo "Refusing to change quarantine outside the alas-host cask." >&2; exit 1 ;;
+    esac
+    root=${executable%/alas-host/alas-host}
+    for binary in "$executable" "$root/zmx/zmx" "$root/alas-cli/alas"; do
+        "$verify" --verify --strict --all-architectures -R \\
+            '=anchor apple generic and certificate leaf[subject.OU] = "57WT3F3FAM"' "$binary" || exit $?
+    done
+    "$clear" -dr com.apple.quarantine "$root"
+    """
+
+    #if os(macOS)
+    /// Runs outside the host's launchd job, so stopping the host cannot kill
+    /// its restart request. PathState can miss Homebrew replacing its symlink.
+    public static func restartAfterExit(executable: URL) async throws {
+        let agent = HostLaunchAgent(executable: executable)
+        let service = "gui/\(getuid())/\(agent.label)"
+        let helper = agent.label + ".update." + UUID().uuidString
+        let result = try await Process.run(
+            "/bin/launchctl",
+            args: [
+                "submit", "-l", helper, "-o", agent.logURL.path, "-e", agent.logURL.path,
+                "--", "/bin/sh", "-c", restartScript, "sh",
+                String(getpid()), service, helper, "/bin/launchctl",
+            ],
+            timeout: 10
+        )
+        guard result.exitCode == 0 else {
+            throw HostError.failed(message: "Couldn't schedule the host restart: " + String(result.stderr.suffix(600)))
+        }
+    }
+
+    static let restartScript = """
+    while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+    "$4" kickstart "$2"
+    status=$?
+    "$4" remove "$3"
+    exit "$status"
+    """
+    #endif
 
     /// The cask that ships the host at `executablePath` (symlinks resolved),
     /// or nil for a host copied into place or built locally.
@@ -34,10 +128,9 @@ public enum HostSelfUpdate {
         return (NSDictionary(contentsOf: info)?["CFBundleShortVersionString"] as? String)
     }
 
-    /// Runs `brew upgrade --cask <cask>` with the login shell's environment.
-    /// An upgrade that replaced the executable stops this host, which its
-    /// launch agent then starts on the new version.
-    public static func upgrade(cask: String) async throws {
+    /// Runs Homebrew with the login shell's environment. The caller must
+    /// defer file-watch shutdown until this finishes, then arrange a restart.
+    public static func upgrade(cask: String, executable: URL) async throws {
         await ShellEnvResolver.shared.waitUntilResolved()
         var env = ShellEnvResolver.shared.resolvedEnvironment ?? ProcessInfo.processInfo.environment
         // Homebrew's own prefixes, should the shell's PATH lack them.
@@ -45,13 +138,22 @@ public enum HostSelfUpdate {
         // As the SSH setup: its cleanup would prune everything else on the Mac.
         env["HOMEBREW_NO_INSTALL_CLEANUP"] = "1"
         env["HOMEBREW_NO_ENV_HINTS"] = "1"
+        env["HOMEBREW_NO_ASK"] = "1"
         let result = try await Process.run(
-            "/bin/sh", args: ["-c", "brew upgrade --cask \"$1\"", "sh", cask], env: env, timeout: 900
+            "/bin/sh", args: ["-c", "exec brew upgrade --cask \"$1\"", "sh", cask], env: env, timeout: 900
         )
         guard result.exitCode == 0 else {
             let output = (result.stderr.isEmpty ? result.stdout : result.stderr)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw HostError.failed(message: "Homebrew couldn't upgrade \(cask): " + String(output.suffix(600)))
+        }
+        if cask == "alas-host" {
+            let prepared = try await Process.run(
+                "/bin/sh", args: ["-c", prepareStandaloneInstallScript, "sh", executable.path], timeout: 30
+            )
+            guard prepared.exitCode == 0 else {
+                throw HostError.failed(message: "Couldn't authorize the installed host: " + String(prepared.stderr.suffix(600)))
+            }
         }
     }
 

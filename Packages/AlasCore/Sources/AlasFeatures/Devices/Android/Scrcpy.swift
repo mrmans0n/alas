@@ -77,6 +77,14 @@ public enum ScrcpyControl {
         return data
     }
 
+    /// Text the device types through its key map; characters it can't type are dropped.
+    public static func injectText(_ text: String) -> Data {
+        let utf8 = Data(text.utf8)
+        var data = Data([1])
+        data.append(be: UInt32(utf8.count))
+        return data + utf8
+    }
+
     /// `x` and `y` are in the video's pixels; `width` and `height` must be the
     /// current session's size, or the server drops the event.
     public static func touch(

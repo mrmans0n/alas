@@ -397,6 +397,7 @@ jobs:
             release-artifacts/**/Alas-*.dmg
             release-artifacts/**/alas-host-*.zip
             release-artifacts/**/alas-host-*-linux-*.tar.gz
+            scripts/install-alas-host.sh
 
   update-homebrew:
     name: Update Homebrew Cask
