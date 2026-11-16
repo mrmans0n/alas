@@ -2,7 +2,8 @@ import Foundation
 
 // The fold itself lives in AlasRemoteKit (`ACPTranscriptFold.swift`) over
 // `ACPTranscriptFoldItem`s; these overloads keep the Mac's message-based
-// signatures and build a lazy source over `messages`.
+// signatures and build a lazy, memoized, fold-only source over `messages`
+// (no verbs: the fold never reads them).
 
 private extension ACPTranscriptFoldSource {
     @MainActor
@@ -11,9 +12,16 @@ private extension ACPTranscriptFoldSource {
         hiddenToolCallIds: Set<String> = [],
         createdAt: @escaping (Int) -> Date? = { _ in nil }
     ) {
+        // The fold reads some indices several times per pass; map each once.
+        var items: [Int: ACPTranscriptFoldItem] = [:]
         self.init(
             count: messages.count,
-            item: { ACPTranscriptFoldItem(messages[$0], hiddenToolCallIds: hiddenToolCallIds) },
+            item: { index in
+                if let item = items[index] { return item }
+                let item = ACPTranscriptFoldItem(messages[index], hiddenToolCallIds: hiddenToolCallIds, foldOnly: true)
+                items[index] = item
+                return item
+            },
             createdAt: createdAt
         )
     }
@@ -48,7 +56,7 @@ extension ACPToolCallGrouping {
 
     @MainActor
     static func isCollapsible(_ message: ACPMessage, hiddenToolCallIds: Set<String> = []) -> Bool {
-        isCollapsible(ACPTranscriptFoldItem(message, hiddenToolCallIds: hiddenToolCallIds))
+        isCollapsible(ACPTranscriptFoldItem(message, hiddenToolCallIds: hiddenToolCallIds, foldOnly: true))
     }
 
     /// `hiddenToolCallIds` should be the set the rows were built with; when nil

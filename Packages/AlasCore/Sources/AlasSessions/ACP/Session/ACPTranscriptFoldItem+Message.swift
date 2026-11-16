@@ -13,6 +13,14 @@ extension ACPTranscriptFoldItem {
     /// Main-actor because `StreamingText` is.
     @MainActor
     public init(_ message: ACPMessage, hiddenToolCallIds: Set<String>) {
+        self.init(message, hiddenToolCallIds: hiddenToolCallIds, foldOnly: false)
+    }
+
+    /// `foldOnly` skips the work the fold never reads, for a caller that
+    /// only folds: the verb is left `.other`, and a status that can't join
+    /// a run anyway skips the exclusion checks (`joins` is then false).
+    @MainActor
+    public init(_ message: ACPMessage, hiddenToolCallIds: Set<String>, foldOnly: Bool) {
         switch message {
         case .user:
             self = .user
@@ -23,13 +31,18 @@ extension ACPTranscriptFoldItem {
         case .plan:
             self = .plan
         case .toolCall(let toolCall):
+            let canJoin = !foldOnly || ACPToolCallGrouping.isFinished(status: toolCall.status)
+                || toolCall.status == "in_progress" || toolCall.status == "pending"
             self = .toolCall(ACPTranscriptFoldToolCall(
                 status: toolCall.status,
-                joins: ACPContextCompaction(toolCall: toolCall) == nil
+                joins: canJoin
+                    && !hiddenToolCallIds.contains(toolCall.toolCallId)
+                    && ACPContextCompaction(toolCall: toolCall) == nil
                     && ACPSubagentRowDescriptor(toolCall: toolCall) == nil
-                    && ACPBackgroundTask(toolCall: toolCall) == nil
-                    && !hiddenToolCallIds.contains(toolCall.toolCallId),
-                verb: ACPToolCallGroupSummary.verb(forLabel: ACPToolCallPresentation.resolve(toolCall).label)
+                    && ACPBackgroundTask(toolCall: toolCall) == nil,
+                verb: foldOnly
+                    ? .other
+                    : ACPToolCallGroupSummary.verb(forLabel: ACPToolCallPresentation.resolve(toolCall).label)
             ))
         default:
             self = .other

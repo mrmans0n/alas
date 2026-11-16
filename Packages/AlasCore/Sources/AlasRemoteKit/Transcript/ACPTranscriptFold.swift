@@ -170,8 +170,8 @@ public enum ACPToolCallGrouping {
     /// An explicit allowlist, not a blocklist: an adapter-specific status
     /// Alas doesn't yet recognize (e.g. a future "awaiting_permission")
     /// must stay visible rather than being silently folded into a
-    /// collapsed bundle. Delegates to the session's own terminal-status
-    /// predicate so the two can never drift; `ACPToolCallCard` likewise
+    /// collapsed bundle. Delegates to `ACPToolCall.isFinalStatus`, which
+    /// the session shares, so the two can never drift; `ACPToolCallCard` likewise
     /// deliberately renders unknown statuses.
     public static func isFinished(status: String) -> Bool {
         ACPToolCall.isFinalStatus(status)
