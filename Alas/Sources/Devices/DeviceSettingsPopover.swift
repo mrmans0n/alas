@@ -28,6 +28,11 @@ struct DeviceSettingsPopover: View {
     @State private var longitude = ""
     @State private var url = ""
     @State private var deviceMessage: String?
+    @State private var slim: SimulatorSlimState?
+    @State private var slimMissing = false
+    @State private var slimApplying = false
+    @State private var slimError: String?
+    @State private var simslimInstall = HomebrewInstallController.simslim()
 
     private static let places: [(name: String, location: SimulatorLocation)] = [
         ("Apple Park", .init(latitude: 37.3349, longitude: -122.0090)),
@@ -43,6 +48,8 @@ struct DeviceSettingsPopover: View {
             if platform == .ios {
                 section("Accessibility") { accessibilityRows }
                 Divider()
+                section("Memory") { slimRows }
+                Divider()
             }
             if platform == .android {
                 section("Network") { networkRows }
@@ -56,6 +63,9 @@ struct DeviceSettingsPopover: View {
         .padding(scale.space[4])
         .frame(width: 340)
         .task { await load() }
+        .onChange(of: simslimInstall.phase) { _, phase in
+            if phase == .succeeded { Task { await loadSlim() } }
+        }
     }
 
     private var platform: AgentDevice.Platform { backend.platform }
@@ -217,6 +227,96 @@ struct DeviceSettingsPopover: View {
             } catch {
                 accessibilityError = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: Memory
+
+    @ViewBuilder
+    private var slimRows: some View {
+        if slimMissing {
+            HStack {
+                Text("Slim simulator")
+                Spacer()
+                Toggle("", isOn: .constant(false)).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(true)
+            }
+            note("Install simslim to cut this simulator's memory about 4x.", tone: "fg-dim")
+            note("Installs via Homebrew: \(SimulatorSlim.installCommand)", tone: "fg-faint")
+            simslimInstallControl
+        } else if let slim {
+            HStack {
+                Text("Slim simulator")
+                Spacer()
+                if slimApplying { ProgressView().controlSize(.small) }
+                // A closure, not `set: setSlim`: the method reference crashes Swift 6.3's IRGen.
+                Toggle("", isOn: Binding(get: { slim.isSlim }, set: { setSlim($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .disabled(slimApplying)
+            }
+            note(Self.slimSummary(slim), tone: "fg-dim")
+            if slim.isSlim, !slim.persistent {
+                note("Lasts until the simulator restarts on this iOS version.", tone: "fg-faint")
+            }
+        } else if slimError == nil {
+            ProgressView().controlSize(.small)
+        }
+        if let slimError { note(slimError, tone: "warn") }
+    }
+
+    /// Settings › Changes' gg install control, for simslim.
+    @ViewBuilder
+    private var simslimInstallControl: some View {
+        switch simslimInstall.phase {
+        case .running:
+            HStack(spacing: 6) {
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                Text("Installing…").foregroundStyle(theme.color("fg-dim"))
+            }
+        case .failed(let message):
+            note(message, tone: "warn")
+            AlasButton(title: "Retry", compact: true) { simslimInstall.install() }
+        case .idle, .succeeded:
+            AlasButton(title: "Install simslim…", compact: true) { simslimInstall.install() }
+        }
+    }
+
+    private static func slimSummary(_ slim: SimulatorSlimState) -> String {
+        let memory = slim.memoryBytes.map { bytes in
+            let gigabytes = (Double(bytes) / 1_073_741_824).formatted(.number.precision(.fractionLength(2)))
+            return slim.processes.map { "\(gigabytes) GB in \($0) processes. " } ?? "\(gigabytes) GB. "
+        } ?? ""
+        let services = slim.isSlim ? "\(slim.servicesOff) of \(slim.services) background services are off." : "All background services run."
+        return memory + services
+    }
+
+    private func setSlim(_ on: Bool) {
+        slimApplying = true
+        mutate(report: { message in
+            slimError = message
+            slimApplying = false
+        }) {
+            do {
+                slim = try await backend.setSlim(udid, on: on)
+                slimError = nil
+            } catch {
+                slimError = error.localizedDescription
+            }
+            slimApplying = false
+        }
+    }
+
+    /// After the other sections: `measure` can take a moment.
+    private func loadSlim() async {
+        do {
+            slim = try await backend.slim(udid)
+            slimMissing = false
+            slimError = nil
+        } catch SimulatorSlimError.notInstalled {
+            slimMissing = true
+        } catch {
+            slimError = error.localizedDescription
         }
     }
 
@@ -445,5 +545,6 @@ struct DeviceSettingsPopover: View {
         }
         apps = (try? await backend.userApps(udid)) ?? []
         if appID == nil || !apps.contains(where: { $0.bundleID == appID }) { appID = apps.first?.bundleID }
+        if platform == .ios { await loadSlim() }
     }
 }
