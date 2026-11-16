@@ -60,7 +60,7 @@ struct TranscriptRowView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
         case .agent(let text):
-            AgentMarkdown(id: item.id, text: text)
+            AgentMarkdown(id: item.id, text: text, image: image)
         case .thought(let text):
             Text(text)
                 .font(.callout.italic())
@@ -110,6 +110,9 @@ struct TranscriptRowView: View {
             }
             if isExpanded {
                 Text(call.content).font(.system(.footnote, design: .monospaced))
+                ForEach(Array(call.assets.filter(Self.isImage).enumerated()), id: \.offset) { _, asset in
+                    TranscriptImage(source: .resolve(asset: asset), label: asset.name ?? asset.uri ?? "Image", image: image)
+                }
             }
         }
         .card()
@@ -167,6 +170,10 @@ struct TranscriptRowView: View {
         }
     }
 
+    private static func isImage(_ asset: ACPToolCallAsset) -> Bool {
+        asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true
+    }
+
     private static func planIcon(_ status: String) -> String {
         switch status {
         case "completed": "checkmark.circle.fill"
@@ -198,6 +205,7 @@ private extension View {
 struct AgentMarkdown: View {
     let id: String
     let text: String
+    var image: (String) -> UIImage? = { _ in nil }
 
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
@@ -227,6 +235,8 @@ struct AgentMarkdown: View {
                     Text(s).foregroundStyle(.secondary)
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
+                case .image(let source, let alt):
+                    TranscriptImage(source: .resolve(source: source), label: alt.isEmpty ? "Image" : alt, image: image)
                 case .table(let rows):
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
