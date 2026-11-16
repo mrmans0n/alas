@@ -23,6 +23,10 @@ extension GitService {
     /// pushed once `origin/<base>` has every commit it has.
     public func basePushState(repoPath: URL, base: String) async throws -> BasePushState {
         if try await remoteForFetch(worktreePath: repoPath, ref: base) != nil { return .pushed }
+        // A stale tracking ref would ask for a push origin rejects; offline, the cached one is all there is.
+        _ = try? await Process.git(
+            ["fetch", "origin", "+refs/heads/\(base):refs/remotes/origin/\(base)"], cwd: repoPath
+        )
         let tracking = try await Process.git(
             ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"], cwd: repoPath
         )

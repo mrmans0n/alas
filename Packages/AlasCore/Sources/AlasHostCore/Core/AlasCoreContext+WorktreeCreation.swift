@@ -264,8 +264,8 @@ extension AlasCoreContext {
     }
 
     /// Fetches `base` from origin (a remote-tracking base from its own remote)
-    /// and returns the tracking ref to create from. A SHA, a tag or a branch
-    /// the remote lacks has no tracking ref and is returned as given.
+    /// and returns the tracking ref to create from. A SHA, a tag, a branch the
+    /// remote lacks, or any base when the fetch fails is returned as given.
     func fetchOriginBase(_ base: String, in repoPath: URL) async -> String {
         let tracked = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base)
         let remote = tracked?.remote ?? "origin"
@@ -273,12 +273,12 @@ extension AlasCoreContext {
         let trackingRef = "refs/remotes/\(remote)/\(branch)"
         // An explicit destination: a single-branch clone's fetch mapping would skip it.
         let fetch = try? await Process.git(["fetch", remote, "+refs/heads/\(branch):\(trackingRef)"], cwd: repoPath)
-        if fetch?.exitCode != 0 {
-            // The create still tries what the checkout has.
+        guard fetch?.exitCode == 0 else {
+            // A cached tracking ref may be older than the checkout's own base, so the create uses that.
             creationLogger.error("Fetch failed before creating worktree: \(fetch?.stderr ?? "", privacy: .public)")
+            return base
         }
-        let tracking = try? await Process.git(["rev-parse", "--verify", "--quiet", trackingRef], cwd: repoPath)
-        return tracking?.exitCode == 0 ? trackingRef : base
+        return trackingRef
     }
 
     func fetchBase(_ base: String, in repoPath: URL) async {

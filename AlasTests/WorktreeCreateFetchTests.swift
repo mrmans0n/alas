@@ -92,6 +92,10 @@ struct GitServiceRemoteForFetchTests {
         #expect(try await svc.basePushState(repoPath: repo, base: "main") == .pushed)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local"], cwd: repo)
         #expect(try await svc.basePushState(repoPath: repo, base: "main") == .ahead(commits: 1))
+        // Published from elsewhere: the cached origin/main is stale, origin is not.
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: repo)
+        _ = try await Process.git(["update-ref", "refs/remotes/origin/main", "main~1"], cwd: repo)
+        #expect(try await svc.basePushState(repoPath: repo, base: "main") == .pushed)
         #expect(try await svc.basePushState(repoPath: repo, base: "origin/main") == .pushed)
         _ = try await Process.git(["branch", "feature"], cwd: repo)
         #expect(try await svc.basePushState(repoPath: repo, base: "feature") == .notOnOrigin)
@@ -226,6 +230,17 @@ struct WorktreeCreateFetchTests {
         // Not tracking origin/main: the branch's first push must not land on main.
         let upstream = try await Process.git(["rev-parse", "--abbrev-ref", "from-origin@{upstream}"], cwd: dest)
         #expect(upstream.exitCode != 0)
+
+        // Offline, the cached origin/main may be older than the checkout's own main.
+        try "local content\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "local"], cwd: repo)
+        _ = try await Process.git(["remote", "set-url", "origin", "/dev/null/nonexistent"], cwd: repo)
+        let offline = repo.appendingPathComponent("wt-offline")
+        request.destination = offline
+        request.branch = "offline"
+        _ = try await state.host.worktrees.create(request, caller: .app)
+        let offlineContent = try String(contentsOf: offline.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(offlineContent.contains("local content"))
     }
 
     /// A single-branch clone's fetch mapping skips other branches, and an
