@@ -1234,6 +1234,58 @@ fn device_tool_definitions() -> Vec<Value> {
                 "required": ["udid", "action"]
             }
         }),
+        json!({
+            "name": "device_run_flow",
+            "description": format!("Run a flow file on a booted device: Maestro YAML, in the subset Alas runs itself (launchApp, tapOn, inputText, pressKey, scroll, swipe, assertVisible, assertNotVisible, openLink, waitForAnimationToEnd). Each step waits up to 5 seconds for its element, and the run stops at the first step that fails. Returns {{\"passed\": true, \"steps\": n}}, or failed_step, line and reason. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "path": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The flow file, relative to the worktree root or absolute, such as .maestro/login.yaml." }
+                },
+                "required": ["udid", "path"]
+            }
+        }),
+        json!({
+            "name": "device_flow_record",
+            "description": "Record your device_* calls on a device as a flow file. start begins recording into .maestro/<name>.yaml in the worktree; each tap, text, button, swipe, launch and URL you then send becomes a step, with taps named by their element's label or id. stop writes the file and returns its path and step count. Replay it with device_run_flow.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "action": { "type": "string", "enum": ["start", "stop"] },
+                    "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "The flow's file name without .yaml; start only." }
+                },
+                "required": ["udid", "action"]
+            }
+        }),
+        json!({
+            "name": "device_set_route",
+            "description": format!("Move the device's simulated location along a route at a constant speed, from waypoints or a GPX file (its track, else route, else waypoints); it stays at the last point when it ends. It replaces a fixed location; device_set_location with clear stops it. iOS simulators need iOS 17 or later. Returns the point count, the length in km and the duration in seconds. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "waypoints": {
+                        "type": "array", "minItems": 2, "maxItems": 10000,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+                                "longitude": { "type": "number", "minimum": -180, "maximum": 180 }
+                            },
+                            "required": ["latitude", "longitude"]
+                        }
+                    },
+                    "gpx_path": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "A .gpx file, relative to the worktree root or absolute." },
+                    "speed_kmh": { "type": "number", "minimum": 1, "maximum": 500, "description": "Defaults to 30." }
+                },
+                "required": ["udid"]
+            }
+        }),
     ]
 }
 
@@ -2403,6 +2455,76 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             Ok(Command::Device(alas_client::DeviceCommand::Record {
                 udid: required_limited_string(args, "udid", 64)?,
                 action: action.into(),
+            }))
+        }
+        "device_run_flow" => {
+            reject_arguments(args, name, &["udid", "path"])?;
+            let path = required_limited_string(args, "path", 4096)?;
+            Ok(Command::Device(alas_client::DeviceCommand::RunFlow {
+                udid: required_limited_string(args, "udid", 64)?,
+                path: alas_client::absolutize(std::path::Path::new(worktree_dir), &path),
+            }))
+        }
+        "device_flow_record" => {
+            reject_arguments(args, name, &["udid", "action", "name"])?;
+            let action = optional_enum(args, "action", &["start", "stop"])?
+                .ok_or_else(|| "missing required argument 'action'".to_string())?;
+            let flow = optional_limited_string(args, "name", 64)?;
+            let path = match (action, flow) {
+                ("start", Some(flow)) => {
+                    if !flow.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                        return Err("name may only use letters, digits, '_' and '-'".into());
+                    }
+                    Some(alas_client::absolutize(
+                        std::path::Path::new(worktree_dir),
+                        &format!(".maestro/{flow}.yaml"),
+                    ))
+                }
+                ("start", None) => return Err("missing required argument 'name'".into()),
+                (_, Some(_)) => return Err("name is only for start".into()),
+                _ => None,
+            };
+            Ok(Command::Device(alas_client::DeviceCommand::FlowRecord {
+                udid: required_limited_string(args, "udid", 64)?,
+                path,
+            }))
+        }
+        "device_set_route" => {
+            reject_arguments(args, name, &["udid", "waypoints", "gpx_path", "speed_kmh"])?;
+            let speed_kmh = match args.get("speed_kmh") {
+                Some(_) => required_bounded_f64(args, "speed_kmh", 1.0, 500.0)?,
+                None => 30.0,
+            };
+            let gpx_path = optional_limited_string(args, "gpx_path", 4096)?
+                .map(|path| alas_client::absolutize(std::path::Path::new(worktree_dir), &path));
+            let waypoints = match args.get("waypoints") {
+                None => None,
+                Some(value) => {
+                    let points = value
+                        .as_array()
+                        .filter(|points| (2..=10_000).contains(&points.len()))
+                        .ok_or("waypoints must be an array of 2 to 10000 points")?;
+                    Some(
+                        points
+                            .iter()
+                            .map(|point| {
+                                Ok((
+                                    required_bounded_f64(point, "latitude", -90.0, 90.0)?,
+                                    required_bounded_f64(point, "longitude", -180.0, 180.0)?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>, String>>()?,
+                    )
+                }
+            };
+            if waypoints.is_some() == gpx_path.is_some() {
+                return Err("pass either waypoints or gpx_path".into());
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::SetRoute {
+                udid: required_limited_string(args, "udid", 64)?,
+                waypoints,
+                gpx_path,
+                speed_kmh,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -4594,6 +4716,9 @@ mod tests {
                 "device_clipboard",
                 "device_rotate",
                 "device_record",
+                "device_run_flow",
+                "device_flow_record",
+                "device_set_route",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -5428,6 +5553,37 @@ mod tests {
         assert!(runs_on_worker(&ok));
         assert_eq!(
             map(
+                "device_flow_record",
+                json!({ "udid": "U", "action": "start", "name": "login" })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::FlowRecord {
+                udid: "U".into(),
+                path: Some("/wt/.maestro/login.yaml".into())
+            })
+        );
+        assert_eq!(
+            map(
+                "device_set_route",
+                json!({ "udid": "U", "waypoints": [{ "latitude": 1, "longitude": 2 }, { "latitude": 3, "longitude": 4 }] })
+            )
+            .unwrap(),
+            Command::Device(DeviceCommand::SetRoute {
+                udid: "U".into(),
+                waypoints: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+                gpx_path: None,
+                speed_kmh: 30.0
+            })
+        );
+        assert_eq!(
+            map("device_run_flow", json!({ "udid": "U", "path": ".maestro/a.yaml" })).unwrap(),
+            Command::Device(DeviceCommand::RunFlow {
+                udid: "U".into(),
+                path: "/wt/.maestro/a.yaml".into()
+            })
+        );
+        assert_eq!(
+            map(
                 "device_install",
                 json!({ "udid": "U", "app_path": "build/../out/Hello.app" })
             )
@@ -5544,6 +5700,12 @@ mod tests {
             ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
             ("device_set_appearance", json!({ "udid": "U" }), "pass at least one of appearance, text_size, increase_contrast"),
             ("device_set_network", json!({ "udid": "U" }), "pass at least one of wifi, data"),
+            ("device_flow_record", json!({ "udid": "U", "action": "start" }), "missing required argument 'name'"),
+            ("device_flow_record", json!({ "udid": "U", "action": "start", "name": "../x" }), "name may only use letters, digits, '_' and '-'"),
+            ("device_flow_record", json!({ "udid": "U", "action": "stop", "name": "x" }), "name is only for start"),
+            ("device_set_route", json!({ "udid": "U" }), "pass either waypoints or gpx_path"),
+            ("device_set_route", json!({ "udid": "U", "waypoints": [{ "latitude": 1, "longitude": 2 }] }), "waypoints must be an array of 2 to 10000 points"),
+            ("device_set_route", json!({ "udid": "U", "gpx_path": "a.gpx", "speed_kmh": 0 }), "speed_kmh must be a number from 1 to 500"),
             ("device_set_accessibility", json!({ "udid": "U" }), "pass at least one of voiceover, reduce_motion, button_shapes, reduce_transparency, color_filter, liquid_glass"),
             ("device_set_accessibility", json!({ "udid": "U", "liquid_glass": "frosted" }), "liquid_glass must be one of clear, tinted"),
             ("device_set_permission", json!({ "udid": "U", "bundle_id": "b", "service": "camera", "action": "grant" }), "service must be one of all, calendar, contacts-limited, contacts, location, location-always, photos-add, photos, media-library, microphone, motion, reminders, siri"),
@@ -5600,7 +5762,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot", "device_logs"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_permission", "device_set_location", "device_push", "device_open_url", "device_run_flow", "device_set_route"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

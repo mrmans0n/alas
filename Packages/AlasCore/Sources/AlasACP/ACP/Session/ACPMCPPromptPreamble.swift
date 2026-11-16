@@ -84,6 +84,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data",
         "device_set_permission", "device_set_location",
         "device_push", "device_open_url", "device_logs", "device_clipboard", "device_rotate", "device_record",
+        "device_run_flow", "device_flow_record", "device_set_route",
     ]
 
     /// What a child delegated from another Mac reports with. It cannot message
@@ -357,6 +358,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                             + "device_type types any text; read or set the device's clipboard with device_clipboard. "
                             + "device_push and device_set_accessibility are iOS only; device_set_network and device_clear_data are Android only. "
                             + "Rotate with device_rotate and record the screen with device_record. "
+                            + "Record a flow with device_flow_record and replay it with device_run_flow; play a GPS route with device_set_route. "
                             + "device_disabled means the user hasn't let agents use simulators and Android devices; ask them instead of retrying.")
                     }
                 }

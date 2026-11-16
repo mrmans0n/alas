@@ -62,6 +62,12 @@ public enum DeviceCommand: Equatable, Sendable {
     case rotate(udid: String, orientation: DeviceScreenOrientation, diff: Bool = true)
     /// `start` false stops the recording.
     case record(udid: String, start: Bool)
+    /// `path` is absolute; the MCP server resolves it against the worktree.
+    case runFlow(udid: String, path: String)
+    /// A path (absolute) starts recording the session's calls into that flow file; nil stops and writes it.
+    case recordFlow(udid: String, path: String?)
+    /// Exactly one of `waypoints` (two or more) and `gpxPath` (absolute) is set.
+    case setRoute(udid: String, waypoints: [SimulatorLocation]?, gpxPath: String?, speedKmh: Double)
 
     /// The `device_<name>` tool, for driver labels.
     public var toolName: String {
@@ -88,6 +94,9 @@ public enum DeviceCommand: Equatable, Sendable {
         case .clipboard: "device_clipboard"
         case .rotate: "device_rotate"
         case .record: "device_record"
+        case .runFlow: "device_run_flow"
+        case .recordFlow: "device_flow_record"
+        case .setRoute: "device_set_route"
         }
     }
 
@@ -98,7 +107,8 @@ public enum DeviceCommand: Equatable, Sendable {
              .tap(let udid, _, _, _), .swipe(let udid, _, _, _, _), .type(let udid, _, _, _), .button(let udid, _, _, _),
              .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _), .setAccessibility(let udid, _), .setNetwork(let udid, _, _), .clearData(let udid, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _, _),
-             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _):
+             .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _),
+             .runFlow(let udid, _), .recordFlow(let udid, _), .setRoute(let udid, _, _, _):
             udid
         }
     }
@@ -143,6 +153,15 @@ public enum DeviceCommand: Equatable, Sendable {
         var include_apple: Bool?
         var orientation: String?
         var diff: Bool?
+        var path: String?
+        var waypoints: [Waypoint]?
+        var gpx_path: String?
+        var speed_kmh: Double?
+    }
+
+    private struct Waypoint: Decodable {
+        var latitude: Double
+        var longitude: Double
     }
 
     private static let allowed: [String: Set<String>] = [
@@ -170,6 +189,9 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_clipboard": ["udid", "text"],
         "device_rotate": ["udid", "orientation", "diff"],
         "device_record": ["udid", "action"],
+        "device_run_flow": ["udid", "path"],
+        "device_flow_record": ["udid", "action", "path"],
+        "device_set_route": ["udid", "waypoints", "gpx_path", "speed_kmh"],
     ]
 
     /// Decodes a `device_<action>` request; anything outside the tool's
@@ -196,6 +218,10 @@ public enum DeviceCommand: Equatable, Sendable {
         func enumValue<E: RawRepresentable>(_: E.Type, _ value: String) throws -> E where E.RawValue == String {
             guard let parsed = E(rawValue: value) else { throw AlasCLIRequestError.malformed }
             return parsed
+        }
+        func absolutePath(_ path: String?) throws -> String {
+            guard let path, path.hasPrefix("/"), path.utf8.count <= 4096 else { throw AlasCLIRequestError.malformed }
+            return path
         }
         func coordinate(_ value: Double?) throws -> Double? {
             guard let value else { return nil }
@@ -246,10 +272,7 @@ public enum DeviceCommand: Equatable, Sendable {
             guard let text = params.text, !text.isEmpty, text.utf8.count <= 4096 else { throw AlasCLIRequestError.malformed }
             return .type(udid: try udid(), text: text, includeScreenshot: includeScreenshot, diff: diff)
         case "device_install":
-            guard let path = params.app_path, path.hasPrefix("/"), path.utf8.count <= 4096 else {
-                throw AlasCLIRequestError.malformed
-            }
-            return .install(udid: try udid(), appPath: path)
+            return .install(udid: try udid(), appPath: try absolutePath(params.app_path))
         case "device_launch":
             return .launch(udid: try udid(), bundleID: try bundleID(), diff: diff)
         case "device_set_appearance":
@@ -319,6 +342,29 @@ public enum DeviceCommand: Equatable, Sendable {
         case "device_record":
             guard let action = params.action, ["start", "stop"].contains(action) else { throw AlasCLIRequestError.malformed }
             return .record(udid: try udid(), start: action == "start")
+        case "device_run_flow":
+            return .runFlow(udid: try udid(), path: try absolutePath(params.path))
+        case "device_flow_record":
+            switch params.action {
+            case "start": return .recordFlow(udid: try udid(), path: try absolutePath(params.path))
+            case "stop" where params.path == nil: return .recordFlow(udid: try udid(), path: nil)
+            default: throw AlasCLIRequestError.malformed
+            }
+        case "device_set_route":
+            let speed = params.speed_kmh ?? 30
+            guard speed.isFinite, (1...500).contains(speed) else { throw AlasCLIRequestError.malformed }
+            switch (params.waypoints, params.gpx_path) {
+            case (let waypoints?, nil):
+                guard (2...10000).contains(waypoints.count),
+                      waypoints.allSatisfy({ (-90...90).contains($0.latitude) && (-180...180).contains($0.longitude) })
+                else { throw AlasCLIRequestError.malformed }
+                let points = waypoints.map { SimulatorLocation(latitude: $0.latitude, longitude: $0.longitude) }
+                return .setRoute(udid: try udid(), waypoints: points, gpxPath: nil, speedKmh: speed)
+            case (nil, let gpx?):
+                return .setRoute(udid: try udid(), waypoints: nil, gpxPath: try absolutePath(gpx), speedKmh: speed)
+            default:
+                throw AlasCLIRequestError.malformed
+            }
         default: // device_button
             guard let name = params.name.flatMap(Button.init(rawValue:)) else { throw AlasCLIRequestError.malformed }
             return .button(udid: try udid(), name: name, includeScreenshot: includeScreenshot, diff: diff)
