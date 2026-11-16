@@ -49,6 +49,16 @@ struct InboxView: View {
             path.removeAll { !ids.contains($0.hostID) }
             if let selected, !ids.contains(selected.hostID) { self.selected = nil }
         }
+        // Split View resizes swap the hierarchy; the open session moves with it.
+        .onChange(of: sizeClass) { _, size in
+            if size == .regular {
+                if let open = path.last { selected = open }
+                path = []
+            } else if let open = selected {
+                path = [open]
+                selected = nil
+            }
+        }
         .onChange(of: openRoute, initial: true) { _, route in
             guard let route else { return }
             if sizeClass == .regular { selected = route } else { path = [route] }
