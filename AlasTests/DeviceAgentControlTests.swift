@@ -812,8 +812,13 @@ extension DeviceAgentControlTests {
         }
 
         func ready(_ id: String) async -> Bool { true }
+        var snapshotCount = 0
+        /// Runs inside each snapshot, as one that takes time would.
+        var onSnapshot: () -> Void = {}
         func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
-            try DeviceSnapshot.parse(DeviceAgentControlTests.snapshot, generation: generation)
+            snapshotCount += 1
+            onSnapshot()
+            return try DeviceSnapshot.parse(DeviceAgentControlTests.snapshot, generation: generation)
         }
 
         func press(_ id: String, _ button: DeviceCommand.Button) -> Bool {
@@ -871,6 +876,7 @@ extension DeviceAgentControlTests {
 
     private func bothPlatforms(
         _ android: FakeBackend, simulators: @escaping () async throws -> [SimulatorDevice] = { [Self.booted] },
+        now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         let input = FakeInput()
@@ -883,6 +889,7 @@ extension DeviceAgentControlTests {
                 android,
             ],
             recorder: DeviceRecorderTests.recorder(),
+            now: now,
             sleep: sleep
         )
     }
@@ -1021,6 +1028,19 @@ extension DeviceAgentControlTests {
         #expect(reply["line"] as? Int == line)
         #expect(reply["reason"] as? String == reason)
         #expect(android.pressed.isEmpty)
+    }
+
+    /// An Android snapshot takes about 2 s, so 20 polls would wait 50 s.
+    @Test func anElementWaitEndsAfterFiveSecondsHoweverSlowSnapshotsAre() async throws {
+        let android = FakeBackend()
+        final class Clock { var date = Date(timeIntervalSince1970: 0) }
+        let clock = Clock()
+        android.onSnapshot = { clock.date += 2 }
+        let control = bothPlatforms(android, now: { clock.date })
+        let file = try Self.flowFile("---\n- assertVisible: Nowhere\n")
+        let reply = try Self.reply(await control.perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s"))
+        #expect(reply["passed"] as? Bool == false)
+        #expect(android.snapshotCount == 3)
     }
 
     @Test func aFlowStopsWhenTheUserTakesOver() async throws {

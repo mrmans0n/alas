@@ -568,8 +568,9 @@ final class DeviceAgentControl {
         return nil
     }
 
-    /// Polls snapshots every 250 ms, 20 times (about 5 s), until the selector's
-    /// element is there (`visible`) or gone. Counting polls keeps tests deterministic.
+    /// Polls snapshots every 250 ms until the selector's element is there
+    /// (`visible`) or gone, for up to 5 s by the clock: an Android snapshot alone
+    /// takes about 2 s. At most 20 polls, so tests with instant clocks end.
     private func waitFor(
         _ selector: DeviceFlow.Selector, udid: String, visible: Bool
     ) async -> Result<(snapshot: DeviceSnapshot, element: DeviceElement)?, Failure> {
@@ -580,8 +581,12 @@ final class DeviceAgentControl {
         case .point: return .failure(Failure(message: "Assertions take text or an id, not a point."))
         }
         var snapshotFailure: String?
+        let started = now()
         for attempt in 0..<20 {
-            if attempt > 0 { await sleep(.milliseconds(250)) }
+            if attempt > 0 {
+                if now().timeIntervalSince(started) >= 5 { break }
+                await sleep(.milliseconds(250))
+            }
             if Task.isCancelled { return .failure(Failure(message: "The call was cancelled.")) }
             if userDriving(udid) { return .failure(Failure(message: "The user took over.")) }
             do {
