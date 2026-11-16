@@ -1092,6 +1092,33 @@ fn device_tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "device_set_network",
+            "description": format!("Turn Wi-Fi and mobile data on or off on an Android device; pass at least one. Returns both read back; a value is \"unknown\" when the device doesn't report it. iOS simulators don't support it. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "wifi": { "type": "boolean" },
+                    "data": { "type": "boolean", "description": "Mobile data." }
+                },
+                "required": ["udid"]
+            }
+        }),
+        json!({
+            "name": "device_clear_data",
+            "description": format!("Clear an installed app's data on an Android device, as a fresh install would have it; this also stops the app. iOS simulators don't support it. {DEVICE_DRIVING_NOTE}"),
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "udid": udid,
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's Android package." }
+                },
+                "required": ["udid", "bundle_id"]
+            }
+        }),
+        json!({
             "name": "device_set_permission",
             "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. On Android the services map to runtime permissions; those Android lacks answer device_unsupported. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
@@ -2246,6 +2273,26 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 reduce_transparency,
                 color_filter,
                 liquid_glass,
+            }))
+        }
+        "device_set_network" => {
+            reject_arguments(args, name, &["udid", "wifi", "data"])?;
+            let wifi = optional_bool(args, "wifi")?;
+            let data = optional_bool(args, "data")?;
+            if wifi.is_none() && data.is_none() {
+                return Err("pass at least one of wifi, data".into());
+            }
+            Ok(Command::Device(alas_client::DeviceCommand::SetNetwork {
+                udid: required_limited_string(args, "udid", 64)?,
+                wifi,
+                data,
+            }))
+        }
+        "device_clear_data" => {
+            reject_arguments(args, name, &["udid", "bundle_id"])?;
+            Ok(Command::Device(alas_client::DeviceCommand::ClearData {
+                udid: required_limited_string(args, "udid", 64)?,
+                bundle_id: required_limited_string(args, "bundle_id", 255)?,
             }))
         }
         "device_set_permission" => {
@@ -4537,6 +4584,8 @@ mod tests {
                 "device_launch",
                 "device_set_appearance",
                 "device_set_accessibility",
+                "device_set_network",
+                "device_clear_data",
                 "device_set_permission",
                 "device_set_location",
                 "device_push",
@@ -5494,6 +5543,7 @@ mod tests {
             ("device_install", json!({ "udid": "U" }), "missing required argument 'app_path'"),
             ("device_launch", json!({ "udid": "U", "bundle_id": "x", "app_path": "/a.app" }), "device_launch does not accept 'app_path'"),
             ("device_set_appearance", json!({ "udid": "U" }), "pass at least one of appearance, text_size, increase_contrast"),
+            ("device_set_network", json!({ "udid": "U" }), "pass at least one of wifi, data"),
             ("device_set_accessibility", json!({ "udid": "U" }), "pass at least one of voiceover, reduce_motion, button_shapes, reduce_transparency, color_filter, liquid_glass"),
             ("device_set_accessibility", json!({ "udid": "U", "liquid_glass": "frosted" }), "liquid_glass must be one of clear, tinted"),
             ("device_set_permission", json!({ "udid": "U", "bundle_id": "b", "service": "camera", "action": "grant" }), "service must be one of all, calendar, contacts-limited, contacts, location, location-always, photos-add, photos, media-library, microphone, motion, reminders, siri"),
@@ -5550,7 +5600,7 @@ mod tests {
         for name in ["device_list", "device_snapshot", "device_screenshot", "device_logs"] {
             assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
         }
-        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
+        for name in ["device_open", "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch", "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_permission", "device_set_location", "device_push", "device_open_url"] {
             assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {

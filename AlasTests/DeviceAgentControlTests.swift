@@ -788,6 +788,8 @@ extension DeviceAgentControlTests {
         var input: DeviceInput { fakeInput }
         var pixelBooted = false
         var pressed: [String] = []
+        var network = AndroidNetworkState(wifi: .value(true), data: .value(true))
+        var cleared: [String] = []
 
         func devices() async throws -> [AgentDevice] {
             [AgentDevice(id: "emulator-5554", name: "Medium Phone", platform: .android, runtime: "Android 16", state: "booted")]
@@ -821,7 +823,21 @@ extension DeviceAgentControlTests {
         func writeClipboard(_ id: String, _ text: String) async throws {}
         func install(_ id: String, path: String) async throws -> (appID: String, name: String) { ("com.example.hello", "Hello") }
         func launch(_ id: String, appID: String) async throws -> Int { 7 }
-        func isInstalled(_ id: String, appID: String) async -> Bool { true }
+        func isInstalled(_ id: String, appID: String) async -> Bool { appID != "com.example.gone" }
+        func display(_ id: String) async throws -> SimulatorDisplaySettings {
+            SimulatorDisplaySettings(appearance: .unknown, textSize: .unknown, increaseContrast: .unknown)
+        }
+        func accessibility(_ id: String) async throws -> SimulatorAccessibility {
+            throw DeviceToolError.unsupported("device_set_accessibility")
+        }
+        func userApps(_ id: String) async throws -> [SimulatorApp] { [] }
+        func network(_ id: String) async throws -> AndroidNetworkState { network }
+        func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState {
+            if let wifi { network.wifi = .value(wifi) }
+            if let data { network.data = .value(data) }
+            return network
+        }
+        func clearData(_ id: String, appID: String) async throws { cleared.append(appID) }
         func openURL(_ id: String, _ url: String) async throws {}
         func setDisplay(
             _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
@@ -903,6 +919,26 @@ extension DeviceAgentControlTests {
          "device_unsupported: The back button isn't available on ios."),
     ])
     func whatAPlatformLacksIsUnsupported(command: DeviceCommand, message: String) async {
+        #expect(error(await bothPlatforms(FakeBackend()).perform(command, sessionID: "s")) == message)
+    }
+
+    @Test func androidSwitchesTheNetworkAndClearsAppData() async {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        let network = await control.perform(.setNetwork(udid: "emulator-5554", wifi: false, data: nil), sessionID: "s")
+        #expect(network == .text([#"{"data":true,"wifi":false}"#]))
+        #expect(await control.perform(.clearData(udid: "emulator-5554", bundleID: "com.example.hello"), sessionID: "s")
+            == .text([#"{"ok":true}"#]))
+        #expect(android.cleared == ["com.example.hello"])
+        let gone = await control.perform(.clearData(udid: "emulator-5554", bundleID: "com.example.gone"), sessionID: "s")
+        #expect(error(gone) == "device_app_not_installed: com.example.gone isn't installed on Medium Phone.")
+    }
+
+    @Test(arguments: [
+        (DeviceCommand.setNetwork(udid: "on", wifi: true, data: nil), "device_unsupported: device_set_network isn't available on iOS."),
+        (.clearData(udid: "on", bundleID: "com.example.hello"), "device_unsupported: device_clear_data isn't available on iOS."),
+    ])
+    func networkAndClearDataAreAndroidOnly(command: DeviceCommand, message: String) async {
         #expect(error(await bothPlatforms(FakeBackend()).perform(command, sessionID: "s")) == message)
     }
 

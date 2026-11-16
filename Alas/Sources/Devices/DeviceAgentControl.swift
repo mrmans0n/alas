@@ -163,7 +163,8 @@ final class DeviceAgentControl {
         // installing and launching take their turn too.
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
-             .setAppearance, .setAccessibility, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate: true
+             .setAppearance, .setAccessibility, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate,
+             .setNetwork, .clearData: true
         case .list, .open, .snapshot, .screenshot, .logs, .record: false
         }
         var inputTurn: UUID?
@@ -333,6 +334,16 @@ final class DeviceAgentControl {
         case .setAccessibility(_, let change):
             return await settingsCall {
                 .text([Self.json(try await backend.setAccessibility(udid, change).json)])
+            }
+        case .setNetwork(_, let wifi, let data):
+            return await settingsCall {
+                .text([Self.json(try await backend.setNetwork(udid, wifi: wifi, data: data).json)])
+            }
+        case .clearData(_, let bundleID):
+            guard await backend.isInstalled(udid, appID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
+            return await settingsCall {
+                try await backend.clearData(udid, appID: bundleID)
+                return .text([Self.json(["ok": true])])
             }
         case .setPermission(_, let bundleID, let service, let action):
             guard await backend.isInstalled(udid, appID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
