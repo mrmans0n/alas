@@ -321,6 +321,7 @@ struct ACPMCPPromptPreambleTests {
             "device_set_permission", "device_set_location",
             "device_push", "device_open_url",
             "device_logs", "device_clipboard", "device_rotate", "device_record",
+            "device_run_flow", "device_flow_record", "device_set_route",
         ])
     }
 

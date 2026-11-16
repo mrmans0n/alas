@@ -183,8 +183,9 @@ Android (after phase 3):
   (`2026-11-16-devices-android-settings-design.md`). Location goes through
   Android's test location provider rather than `emu geo fix`, so it works on
   phones too.
-- [ ] GPS route playback and session record/replay. serve-emu builds these
-  itself; they need a design of their own.
+- [x] GPS route playback and session record/replay, on both platforms: flows
+  in Maestro's YAML, recorded and run by Alas, and routes from presets, GPX
+  files and `device_set_route` (`2026-11-16-devices-flows-routes-design.md`).
 
 Agents (phase 2 and after):
 

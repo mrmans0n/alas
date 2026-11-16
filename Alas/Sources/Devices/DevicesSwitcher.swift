@@ -96,6 +96,8 @@ struct DevicesActions: View {
     let recorder: DeviceRecorder
     /// Names the agent session recording the device.
     let agentName: (String) -> String
+    let flowRecorder: DeviceFlowRecorder
+    let worktree: URL
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     /// "Saved to Desktop", or why it wasn't, for a moment after a click.
@@ -130,6 +132,10 @@ struct DevicesActions: View {
                         DeviceSettingsPopover(udid: device.udid, backend: backend, control: control)
                     }
                 }
+            DeviceFlowButtons(
+                udid: device.udid, backend: control.backend(for: .ios), control: control, recorder: flowRecorder,
+                worktree: worktree, enabled: canChangeSettings
+            )
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)
                 .disabled(!booted)

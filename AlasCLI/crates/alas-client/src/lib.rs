@@ -584,6 +584,23 @@ pub enum DeviceCommand {
         udid: String,
         action: String,
     },
+    /// `path` is absolute.
+    RunFlow {
+        udid: String,
+        path: String,
+    },
+    /// An absolute `path` starts recording into that flow file; `None` stops.
+    FlowRecord {
+        udid: String,
+        path: Option<String>,
+    },
+    /// Exactly one of `waypoints` (two or more) and `gpx_path` (absolute) is set.
+    SetRoute {
+        udid: String,
+        waypoints: Option<Vec<(f64, f64)>>,
+        gpx_path: Option<String>,
+        speed_kmh: f64,
+    },
 }
 
 /// A ref from the device's latest `device_snapshot`, or pixels in its latest
@@ -655,7 +672,10 @@ impl DeviceCommand {
             | DeviceCommand::Logs { .. }
             | DeviceCommand::Clipboard { .. }
             | DeviceCommand::Rotate { .. }
-            | DeviceCommand::Record { .. } => false,
+            | DeviceCommand::Record { .. }
+            | DeviceCommand::RunFlow { .. }
+            | DeviceCommand::FlowRecord { .. }
+            | DeviceCommand::SetRoute { .. } => false,
         }
     }
 }
@@ -1465,6 +1485,37 @@ fn device_request(command: &DeviceCommand) -> Request {
         }
         DeviceCommand::Record { udid, action } => {
             ("device_record", json!({ "udid": udid, "action": action }))
+        }
+        DeviceCommand::RunFlow { udid, path } => {
+            ("device_run_flow", json!({ "udid": udid, "path": path }))
+        }
+        DeviceCommand::FlowRecord { udid, path } => match path {
+            Some(path) => (
+                "device_flow_record",
+                json!({ "udid": udid, "action": "start", "path": path }),
+            ),
+            None => (
+                "device_flow_record",
+                json!({ "udid": udid, "action": "stop" }),
+            ),
+        },
+        DeviceCommand::SetRoute {
+            udid,
+            waypoints,
+            gpx_path,
+            speed_kmh,
+        } => {
+            let mut params = json!({ "udid": udid, "speed_kmh": speed_kmh });
+            if let Some(points) = waypoints {
+                params["waypoints"] = points
+                    .iter()
+                    .map(|(latitude, longitude)| json!({ "latitude": latitude, "longitude": longitude }))
+                    .collect();
+            }
+            if let Some(path) = gpx_path {
+                params["gpx_path"] = json!(path);
+            }
+            ("device_set_route", params)
         }
     };
     // Sent only when false, so the default request is unchanged.
@@ -2997,6 +3048,28 @@ mod tests {
             (
                 "device_launch".into(),
                 serde_json::json!({ "udid": "U-1", "bundle_id": "com.example.hello" })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::SetRoute {
+                udid: udid(),
+                waypoints: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+                gpx_path: None,
+                speed_kmh: 5.0
+            }),
+            (
+                "device_set_route".into(),
+                serde_json::json!({ "udid": "U-1", "speed_kmh": 5.0, "waypoints": [{ "latitude": 1.0, "longitude": 2.0 }, { "latitude": 3.0, "longitude": 4.0 }] })
+            )
+        );
+        assert_eq!(
+            build(DeviceCommand::FlowRecord {
+                udid: udid(),
+                path: None
+            }),
+            (
+                "device_flow_record".into(),
+                serde_json::json!({ "udid": "U-1", "action": "stop" })
             )
         );
         assert_eq!(

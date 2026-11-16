@@ -108,8 +108,11 @@ public struct ACPCodexHooksList: Decodable, Equatable, Sendable {
     public func isUnique(_ identity: ACPCodexHookIdentity) -> Bool {
         hooks.filter { $0.key == identity.key }.count == 1 && hooks.contains { $0.identity == identity }
     }
+    /// Warnings alone never block startup: Codex emits them for benign
+    /// normalizations (for example clamping a hook timeout), and there is
+    /// nothing to trust. They still show when a review is needed for another reason.
     public var requiresReview: Bool {
-        !warnings.isEmpty || !errors.isEmpty || hooks.contains {
+        !errors.isEmpty || hooks.contains {
             !$0.isKnown || !isUnique($0.identity) || !["trusted", "managed"].contains($0.trustStatus)
         }
     }

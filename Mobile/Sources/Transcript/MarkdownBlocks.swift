@@ -11,6 +11,8 @@ enum MarkdownBlock: Equatable {
     case list([AttributedString])
     case quote(AttributedString)
     case table([[String]])
+    /// `![alt](source)` on its own line; inside other text an image reads as its alt text.
+    case image(source: String, alt: String)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
         Document(parsing: text).children.compactMap(block)
@@ -18,7 +20,12 @@ enum MarkdownBlock: Equatable {
 
     private static func block(_ markup: Markup) -> MarkdownBlock? {
         switch markup {
-        case let p as Paragraph: .paragraph(inline(p))
+        case let p as Paragraph:
+            if p.childCount == 1, let image = p.child(at: 0) as? Markdown.Image {
+                .image(source: image.source ?? "", alt: image.plainText)
+            } else {
+                .paragraph(inline(p))
+            }
         case let h as Heading: .heading(h.level, inline(h))
         case let c as CodeBlock: .code(language: c.language, chunks: chunked(c.code.trimmingCharacters(in: .newlines)))
         case let l as UnorderedList: .list(l.listItems.map { inline($0) })

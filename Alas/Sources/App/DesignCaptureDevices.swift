@@ -94,6 +94,7 @@ enum DesignCaptureDevices {
         ) async throws -> SimulatorDisplaySettings { Self.display }
         func setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {}
         func setLocation(udid: String, _ location: SimulatorLocation?) async throws {}
+        func startRoute(udid: String, _ route: DeviceRoute) async throws {}
         func push(udid: String, bundleID: String, payload: Data) async throws {}
         func openURL(udid: String, url: String) async throws {}
         func userApps(udid: String) async throws -> [SimulatorApp] {
@@ -224,7 +225,8 @@ enum DesignCaptureDevices {
                         device: device, booted: booted, client: SimulatorStreamClient(), control: control,
                         canChangeSettings: booted, onShutDown: {}, onOpenLogs: {},
                         accessibilityOverlay: false, onToggleAccessibilityOverlay: {},
-                        recorder: fakeRecorder(), agentName: { _ in "Claude" })
+                        recorder: fakeRecorder(), agentName: { _ in "Claude" },
+                        flowRecorder: DeviceFlowRecorder(), worktree: FileManager.default.temporaryDirectory)
                 }
             }
             .padding(.horizontal, 8)
@@ -268,7 +270,7 @@ enum DesignCaptureDevices {
             DeviceStage(
                 device: device, shape: shape, client: client, control: control, agentName: { _ in "Claude" }, now: now,
                 appInstall: install, onDropApp: { _ in }, onDismissAppInstall: {}, notice: nil, onPaste: {}, onCopy: {},
-                accessibilityOverlay: false)
+                accessibilityOverlay: false, flowRecorder: DeviceFlowRecorder())
         }
         let agentVMDriver = VMDriverStatus.make(
             driver: .agent(sessionID: "demo-agent", tool: "computer_click", at: now.addingTimeInterval(-4)), agentName: "Claude", now: now)

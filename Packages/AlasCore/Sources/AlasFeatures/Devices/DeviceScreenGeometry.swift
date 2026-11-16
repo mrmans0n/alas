@@ -45,6 +45,11 @@ public struct DeviceScreenGeometry: Sendable {
         return orientation.panelPoint(DeviceScreenPoint(x: min(max(point.x, 0), 1), y: min(max(point.y, 0), 1)))
     }
 
+    /// The point on the upright screen, as snapshots measure it, pulled to the nearest edge.
+    public func uprightClamped(x: Double, y: Double) -> DeviceScreenPoint? {
+        upright(x: x, y: y).map { DeviceScreenPoint(x: min(max($0.x, 0), 1), y: min(max($0.y, 0), 1)) }
+    }
+
     /// The point on the upright screen, unclamped.
     private func upright(x: Double, y: Double) -> DeviceScreenPoint? {
         let (uprightWidth, uprightHeight) = orientation.uprightSize(width: screenWidth, height: screenHeight)

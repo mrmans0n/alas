@@ -33,6 +33,8 @@ final class DeviceAgentControl {
         "device_disabled: Agents can't use simulators or Android devices. Ask the user to turn on Settings › Computer Use › Let agents use simulators and Android devices."
     static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
     static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
+    /// The session of a flow the user runs from the toolbar.
+    static let userFlowSession = "flow:user"
     /// The agent cancelled the call, or its MCP server went away.
     static let cancelled = "device_cancelled: The call was cancelled."
 
@@ -71,6 +73,31 @@ final class DeviceAgentControl {
     @ObservationIgnored private var inputWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     /// The backend each device was last found in, for the paths that don't list devices.
     @ObservationIgnored private var routes: [String: AgentDevice.Platform] = [:]
+    /// Flows agent sessions are recording, by device.
+    @ObservationIgnored private var flowRecordings: [String: FlowRecording] = [:]
+
+    /// A flow running on a device, for the stage.
+    struct FlowProgress: Equatable {
+        let name: String
+        let step: Int
+        let total: Int
+    }
+
+    /// The flow running on each device.
+    private(set) var flowRuns: [String: FlowProgress] = [:]
+
+    private struct FlowRecording {
+        let sessionID: String
+        let path: String
+        var flow = DeviceFlow(appID: nil, steps: [])
+
+        /// The first app launched becomes the flow's `appId`.
+        mutating func add(_ step: DeviceFlow.Step) {
+            guard case .launchApp(let id?) = step else { return flow.steps.append(step) }
+            if flow.appID == nil { flow.appID = id }
+            flow.steps.append(.launchApp(id == flow.appID ? nil : id))
+        }
+    }
 
     init(
         backends: [any DeviceBackend],
@@ -149,6 +176,10 @@ final class DeviceAgentControl {
         if case .record(_, let start) = command {
             return await record(udid: udid, start: start, sessionID: sessionID)
         }
+        // Recording a flow doesn't touch the screen either.
+        if case .recordFlow(_, let path) = command {
+            return await recordFlow(udid: udid, path: path, sessionID: sessionID)
+        }
         if case .clipboard(_, nil) = command {
             switch await bootedDevice(udid) {
             case .failure(let refusal): return refusal.response
@@ -164,8 +195,8 @@ final class DeviceAgentControl {
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
              .setAppearance, .setAccessibility, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate,
-             .setNetwork, .clearData, .setSlim: true
-        case .list, .open, .snapshot, .screenshot, .logs, .record: false
+             .setNetwork, .clearData, .setSlim, .runFlow, .setRoute: true
+        case .list, .open, .snapshot, .screenshot, .logs, .record, .recordFlow: false
         }
         var inputTurn: UUID?
         switch await holdWhileTakenOver(udid, sessionID: sessionID, isInput: isInput) {
@@ -224,7 +255,7 @@ final class DeviceAgentControl {
         renewLease(device.id)
         leased = device.id
         let needsStream = switch command {
-        case .tap, .swipe, .type, .button, .screenshot, .rotate, .clipboard: true
+        case .tap, .swipe, .type, .button, .screenshot, .rotate, .clipboard, .runFlow: true
         default: false
         }
         if needsStream, await !backend.ready(device.id) {
@@ -237,6 +268,17 @@ final class DeviceAgentControl {
             if userDriving(udid) { return .error(Self.userDriving) }
         }
 
+        // Named from the screen before the call: a tap's element may be gone after it.
+        let step = flowRecordings[udid]?.sessionID == sessionID ? flowStep(for: command, udid: udid) : nil
+        let response = await dispatch(command, udid: udid, backend: backend, device: device, sessionID: sessionID)
+        let failed = if case .error = response { true } else { false }
+        if let step, !failed, flowRecordings[udid]?.sessionID == sessionID { flowRecordings[udid]?.add(step) }
+        return response
+    }
+
+    private func dispatch(
+        _ command: DeviceCommand, udid: String, backend: any DeviceBackend, device: AgentDevice, sessionID: String
+    ) async -> AlasCLIResponse {
         switch command {
         case .list:
             return await list()
@@ -276,21 +318,7 @@ final class DeviceAgentControl {
             case .success(let ends): (from, to) = ends
             case .failure(let failure): return .error(failure.message)
             }
-            let steps = max(1, durationMs / 16)
-            var current = from
-            backend.input.touch(udid: udid, phase: "begin", point: from)
-            for step in 1...steps {
-                await sleep(.milliseconds(16))
-                if userDriving(udid) || Task.isCancelled {
-                    backend.input.touch(udid: udid, phase: "end", point: current)
-                    return .error(Task.isCancelled ? Self.cancelled : Self.userDriving)
-                }
-                let fraction = Double(step) / Double(steps)
-                current = DeviceScreenPoint(
-                    x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction
-                )
-                backend.input.touch(udid: udid, phase: step == steps ? "end" : "move", point: current)
-            }
+            if let stopped = await drag(udid, backend: backend, from: from, to: to, durationMs: durationMs) { return stopped }
             return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .type(_, let text, let includeScreenshot, let diff):
             let runs = DeviceTextInput.runs(for: text)
@@ -394,10 +422,272 @@ final class DeviceAgentControl {
             }
         case .rotate(_, let orientation, let diff):
             return await rotate(udid, backend: backend, to: orientation, diff: diff, sessionID: sessionID)
-        case .logs, .record:
+        case .runFlow(_, let path):
+            return await runFlow(path: path, udid: udid, backend: backend, device: device)
+        case .setRoute(_, let waypoints, let gpxPath, let speedKmh):
+            let route: DeviceRoute
+            do {
+                if let gpxPath {
+                    let name = URL(fileURLWithPath: gpxPath).deletingPathExtension().lastPathComponent
+                    route = try DeviceRoute.gpx(String(contentsOfFile: gpxPath, encoding: .utf8), name: name, speedKmh: speedKmh)
+                } else {
+                    route = DeviceRoute(name: "Route", points: waypoints ?? [], speed: speedKmh / 3.6)
+                }
+            } catch {
+                return .error("device_route_invalid: \(error.localizedDescription)")
+            }
+            return await settingsCall {
+                try await backend.startRoute(udid, route)
+                return .text([Self.json([
+                    "points": route.points.count,
+                    // A decimal, so the JSON says 0.11 and not 0.10999999.
+                    "km": NSDecimalNumber(string: String(format: "%.2f", route.length / 1000)),
+                    "seconds": Int(route.duration.rounded()),
+                ])])
+            }
+        case .logs, .record, .recordFlow:
             // Answered before the hold.
             return .error("device_unavailable: The call took the wrong path.")
         }
+    }
+
+    /// A touch dragged from one panel point to another; the response that stopped it, or nil.
+    private func drag(
+        _ udid: String, backend: any DeviceBackend, from: DeviceScreenPoint, to: DeviceScreenPoint, durationMs: Int
+    ) async -> AlasCLIResponse? {
+        let steps = max(1, durationMs / 16)
+        var current = from
+        backend.input.touch(udid: udid, phase: "begin", point: from)
+        for step in 1...steps {
+            await sleep(.milliseconds(16))
+            if userDriving(udid) || Task.isCancelled {
+                backend.input.touch(udid: udid, phase: "end", point: current)
+                return .error(Task.isCancelled ? Self.cancelled : Self.userDriving)
+            }
+            let fraction = Double(step) / Double(steps)
+            current = DeviceScreenPoint(x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction)
+            backend.input.touch(udid: udid, phase: step == steps ? "end" : "move", point: current)
+        }
+        return nil
+    }
+
+    // MARK: Flows
+
+    /// Runs a flow file's steps through the same paths as the tools, as one
+    /// call: it stops at the first step that fails and says which.
+    private func runFlow(path: String, udid: String, backend: any DeviceBackend, device: AgentDevice) async -> AlasCLIResponse {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let flow: DeviceFlow
+        do {
+            flow = try DeviceFlow.parse(String(contentsOfFile: path, encoding: .utf8))
+        } catch let error as DeviceFlowError {
+            return .error("device_flow_invalid: \(name), line \(error.line): \(error.message)")
+        } catch {
+            return .error("device_flow_not_found: \(error.localizedDescription)")
+        }
+        defer { flowRuns[udid] = nil }
+        for (index, step) in flow.steps.enumerated() {
+            flowRuns[udid] = FlowProgress(name: name, step: index + 1, total: flow.steps.count)
+            let reason: String?
+            if Task.isCancelled {
+                reason = "The call was cancelled."
+            } else if userDriving(udid) {
+                reason = "The user took over."
+            } else {
+                reason = await runStep(step, appID: flow.appID, udid: udid, backend: backend, device: device)
+            }
+            if let reason {
+                return .text([Self.json([
+                    "passed": false, "failed_step": index + 1, "line": flow.lines[index], "reason": reason,
+                    "steps": flow.steps.count,
+                ])])
+            }
+        }
+        return .text([Self.json(["passed": true, "steps": flow.steps.count])])
+    }
+
+    /// Why a step failed, or nil when it passed.
+    private func runStep(
+        _ step: DeviceFlow.Step, appID: String?, udid: String, backend: any DeviceBackend, device: AgentDevice
+    ) async -> String? {
+        switch step {
+        case .launchApp(let id):
+            guard let app = id ?? appID else { return "launchApp needs an appId in the flow's header." }
+            do {
+                _ = try await backend.launch(udid, appID: app)
+            } catch is DeviceAppNotInstalled {
+                return "\(app) isn't installed on \(device.name)."
+            } catch let error as DeviceToolError {
+                return error.message
+            } catch {
+                return error.localizedDescription
+            }
+        case .tapOn(let selector):
+            let upright: DeviceScreenPoint
+            if case .point(let x, let y) = selector {
+                upright = DeviceScreenPoint(x: x, y: y)
+            } else {
+                switch await waitFor(selector, udid: udid, visible: true) {
+                case .failure(let failure): return failure.message
+                case .success(let found):
+                    guard let found else { return "No element to tap." }
+                    upright = found.snapshot.center(of: found.element)
+                }
+            }
+            let point = panelPoint(upright, udid: udid)
+            backend.input.touch(udid: udid, phase: "begin", point: point)
+            await sleep(.milliseconds(50))
+            backend.input.touch(udid: udid, phase: "end", point: point)
+        case .inputText(let text):
+            let runs = DeviceTextInput.runs(for: text)
+            var paste: (any DevicePasteSession)?
+            let stopped = await typeRuns(
+                runs, total: runs.reduce(0) { $0 + $1.characterCount }, udid: udid, backend: backend, paste: &paste
+            )
+            if let paste { await paste.end() }
+            if case .error(let message)? = stopped { return message }
+        case .eraseText(let count):
+            // Delete (Backspace).
+            for _ in 0..<count {
+                if Task.isCancelled { return "The call was cancelled." }
+                if userDriving(udid) { return "The user took over." }
+                backend.input.key(udid: udid, usage: 0x2A, down: true)
+                backend.input.key(udid: udid, usage: 0x2A, down: false)
+                await sleep(.milliseconds(20))
+            }
+        case .pressKey(.enter):
+            backend.input.key(udid: udid, usage: 0x28, down: true)
+            backend.input.key(udid: udid, usage: 0x28, down: false)
+        case .pressKey(let key):
+            guard backend.press(udid, key == .home ? .home : .back) else {
+                return "The \(key.rawValue) key isn't available on \(device.platform == .ios ? "iOS" : "Android")."
+            }
+        case .scroll, .swipe:
+            let direction: DeviceCommand.Direction = if case .swipe(let way) = step {
+                DeviceCommand.Direction(rawValue: way.rawValue.lowercased()) ?? .up
+            } else {
+                .up
+            }
+            guard case .success(let ends) = swipeEnds(.direction(direction), udid: udid) else { return "The swipe failed." }
+            if case .error(let message)? = await drag(udid, backend: backend, from: ends.0, to: ends.1, durationMs: 300) {
+                return message
+            }
+        case .assertVisible(let selector), .assertNotVisible(let selector):
+            let visible = if case .assertVisible = step { true } else { false }
+            if case .failure(let failure) = await waitFor(selector, udid: udid, visible: visible) { return failure.message }
+            return nil
+        case .openLink(let url):
+            do {
+                try await backend.openURL(udid, url)
+            } catch let error as DeviceToolError {
+                return error.message
+            } catch {
+                return error.localizedDescription
+            }
+        case .waitForAnimationToEnd:
+            break
+        }
+        // Settling stops early when interrupted; a screen that keeps moving is no failure.
+        _ = await settle(udid)
+        if Task.isCancelled { return "The call was cancelled." }
+        if userDriving(udid) { return "The user took over." }
+        return nil
+    }
+
+    /// Polls snapshots every 250 ms until the selector's element is there
+    /// (`visible`) or gone, for up to 5 s by the clock: an Android snapshot alone
+    /// takes about 2 s. At most 20 polls, so tests with instant clocks end.
+    private func waitFor(
+        _ selector: DeviceFlow.Selector, udid: String, visible: Bool
+    ) async -> Result<(snapshot: DeviceSnapshot, element: DeviceElement)?, Failure> {
+        let described: String
+        switch selector {
+        case .text(let text): described = "text \"\(text)\""
+        case .id(let id): described = "id \"\(id)\""
+        case .point: return .failure(Failure(message: "Assertions take text or an id, not a point."))
+        }
+        var snapshotFailure: String?
+        let started = now()
+        for attempt in 0..<20 {
+            if attempt > 0 {
+                if now().timeIntervalSince(started) >= 5 { break }
+                await sleep(.milliseconds(250))
+            }
+            if Task.isCancelled { return .failure(Failure(message: "The call was cancelled.")) }
+            if userDriving(udid) { return .failure(Failure(message: "The user took over.")) }
+            do {
+                let snapshot = try await takeSnapshot(udid)
+                snapshotFailure = nil
+                // The user can take over while a snapshot is read (about 2 s on Android).
+                if Task.isCancelled { return .failure(Failure(message: "The call was cancelled.")) }
+                if userDriving(udid) { return .failure(Failure(message: "The user took over.")) }
+                switch (DeviceFlow.find(selector, in: snapshot), visible) {
+                case (let element?, true): return .success((snapshot, element))
+                case (nil, false): return .success(nil)
+                default: continue
+                }
+            } catch {
+                snapshotFailure = Self.snapshotError(error)
+            }
+        }
+        if let snapshotFailure { return .failure(Failure(message: snapshotFailure)) }
+        if visible { return .failure(Failure(message: "No element with \(described) after 5 s.")) }
+        let what = if case .text(let text) = selector { "\"\(text)\"" } else { "The element with \(described)" }
+        return .failure(Failure(message: "\(what) is still visible after 5 s."))
+    }
+
+    /// A call as a flow step, or nil for calls a flow has no step for.
+    private func flowStep(for command: DeviceCommand, udid: String) -> DeviceFlow.Step? {
+        switch command {
+        case .tap(_, .ref(let ref), _, _):
+            guard let snapshot = snapshots[udid], let element = snapshot.element(ref: ref) else { return nil }
+            return .tapOn(DeviceFlow.selector(for: element, at: snapshot.center(of: element)))
+        case .tap(_, .point(let x, let y), _, _):
+            guard case .success(let point) = screenPoint(x: x, y: y, udid: udid) else { return nil }
+            return .tapOn(DeviceFlow.selector(for: snapshots[udid].flatMap { DeviceFlow.element(at: point, in: $0) }, at: point))
+        case .swipe(_, .direction(let direction), _, _, _):
+            return DeviceFlow.Direction(rawValue: direction.rawValue.uppercased()).map { .swipe($0) }
+        case .swipe(_, .points(let fromX, let fromY, let toX, let toY), _, _, _):
+            let (dx, dy) = (toX - fromX, toY - fromY)
+            return .swipe(abs(dx) > abs(dy) ? (dx < 0 ? .left : .right) : (dy < 0 ? .up : .down))
+        case .type(_, let text, _, _): return .inputText(text)
+        case .button(_, .home, _, _): return .pressKey(.home)
+        case .button(_, .back, _, _): return .pressKey(.back)
+        case .launch(_, let bundleID, _): return .launchApp(bundleID)
+        case .openURL(_, let url, _): return .openLink(url)
+        default: return nil
+        }
+    }
+
+    /// A path starts recording this session's calls on the device; nil stops and writes the flow.
+    private func recordFlow(udid: String, path: String?, sessionID: String) async -> AlasCLIResponse {
+        if let path {
+            let device: AgentDevice
+            switch await bootedDevice(udid) {
+            case .failure(let refusal): return refusal.response
+            case .success(let found): device = found.device
+            }
+            if let current = flowRecordings[udid] {
+                let who = current.sessionID == sessionID ? "This session" : "Another agent session"
+                return .error("device_recording_busy: \(who) is already recording a flow on \(device.name).")
+            }
+            flowRecordings[udid] = FlowRecording(sessionID: sessionID, path: path)
+            return .text([Self.json(["recording": true])])
+        }
+        let name = (try? await locate(udid).get().device.name) ?? udid
+        guard let recording = flowRecordings[udid], recording.sessionID == sessionID else {
+            return .error("device_not_recording: No flow is being recorded on \(name) by this session.")
+        }
+        do {
+            let file = URL(fileURLWithPath: recording.path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try recording.flow.yaml.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            // Kept, so a stop after fixing the folder still saves it.
+            return .error("device_flow_record_failed: \(error.localizedDescription) The recording is kept; call stop again to retry.")
+        }
+        flowRecordings[udid] = nil
+        return .text([Self.json(["path": recording.path, "steps": recording.flow.steps.count])])
     }
 
     private func rotate(

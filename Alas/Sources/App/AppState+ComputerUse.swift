@@ -479,6 +479,7 @@ extension AppState {
 
     /// The display name of the agent behind `sessionID`.
     func computerUseAgentName(_ sessionID: String) -> String {
+        if sessionID == DeviceAgentControl.userFlowSession { return "A flow" }
         guard let session = session(for: sessionID) else { return "An agent" }
         return agent(id: session.agentId)?.displayName ?? session.agentId
     }

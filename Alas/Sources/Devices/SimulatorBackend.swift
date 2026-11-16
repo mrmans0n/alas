@@ -14,6 +14,8 @@ final class SimulatorBackend: DeviceBackend {
     private let settings: any SimulatorSettingsControl
     private let logControl: any SimulatorLogsControl
     private let pasteboard: DevicePasteboard
+    /// The route each simulator was last sent; simctl doesn't report its progress.
+    private var playing: [String: DeviceRoute] = [:]
     private let now: () -> Date
     private let sleep: @MainActor (Duration) async -> Void
 
@@ -183,8 +185,28 @@ final class SimulatorBackend: DeviceBackend {
         try await settings.setPermission(udid: id, bundleID: appID, service: service, action: action)
     }
 
+    func frontApp(_ id: String) async -> String? {
+        await logControl.frontmostApp(udid: id)
+    }
+
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {
         try await settings.setLocation(udid: id, location)
+        playing[id] = nil
+    }
+
+    func startRoute(_ id: String, _ route: DeviceRoute) async throws {
+        // `simctl location start` came with iOS 17.
+        if let device = try await listDevices().first(where: { $0.udid == id }),
+           let major = device.runtimeName.split(separator: " ").last?.split(separator: ".").first.flatMap({ Int($0) }),
+           major < 17 {
+            throw DeviceToolError(message: "device_unsupported: Routes need iOS 17 or later; \(device.name) runs \(device.runtimeName).")
+        }
+        try await settings.startRoute(udid: id, route)
+        playing[id] = route
+    }
+
+    func routeProgress(_ id: String) -> DeviceRouteProgress? {
+        playing[id].map { DeviceRouteProgress(name: $0.name, travelled: nil, length: $0.length) }
     }
 
     func push(_ id: String, appID: String, payload: Data) async throws {

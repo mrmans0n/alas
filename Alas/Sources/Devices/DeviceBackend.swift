@@ -12,6 +12,15 @@ struct DeviceToolError: Error, LocalizedError {
     }
 }
 
+/// A route playing on a device, for the settings popover.
+struct DeviceRouteProgress: Equatable {
+    let name: String
+    /// Meters along the route; nil where the platform doesn't report it (iOS).
+    let travelled: Double?
+    /// Meters.
+    let length: Double
+}
+
 /// The app isn't installed; the control names the device.
 struct DeviceAppNotInstalled: Error {
     let appID: String
@@ -42,6 +51,8 @@ protocol DeviceBackend: AnyObject {
     /// The launched app's pid; `DeviceAppNotInstalled` when it isn't there.
     func launch(_ id: String, appID: String) async throws -> Int
     func isInstalled(_ id: String, appID: String) async -> Bool
+    /// The app in front, or nil when the home screen is.
+    func frontApp(_ id: String) async -> String?
     func openURL(_ id: String, _ url: String) async throws
     func setDisplay(
         _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
@@ -58,7 +69,12 @@ protocol DeviceBackend: AnyObject {
     func slim(_ id: String) async throws -> SimulatorSlimState
     func setSlim(_ id: String, on: Bool) async throws -> SimulatorSlimState
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws
+    /// A fixed location, or nil to clear it; either stops a route.
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws
+    /// Moves the simulated location along `route`, replacing a fixed location or another route.
+    func startRoute(_ id: String, _ route: DeviceRoute) async throws
+    /// The route playing on `id`, while it plays.
+    func routeProgress(_ id: String) -> DeviceRouteProgress?
     func push(_ id: String, appID: String, payload: Data) async throws
     /// device_logs' reply; `name` is the device's, for messages.
     func logs(
