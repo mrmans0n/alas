@@ -33,6 +33,31 @@ struct DevicesTabStateTests {
         )
     }
 
+    @Test func theChipFindsAnAndroidSelection() {
+        let state = resolve(
+            selection: .android("avd:Medium_Phone"),
+            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone"], bootingAVDs: [], note: nil)
+        )
+        #expect(state.selectedRow?.target == .android("emulator-5554"))
+        #expect(state.selectedRow?.status == "Booted")
+    }
+
+    @Test func rowsCarryStatusAndBootability() {
+        let state = DevicesTabState.resolve(
+            simulators: [Self.off, Self.on], listError: nil, vms: [.macOS: .stopped], selection: nil,
+            bootingUDIDs: [], agentDriving: [.simulator("on"), .android("emulator-5554")],
+            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil),
+            agentNames: [.simulator("on"): "Claude"]
+        )
+        #expect(state.simulatorRows.map(\.status) == ["Shut down", "Claude driving"])
+        #expect(state.simulatorRows.map(\.canBoot) == [true, false])
+        #expect(state.androidRows.map(\.status) == ["Agent driving", "Shut down"])
+        #expect(state.androidRows.map(\.canBoot) == [false, true])
+        #expect(state.vmRows.map(\.status) == ["Stopped"])
+        #expect(state.vmRows.map(\.canBoot) == [false])
+        #expect(state.vmRows.map(\.platform) == [.vm(.macOS)])
+    }
+
     @Test func androidRowsListDevicesThenAVDsThatArentRunning() {
         let state = resolve(android: AndroidListing(
             devices: [Self.emulator, Self.phone, AndroidDevice(serial: "emulator-5556", state: .offline, model: nil)],
