@@ -573,7 +573,10 @@ final class DeviceAgentControl {
         case .waitForAnimationToEnd:
             break
         }
+        // Settling stops early when interrupted; a screen that keeps moving is no failure.
         _ = await settle(udid)
+        if Task.isCancelled { return "The call was cancelled." }
+        if userDriving(udid) { return "The user took over." }
         return nil
     }
 

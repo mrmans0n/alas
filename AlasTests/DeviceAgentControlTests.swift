@@ -1063,13 +1063,16 @@ extension DeviceAgentControlTests {
         #expect(android.fakeInput.touches.isEmpty)
     }
 
-    @Test func aFlowStopsWhenTheUserTakesOver() async throws {
+    /// Taken over while its step settles: that step fails, even the last one.
+    @Test(arguments: ["", "- tapOn: General\n"])
+    func aFlowStopsWhenTheUserTakesOver(rest: String) async throws {
         let android = FakeBackend()
         let control = bothPlatforms(android)
         android.onLaunch = { control.takeOver(udid: "emulator-5554") }
-        let file = try Self.flowFile("---\n- launchApp: com.example.hello\n- tapOn: General\n")
+        let file = try Self.flowFile("---\n- launchApp: com.example.hello\n" + rest)
         let reply = try Self.reply(await control.perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s"))
-        #expect(reply["failed_step"] as? Int == 2)
+        #expect(reply["passed"] as? Bool == false)
+        #expect(reply["failed_step"] as? Int == 1)
         #expect(reply["reason"] as? String == "The user took over.")
         #expect(android.fakeInput.touches.isEmpty)
     }
