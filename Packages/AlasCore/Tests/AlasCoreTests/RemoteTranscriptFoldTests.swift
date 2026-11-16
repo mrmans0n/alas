@@ -121,4 +121,24 @@ struct RemoteTranscriptFoldTests {
         #expect(group.members.map(\.stableId) == ["c", "r"])
         #expect(group.kind == .completedTurn(duration: nil))
     }
+
+    @Test(arguments: [
+        ("data:image/png;base64,iVBORw0KGgo=",
+         RemoteTranscriptImageSource.inline(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))),
+        ("/tmp/a.png", .host(path: "/tmp/a.png")),
+        ("file:///tmp/a.png", .host(path: "/tmp/a.png")),
+        ("shots/a.png", .host(path: "shots/a.png")),
+        ("https://example.com/a.png", .unavailable),
+        ("", .unavailable),
+    ])
+    func imageSourcesResolveLikeTheMac(source: String, expected: RemoteTranscriptImageSource) {
+        #expect(RemoteTranscriptImageSource.resolve(source: source) == expected)
+    }
+
+    @Test func assetPrefersInlineData() {
+        let both = ACPToolCallAsset.image(data: "iVBORw0KGgo=", uri: "/tmp/a.png", name: nil)
+        #expect(RemoteTranscriptImageSource.resolve(asset: both)
+            == .inline(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])))
+        #expect(RemoteTranscriptImageSource.resolve(asset: ACPToolCallAsset(kind: .image)) == .unavailable)
+    }
 }
