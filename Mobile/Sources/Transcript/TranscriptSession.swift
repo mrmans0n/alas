@@ -1,5 +1,4 @@
 import AlasRemoteKit
-import CryptoKit
 import Observation
 import UIKit
 
@@ -164,7 +163,7 @@ final class TranscriptSession {
     }
 
     /// An attachment's 96 pt thumbnail, or a markdown or tool-call image sized for the row.
-    enum ImageSize: Hashable {
+    private enum ImageSize {
         case thumbnail, display
     }
 
@@ -172,17 +171,25 @@ final class TranscriptSession {
         case loading, loaded(UIImage), failed
     }
 
-    /// One path can be both an attachment and a markdown image, at different sizes.
-    private struct ImageKey: Hashable {
-        let path: String
-        let size: ImageSize
+    /// Attachment thumbnails by path: small, so they stay for the session.
+    private var images: [String: LoadedImage] = [:]
+    @ObservationIgnored private var requestedImages: Set<String> = []
+
+    private enum DisplayLoad {
+        case loading, loaded, failed
     }
 
-    private var images: [ImageKey: LoadedImage] = [:]
-    @ObservationIgnored private var requestedImages: Set<ImageKey> = []
-    /// Inline bytes by their SHA-256, decoded once off the main actor.
-    private var inlineImages: [String: LoadedImage] = [:]
-    @ObservationIgnored private var decodingInline: Set<String> = []
+    /// Markdown and tool-call images, keyed `host:<path>` or `inline:<fingerprint>`. A loaded
+    /// one's bitmap lives in `displayImages`, which may evict it; the next view to ask loads it again.
+    @ObservationIgnored private var displayLoads: [String: DisplayLoad] = [:]
+    @ObservationIgnored private let displayImages: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 100 * 1024 * 1024
+        return cache
+    }()
+
+    /// Bumps when a display image lands, so the views reading one re-render.
+    private var displayGeneration = 0
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -240,6 +247,7 @@ final class TranscriptSession {
         MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
         requestedImages = requestedImages.filter { images[$0] != nil }
+        displayLoads = displayLoads.filter { !($0.key.hasPrefix(Self.hostKeyPrefix) && $0.value == .loading) }
     }
 
     func send(intent: String) {
@@ -447,44 +455,71 @@ final class TranscriptSession {
 
     /// An attachment's thumbnail once its bytes arrive. The first call for a path asks the host for them.
     func image(for path: String) -> UIImage? {
-        if case .loaded(let image) = image(at: ImageKey(path: path, size: .thumbnail)) { return image }
-        return nil
+        switch images[path] {
+        case .image(let image): return image
+        case .unavailable: return nil
+        case nil:
+            if requestedImages.insert(path).inserted {
+                hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
+            }
+            return nil
+        }
     }
 
-    /// A markdown or tool-call image, sized for the row.
-    func transcriptImage(_ source: RemoteTranscriptImageSource) -> ImageLoad {
-        switch source {
-        case .unavailable:
-            return .failed
-        case .host(let path):
-            return image(at: ImageKey(path: path, size: .display))
-        case .inline(let data):
-            let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            switch inlineImages[key] {
-            case .image(let image): return .loaded(image)
-            case .unavailable: return .failed
-            case nil:
-                if decodingInline.insert(key).inserted {
-                    Task { [weak self] in
-                        let image = await Self.decode(data, .display)
-                        self?.inlineImages[key] = image.map(LoadedImage.image) ?? .unavailable
-                    }
-                }
-                return .loading
+    /// A markdown or tool-call image, sized for the row. `source` is a markdown source or an
+    /// asset's uri, `data` an asset's base64 data, tried first as on the Mac. Inline data is
+    /// decoded only off the main actor, so a body pays for a short fingerprint, not the bytes.
+    func transcriptImage(source: String, data: String? = nil) -> ImageLoad {
+        if let data, !data.isEmpty {
+            let load = inlineImage(data) { .resolve(asset: .image(data: $0)) }
+            if case .failed = load {} else { return load }
+        }
+        if source.drop(while: \.isWhitespace).prefix(5).lowercased() == "data:" {
+            return inlineImage(source) { .resolve(source: $0) }
+        }
+        guard case .host(let path) = RemoteTranscriptImageSource.resolve(source: source) else { return .failed }
+        return displayImage(key: Self.hostKeyPrefix + path) { [self] in
+            hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
+        }
+    }
+
+    private static let hostKeyPrefix = "host:"
+
+    private func inlineImage(
+        _ string: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
+    ) -> ImageLoad {
+        let key = "inline:\(string.utf8.count):\(string.prefix(64)):\(string.suffix(64))"
+        return displayImage(key: key) {
+            Task { [weak self] in
+                let image = await Self.decodeInline(string, resolve)
+                self?.landDisplay(key, image)
             }
         }
     }
 
-    private func image(at key: ImageKey) -> ImageLoad {
-        switch images[key] {
-        case .image(let image): return .loaded(image)
-        case .unavailable: return .failed
-        case nil:
-            if requestedImages.insert(key).inserted {
-                hub.send(.readTranscriptImage(sessionId: sessionId, path: key.path), to: hostID)
-            }
+    /// Asks for the image only when it was never asked for or was evicted, and only from a view
+    /// that wants it, so an eviction cannot loop on its own.
+    private func displayImage(key: String, start: () -> Void) -> ImageLoad {
+        _ = displayGeneration
+        if let image = displayImages.object(forKey: key as NSString) { return .loaded(image) }
+        switch displayLoads[key] {
+        case .loading: return .loading
+        case .failed: return .failed
+        case .loaded, nil:
+            displayLoads[key] = .loading
+            start()
             return .loading
         }
+    }
+
+    private func landDisplay(_ key: String, _ image: UIImage?) {
+        if let image, let cgImage = image.cgImage {
+            displayImages.setObject(image, forKey: key as NSString, cost: cgImage.width * cgImage.height * 4)
+            displayLoads[key] = .loaded
+        } else {
+            displayLoads[key] = .failed
+        }
+        displayGeneration += 1
     }
 
     /// Resubscribes each time the host comes back online. Observation tracking re-reads the
@@ -576,7 +611,10 @@ final class TranscriptSession {
         fetchingOlder = false
         forgetTransientState()
         hub.send(.subscribe(sessionId: sessionId), to: hostID)
-        for path in Set(requestedImages.filter { images[$0] == nil }.map(\.path)) {
+        let displayPaths = displayLoads.compactMap { key, load in
+            load == .loading && key.hasPrefix(Self.hostKeyPrefix) ? String(key.dropFirst(Self.hostKeyPrefix.count)) : nil
+        }
+        for path in Set(requestedImages.filter { images[$0] == nil }).union(displayPaths) {
             hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
         }
         refreshCanLoadOlder()
@@ -589,10 +627,17 @@ final class TranscriptSession {
         }
         switch message {
         case .transcriptImage(let id, let path, let data) where id == sessionId:
-            for key in requestedImages where key.path == path && images[key] == nil {
+            if requestedImages.contains(path), images[path] == nil {
                 Task { [weak self] in
-                    let image = await Self.decode(data, key.size)
-                    self?.images[key] = image.map(LoadedImage.image) ?? .unavailable
+                    let image = await Self.decode(data, .thumbnail)
+                    self?.images[path] = image.map(LoadedImage.image) ?? .unavailable
+                }
+            }
+            let key = Self.hostKeyPrefix + path
+            if displayLoads[key] == .loading {
+                Task { [weak self] in
+                    let image = await Self.decode(data, .display)
+                    self?.landDisplay(key, image)
                 }
             }
             return
@@ -761,6 +806,14 @@ final class TranscriptSession {
 
     /// Decoded and downscaled off the main actor, once on arrival, so neither the frame handler
     /// nor a cell decodes a full-size photo.
+    @concurrent
+    private nonisolated static func decodeInline(
+        _ string: String, _ resolve: @Sendable (String) -> RemoteTranscriptImageSource
+    ) async -> UIImage? {
+        guard case .inline(let data) = resolve(string) else { return nil }
+        return await decode(data, .display)
+    }
+
     @concurrent
     private nonisolated static func decode(_ data: Data?, _ size: ImageSize) async -> UIImage? {
         guard let data, let image = UIImage(data: data) else { return nil }

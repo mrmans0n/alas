@@ -111,9 +111,7 @@ struct TranscriptRowView: View {
             if isExpanded {
                 Text(call.content).font(.system(.footnote, design: .monospaced))
                 ForEach(Array(call.assets.filter(Self.isImage).enumerated()), id: \.offset) { _, asset in
-                    TranscriptImage(source: .resolve(asset: asset),
-                                    fallback: asset.data == nil ? nil : .resolve(source: asset.uri ?? ""),
-                                    label: Self.label(asset), session: session)
+                    TranscriptImage(source: asset.uri ?? "", data: asset.data, label: Self.label(asset), session: session)
                 }
             }
         }
@@ -252,7 +250,7 @@ struct AgentMarkdown: View {
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
                 case .image(let source, let alt):
-                    TranscriptImage(source: .resolve(source: source), label: alt.isEmpty ? "Image" : alt, session: session)
+                    TranscriptImage(source: source, label: alt.isEmpty ? "Image" : alt, session: session)
                 case .table(let rows):
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
