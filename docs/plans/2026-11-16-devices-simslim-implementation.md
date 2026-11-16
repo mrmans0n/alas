@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A "Slim simulator" switch in a booted simulator's settings and a `device_set_slim` agent tool, both running the user's installed simslim without a reboot.
+**Goal:** A "Slim simulator" switch in a booted simulator's settings, with an "Install simslim…" button when it's missing, and a `device_set_slim` agent tool, both running simslim without a reboot.
 
-**Architecture:** AlasCore's `SimulatorSlim` parses simslim's output and runs it; `SimulatorSettingsControl` gains `slim`/`setSlim`, so the existing fakes cover the control and the design capture. `DeviceBackend` forwards them; the control maps simslim's errors to tool codes; the popover gets a Memory section.
+**Architecture:** AlasCore's `SimulatorSlim` parses simslim's output and runs it; `SimulatorSettingsControl` gains `slim`/`setSlim`, so the existing fakes cover the control and the design capture. `DeviceBackend` forwards them; the control maps simslim's errors to tool codes; the popover gets a Memory section. `GGInstallController` becomes a `HomebrewInstallController` that installs gg and simslim.
 
 **Tech Stack:** Swift 6, SwiftUI, AlasCore, Swift Testing, Rust MCP server, simslim 0.14.0.
 
@@ -15,15 +15,15 @@
 - English; Conventional Commits; no attribution. AlasCore stays free of AppKit/SwiftUI and builds on Linux (no `XMLParser`).
 - New app files: run `xcodegen`, commit only their pbxproj hunks. `swiftformat --lint` passes.
 - Profile: `--except store,web`, from `SimulatorSlim.keptCategories`. On: `simslim on <udid> --no-reboot --except store,web`. Off: `simslim enable <udid> <every id from profiles --json>`. Never `off`.
-- Install command, everywhere it shows: `brew install mobai-app/tap/simslim`.
-- Tool errors: `device_simslim_missing: simslim isn't installed. Ask the user to run brew install mobai-app/tap/simslim.`; `device_slim_failed: <reason>`; Android `device_unsupported: device_set_slim isn't available on Android.`
+- Install command, everywhere it shows: `brew install mobai-app/tap/simslim` (`SimulatorSlim.formula` is `mobai-app/tap/simslim`).
+- Tool errors: `device_simslim_missing: simslim isn't installed. Ask the user to install it from the simulator's settings in the Devices tab, or to run brew install mobai-app/tap/simslim.`; `device_slim_failed: <reason>`; Android `device_unsupported: device_set_slim isn't available on Android.`
 - No test runs simslim; no fixed sleeps in tests.
 
 ## Review Focus
 
-1. **simslim installed while Alas runs:** the next popover open finds it, no relaunch (Task 2's lookup runs per call; checked by hand in Task 4).
+1. **simslim installed while Alas runs,** by the button or in a terminal: the section reads the simulator right after the button's install, and the next popover open finds a terminal install, no relaunch (Task 2's lookup runs per call; Task 3's re-probe; Task 5 by hand).
 2. **simslim fails half way** (simulator shut down meanwhile, a daemon that won't stop): the popover and tool show simslim's own reason, not a generic error (Task 1's failure test, Task 2's mapping).
-3. **A simulator the user slimmed in a terminal, or with a custom profile:** the switch reads on, and turning it off brings every category back (Task 1's `categories` test; Task 4 by hand).
+3. **A simulator the user slimmed in a terminal, or with a custom profile:** the switch reads on, and turning it off brings every category back (Task 1's `categories` test; Task 5 by hand).
 4. **A runtime before iOS 18.5:** the popover says slimming lasts until restart (`persistent` false; Task 1's parse test covers the field).
 5. **An agent slimming while the user drives:** held like every other settings call (the generic `isInput` path, already pinned by `anAndroidCallWaitsForTheUserToHandBack`; `setSlim` must be in the `isInput` list, Task 2).
 
@@ -162,9 +162,10 @@ public enum SimulatorSlimError: Error, Equatable, LocalizedError {
 }
 
 /// Runs the user's simslim, which turns off the background services a
-/// simulator doesn't need. Alas never installs it.
+/// simulator doesn't need. The user installs it, from the simulator settings or Homebrew.
 public enum SimulatorSlim {
-    public static let installCommand = "brew install mobai-app/tap/simslim"
+    public static let formula = "mobai-app/tap/simslim"
+    public static let installCommand = "brew install \(formula)"
     /// Kept on: push tokens (apsd) and universal links (swcd).
     public static let keptCategories = ["store", "web"]
 
@@ -301,7 +302,7 @@ Tests:
 
     @Test(arguments: [
         (nil as SimulatorSlimError?,
-         "device_simslim_missing: simslim isn't installed. Ask the user to run brew install mobai-app/tap/simslim."),
+         "device_simslim_missing: simslim isn't installed. Ask the user to install it from the simulator's settings in the Devices tab, or to run brew install mobai-app/tap/simslim."),
         (.failed("simulator must be booted to read its state (it is Shutdown)"),
          "device_slim_failed: simulator must be booted to read its state (it is Shutdown)"),
     ])
@@ -390,7 +391,9 @@ Protocol:
             do {
                 return .text([Self.json(try await backend.setSlim(udid, on: on).json)])
             } catch SimulatorSlimError.notInstalled {
-                return .error("device_simslim_missing: simslim isn't installed. Ask the user to run \(SimulatorSlim.installCommand).")
+                return .error(
+                    "device_simslim_missing: simslim isn't installed. Ask the user to install it from the simulator's settings in the Devices tab, or to run \(SimulatorSlim.installCommand)."
+                )
             } catch SimulatorSlimError.failed(let reason) {
                 return .error("device_slim_failed: \(reason)")
             } catch let error as DeviceToolError {
@@ -447,11 +450,153 @@ Protocol:
 
 ---
 
-### Task 3: The Memory section in the settings popover
+### Task 3: One Homebrew install controller for gg and simslim
+
+`GGInstallController` already runs `brew install` headless, re-probes, and has the phases the popover needs. Generalize it instead of copying it.
+
+**Files:**
+- Create: `Packages/AlasCore/Sources/AlasIntegrations/Integrations/HomebrewInstallController.swift`
+- Delete: `Packages/AlasCore/Sources/AlasIntegrations/Integrations/GG/GGInstallController.swift`; create `Packages/AlasCore/Sources/AlasIntegrations/Integrations/GG/GGInstall.swift` with gg's factory
+- Modify: `Alas/Sources/Settings/ChangesPane.swift`, `Alas/Sources/Integrations/GG/GGInboxTabView.swift` (their `GGInstallController()` becomes `.gg()`), `Alas/Sources/Devices/AppState+Devices.swift` (simslim's factory)
+- Test: move `AlasTests/Integrations/GGInstallControllerTests.swift` to `AlasTests/Integrations/HomebrewInstallControllerTests.swift`
+
+**Interfaces — Produces:**
+- `@MainActor @Observable public final class HomebrewInstallController { public enum Phase { idle, running, succeeded, failed(String) }; public private(set) var phase: Phase; public init(formula: String, tool: String, runBrew: @escaping @Sendable ([String]) async throws -> ProcessResult = <brew>, reprobe: @escaping @MainActor () async -> Bool); install(); installAndWait() async; upgrade(); upgradeAndWait() async }`
+- `HomebrewInstallController.gg() -> HomebrewInstallController` (AlasIntegrations) and `HomebrewInstallController.simslim() -> HomebrewInstallController` (app).
+
+- [ ] **Step 1: Move and adapt the tests.** `git mv` the test file, rename the suite `HomebrewInstallControllerTests`, and build every controller through one helper, so each test states only what differs:
+
+```swift
+    private func controller(
+        brew: @escaping @Sendable ([String]) async throws -> ProcessResult = { _ in ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+        reprobe: @escaping @MainActor () async -> Bool = { true }
+    ) -> HomebrewInstallController {
+        HomebrewInstallController(formula: "example/tap/tool", tool: "tool", runBrew: brew, reprobe: reprobe)
+    }
+```
+
+  - `successfulInstallReachesSucceededAndReprobes`: `brew` records its arguments in a `Flag`-style locked box; expect `["install", "example/tap/tool"]`, `.succeeded`, and the re-probe ran.
+  - `brewFailureSurfacesStderr`: `brew` answers exit 1, stderr "no tap"; expect `.failed("no tap")`.
+  - `installedButNotOnPathFails`: re-probe answers false; expect `.failed("tool is still not on PATH after install.")`.
+  - `successfulUpgradeReachesSucceededAndReprobes`: expect `["upgrade", "example/tap/tool"]`, `.succeeded`, re-probed.
+  - `upgradeFailureSurfacesStderrWithoutReprobe`: unchanged apart from the helper.
+  - `concurrentUpgradeCallsDeduplicateWhileRunning`: `brew: { _ in await operation.run() }`.
+
+  Same six tests; none added.
+
+- [ ] **Step 2: Run to see them fail.** `xcodebuild … -only-testing AlasTests/HomebrewInstallControllerTests test`; expected: build failure, `HomebrewInstallController` undefined.
+
+- [ ] **Step 3: Implement.** `HomebrewInstallController.swift` is `GGInstallController.swift` with:
+
+```swift
+/// Installs or upgrades a command-line tool with Homebrew, headless, then
+/// re-probes that the tool is found. Settings › Changes installs gg with it,
+/// and the simulator settings install simslim.
+@MainActor
+@Observable
+public final class HomebrewInstallController {
+    public enum Phase: Equatable, Sendable {
+        case idle, running, succeeded
+        case failed(String)
+    }
+
+    public private(set) var phase: Phase = .idle
+
+    private let formula: String
+    /// Names the tool in messages.
+    private let tool: String
+    private let runBrew: @Sendable ([String]) async throws -> ProcessResult
+    /// Whether the tool is found after the install. Injectable for tests.
+    private let reprobe: @MainActor () async -> Bool
+
+    public init(
+        formula: String,
+        tool: String,
+        runBrew: @escaping @Sendable ([String]) async throws -> ProcessResult = { args in
+            try await Process.run("/usr/bin/env", args: ["brew"] + args, env: Process.gitEnv(), timeout: 600)
+        },
+        reprobe: @escaping @MainActor () async -> Bool
+    ) {
+        self.formula = formula
+        self.tool = tool
+        self.runBrew = runBrew
+        self.reprobe = reprobe
+    }
+
+    public func install() {
+        Task { await installAndWait() }
+    }
+
+    public func installAndWait() async {
+        await perform("install")
+    }
+
+    public func upgrade() {
+        Task { await upgradeAndWait() }
+    }
+
+    public func upgradeAndWait() async {
+        await perform("upgrade")
+    }
+
+    private func perform(_ command: String) async {
+        guard phase != .running else { return }
+        phase = .running
+        do {
+            let result = try await runBrew([command, formula])
+            guard result.exitCode == 0 else {
+                let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                phase = .failed(stderr.isEmpty ? "brew exited with code \(result.exitCode)." : stderr)
+                return
+            }
+            phase = await reprobe() ? .succeeded : .failed("\(tool) is still not on PATH after \(command).")
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+}
+```
+
+`GGInstall.swift`:
+
+```swift
+extension HomebrewInstallController {
+    /// The "Install gg…" flow in Settings › Changes and the Inbox.
+    public static func gg() -> HomebrewInstallController {
+        HomebrewInstallController(formula: "mrmans0n/tap/gg-stack", tool: "gg") {
+            await GGAvailability.shared.probe(force: true)
+            return GGAvailability.shared.isInstalled
+        }
+    }
+}
+```
+
+`AppState+Devices.swift`, beside `LiveSimulatorSettings.bundled`:
+
+```swift
+extension HomebrewInstallController {
+    /// The simulator settings' "Install simslim…".
+    static func simslim() -> HomebrewInstallController {
+        HomebrewInstallController(formula: SimulatorSlim.formula, tool: "simslim") {
+            LiveSimulatorSettings.bundled.simslim() != nil
+        }
+    }
+}
+```
+
+`ChangesPane`: `@State private var ggInstall = HomebrewInstallController.gg()`. `GGInboxTabView`: `@State private var ggUpgrade = HomebrewInstallController.gg()`. Run `xcodegen` for the new and moved files; commit only their pbxproj hunks.
+
+- [ ] **Step 4: Run** `xcodebuild … -only-testing AlasTests/HomebrewInstallControllerTests test`; check the "Test run with 6 tests" line. Expected: PASS.
+
+- [ ] **Step 5: Commit** `refactor(integrations): install any Homebrew tool with one controller`
+
+---
+
+### Task 4: The Memory section in the settings popover
 
 **Files:** Modify `Alas/Sources/Devices/DeviceSettingsPopover.swift`.
 
-**Interfaces — Consumes:** `backend.slim(_:)`, `backend.setSlim(_:on:)`, `SimulatorSlimError`, `SimulatorSlim.installCommand`.
+**Interfaces — Consumes:** `backend.slim(_:)`, `backend.setSlim(_:on:)`, `SimulatorSlimError`, `SimulatorSlim.installCommand`, Task 3's `HomebrewInstallController.simslim()`.
 
 - [ ] **Step 1: State**
 
@@ -460,6 +605,7 @@ Protocol:
     @State private var slimMissing = false
     @State private var slimApplying = false
     @State private var slimError: String?
+    @State private var simslimInstall = HomebrewInstallController.simslim()
 ```
 
 - [ ] **Step 2: Section**, in `body` after Accessibility, iOS only:
@@ -482,18 +628,9 @@ Protocol:
                 Spacer()
                 Toggle("", isOn: .constant(false)).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(true)
             }
-            note("Install simslim to cut this simulator's memory about 4x:", tone: "fg-dim")
-            HStack(spacing: 6) {
-                Text(SimulatorSlim.installCommand)
-                    .font(scale.meta.font(design: .monospaced))
-                    .textSelection(.enabled)
-                Spacer()
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(SimulatorSlim.installCommand, forType: .string)
-                }
-                .controlSize(.small)
-            }
+            note("Install simslim to cut this simulator's memory about 4x.", tone: "fg-dim")
+            note("Installs via Homebrew: \(SimulatorSlim.installCommand)", tone: "fg-faint")
+            simslimInstallControl
         } else if let slim {
             HStack {
                 Text("Slim simulator")
@@ -539,34 +676,62 @@ Protocol:
             slimApplying = false
         }
     }
+
+    /// Settings › Changes' gg install control, for simslim.
+    @ViewBuilder
+    private var simslimInstallControl: some View {
+        switch simslimInstall.phase {
+        case .running:
+            HStack(spacing: 6) {
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                Text("Installing…").foregroundStyle(theme.color("fg-dim"))
+            }
+        case .failed(let message):
+            note(message, tone: "warn")
+            AlasButton(title: "Retry", compact: true) { simslimInstall.install() }
+        case .idle, .succeeded:
+            AlasButton(title: "Install simslim…", compact: true) { simslimInstall.install() }
+        }
+    }
 ```
 
-- [ ] **Step 3: Load**, in `load()` inside the `platform == .ios` branch after accessibility:
+- [ ] **Step 3: Load.** Move the read into `loadSlim()` and call it from `load()` inside the `platform == .ios` branch after accessibility, so a slow `measure` doesn't hold up the other sections; call it again when the install succeeds:
 
 ```swift
-            do {
-                slim = try await backend.slim(udid)
-            } catch SimulatorSlimError.notInstalled {
-                slimMissing = true
-            } catch {
-                slimError = error.localizedDescription
-            }
+    private func loadSlim() async {
+        do {
+            slim = try await backend.slim(udid)
+            slimMissing = false
+        } catch SimulatorSlimError.notInstalled {
+            slimMissing = true
+        } catch {
+            slimError = error.localizedDescription
+        }
+    }
 ```
 
-Read it after the display and accessibility reads so a slow `measure` doesn't hold them up. If `DeviceSettingsPopover` lacks `import AppKit` for `NSPasteboard`, add it (SwiftUI on macOS usually brings it; follow the file's build error).
+and on the popover's root, beside `.task { await load() }`:
+
+```swift
+        .onChange(of: simslimInstall.phase) { _, phase in
+            if phase == .succeeded { Task { await loadSlim() } }
+        }
+```
+
+Installing doesn't touch the simulator, so it doesn't take the input turn. Closing the popover mid-install leaves brew running; the next open finds simslim through the per-call lookup.
 
 - [ ] **Step 4: Build** with the AGENTS.md build command. If the design capture covers the popover (`DesignCaptureDevices`' settings panel), capture it and look at the Memory section with the fake slim state.
 
-- [ ] **Step 5: Commit** `feat(devices): add a Slim simulator switch to the simulator settings`
+- [ ] **Step 5: Commit** `feat(devices): add a Slim simulator switch and simslim install to the simulator settings`
 
 ---
 
-### Task 4: Docs and end to end
+### Task 5: Docs and end to end
 
 **Files:** Modify `docs/devices.md`, `docs/plans/2026-11-04-device-panel-design.md` (only if it lists simulator memory as a follow-up).
 
 - [ ] **Step 1: `docs/devices.md`**
-  - After the accessibility paragraph in Simulators: "With [simslim](https://github.com/MobAI-App/simslim) installed (`brew install mobai-app/tap/simslim`), the settings' Memory section slims the simulator: simslim turns off about 150 background services it doesn't need, which cuts its memory from about 3.9 GB to under 1 GB, so more simulators fit on the Mac. Siri, Spotlight, iCloud, widgets and the Photos and Contacts pickers stop working; push notifications and universal links keep working. The switch applies without a reboot, and on iOS 18.5 and newer the simulator stays slim across reboots until you turn it off. Alas runs your simslim and never installs it."
+  - After the accessibility paragraph in Simulators: "The settings' Memory section slims the simulator with [simslim](https://github.com/MobAI-App/simslim): it turns off about 150 background services the simulator doesn't need, which cuts its memory from about 3.9 GB to under 1 GB, so more simulators fit on the Mac. Siri, Spotlight, iCloud, widgets and the Photos and Contacts pickers stop working; push notifications and universal links keep working. The switch applies without a reboot, and on iOS 18.5 and newer the simulator stays slim across reboots until you turn it off. Without simslim, Install simslim… installs it with Homebrew (`brew install mobai-app/tap/simslim`)."
   - Agents table, after `device_clear_data`: `| device_set_slim | Slims a simulator with simslim, or brings it back to stock, and returns its memory. iOS only; needs simslim. |`
 
 - [ ] **Step 2: End to end**, with the real simslim on a scratch simulator (create, boot, delete afterwards), against Alas Dev:
@@ -574,7 +739,8 @@ Read it after the display and accessibility reads so a slow `measure` doesn't ho
   - Turn it on: spinner, then about 1 GB and "149 of 173 background services are off."; the screen keeps working.
   - Turn it off: back to "All background services run."
   - Slim it in a terminal with plain `simslim on <udid> --no-reboot` (the full profile); reopen: the switch is on, 173 of 173.
-  - With no `simslim` where Alas looks (if Homebrew's is the only one, `mv /opt/homebrew/bin/simslim /tmp/` while testing): reopen the popover; the hint and Copy button show. Put it back and reopen without relaunching Alas Dev: the switch shows.
+  - With no `simslim` where Alas looks (if Homebrew's is the only one, `brew uninstall simslim`): reopen the popover; the hint and "Install simslim…" show. Click it: "Installing…", then the switch and the read-back appear without reopening. Then `brew uninstall simslim`, reopen (hint), `brew install mobai-app/tap/simslim` in a terminal, reopen without relaunching Alas Dev: the switch shows.
+  - Without Homebrew on PATH is not reproduced; it fails like gg's install, with brew's `env` error and Retry.
   - Through the tool: `device_set_slim` on and off from an agent session in Alas Dev with the device setting on; on an Android emulator if one is available, `device_unsupported`.
   Record what ran in the PR description; anything not run is listed as not run.
 

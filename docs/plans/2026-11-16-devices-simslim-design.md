@@ -11,11 +11,11 @@ a booted simulator's settings, and agents get `device_set_slim`. Issue
 
 ## Decisions
 
-- **Call the user's simslim.** Alas doesn't bundle it or port its daemon
-  list. The list of about 175 safe-to-disable daemons and its per-runtime
-  exceptions is the part that needs upkeep, and simslim writes into the
-  simulator's launchd store, an internal format. Alas finds the binary on
-  each use, so installing it while Alas runs works.
+- **Run simslim from Homebrew, don't bundle it.** Alas doesn't ship it or
+  port its daemon list. The list of about 175 safe-to-disable daemons and
+  its per-runtime exceptions is the part that needs upkeep, and simslim
+  writes into the simulator's launchd store, an internal format. Alas finds
+  the binary on each use, so installing it while Alas runs works.
 - **One fixed profile:** `--except store,web`. It keeps `apsd` (remote push
   tokens) and `swcd` (universal links) for about 0.12 GB.
 - **No reboot either way.** On: `simslim on <udid> --no-reboot --except
@@ -26,8 +26,9 @@ a booted simulator's settings, and agents get `device_set_slim`. Issue
   shows as slim.
 - **User and agents.** The settings popover has the switch; agents get
   `device_set_slim`.
-- **Without simslim,** the switch is disabled and the section shows the
-  install command with a Copy button.
+- **Without simslim,** the switch is disabled and the section offers an
+  "Install simslim…" button that runs `brew install mobai-app/tap/simslim`,
+  the way Settings › Changes installs gg.
 
 ## Spike evidence (iPhone 17, iOS 26.5, simslim 0.14.0, Xcode 26.6)
 
@@ -94,8 +95,16 @@ afterwards.
   - "Lasts until the simulator restarts on this iOS version." when
     `persistent` is false;
   - without simslim: the switch disabled, "Install simslim to cut this
-    simulator's memory about 4x:", the command and a Copy button.
-  Changes take the input turn, as the other settings do.
+    simulator's memory about 4x.", "Installs via Homebrew: brew install
+    mobai-app/tap/simslim", and an "Install simslim…" button. While brew
+    runs: a spinner and "Installing…". On success the section reads the
+    simulator's state; on failure it shows brew's error and Retry.
+  Changes take the input turn, as the other settings do. Installing
+  doesn't touch the simulator, so it doesn't.
+- **Installing:** `GGInstallController` becomes `HomebrewInstallController`
+  (formula, the tool's name, and a re-probe), with gg and simslim as its
+  two users. Same phases (idle, running, succeeded, failed), same
+  `/usr/bin/env brew` run with the login shell's environment.
 
 ## Agent tool
 
@@ -103,7 +112,8 @@ afterwards.
   `{"slim", "services_off", "services", "persistent", "memory_mb"}`. iOS
   only; held while the user drives.
 - Errors: `device_simslim_missing: simslim isn't installed. Ask the user to
-  run brew install mobai-app/tap/simslim.`, `device_slim_failed: <reason>`,
+  install it from the simulator's settings in the Devices tab, or to run
+  brew install mobai-app/tap/simslim.`, `device_slim_failed: <reason>`,
   and on Android `device_unsupported: device_set_slim isn't available on
   Android.`
 - The description says what stops working while slim (Siri, Spotlight,
