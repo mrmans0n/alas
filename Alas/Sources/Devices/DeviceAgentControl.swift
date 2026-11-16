@@ -661,14 +661,15 @@ final class DeviceAgentControl {
         guard let recording = flowRecordings[udid], recording.sessionID == sessionID else {
             return .error("device_not_recording: No flow is being recorded on \(name) by this session.")
         }
-        flowRecordings[udid] = nil
         do {
             let file = URL(fileURLWithPath: recording.path)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try recording.flow.yaml.write(to: file, atomically: true, encoding: .utf8)
         } catch {
-            return .error("device_flow_record_failed: \(error.localizedDescription)")
+            // Kept, so a stop after fixing the folder still saves it.
+            return .error("device_flow_record_failed: \(error.localizedDescription) The recording is kept; call stop again to retry.")
         }
+        flowRecordings[udid] = nil
         return .text([Self.json(["path": recording.path, "steps": recording.flow.steps.count])])
     }
 

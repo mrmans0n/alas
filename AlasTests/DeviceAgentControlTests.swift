@@ -1074,6 +1074,25 @@ extension DeviceAgentControlTests {
         #expect(android.fakeInput.touches.isEmpty)
     }
 
+    @Test func aFlowThatCantBeWrittenIsKeptForAnotherStop() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        // A file where the .maestro folder would go.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let blocker = root.appendingPathComponent(".maestro")
+        try Data().write(to: blocker)
+        let file = blocker.appendingPathComponent("login.yaml")
+        _ = await control.perform(.recordFlow(udid: "emulator-5554", path: file.path), sessionID: "s")
+        _ = await control.perform(.button(udid: "emulator-5554", name: .back, includeScreenshot: false, diff: false), sessionID: "s")
+        let failed = await control.perform(.recordFlow(udid: "emulator-5554", path: nil), sessionID: "s")
+        #expect(error(failed)?.hasPrefix("device_flow_record_failed:") == true)
+        try FileManager.default.removeItem(at: blocker)
+        let saved = try Self.reply(await control.perform(.recordFlow(udid: "emulator-5554", path: nil), sessionID: "s"))
+        #expect(saved["steps"] as? Int == 1)
+        #expect(try DeviceFlow.parse(String(contentsOf: file, encoding: .utf8)).steps == [.pressKey(.back)])
+    }
+
     @Test func anAgentsCallsAreRecordedAsAFlow() async throws {
         let android = FakeBackend()
         let control = bothPlatforms(android)
