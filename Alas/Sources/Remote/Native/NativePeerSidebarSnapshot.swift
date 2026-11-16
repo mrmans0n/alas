@@ -120,6 +120,12 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         var sessionBuckets: [String: [RemoteSessionSummary]] = [:]
         var consoleBuckets: [String: [PeerConsoleSummary]] = [:]
         var hostBuckets: [String: PeerHostWorktree] = [:]
+        // A Machine checkout is listed under its local project, as on the owning Mac.
+        var primaryOf = Dictionary(projects.compactMap { p in p.linkedProjectId.map { (p.id, $0) } }, uniquingKeysWith: { a, _ in a })
+        for host in hostWorktrees ?? [] {
+            if let primary = host.project.linkedProjectId { primaryOf[host.project.id] = primary }
+        }
+        func listed(_ projectId: String?) -> String? { projectId.map { primaryOf[$0] ?? $0 } }
         // Worktree keys are namespaced by repo identity too, so a worktree id
         // or path that happens to repeat across two differently-identified
         // projects still can't merge rows.
@@ -136,7 +142,7 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         }
         for session in sessions {
             let key = place(
-                repo: repoKey(projectId: session.projectId),
+                repo: repoKey(projectId: session.worktree?.linkedProjectId ?? listed(session.projectId)),
                 worktreeKey: NativePeerWorktreeGroup.key(for: session),
                 name: session.worktree?.projectName ?? unassignedName
             )
@@ -144,19 +150,19 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         }
         for console in consoles {
             let key = place(
-                repo: repoKey(projectId: console.projectId),
+                repo: repoKey(projectId: listed(console.projectId)),
                 worktreeKey: NativePeerWorktreeGroup.key(for: console),
                 name: console.worktree?.projectName ?? console.projectName ?? unassignedName
             )
             consoleBuckets[key, default: []].append(console)
         }
         for host in hostWorktrees ?? [] {
-            let repo = repoKey(projectId: host.project.id)
+            let repo = repoKey(projectId: listed(host.project.id))
             let key = place(repo: repo, worktreeKey: "id:\(host.snapshot.worktree.id)", name: host.project.name)
             hostBuckets[key] = host
-            repoNames[repo] = host.project.name
+            if host.project.linkedProjectId == nil { repoNames[repo] = host.project.name }
         }
-        for project in projects {
+        for project in projects where project.linkedProjectId == nil {
             let repo = repoKey(projectId: project.id)
             if repoNames[repo] == nil { repoOrder.append(repo) }
             repoNames[repo] = project.name

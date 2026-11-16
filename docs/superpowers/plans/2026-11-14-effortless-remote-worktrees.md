@@ -573,7 +573,13 @@ project; 2d moves settings to the primary and adds Reconnect.
   with a status line, then the normal create. Cancel cancels the SSH call.
   Create is disabled while setup runs.
 
-## PR 5: iOS and Mac remote-client folding (outline)
+## PR 5: `feat(remote): fold Machine checkouts in the phone and peer views`
 
-Fold by `ProjectSnapshot.linkedProjectId` in the iOS app and in the Mac's
-peer views of a host's projects. Merge this into PR 2b if it is small.
+- Wire (additive, optional): `linkedProjectId` on `RemoteProjectOption`,
+  `RemoteWorktreeOption` and `RemoteWorktreeSummary`. The host fills them and
+  names a linked worktree's project after its primary.
+- iOS: `RemoteSessionDirectory.sections` keys on the summary's
+  `linkedProjectId`; the New Session repository picker lists primaries only.
+- Mac peers: `NativePeerRepoGroup.build` folds sessions, consoles and host
+  worktrees into the primary's repo and skips linked inventory rows.
+- `RemoteNewSession.worktrees` includes a primary's linked worktrees.

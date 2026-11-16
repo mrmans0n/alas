@@ -161,8 +161,10 @@ public struct RemoteWorktreeOption: Codable, Equatable, Sendable {
     /// The peer's project id. Older peers omit it; clients then match by
     /// `projectName`.
     public var projectId: String? = nil
+    /// The local project `projectId` is listed under, as in `RemoteWorktreeSummary`.
+    public var linkedProjectId: String? = nil
 
-    public init(id: String, projectName: String, worktreeName: String, branch: String, path: String, metricsAvailable: Bool, comparisonRef: String?, commitCount: Int, changedFileCount: Int, addedLines: Int, deletedLines: Int, conflictCount: Int, projectId: String? = nil) {
+    public init(id: String, projectName: String, worktreeName: String, branch: String, path: String, metricsAvailable: Bool, comparisonRef: String?, commitCount: Int, changedFileCount: Int, addedLines: Int, deletedLines: Int, conflictCount: Int, projectId: String? = nil, linkedProjectId: String? = nil) {
         self.id = id
         self.projectName = projectName
         self.worktreeName = worktreeName
@@ -176,6 +178,7 @@ public struct RemoteWorktreeOption: Codable, Equatable, Sendable {
         self.deletedLines = deletedLines
         self.conflictCount = conflictCount
         self.projectId = projectId
+        self.linkedProjectId = linkedProjectId
     }
 }
 
@@ -238,10 +241,14 @@ public struct RemoteAgentOption: Codable, Equatable, Sendable {
 public struct RemoteProjectOption: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
+    /// The local project this Machine checkout is listed under; clients fold
+    /// it there. Nil for a project of its own, and from older hosts.
+    public var linkedProjectId: String? = nil
 
-    public init(id: String, name: String) {
+    public init(id: String, name: String, linkedProjectId: String? = nil) {
         self.id = id
         self.name = name
+        self.linkedProjectId = linkedProjectId
     }
 }
 

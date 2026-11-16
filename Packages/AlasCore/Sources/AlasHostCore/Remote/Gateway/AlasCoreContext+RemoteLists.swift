@@ -37,7 +37,9 @@ extension AlasCoreContext {
 
     /// Projects a worktree can be created in, which folder projects cannot.
     func remoteProjectOptions() -> [RemoteProjectOption] {
-        projects.projects.filter { !$0.isFolder }.map { RemoteProjectOption(id: $0.id, name: $0.name) }
+        projects.projects.filter { !$0.isFolder }.map {
+            RemoteProjectOption(id: $0.id, name: $0.name, linkedProjectId: $0.linkedProjectId)
+        }
     }
 
     /// Visible worktrees that no operation is creating or removing, with
@@ -64,7 +66,8 @@ extension AlasCoreContext {
                         addedLines: summary.addedLines,
                         deletedLines: summary.deletedLines,
                         conflictCount: summary.conflictCount,
-                        projectId: project.id
+                        projectId: project.id,
+                        linkedProjectId: summary.linkedProjectId
                     ))
                 }
             }
@@ -106,25 +109,51 @@ extension AlasCoreContext {
                 resolution: GitService.BaseResolution.forCommits(mode: config.changes.comparisonMode, userOverrodeBaseBranch: false)
             )
             let (changes, commitResult) = try await (status, commits)
-            return RemoteWorktreeSummaryBuilder.make(
+            return listedUnderPrimary(RemoteWorktreeSummaryBuilder.make(
                 projectName: project.name,
                 worktree: worktree,
                 isMain: projects.isMain(worktree, in: project),
                 metrics: .available(comparisonRef: commitResult.comparisonRef, commitCount: commitResult.commits.count, changes: changes)
-            )
+            ), project: project)
         } catch {
             return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree)
         }
     }
 
     @_spi(AppHost) public func remoteWorktreeSummaryWithoutMetrics(project: ProjectConfig, worktree: Worktree) -> RemoteWorktreeSummary {
-        RemoteWorktreeSummaryBuilder.make(
+        listedUnderPrimary(RemoteWorktreeSummaryBuilder.make(
             projectName: project.name,
             worktree: worktree,
             isMain: projects.isMain(worktree, in: project),
             isFolder: project.isFolder,
             metrics: .unavailable
+        ), project: project)
+    }
+
+    /// A Machine checkout's worktree is shown under its local project, by that project's name.
+    private func listedUnderPrimary(_ summary: RemoteWorktreeSummary, project: ProjectConfig) -> RemoteWorktreeSummary {
+        guard let primaryId = project.linkedProjectId,
+              let primary = projects.projects.first(where: { $0.id == primaryId })
+        else { return summary }
+        var listed = RemoteWorktreeSummary(
+            projectName: primary.name,
+            worktreeName: summary.worktreeName,
+            branch: summary.branch,
+            path: summary.path,
+            metricsAvailable: summary.metricsAvailable,
+            comparisonRef: summary.comparisonRef,
+            commitCount: summary.commitCount,
+            changedFileCount: summary.changedFileCount,
+            addedLines: summary.addedLines,
+            deletedLines: summary.deletedLines,
+            conflictCount: summary.conflictCount,
+            isMain: summary.isMain,
+            createdAt: summary.createdAt,
+            lastActivity: summary.lastActivity,
+            isFolder: summary.isFolder
         )
+        listed.linkedProjectId = primaryId
+        return listed
     }
 
     nonisolated static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
