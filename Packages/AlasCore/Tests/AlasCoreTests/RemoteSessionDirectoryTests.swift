@@ -100,4 +100,85 @@ import Testing
         #expect(c[.running] == 1)
         #expect(c[.dirty] == 2)
     }
+
+    private func source(_ number: Int, serverId: String? = "owner", live: Bool = true,
+                        sessions: [RemoteSessionSummary]) -> RemoteSessionCatalog.Source {
+        RemoteSessionCatalog.Source(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000000\(number)")!,
+            serverId: serverId, name: "Mac \(number)", isLive: live, sessions: sessions
+        )
+    }
+
+    @Test func federatedCopiesAppearOnceUnderEachOwningHost() throws {
+        let sources = (1...3).map { gateway in
+            source(gateway, serverId: "mac\(gateway)", sessions: (1...3).map { owner in
+                session(owner == gateway ? "s1" : "mac\(owner):s1", status: "streaming",
+                        worktree: wt(changed: 1), serverId: owner == gateway ? nil : "mac\(owner)",
+                        serverName: "Mac \(owner)")
+            })
+        }
+        let hosts = RemoteSessionCatalog.hosts(from: sources)
+        #expect(hosts.count == 3)
+        #expect(hosts.flatMap(\.sections).flatMap(\.worktrees).count == 3)
+        #expect(RemoteSessionDirectory.counts(hosts.flatMap(\.sections)) == [.all: 3, .running: 3, .dirty: 3])
+        for host in hosts {
+            let worktree = try #require(host.sections.first?.worktrees.first)
+            #expect(worktree.activeSessions.map(\.id) == ["s1"])
+            let route = try #require(host.route(for: "s1"))
+            #expect(route.sessionId == "s1")
+            #expect(sources.first { $0.id == route.hostID }?.name == host.name)
+        }
+    }
+
+    @Test(arguments: [(true, true, 1), (false, true, 2), (true, false, 1), (false, false, 1)])
+    func liveReportsBeatCacheThenPreferDirectRoutes(directLive: Bool, relayLive: Bool, expected: Int) throws {
+        let direct = source(1, live: directLive, sessions: [session("s1", title: "Direct")])
+        let relay = source(2, serverId: "relay", live: relayLive, sessions: [
+            session("owner:s1", title: "Relayed", at: 9, serverId: "owner", serverName: "Owner"),
+        ])
+        let host = try #require(RemoteSessionCatalog.hosts(from: [relay, direct]).first { $0.id == .server("owner") })
+        let route = try #require(host.route(for: "s1"))
+        #expect(route.hostID == (expected == 1 ? direct.id : relay.id))
+        #expect(route.sessionId == (expected == 1 ? "s1" : "owner:s1"))
+        #expect(host.sections.first?.worktrees.first?.activeSessions.first?.title == (expected == 1 ? "Direct" : "Relayed"))
+    }
+
+    @Test(arguments: [true, false])
+    func liveOwnerCatalogRemovesSessionsOnlyRelaysStillReport(ownerLive: Bool) throws {
+        let owner = source(1, live: ownerLive, sessions: [])
+        let relay = source(2, serverId: "relay", sessions: [session("owner:gone", serverId: "owner")])
+        let host = try #require(RemoteSessionCatalog.hosts(from: [owner, relay]).first { $0.id == .server("owner") })
+        #expect(host.sections.flatMap(\.worktrees).count == (ownerLive ? 0 : 1))
+    }
+
+    @Test func relayOnlyOwnerKeepsOneStableRoute() throws {
+        let first = source(1, serverId: "relay1", sessions: [session("owner:s1", serverId: "owner", serverName: "Studio")])
+        let second = source(2, serverId: "relay2", sessions: [session("owner:s1", serverId: "owner", serverName: "Studio")])
+        for sources in [[first, second], [second, first]] {
+            let host = try #require(RemoteSessionCatalog.hosts(from: sources).first { $0.id == .server("owner") })
+            #expect(host.name == "Studio")
+            #expect(host.sections.flatMap(\.worktrees).count == 1)
+            #expect(host.route(for: "s1")?.hostID == first.id)
+            #expect(host.route(for: "s1")?.sessionId == "owner:s1")
+        }
+    }
+
+    @Test func unidentifiedPairingsKeepMatchingCheckoutsSeparate() {
+        let hosts = RemoteSessionCatalog.hosts(from: [
+            source(1, serverId: nil, sessions: [session("s1")]),
+            source(2, serverId: nil, sessions: [session("s1")]),
+        ])
+        #expect(hosts.count == 2)
+        #expect(Set(hosts.map(\.id)).count == 2)
+        #expect(hosts.flatMap(\.sections).flatMap(\.worktrees).count == 2)
+    }
+
+    @Test(arguments: ["s1", "part:session", "owner:session"])
+    func relayRoutePreservesTheOriginalSessionID(nativeID: String) throws {
+        let direct = source(1, live: false, sessions: [session(nativeID)])
+        let relay = source(2, serverId: "relay", sessions: [session("owner:\(nativeID)", serverId: "owner")])
+        let host = try #require(RemoteSessionCatalog.hosts(from: [direct, relay]).first { $0.id == .server("owner") })
+        #expect(host.sections.first?.worktrees.first?.activeSessions.map(\.id) == [nativeID])
+        #expect(host.route(for: nativeID)?.sessionId == "owner:\(nativeID)")
+    }
 }

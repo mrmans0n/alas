@@ -31,7 +31,7 @@ final class HostHub {
     private var states: [UUID: PhoneConnection.State] = [:]
     private var sessionLists: [UUID: [RemoteSessionSummary]] = [:]
     /// Hosts whose list arrived on the live connection, not from the cache.
-    @ObservationIgnored private var listedLive: Set<UUID> = []
+    private var listedLive: Set<UUID> = []
     /// What each host's hello advertised, for this connection.
     @ObservationIgnored private var capabilities: [UUID: Set<String>] = [:]
 
