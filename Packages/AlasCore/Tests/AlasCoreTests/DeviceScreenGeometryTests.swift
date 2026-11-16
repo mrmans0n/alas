@@ -49,6 +49,8 @@ struct DeviceScreenOrientationTests {
         )
         #expect(geometry.normalized(x: 200, y: 50) == .init(x: 0.5, y: 0))
         #expect(geometry.clamped(x: 250, y: 50) == .init(x: 0.5, y: 0))
+        // What a recorded tap names: the upright point, which snapshots use.
+        #expect(geometry.uprightClamped(x: 250, y: 50) == .init(x: 1, y: 0.5))
     }
 
     @Test func rotatingLeftFourTimesComesBack() {

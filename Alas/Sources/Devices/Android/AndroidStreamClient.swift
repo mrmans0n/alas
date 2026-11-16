@@ -94,6 +94,8 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
         for session in running { await session.stopAndWait() }
     }
 
+    var takesScroll: Bool { true }
+
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double) {
         guard let session = sessions[udid], let size = videoSizes[udid] else { return }
         session.send(ScrcpyControl.scroll(

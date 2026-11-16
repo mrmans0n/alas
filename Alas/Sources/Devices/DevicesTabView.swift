@@ -52,10 +52,15 @@ struct DevicesTabView: View {
                 notice: model.notices[device.udid],
                 onPaste: {
                     let text = NSPasteboard.general.string(forType: .string)
-                    Task { await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard) }
+                    Task {
+                        if await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard), let text {
+                            state.deviceFlowRecorder.pasted(device.udid, text)
+                        }
+                    }
                 },
                 onCopy: { Task { await model.copy(udid: device.udid, pasteboard: state.devicePasteboard) } },
-                accessibilityOverlay: model.accessibilityOverlays.contains(device.udid)
+                accessibilityOverlay: model.accessibilityOverlays.contains(device.udid),
+                flowRecorder: state.deviceFlowRecorder
             )
             .id(device.udid)
         case .simulator(let device, .booting):
@@ -76,7 +81,7 @@ struct DevicesTabView: View {
             if let device = target.device {
                 AndroidDeviceStage(
                     device: device, client: state.androidStreams, pane: state.androidPane, control: state.deviceControl,
-                    agentName: { state.computerUseAgentName($0) }, now: now
+                    agentName: { state.computerUseAgentName($0) }, now: now, flowRecorder: state.deviceFlowRecorder
                 )
                     .id(device.serial)
             }

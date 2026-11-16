@@ -21,6 +21,7 @@ struct DeviceStage: View {
     let onCopy: () -> Void
     /// Outline the screen's accessibility elements.
     let accessibilityOverlay: Bool
+    let flowRecorder: DeviceFlowRecorder
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -57,7 +58,10 @@ struct DeviceStage: View {
                     overlayReadKey += 1
                 },
                 onHover: accessibilityOverlay ? { hover = $0 } : nil,
-                onUserInput: { overlayReadKey += 1 }
+                onUserInput: { overlayReadKey += 1 },
+                onGesture: flowRecorder.isRecording(device.udid) ? { flowRecorder.gesture(device.udid, from: $0, to: $1) } : nil,
+                onText: flowRecorder.isRecording(device.udid) ? { flowRecorder.typed(device.udid, $0) } : nil,
+                onScroll: flowRecorder.isRecording(device.udid) ? { flowRecorder.scrolled(device.udid, dx: $0, dy: $1) } : nil
             )
             // A new identity unsubscribes and subscribes again, which restarts the stream.
             .id("\(device.udid):\(streamGeneration)")
@@ -78,7 +82,7 @@ struct DeviceStage: View {
             } else if driver != .idle {
                 DeviceDriverPill(
                     driver: driver, waiting: control.waitingSessions(udid: device.udid).first, agentName: agentName,
-                    pulse: pulse, onTakeOver: { control.takeOver(udid: device.udid) },
+                    flow: control.flowRuns[device.udid], pulse: pulse, onTakeOver: { control.takeOver(udid: device.udid) },
                     onHandBack: { control.handBack(udid: device.udid) }
                 )
                 .padding(.top, scale.space[2])
@@ -118,6 +122,7 @@ struct DeviceStage: View {
     private func hardwareButton(_ symbol: String, help: String, name: String) -> some View {
         DeviceGutterButton(icon: symbol, help: help) {
             client.button(udid: device.udid, name: name)
+            if name == "home" { flowRecorder.pressed(device.udid, .home) }
             overlayReadKey += 1
         }
     }

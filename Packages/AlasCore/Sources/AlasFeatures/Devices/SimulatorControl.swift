@@ -157,6 +157,16 @@ public enum SimulatorControl {
         guard result.exitCode == 0 else { throw SimulatorControlError(result) }
     }
 
+    /// Moves the simulated location along `route`, updating it each second (iOS 17 or later).
+    public static func locationRoute(udid: String, _ route: DeviceRoute) async throws {
+        let points = route.points.map { "\($0.latitude),\($0.longitude)" }
+        let speed = String(format: "%.3f", route.speed)
+        let result = try await Process.run(
+            xcrun, args: ["simctl", "location", udid, "start", "--speed=\(speed)", "--interval=1"] + points
+        )
+        guard result.exitCode == 0 else { throw SimulatorControlError(result) }
+    }
+
     public static func push(udid: String, bundleID: String, payload: Data) async throws {
         let result = try await Process.run(
             xcrun, args: ["simctl", "push", udid, bundleID, "-"], stdin: String(decoding: payload, as: UTF8.self)

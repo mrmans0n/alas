@@ -14,6 +14,8 @@ final class AndroidBackend: DeviceBackend {
     private var densities: [String: Double] = [:]
     /// `wm size` by serial: the display's natural size in pixels.
     private var displaySizes: [String: (width: Double, height: Double)] = [:]
+    /// The route each device follows, while it plays.
+    private var routes: [String: (route: DeviceRoute, started: Date, task: Task<Void, Never>)] = [:]
 
     init(pane: AndroidPaneModel, streams: AndroidStreamClient) {
         self.pane = pane
@@ -311,21 +313,72 @@ final class AndroidBackend: DeviceBackend {
         }
     }
 
+    func frontApp(_ id: String) async -> String? {
+        guard let control = try? control(),
+              let activities = try? await control.adb(id, ["shell", "dumpsys", "activity", "activities"]) else { return nil }
+        return AndroidLogcat.frontmostPackage(activities)
+    }
+
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {
+        stopRoute(id)
         let control = try control()
         guard let location else {
             _ = try? await control.adb(id, ["shell", "cmd", "location", "providers", "remove-test-provider", "gps"])
             _ = try await control.adb(id, ["shell", "appops", "set", "com.android.shell", "android:mock_location", "default"])
             return
         }
-        // The test provider changes what apps read, on emulators and phones alike.
+        try await enableTestProvider(id, control: control)
+        try await moveTestProvider(id, to: location, control: control)
+    }
+
+    /// The test provider changes what apps read, on emulators and phones alike.
+    private func enableTestProvider(_ id: String, control: AndroidControl) async throws {
         _ = try await control.adb(id, ["shell", "appops", "set", "com.android.shell", "android:mock_location", "allow"])
         _ = try? await control.adb(id, ["shell", "cmd", "location", "providers", "add-test-provider", "gps"])
         _ = try await control.adb(id, ["shell", "cmd", "location", "providers", "set-test-provider-enabled", "gps", "true"])
+    }
+
+    private func moveTestProvider(_ id: String, to location: SimulatorLocation, control: AndroidControl) async throws {
         _ = try await control.adb(id, [
             "shell", "cmd", "location", "providers", "set-test-provider-location", "gps",
             "--location", "\(location.latitude),\(location.longitude)",
         ])
+    }
+
+    /// Moves the test provider along the route once a second, ending at its
+    /// last point; it stops when replaced, cleared, or when adb fails (the device went away).
+    func startRoute(_ id: String, _ route: DeviceRoute) async throws {
+        stopRoute(id)
+        let control = try control()
+        try await enableTestProvider(id, control: control)
+        try await moveTestProvider(id, to: route.position(after: 0), control: control)
+        let started = Date()
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                let elapsed = Date().timeIntervalSince(started)
+                do {
+                    try await self?.moveTestProvider(id, to: route.position(after: elapsed), control: control)
+                } catch {
+                    break
+                }
+                if elapsed >= route.duration { break }
+            }
+            guard !Task.isCancelled else { return }
+            self?.routes[id] = nil
+        }
+        routes[id] = (route, started, task)
+    }
+
+    func routeProgress(_ id: String) -> DeviceRouteProgress? {
+        guard let playing = routes[id] else { return nil }
+        let travelled = playing.route.travelled(after: Date().timeIntervalSince(playing.started))
+        return DeviceRouteProgress(name: playing.route.name, travelled: travelled, length: playing.route.length)
+    }
+
+    private func stopRoute(_ id: String) {
+        routes.removeValue(forKey: id)?.task.cancel()
     }
 
     func push(_ id: String, appID: String, payload: Data) async throws {

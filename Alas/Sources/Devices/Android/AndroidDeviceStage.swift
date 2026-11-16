@@ -12,6 +12,7 @@ struct AndroidDeviceStage: View {
     /// Names the agent session driving the device.
     let agentName: (String) -> String
     let now: Date
+    let flowRecorder: DeviceFlowRecorder
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var streamError: String?
@@ -53,7 +54,10 @@ struct AndroidDeviceStage: View {
                 onDropApp: { apk in Task { await pane.installAndLaunch(apk, on: device) } },
                 onDropTargeted: { dropTargeted = $0 },
                 canDrop: { $0.pathExtension.lowercased() == "apk" },
-                onPaste: paste, onCopy: copy
+                onPaste: paste, onCopy: copy,
+                onGesture: flowRecorder.isRecording(device.serial) ? { flowRecorder.gesture(device.serial, from: $0, to: $1) } : nil,
+                onText: flowRecorder.isRecording(device.serial) ? { flowRecorder.typed(device.serial, $0) } : nil,
+                onScroll: flowRecorder.isRecording(device.serial) ? { flowRecorder.scrolled(device.serial, dx: $0, dy: $1) } : nil
             )
             .id("\(device.serial):\(streamGeneration)")
             if let streamError {
@@ -68,7 +72,7 @@ struct AndroidDeviceStage: View {
             } else if driver != .idle {
                 DeviceDriverPill(
                     driver: driver, waiting: control.waitingSessions(udid: device.serial).first, agentName: agentName,
-                    pulse: pulse, onTakeOver: { control.takeOver(udid: device.serial) },
+                    flow: control.flowRuns[device.serial], pulse: pulse, onTakeOver: { control.takeOver(udid: device.serial) },
                     onHandBack: { control.handBack(udid: device.serial) }
                 )
                 .padding(.top, scale.space[2])
@@ -93,7 +97,10 @@ struct AndroidDeviceStage: View {
     }
 
     private func button(_ icon: String, _ help: String, _ name: String) -> some View {
-        DeviceGutterButton(icon: icon, help: help) { client.button(udid: device.serial, name: name) }
+        DeviceGutterButton(icon: icon, help: help) {
+            client.button(udid: device.serial, name: name)
+            if let key = ["home": DeviceFlow.Key.home, "back": .back][name] { flowRecorder.pressed(device.serial, key) }
+        }
     }
 
     private func rotate(left: Bool) {
@@ -105,6 +112,7 @@ struct AndroidDeviceStage: View {
             return pane.show("The clipboard has no text to paste.", serial: device.serial)
         }
         client.paste(udid: device.serial, text: text)
+        flowRecorder.pasted(device.serial, text)
     }
 
     private func copy() {
