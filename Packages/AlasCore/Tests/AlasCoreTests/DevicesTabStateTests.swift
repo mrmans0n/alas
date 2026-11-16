@@ -5,6 +5,8 @@ import AlasCore
 struct DevicesTabStateTests {
     static let off = SimulatorDevice(udid: "off", name: "iPhone 17", runtimeName: "iOS 26.5", state: .shutdown)
     static let on = SimulatorDevice(udid: "on", name: "iPhone Air", runtimeName: "iOS 26.5", state: .booted)
+    static let old = SimulatorDevice(udid: "old", name: "iPhone 16e", runtimeName: "iOS 18.6", state: .shutdown)
+    static let mid = SimulatorDevice(udid: "mid", name: "iPad Pro", runtimeName: "iOS 26.0", state: .shutdown)
     static let stoppedVMs: [VMGuestOS: VMDeviceStatus] = [.macOS: .stopped, .linux: .notCreated]
 
     struct Case: Sendable, CustomTestStringConvertible {
@@ -199,5 +201,59 @@ struct DevicesTabStateTests {
     @Test func withNothingBootedARunScriptsAppGoesToTheFirstSimulator() {
         #expect(SimulatorTarget.choose(selection: nil, simulators: [Self.off])?.udid == "off")
         #expect(SimulatorTarget.choose(selection: nil, simulators: []) == nil)
+    }
+
+    @Test func runningDevicesLeadAndLeaveTheirSections() {
+        let state = resolve(
+            simulators: [Self.off, Self.on], vms: [.macOS: .running, .linux: .stopped],
+            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil)
+        )
+        let listing = state.switcherListing(query: "", showsOlderRuntimes: false)
+        #expect(listing.sections.map(\.kind) == [.running, .runtime("iOS 26.5"), .android, .vms])
+        #expect(listing.sections[0].rows.map(\.target) == [.simulator("on"), .android("emulator-5554"), .vm(.macOS)])
+        #expect(listing.sections[1].rows.map(\.target) == [.simulator("off")])
+    }
+
+    @Test func olderRuntimesFoldUnlessSelectedOrShown() {
+        let sims = [Self.old, Self.off, Self.mid]
+        let folded = resolve(simulators: sims, selection: .simulator("off"), android: nil)
+            .switcherListing(query: "", showsOlderRuntimes: false)
+        #expect(folded.sections.map(\.kind) == [.runtime("iOS 26.5")])
+        #expect(folded.foldedRuntimeCount == 2)
+
+        let selectedOld = resolve(simulators: sims, selection: .simulator("old"), android: nil)
+            .switcherListing(query: "", showsOlderRuntimes: false)
+        #expect(selectedOld.sections.map(\.kind) == [.runtime("iOS 26.5"), .runtime("iOS 18.6")])
+        #expect(selectedOld.foldedRuntimeCount == 1)
+
+        let shown = resolve(simulators: sims, android: nil).switcherListing(query: "", showsOlderRuntimes: true)
+        #expect(shown.sections.map(\.kind) == [.runtime("iOS 26.5"), .runtime("iOS 26.0"), .runtime("iOS 18.6")])
+        #expect(shown.foldedRuntimeCount == 0)
+    }
+
+    @Test(arguments: [
+        ("16e", [DevicesTarget.simulator("old")]),
+        ("ios 18", [.simulator("old")]),
+        ("android", [.android("emulator-5554"), .android("avd:Pixel_9")]),
+        ("linux", [.vm(.linux)]),
+        ("zzz", []),
+    ])
+    func theFilterMatchesEveryToken(query: String, expected: [DevicesTarget]) {
+        let state = resolve(
+            simulators: [Self.old, Self.off], vms: [.linux: .stopped],
+            android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil)
+        )
+        let listing = state.switcherListing(query: query, showsOlderRuntimes: false)
+        #expect(listing.sections.flatMap(\.rows).map(\.target) == expected)
+        #expect(listing.foldedRuntimeCount == 0)
+    }
+
+    @Test func notesShowOnlyWithoutAQuery() {
+        let note = "Install Android Studio or the SDK command-line tools to use Android devices"
+        let state = resolve(simulators: [], android: AndroidListing(devices: [], avds: [], bootingAVDs: [], note: note))
+        let listing = state.switcherListing(query: "", showsOlderRuntimes: false)
+        #expect(listing.sections.map(\.kind) == [.simulatorsNote, .android])
+        #expect(listing.sections.map(\.note) == ["No iOS simulators", note])
+        #expect(state.switcherListing(query: "x", showsOlderRuntimes: false).sections.isEmpty)
     }
 }
