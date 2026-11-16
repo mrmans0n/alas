@@ -60,7 +60,7 @@ struct TranscriptRowView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
         case .agent(let text):
-            AgentMarkdown(id: item.id, text: text, image: image)
+            AgentMarkdown(id: item.id, text: text, session: session)
         case .thought(let text):
             Text(text)
                 .font(.callout.italic())
@@ -111,7 +111,9 @@ struct TranscriptRowView: View {
             if isExpanded {
                 Text(call.content).font(.system(.footnote, design: .monospaced))
                 ForEach(Array(call.assets.filter(Self.isImage).enumerated()), id: \.offset) { _, asset in
-                    TranscriptImage(source: .resolve(asset: asset), label: asset.name ?? asset.uri ?? "Image", image: image)
+                    TranscriptImage(source: .resolve(asset: asset),
+                                    fallback: asset.data == nil ? nil : .resolve(source: asset.uri ?? ""),
+                                    label: Self.label(asset), session: session)
                 }
             }
         }
@@ -170,8 +172,22 @@ struct TranscriptRowView: View {
         }
     }
 
+    /// As the Mac's `looksLikeImage`: the kind, an image mime type, or an image file extension.
     private static func isImage(_ asset: ACPToolCallAsset) -> Bool {
-        asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true
+        if asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true { return true }
+        let candidate = [asset.uri, asset.name].compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        guard let candidate else { return false }
+        let ext = URL(fileURLWithPath: candidate).pathExtension.lowercased()
+        return ["png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp"].contains(ext)
+    }
+
+    /// The name, else the uri's last path component; never a data uri, which can run to megabytes.
+    private static func label(_ asset: ACPToolCallAsset) -> String {
+        if let name = asset.name, !name.isEmpty { return name }
+        guard let uri = asset.uri, !uri.isEmpty, !uri.lowercased().hasPrefix("data:") else { return "Image" }
+        let url = URL(string: uri).flatMap { $0.scheme == nil ? nil : $0 } ?? URL(fileURLWithPath: uri)
+        return url.lastPathComponent.isEmpty ? "Image" : url.lastPathComponent
     }
 
     private static func planIcon(_ status: String) -> String {
@@ -205,7 +221,7 @@ private extension View {
 struct AgentMarkdown: View {
     let id: String
     let text: String
-    var image: (String) -> UIImage? = { _ in nil }
+    var session: TranscriptSession?
 
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
@@ -236,7 +252,7 @@ struct AgentMarkdown: View {
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
                 case .image(let source, let alt):
-                    TranscriptImage(source: .resolve(source: source), label: alt.isEmpty ? "Image" : alt, image: image)
+                    TranscriptImage(source: .resolve(source: source), label: alt.isEmpty ? "Image" : alt, session: session)
                 case .table(let rows):
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in

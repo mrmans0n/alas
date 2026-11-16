@@ -2,40 +2,49 @@ import AlasRemoteKit
 import SwiftUI
 
 /// A markdown or tool-call image: full width, never upscaled, at most 320 pt tall.
-/// Until it loads, or when it cannot, it reads as its label.
+/// It reads as its label with a spinner while loading, and as the label alone when it cannot load.
 struct TranscriptImage: View {
     let source: RemoteTranscriptImageSource
+    /// Tried when `source` fails, as the Mac falls back to an asset's uri when its data is not an image.
+    var fallback: RemoteTranscriptImageSource?
     let label: String
-    /// A host image's bytes by path, through the session's cached `readTranscriptImage`.
-    var image: (String) -> UIImage? = { _ in nil }
+    /// Loads through the session's caches; without one the image reads as its label.
+    let session: TranscriptSession?
     /// Opens the viewer once there is an image; nil leaves it inert.
     var onTap: ((UIImage) -> Void)?
 
     var body: some View {
-        if let loaded {
-            Image(uiImage: loaded)
+        switch load {
+        case .loaded(let image):
+            Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: loaded.size.width, maxHeight: min(320, loaded.size.height))
+                .frame(maxWidth: image.size.width, maxHeight: min(320, image.size.height))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(label)
                 .contentShape(Rectangle())
-                .onTapGesture { onTap?(loaded) }
+                .onTapGesture { onTap?(image) }
                 // Inert, a tap falls through to the row (a tool call's expand toggle).
                 .allowsHitTesting(onTap != nil)
-        } else {
-            Label(label, systemImage: "photo")
-                .font(.footnote)
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                caption
+            }
+        case .failed:
+            Label { caption } icon: { Image(systemName: "photo") }
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var loaded: UIImage? {
-        switch source {
-        // ponytail: decodes inline bytes per render; cache by row if a long transcript of inline images stutters.
-        case .inline(let data): UIImage(data: data)
-        case .host(let path): image(path)
-        case .unavailable: nil
-        }
+    private var caption: some View {
+        Text(label).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+    }
+
+    private var load: TranscriptSession.ImageLoad {
+        guard let session else { return .failed }
+        let load = session.transcriptImage(source)
+        if case .failed = load, let fallback, fallback != source { return session.transcriptImage(fallback) }
+        return load
     }
 }

@@ -1,4 +1,5 @@
 import AlasRemoteKit
+import CryptoKit
 import Observation
 import UIKit
 
@@ -162,8 +163,26 @@ final class TranscriptSession {
         case unavailable
     }
 
-    private var images: [String: LoadedImage] = [:]
-    @ObservationIgnored private var requestedImages: Set<String> = []
+    /// An attachment's 96 pt thumbnail, or a markdown or tool-call image sized for the row.
+    enum ImageSize: Hashable {
+        case thumbnail, display
+    }
+
+    enum ImageLoad {
+        case loading, loaded(UIImage), failed
+    }
+
+    /// One path can be both an attachment and a markdown image, at different sizes.
+    private struct ImageKey: Hashable {
+        let path: String
+        let size: ImageSize
+    }
+
+    private var images: [ImageKey: LoadedImage] = [:]
+    @ObservationIgnored private var requestedImages: Set<ImageKey> = []
+    /// Inline bytes by their SHA-256, decoded once off the main actor.
+    private var inlineImages: [String: LoadedImage] = [:]
+    @ObservationIgnored private var decodingInline: Set<String> = []
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -426,16 +445,45 @@ final class TranscriptSession {
         refreshCanLoadOlder()
     }
 
-    /// The image's bytes once they arrive. The first call for a path asks the host for them.
+    /// An attachment's thumbnail once its bytes arrive. The first call for a path asks the host for them.
     func image(for path: String) -> UIImage? {
-        switch images[path] {
-        case .image(let image): return image
-        case .unavailable: return nil
-        case nil:
-            if requestedImages.insert(path).inserted {
-                hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
+        if case .loaded(let image) = image(at: ImageKey(path: path, size: .thumbnail)) { return image }
+        return nil
+    }
+
+    /// A markdown or tool-call image, sized for the row.
+    func transcriptImage(_ source: RemoteTranscriptImageSource) -> ImageLoad {
+        switch source {
+        case .unavailable:
+            return .failed
+        case .host(let path):
+            return image(at: ImageKey(path: path, size: .display))
+        case .inline(let data):
+            let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            switch inlineImages[key] {
+            case .image(let image): return .loaded(image)
+            case .unavailable: return .failed
+            case nil:
+                if decodingInline.insert(key).inserted {
+                    Task { [weak self] in
+                        let image = await Self.decode(data, .display)
+                        self?.inlineImages[key] = image.map(LoadedImage.image) ?? .unavailable
+                    }
+                }
+                return .loading
             }
-            return nil
+        }
+    }
+
+    private func image(at key: ImageKey) -> ImageLoad {
+        switch images[key] {
+        case .image(let image): return .loaded(image)
+        case .unavailable: return .failed
+        case nil:
+            if requestedImages.insert(key).inserted {
+                hub.send(.readTranscriptImage(sessionId: sessionId, path: key.path), to: hostID)
+            }
+            return .loading
         }
     }
 
@@ -528,7 +576,7 @@ final class TranscriptSession {
         fetchingOlder = false
         forgetTransientState()
         hub.send(.subscribe(sessionId: sessionId), to: hostID)
-        for path in requestedImages where images[path] == nil {
+        for path in Set(requestedImages.filter { images[$0] == nil }.map(\.path)) {
             hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
         }
         refreshCanLoadOlder()
@@ -541,9 +589,11 @@ final class TranscriptSession {
         }
         switch message {
         case .transcriptImage(let id, let path, let data) where id == sessionId:
-            Task { [weak self] in
-                let image = await Self.thumbnail(data)
-                self?.images[path] = image.map(LoadedImage.image) ?? .unavailable
+            for key in requestedImages where key.path == path && images[key] == nil {
+                Task { [weak self] in
+                    let image = await Self.decode(data, key.size)
+                    self?.images[key] = image.map(LoadedImage.image) ?? .unavailable
+                }
             }
             return
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
@@ -710,13 +760,29 @@ final class TranscriptSession {
     }
 
     /// Decoded and downscaled off the main actor, once on arrival, so neither the frame handler
-    /// nor a cell decodes a full-size photo. 288 px fills the row's 96 pt square at 3x.
+    /// nor a cell decodes a full-size photo.
     @concurrent
-    private nonisolated static func thumbnail(_ data: Data?) async -> UIImage? {
+    private nonisolated static func decode(_ data: Data?, _ size: ImageSize) async -> UIImage? {
         guard let data, let image = UIImage(data: data) else { return nil }
-        let scale = 288 / min(image.size.width, image.size.height)
-        let size = scale < 1 ? CGSize(width: image.size.width * scale, height: image.size.height * scale) : image.size
-        return await image.byPreparingThumbnail(ofSize: size) ?? image
+        switch size {
+        case .thumbnail:
+            // 288 px fills the row's 96 pt square at 3x.
+            let scale = 288 / min(image.size.width, image.size.height)
+            let size = scale < 1 ? CGSize(width: image.size.width * scale, height: image.size.height * scale) : image.size
+            return await image.byPreparingThumbnail(ofSize: size) ?? image
+        case .display:
+            // A row is at most ~400 pt wide or 320 pt tall, so 1200 px on the long side is sharp at 3x.
+            let long = max(image.size.width, image.size.height)
+            let fit = 1200 / (long * image.scale)
+            guard fit < 1 else { return await image.byPreparingForDisplay() ?? image }
+            let target = CGSize(width: image.size.width * image.scale * fit, height: image.size.height * image.scale * fit)
+            guard let thumb = await image.byPreparingThumbnail(ofSize: target), let cgImage = thumb.cgImage else {
+                return image
+            }
+            // Only the bitmap shrinks: the point size stays the source's, so the row never upscales it.
+            let pixels = max(thumb.size.width, thumb.size.height) * thumb.scale
+            return UIImage(cgImage: cgImage, scale: pixels / long, orientation: thumb.imageOrientation)
+        }
     }
 
     private func refreshCanLoadOlder() {
