@@ -178,10 +178,11 @@ iOS:
 
 Android (after phase 3):
 
-- [ ] Dark mode, font scale, orientation, network on and off, location,
-  permissions, APK install and launch, clear data, logcat. Each is an `adb`
-  command (`cmd uimode night`, `settings put system font_scale`,
-  `adb emu geo fix`, `pm grant`, `install`, `logcat`).
+- [x] Dark mode, font scale, orientation, network on and off, location,
+  permissions, APK install and launch, clear data, logcat: G, H and I
+  (`2026-11-16-devices-android-settings-design.md`). Location goes through
+  Android's test location provider rather than `emu geo fix`, so it works on
+  phones too.
 - [ ] GPS route playback and session record/replay. serve-emu builds these
   itself; they need a design of their own.
 

@@ -271,7 +271,15 @@ final class AndroidBackend: DeviceBackend {
         let control = try control()
         if let wifi { _ = try await control.adb(id, ["shell", "svc", "wifi", wifi ? "enable" : "disable"]) }
         if let data { _ = try await control.adb(id, ["shell", "svc", "data", data ? "enable" : "disable"]) }
-        return try await network(id)
+        // svc returns before the radio changes: read until it matches, for up to 3 s.
+        var state = try await network(id)
+        for _ in 0..<15 {
+            let settled = (wifi.map { state.wifi == .value($0) } ?? true) && (data.map { state.data == .value($0) } ?? true)
+            if settled { break }
+            try? await Task.sleep(for: .milliseconds(200))
+            state = try await network(id)
+        }
+        return state
     }
 
     func clearData(_ id: String, appID: String) async throws {
