@@ -8,6 +8,9 @@ struct InboxView: View {
     @Environment(SessionRegistry.self) private var registry
     @State private var model = InboxModel()
     @State private var path: [SessionRoute] = []
+    /// The session in the detail column, where there is room for one (iPad).
+    @State private var selected: SessionRoute?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// A hidden tab keeps its view alive; it must not hold sessions then.
     @State private var visible = false
 
@@ -18,29 +21,37 @@ struct InboxView: View {
             guard let session = model.sessions[entry.route], session.hasSnapshot else { return true }
             return session.hasPendingRequest
         }
-        NavigationStack(path: $path) {
-            Group {
-                if shown.isEmpty {
-                    ContentUnavailableView("Nothing needs you right now", systemImage: "tray",
-                                           description: Text("Permission requests, questions and plans from your sessions show up here."))
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 20) {
-                            ForEach(shown) { entry in section(entry) }
+        Group {
+            if sizeClass == .regular {
+                NavigationSplitView {
+                    list(shown)
+                } detail: {
+                    // Its own stack, for the diffs and files a session pushes.
+                    NavigationStack {
+                        if let selected {
+                            TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
+                        } else {
+                            ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
+                                                   description: Text("Choose a request to see its session."))
                         }
-                        .padding(16)
                     }
                 }
+            } else {
+                NavigationStack(path: $path) {
+                    list(shown)
+                        .navigationDestination(for: SessionRoute.self) { route in
+                            TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
+                        }
+                }
             }
-            .navigationTitle("Inbox")
-            .navigationDestination(for: SessionRoute.self) { route in
-                TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
-            }
-            .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
+        }
+        .onChange(of: hub.hosts.map(\.id)) { _, ids in
+            path.removeAll { !ids.contains($0.hostID) }
+            if let selected, !ids.contains(selected.hostID) { self.selected = nil }
         }
         .onChange(of: openRoute, initial: true) { _, route in
             guard let route else { return }
-            path = [route]
+            if sizeClass == .regular { selected = route } else { path = [route] }
             openRoute = nil
         }
         .onAppear {
@@ -54,9 +65,34 @@ struct InboxView: View {
         }
     }
 
+    private func list(_ shown: [InboxModel.Entry]) -> some View {
+        Group {
+            if shown.isEmpty {
+                ContentUnavailableView("Nothing needs you right now", systemImage: "tray",
+                                       description: Text("Permission requests, questions and plans from your sessions show up here."))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 20) {
+                        ForEach(shown) { entry in section(entry) }
+                    }
+                    .padding(16)
+                }
+            }
+        }
+        .navigationTitle("Inbox")
+    }
+
+    private func open(_ route: SessionRoute) {
+        if sizeClass == .regular {
+            selected = route
+        } else if path.last != route {
+            path.append(route)
+        }
+    }
+
     private func section(_ entry: InboxModel.Entry) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            NavigationLink(value: entry.route) {
+            Button { open(entry.route) } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
@@ -66,6 +102,10 @@ struct InboxView: View {
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 4)
+                .padding(.vertical, sizeClass == .regular ? 6 : 0)
+                .background(selected == entry.route && sizeClass == .regular ? Color.accentColor.opacity(0.15) : .clear,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if let session = model.sessions[entry.route], session.hasPendingRequest {
