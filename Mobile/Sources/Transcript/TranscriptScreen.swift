@@ -142,6 +142,9 @@ struct TranscriptScreen: View {
                 }
             }
             .toolbar {
+                if !session.hasEnded, workspace.canShepherd, workspace.shepherdLoaded {
+                    ToolbarItem(placement: .primaryAction) { ShepherdMenu(workspace: workspace) }
+                }
                 if let worktreeId = session.summary?.worktreeId,
                    registry.hub.supports(PeerConsoleCapability.phoneV1, on: hostID) {
                     ToolbarItem(placement: .primaryAction) {
