@@ -311,7 +311,12 @@ struct RightPaneView: View {
     private func devicesActions(rps: RightPaneState) -> AnyView? {
         let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesSelection)
         if case .android(let target, .ready) = tabState.stage, let device = target.device {
-            return AnyView(AndroidActions(device: device, pane: state.androidPane, recorder: state.deviceRecorder) {
+            return AnyView(AndroidActions(
+                device: device, pane: state.androidPane, control: state.deviceControl, recorder: state.deviceRecorder,
+                onOpenLogs: {
+                    state.openDeviceLogs(worktreeID: worktree.id, udid: device.serial, name: device.title, platform: .android)
+                }
+            ) {
                 Task {
                     // Saves a recording before the device goes.
                     await state.deviceRecorder.simulatorStopped(udid: device.serial)
@@ -327,7 +332,7 @@ struct RightPaneView: View {
             canChangeSettings: stage == .booted
                 && VMDriver.allowsViewInput(state.deviceControl.driver(udid: device.udid)),
             onShutDown: { Task { await state.devicePane.shutDown(device) } },
-            onOpenLogs: { state.openSimulatorLogs(worktreeID: worktree.id, device: device) },
+            onOpenLogs: { state.openDeviceLogs(worktreeID: worktree.id, udid: device.udid, name: device.name, platform: .ios) },
             accessibilityOverlay: state.devicePane.accessibilityOverlays.contains(device.udid),
             onToggleAccessibilityOverlay: { state.devicePane.toggleAccessibilityOverlay(udid: device.udid) },
             recorder: state.deviceRecorder,

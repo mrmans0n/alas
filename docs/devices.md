@@ -117,6 +117,13 @@ copies the device's selection. Drop an `.apk` on the screen to install and
 open it. The toolbar records up to 3 minutes of the screen and saves a
 screenshot, both to the Desktop, and shuts an emulator down.
 
+The settings button opens the same settings as on iOS: appearance, text size
+(Android's font scale) and high-contrast text; Wi-Fi and mobile data; an
+app's permissions, or clearing its data after a confirmation; a simulated
+location; and a URL to open. The Logs button opens a center tab with the
+logcat of the app in front, a chosen app or every process, followed across
+the app's restarts, with a banner for each Java crash.
+
 The screen streams with scrcpy's server, which Alas bundles and copies to
 the device each time it shows the screen.
 
@@ -153,6 +160,8 @@ MCP server:
 | `device_set_permission` | Grants, revokes or resets a privacy permission for an installed app. |
 | `device_set_location` | Sets or clears the simulated location. |
 | `device_push` | Sends a push notification to an installed app. iOS only. |
+| `device_set_network` | Turns Wi-Fi and mobile data on or off, and returns both. Android only. |
+| `device_clear_data` | Clears an installed app's data, as a fresh install has it. Android only. |
 | `device_open_url` | Opens a web page or a deep link. |
 | `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
 | `device_clipboard` | Reads the device's clipboard, or sets it. |

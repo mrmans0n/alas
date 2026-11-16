@@ -319,14 +319,28 @@ struct SimulatorLogsTabState: Codable, Equatable, Identifiable {
     let worktreeId: String
     let udid: String
     let deviceName: String
+    let platform: AgentDevice.Platform
 
     var title: String { "Logs · \(deviceName)" }
 
-    init(worktreeId: String, udid: String, deviceName: String) {
+    init(worktreeId: String, udid: String, deviceName: String, platform: AgentDevice.Platform = .ios) {
         self.worktreeId = worktreeId
         self.udid = udid
         self.deviceName = deviceName
+        self.platform = platform
         id = "simulator-logs:\(udid)"
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, worktreeId, udid, deviceName, platform }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        udid = try container.decode(String.self, forKey: .udid)
+        deviceName = try container.decode(String.self, forKey: .deviceName)
+        // Tabs saved before Android had logs are simulators'.
+        platform = try container.decodeIfPresent(AgentDevice.Platform.self, forKey: .platform) ?? .ios
     }
 }
 

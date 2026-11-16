@@ -510,6 +510,17 @@ pub enum DeviceCommand {
         text_size: Option<String>,
         increase_contrast: Option<bool>,
     },
+    /// Android only; at least one is set.
+    SetNetwork {
+        udid: String,
+        wifi: Option<bool>,
+        data: Option<bool>,
+    },
+    /// Android only.
+    ClearData {
+        udid: String,
+        bundle_id: String,
+    },
     /// At least one is set.
     SetAccessibility {
         udid: String,
@@ -629,6 +640,8 @@ impl DeviceCommand {
             | DeviceCommand::Launch { .. }
             | DeviceCommand::SetAppearance { .. }
             | DeviceCommand::SetAccessibility { .. }
+            | DeviceCommand::SetNetwork { .. }
+            | DeviceCommand::ClearData { .. }
             | DeviceCommand::SetPermission { .. }
             | DeviceCommand::SetLocation { .. }
             | DeviceCommand::Push { .. }
@@ -1337,6 +1350,20 @@ fn device_request(command: &DeviceCommand) -> Request {
             }
             ("device_set_appearance", params)
         }
+        DeviceCommand::SetNetwork { udid, wifi, data } => {
+            let mut params = json!({ "udid": udid });
+            if let Some(value) = wifi {
+                params["wifi"] = json!(value);
+            }
+            if let Some(value) = data {
+                params["data"] = json!(value);
+            }
+            ("device_set_network", params)
+        }
+        DeviceCommand::ClearData { udid, bundle_id } => (
+            "device_clear_data",
+            json!({ "udid": udid, "bundle_id": bundle_id }),
+        ),
         DeviceCommand::SetAccessibility {
             udid,
             voiceover,

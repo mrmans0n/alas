@@ -47,6 +47,13 @@ protocol DeviceBackend: AnyObject {
         _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
     ) async throws -> SimulatorDisplaySettings
     func setAccessibility(_ id: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility
+    func display(_ id: String) async throws -> SimulatorDisplaySettings
+    func accessibility(_ id: String) async throws -> SimulatorAccessibility
+    /// The apps the user installed, for the settings popover.
+    func userApps(_ id: String) async throws -> [SimulatorApp]
+    func network(_ id: String) async throws -> AndroidNetworkState
+    func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState
+    func clearData(_ id: String, appID: String) async throws
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws
     func push(_ id: String, appID: String, payload: Data) async throws

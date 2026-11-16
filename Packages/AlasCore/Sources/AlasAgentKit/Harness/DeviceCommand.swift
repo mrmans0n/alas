@@ -45,6 +45,10 @@ public enum DeviceCommand: Equatable, Sendable {
     case setAppearance(udid: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?)
     /// At least one setting is set.
     case setAccessibility(udid: String, change: SimulatorAccessibilityChange)
+    /// Android only; at least one is set.
+    case setNetwork(udid: String, wifi: Bool?, data: Bool?)
+    /// Android only: the app's data, as a fresh install has it.
+    case clearData(udid: String, bundleID: String)
     case setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction)
     /// Nil clears the simulated location.
     case setLocation(udid: String, location: SimulatorLocation?)
@@ -74,6 +78,8 @@ public enum DeviceCommand: Equatable, Sendable {
         case .launch: "device_launch"
         case .setAppearance: "device_set_appearance"
         case .setAccessibility: "device_set_accessibility"
+        case .setNetwork: "device_set_network"
+        case .clearData: "device_clear_data"
         case .setPermission: "device_set_permission"
         case .setLocation: "device_set_location"
         case .push: "device_push"
@@ -90,7 +96,7 @@ public enum DeviceCommand: Equatable, Sendable {
         case .list: nil
         case .open(let udid), .snapshot(let udid, _, _), .screenshot(let udid),
              .tap(let udid, _, _, _), .swipe(let udid, _, _, _, _), .type(let udid, _, _, _), .button(let udid, _, _, _),
-             .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _), .setAccessibility(let udid, _),
+             .install(let udid, _), .launch(let udid, _, _), .setAppearance(let udid, _, _, _), .setAccessibility(let udid, _), .setNetwork(let udid, _, _), .clearData(let udid, _),
              .setPermission(let udid, _, _, _), .setLocation(let udid, _), .push(let udid, _, _), .openURL(let udid, _, _),
              .logs(let udid, _, _, _, _, _, _), .clipboard(let udid, _), .rotate(let udid, _, _), .record(let udid, _):
             udid
@@ -124,6 +130,8 @@ public enum DeviceCommand: Equatable, Sendable {
         var reduce_transparency: Bool?
         var color_filter: String?
         var liquid_glass: String?
+        var wifi: Bool?
+        var data: Bool?
         var service: String?
         var action: String?
         var latitude: Double?
@@ -149,6 +157,8 @@ public enum DeviceCommand: Equatable, Sendable {
         "device_install": ["udid", "app_path"],
         "device_launch": ["udid", "bundle_id", "diff"],
         "device_set_appearance": ["udid", "appearance", "text_size", "increase_contrast"],
+        "device_set_network": ["udid", "wifi", "data"],
+        "device_clear_data": ["udid", "bundle_id"],
         "device_set_accessibility": [
             "udid", "voiceover", "reduce_motion", "button_shapes", "reduce_transparency", "color_filter", "liquid_glass",
         ],
@@ -260,6 +270,11 @@ public enum DeviceCommand: Equatable, Sendable {
             )
             guard !change.isEmpty else { throw AlasCLIRequestError.malformed }
             return .setAccessibility(udid: try udid(), change: change)
+        case "device_set_network":
+            guard params.wifi != nil || params.data != nil else { throw AlasCLIRequestError.malformed }
+            return .setNetwork(udid: try udid(), wifi: params.wifi, data: params.data)
+        case "device_clear_data":
+            return .clearData(udid: try udid(), bundleID: try bundleID())
         case "device_set_permission":
             guard let service = params.service.flatMap(SimulatorPrivacyService.init(rawValue:)),
                   let action = params.action.flatMap(SimulatorPrivacyAction.init(rawValue:))

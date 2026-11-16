@@ -20,8 +20,18 @@ extension AppState {
         return .stopped
     }
 
-    func openSimulatorLogs(worktreeID: String, device: SimulatorDevice) {
-        let tab = tabs.openOrFocusSimulatorLogs(worktreeId: worktreeID, udid: device.udid, deviceName: device.name)
+    /// What a Logs tab reads; nil for an Android tab once the SDK is gone.
+    func deviceLogSource(for tab: SimulatorLogsTabState) -> (any DeviceLogSource)? {
+        switch tab.platform {
+        case .ios:
+            SimulatorLogSource(udid: tab.udid) { [unowned self] in foregroundTracker(udid: tab.udid) }
+        case .android:
+            androidPane.control.map { AndroidLogSource(serial: tab.udid, control: $0) }
+        }
+    }
+
+    func openDeviceLogs(worktreeID: String, udid: String, name: String, platform: AgentDevice.Platform) {
+        let tab = tabs.openOrFocusDeviceLogs(worktreeId: worktreeID, udid: udid, deviceName: name, platform: platform)
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
     }
 

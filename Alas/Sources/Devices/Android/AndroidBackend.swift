@@ -223,6 +223,14 @@ final class AndroidBackend: DeviceBackend {
         if let increaseContrast {
             _ = try await control.adb(id, ["shell", "settings", "put", "secure", "high_text_contrast_enabled", increaseContrast ? "1" : "0"])
         }
+        return try await readDisplay(id, control: control)
+    }
+
+    func display(_ id: String) async throws -> SimulatorDisplaySettings {
+        try await readDisplay(id, control: control())
+    }
+
+    private func readDisplay(_ id: String, control: AndroidControl) async throws -> SimulatorDisplaySettings {
         let night = try await control.adb(id, ["shell", "cmd", "uimode", "night"])
         let scale = try await control.adb(id, ["shell", "settings", "get", "system", "font_scale"])
         let contrast = try await control.adb(id, ["shell", "settings", "get", "secure", "high_text_contrast_enabled"])
@@ -236,6 +244,49 @@ final class AndroidBackend: DeviceBackend {
 
     func setAccessibility(_ id: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
         throw DeviceToolError.unsupported("device_set_accessibility")
+    }
+
+    func accessibility(_ id: String) async throws -> SimulatorAccessibility {
+        throw DeviceToolError.unsupported("device_set_accessibility")
+    }
+
+    func userApps(_ id: String) async throws -> [SimulatorApp] {
+        let output = try await control().adb(id, ["shell", "pm", "list", "packages", "-3"])
+        return output.split(whereSeparator: \.isNewline).compactMap { line in
+            guard line.hasPrefix("package:") else { return nil }
+            let package = String(line.dropFirst("package:".count)).trimmingCharacters(in: .whitespaces)
+            return SimulatorApp(bundleID: package, name: package)
+        }.sorted { $0.bundleID < $1.bundleID }
+    }
+
+    func network(_ id: String) async throws -> AndroidNetworkState {
+        let control = try control()
+        return AndroidNetworkState(
+            wifi: AndroidNetwork.wifi(try await control.adb(id, ["shell", "cmd", "wifi", "status"])),
+            data: AndroidNetwork.data(try await control.adb(id, ["shell", "settings", "get", "global", "mobile_data"]))
+        )
+    }
+
+    func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState {
+        let control = try control()
+        if let wifi { _ = try await control.adb(id, ["shell", "svc", "wifi", wifi ? "enable" : "disable"]) }
+        if let data { _ = try await control.adb(id, ["shell", "svc", "data", data ? "enable" : "disable"]) }
+        // svc returns before the radio changes: read until it matches, for up to 3 s.
+        var state = try await network(id)
+        for _ in 0..<15 {
+            let settled = (wifi.map { state.wifi == .value($0) } ?? true) && (data.map { state.data == .value($0) } ?? true)
+            if settled { break }
+            try? await Task.sleep(for: .milliseconds(200))
+            state = try await network(id)
+        }
+        return state
+    }
+
+    func clearData(_ id: String, appID: String) async throws {
+        let output = try await control().adb(id, ["shell", "pm", "clear", appID])
+        guard output.trimmingCharacters(in: .whitespacesAndNewlines) == "Success" else {
+            throw DeviceToolError(message: "device_clear_data_failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
     }
 
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {
@@ -294,7 +345,7 @@ final class AndroidBackend: DeviceBackend {
         guard await isInstalled(id, appID: app) else { throw DeviceAppNotInstalled(appID: app) }
         let year = Calendar.current.component(.year, from: Date())
         // Lines since `since` seconds ago by the device's own clock.
-        let start = "\"$(date -d @$(( $(date +%s) - \(since) )) '+%m-%d %H:%M:%S.000')\""
+        let start = AndroidLogcat.since(seconds: since)
         let pid = (try? await control.adb(id, ["shell", "pidof", app]))?
             .split(whereSeparator: \.isWhitespace).first.map(String.init)
         var lines: [SimulatorLogLine] = []

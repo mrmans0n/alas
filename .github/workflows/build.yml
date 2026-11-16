@@ -137,8 +137,11 @@ jobs:
 
       - name: Test AlasCore
         # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
-        # the app build starts.
-        run: swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
+        # the app build starts. A run silent for 10 minutes is hung: the
+        # watchdog prints its stacks and fails it.
+        run: >-
+          scripts/run-with-stall-watchdog.sh 600
+          swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update
 
       - name: Set up Node for the push relay
         # The test glob needs Node 22+; the runner image's default may be older.
