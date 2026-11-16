@@ -46,7 +46,7 @@ struct ACPCodexHooksTests {
         let mock = ACPMockClient()
         mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
         mock.script(method: "_codex/hooks/list") { _ in
-            Data(#"{"cwd":"/p","hooks":[],"warnings":["Review startup configuration"],"errors":[],"reviewToken":"token","codexHome":"/actual/codex"}"#.utf8)
+            Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[{"path":"/c","message":"Review startup configuration"}],"reviewToken":"token","codexHome":"/actual/codex"}"#.utf8)
         }
         mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
@@ -117,7 +117,7 @@ struct ACPCodexHooksTests {
             let mock = try #require(mock)
             let inspection = mock.sent.filter { $0.method == "_codex/hooks/list" }.count
             return Data("""
-            {"cwd":"/p","hooks":[],"warnings":\(inspection == 1 ? "[]" : #"["Review configuration"]"#),"errors":[],"reviewToken":"review-\(inspection)"}
+            {"cwd":"/p","hooks":[],"warnings":[],"errors":\(inspection == 1 ? "[]" : #"[{"path":"/c","message":"Review configuration"}]"#),"reviewToken":"review-\(inspection)"}
             """.utf8)
         }
         mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
@@ -201,7 +201,7 @@ struct ACPCodexHooksTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let mock = ACPMockClient()
         mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
-        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review configuration"],"errors":[],"reviewToken":"token"}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[{"path":"/c","message":"Review configuration"}],"reviewToken":"token"}"#.utf8) }
         mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let gate = ExecutionReviewGate()
@@ -254,7 +254,7 @@ struct ACPCodexHooksTests {
         let mocks = [ACPMockClient(), ACPMockClient()]
         for mock in mocks {
             mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
-            mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review configuration"],"errors":[],"reviewToken":"token"}"#.utf8) }
+            mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[{"path":"/c","message":"Review configuration"}],"reviewToken":"token"}"#.utf8) }
             mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
             mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         }
@@ -322,7 +322,7 @@ struct ACPCodexHooksTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let mock = ACPMockClient()
         mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
-        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review child configuration"],"errors":[],"reviewToken":"child-token"}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[{"path":"/c","message":"Review child configuration"}],"reviewToken":"child-token"}"#.utf8) }
         mock.script(method: "session/new") { _ in Data(#"{"sessionId":"side","modes":{"currentModeId":"read-only","availableModes":[{"id":"read-only","name":"Read only","_meta":{"kind":"standard"}}]}}"#.utf8) }
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: mock) })
@@ -616,8 +616,16 @@ struct ACPCodexHooksTests {
         #expect(coordinator.reviewToken == nil)
     }
 
-    @Test @MainActor func emptyAndTrustedSnapshotsContinueAutomatically() async throws {
-        for initial in [try snapshot(status: "trusted", diagnostics: false), try JSONDecoder().decode(ACPCodexHooksList.self, from: Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[],"reviewToken":"token"}"#.utf8))] {
+    @Test @MainActor func emptyTrustedAndWarningOnlySnapshotsContinueAutomatically() async throws {
+        let decode = { (json: String) in try JSONDecoder().decode(ACPCodexHooksList.self, from: Data(json.utf8)) }
+        for initial in [
+            try snapshot(status: "trusted", diagnostics: false),
+            try decode(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[],"reviewToken":"token"}"#),
+            // Codex warns about benign normalizations; with nothing to trust they must not block startup.
+            try decode(#"{"cwd":"/p","hooks":[],"warnings":["clamping SessionEnd hook timeout to 3s"],"errors":[],"reviewToken":"token"}"#),
+        ] {
+            // Fail fast: a snapshot that needs review would leave `review()` waiting forever.
+            try #require(!initial.requiresReview)
             var coordinator: ACPCodexHooksReviewCoordinator?
             var shownWhileListing = false
             coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: {

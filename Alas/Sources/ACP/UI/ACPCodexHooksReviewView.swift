@@ -4,6 +4,7 @@ struct ACPCodexHooksReviewView: View {
     @Environment(\.designScale) private var scale
     @ObservedObject var coordinator: ACPCodexHooksReviewCoordinator
     @Environment(\.theme) private var theme
+    @State private var listHeight: Double = 0
 
     var body: some View {
         if let presentation = coordinator.presentation {
@@ -11,27 +12,16 @@ struct ACPCodexHooksReviewView: View {
                 header(presentation)
                 introduction(presentation)
                 if let snapshot = presentation.snapshot {
+                    // A ScrollView takes all the height it is offered, which left a
+                    // tall empty gap under short lists. Size it to the measured list,
+                    // capped, keeping one list instance so expanded rows stay open
+                    // when the list grows past the cap.
                     ScrollView {
-                        VStack(alignment: .leading, spacing: scale.space[2]) {
-                            ForEach(rows(snapshot)) { row in
-                                CodexHookReviewRow(
-                                    hook: row.hook,
-                                    isUnique: snapshot.isUnique(row.hook.identity),
-                                    isSelected: Binding(
-                                        get: { coordinator.selection.contains(row.hook.identity) },
-                                        set: { coordinator.setSelected(row.hook.identity, selected: $0, presentationID: presentation.id) }
-                                    )
-                                )
-                            }
-                            ForEach(diagnostics(snapshot)) { diagnostic in
-                                diagnosticMessage(diagnostic.text, isError: false)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, scale.space[3])
-                        .padding(.bottom, scale.space[0])
+                        hookList(snapshot, presentation: presentation)
+                            .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { listHeight = $0 }
                     }
-                    .frame(maxHeight: 280)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(height: min(listHeight, 280))
                     .disabled(presentation.isBusy)
                 }
                 if let error = presentation.error {
@@ -59,6 +49,27 @@ struct ACPCodexHooksReviewView: View {
             .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
             .tint(theme.color("accent"))
         }
+    }
+
+    private func hookList(_ snapshot: ACPCodexHooksList, presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
+        VStack(alignment: .leading, spacing: scale.space[2]) {
+            ForEach(rows(snapshot)) { row in
+                CodexHookReviewRow(
+                    hook: row.hook,
+                    isUnique: snapshot.isUnique(row.hook.identity),
+                    isSelected: Binding(
+                        get: { coordinator.selection.contains(row.hook.identity) },
+                        set: { coordinator.setSelected(row.hook.identity, selected: $0, presentationID: presentation.id) }
+                    )
+                )
+            }
+            ForEach(diagnostics(snapshot)) { diagnostic in
+                diagnosticMessage(diagnostic.text, isError: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, scale.space[3])
+        .padding(.bottom, scale.space[0])
     }
 
     private func header(_ presentation: ACPCodexHooksReviewCoordinator.Presentation) -> some View {
