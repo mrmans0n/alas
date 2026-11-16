@@ -735,16 +735,21 @@ final class AppState {
     let androidPane = AndroidPaneModel()
     /// Android screens, through scrcpy; the SDK comes from `androidPane`.
     @ObservationIgnored lazy var androidStreams = AndroidStreamClient { [weak self] in self?.androidPane.control }
-    /// Runs agents' `device_*` calls and tracks who drives each simulator.
+    /// Runs agents' `device_*` calls and tracks who drives each device.
     @ObservationIgnored lazy var deviceControl = DeviceAgentControl(
-        input: simulatorStreams,
-        devices: { try await SimulatorControl.devices() },
-        boot: { try await SimulatorControl.boot(udid: $0) },
-        install: { try await SimulatorControl.install(udid: $0, app: $1) },
-        launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
-        settings: LiveSimulatorSettings.bundled,
-        logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
-        pasteboard: devicePasteboard,
+        backends: [
+            SimulatorBackend(
+                input: simulatorStreams,
+                devices: { try await SimulatorControl.devices() },
+                boot: { try await SimulatorControl.boot(udid: $0) },
+                install: { try await SimulatorControl.install(udid: $0, app: $1) },
+                launch: { try await SimulatorControl.launch(udid: $0, bundleID: $1) },
+                settings: LiveSimulatorSettings.bundled,
+                logs: LiveSimulatorLogs { [weak self] udid in await self?.foregroundApp(udid: udid) },
+                pasteboard: devicePasteboard
+            ),
+            AndroidBackend(pane: androidPane, streams: androidStreams),
+        ],
         recorder: deviceRecorder
     )
     /// Screen recordings of simulators, yours and agents'. Made on first use,

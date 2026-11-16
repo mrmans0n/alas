@@ -188,7 +188,8 @@ private struct TranscriptContent: View {
     var body: some View {
         TranscriptCollectionView(
             items: session.items, expanded: $session.expanded, canLoadOlder: session.canLoadOlder,
-            loadOlder: session.loadOlder, image: session.image(for:), session: session)
+            loadOlder: session.loadOlder, image: session.image(for:), session: session,
+            sendCount: session.sendCount)
         .overlay {
             if session.items.isEmpty, !session.hasEnded {
                 if session.hasSnapshot {

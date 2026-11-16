@@ -908,10 +908,10 @@ fn vm_tools_without_vm() -> Vec<Value> {
 const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 
 /// The buttons `device_button` presses.
-const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher"];
+const DEVICE_BUTTONS: &[&str] = &["home", "lock", "siri", "side_button", "app_switcher", "back", "volume_up", "volume_down"];
 
 /// The same refusal the app gives a device call while the setting is off.
-const DEVICE_DISABLED: &str = "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators.";
+const DEVICE_DISABLED: &str = "device_disabled: Agents can't use simulators or Android devices. Ask the user to turn on Settings › Computer Use › Let agents use simulators and Android devices.";
 
 /// How input actions report their effect.
 const DEVICE_DIFF_NOTE: &str = "Returns what changed on the screen once it settles: added and removed elements with refs, and changed values; or the whole screen when it changed completely. Refs of elements still on screen keep working. Pass diff: false to skip that.";
@@ -919,20 +919,20 @@ const DEVICE_DIFF_NOTE: &str = "Returns what changed on the screen once it settl
 const DEVICE_DRIVING_NOTE: &str = "The user sees the device in Alas's Devices tab. While they drive it, a call waits up to 50 seconds for them to hand it back; `device_user_active` means it is still theirs: try again later. `device_disabled` means the user hasn't let agents use iOS simulators in Alas's Computer Use settings.";
 
 fn device_tool_definitions() -> Vec<Value> {
-    let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "The simulator's UDID, from device_list." });
+    let udid = json!({ "type": "string", "minLength": 1, "maxLength": 64, "description": "A simulator UDID or an Android serial, from device_list." });
     let include_screenshot = json!({ "type": "boolean", "description": "Also return a screenshot taken after the action. Default: false." });
     let diff = json!({ "type": "boolean", "description": "Return what changed on the screen once it settles. Default: true." });
     let coordinate = json!({ "type": "number", "minimum": 0 });
     vec![
         json!({
             "name": "device_list",
-            "description": "List the iOS simulators on this Mac: udid, name, runtime, and state (booted or shutdown).",
+            "description": "List the iOS simulators and Android devices on this Mac: udid, name, platform (ios or android), runtime, and state (booted, shutdown, or for a phone unauthorized or offline). Android AVDs that aren't running are listed as avd:<name>; device_open boots one and returns its serial, which later calls use.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
             "name": "device_open",
-            "description": format!("Open an iOS simulator for this session: boot it if it is shut down (this can take a minute), and show it in the Devices tab of this worktree. Call it before the other device_* tools. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Open an iOS simulator or Android device for this session: boot it if it is shut down (this can take a minute), and show it in the Devices tab of this worktree. Call it before the other device_* tools. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -942,7 +942,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_snapshot",
-            "description": "Read the simulator screen's accessibility elements: ref, role, label, value, id and frame in screen points, plus the screen size. Refs such as s2e3 are valid until the next device_snapshot of the same device. Prefer this over screenshots to find what to tap.",
+            "description": "Read the device screen's accessibility elements: ref, role, label, value, id and frame in screen points, plus the screen size. Refs such as s2e3 are valid until the next device_snapshot of the same device. Prefer this over screenshots to find what to tap.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -956,7 +956,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_screenshot",
-            "description": "Capture a PNG of the simulator screen (long edge at most 1280 px), with its width and height. x/y arguments of device_tap and device_swipe are pixels in the latest screenshot of the device.",
+            "description": "Capture a PNG of the device screen (long edge at most 1280 px), with its width and height. x/y arguments of device_tap and device_swipe are pixels in the latest screenshot of the device.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -966,7 +966,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_tap",
-            "description": format!("Tap the simulator screen: on an element ref from the latest device_snapshot, or at x/y pixels in the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Tap the device screen: on an element ref from the latest device_snapshot, or at x/y pixels in the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -983,7 +983,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_swipe",
-            "description": format!("Swipe on the simulator screen: a direction across the middle of the screen (up scrolls content up), or from one point to another in pixels of the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Swipe on the device screen: a direction across the middle of the screen (up scrolls content up), or from one point to another in pixels of the latest device_screenshot. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1003,7 +1003,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_type",
-            "description": format!("Type text into the focused field of the simulator. ASCII is typed as key presses on a US keyboard, and \\n presses Return; other characters, such as accents and emoji, are pasted. Tap the field first. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Type text into the focused field of the device. ASCII is typed as key presses on a US keyboard, and \\n presses Return; other characters, such as accents and emoji, are pasted. Tap the field first. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1018,7 +1018,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_button",
-            "description": format!("Press a hardware button on the simulator. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Press a hardware button on the device. back and the volume buttons are Android's; siri is iOS's. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1033,7 +1033,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_install",
-            "description": format!("Install a built .app on a booted simulator, replacing an installed copy. Build it for the simulator first, for example with xcodebuild -destination 'platform=iOS Simulator,id=<udid>'. Returns the app's bundle_id and name; then call device_launch. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Install a built .app on a booted simulator, or an .apk on an Android device, replacing an installed copy. Build it for the simulator first, for example with xcodebuild -destination 'platform=iOS Simulator,id=<udid>'. Returns the app's bundle_id and name; then call device_launch. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1046,21 +1046,21 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_launch",
-            "description": format!("Launch an installed app on a booted simulator, ending a running copy first. Returns its pid. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Launch an installed app on a booted device, ending a running copy first. Returns its pid. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "udid": udid,
                     "diff": diff,
-                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's bundle ID, from device_install." }
+                    "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "The app's bundle ID, or its Android package, from device_install." }
                 },
                 "required": ["udid", "bundle_id"]
             }
         }),
         json!({
             "name": "device_set_appearance",
-            "description": format!("Change the simulator's appearance (light or dark), text size (Dynamic Type) and Increase Contrast; pass at least one. Returns the three values read back; a value is \"unsupported\" when the runtime lacks that setting. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Change the device's appearance (light or dark), text size (Dynamic Type, or Android's font scale) and Increase Contrast (Android's high-contrast text); pass at least one. Returns the three values read back; a value is \"unsupported\" when the runtime lacks that setting. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1075,7 +1075,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_set_accessibility",
-            "description": format!("Turn the simulator's accessibility settings on or off: VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look (iOS 26); pass at least one. Running apps pick changes up live. Returns all six read back; a value is \"unsupported\" when the runtime lacks that setting (Liquid Glass before iOS 26) and \"unknown\" when it doesn't report it. With VoiceOver on, a tap selects an element and a double tap activates it; turn it off when done. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("iOS simulators only. Turn the simulator's accessibility settings on or off: VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look (iOS 26); pass at least one. Running apps pick changes up live. Returns all six read back; a value is \"unsupported\" when the runtime lacks that setting (Liquid Glass before iOS 26) and \"unknown\" when it doesn't report it. With VoiceOver on, a tap selects an element and a double tap activates it; turn it off when done. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1093,7 +1093,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_set_permission",
-            "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Grant, revoke or reset a privacy permission for an installed app, without the system prompt. On Android the services map to runtime permissions; those Android lacks answer device_unsupported. Changing a permission may end the running app. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1108,7 +1108,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_set_location",
-            "description": format!("Set the simulator's simulated location, or clear it. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Set the device's simulated location, or clear it. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1123,7 +1123,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_push",
-            "description": format!("Deliver a push notification to an installed app. payload is the notification's JSON, with an aps object, at most {DEVICE_PUSH_MAX_BYTES} bytes. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("iOS simulators only. Deliver a push notification to an installed app. payload is the notification's JSON, with an aps object, at most {DEVICE_PUSH_MAX_BYTES} bytes. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1137,7 +1137,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_open_url",
-            "description": format!("Open a URL on the simulator: a web page in Safari, or a deep link into an app. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Open a URL on the device: a web page in the browser, or a deep link into an app. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1151,7 +1151,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_logs",
-            "description": "Read an app's recent logs and crash reports on a booted simulator: by default the app in front, its own lines at Default level and above, without Apple's subsystems, from the last 60 seconds. Returns lines oldest first (the newest `limit`; `truncated` says when more matched) and `crashes` with each report's exception and crashing frames. Debug and Info lines are only there if the app's logging keeps them. A crash report appears about 30 seconds after the crash: if the logs end in a fatal error and `crashes` is empty, call again shortly.",
+            "description": "Read an app's recent logs and crash reports on a booted device: by default the app in front, its own lines at Default level and above, without Apple's subsystems, from the last 60 seconds. Returns lines oldest first (the newest `limit`; `truncated` says when more matched) and `crashes` with each report's exception and crashing frames. Debug and Info lines are only there if the app's logging keeps them. A crash report appears about 30 seconds after the crash: if the logs end in a fatal error and `crashes` is empty, call again shortly.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1160,7 +1160,7 @@ fn device_tool_definitions() -> Vec<Value> {
                     "since_seconds": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Default: 60." },
                     "bundle_id": { "type": "string", "minLength": 1, "maxLength": 255, "description": "Default: the app in front." },
                     "level": { "type": "string", "enum": ["default", "info", "debug", "error"], "description": "default: Default and above. error: errors and faults only. Default: default." },
-                    "include_apple": { "type": "boolean", "description": "Keep Apple's subsystems (com.apple.*) inside the app. Default: false." },
+                    "include_apple": { "type": "boolean", "description": "Keep Apple's subsystems (com.apple.*) inside the app; iOS only. Default: false." },
                     "query": { "type": "string", "maxLength": 256, "description": "Only lines whose message, subsystem or category contain this text." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Default: 200." }
                 },
@@ -1169,7 +1169,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_clipboard",
-            "description": format!("Read the simulator's pasteboard, or set it by passing text. To paste it into a field, tap the field and type with device_type, or use the app's Paste menu. Setting it waits while the user drives. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Read the device's clipboard, or set it by passing text. To paste it into a field, tap the field and type with device_type, or use the app's Paste menu. Setting it waits while the user drives. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
@@ -1182,7 +1182,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_rotate",
-            "description": format!("Turn the simulator to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Turn the device to an orientation, as rotating the device. Returns the device orientation and the interface's: an app that supports only portrait stays portrait. After rotating, take a new device_screenshot or device_snapshot; x/y and refs follow the screen as it looks. {DEVICE_DIFF_NOTE} {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1196,7 +1196,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_record",
-            "description": "Record the simulator's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes or when the simulator shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
+            "description": "Record the device's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes on iOS or 3 minutes on Android, or when the device shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
             "annotations": { "readOnlyHint": false, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
@@ -5486,7 +5486,7 @@ mod tests {
             ("device_tap", json!({ "udid": "U", "x": 1 }), "pass 'ref', or both 'x' and 'y'"),
             ("device_tap", json!({ "udid": "U", "ref": "e1" }), "ref must be a ref such as s2e3 from device_snapshot"),
             ("device_swipe", json!({ "udid": "U", "direction": "up", "from_x": 1 }), "pass either 'direction' or the from/to points, not both"),
-            ("device_button", json!({ "udid": "U", "name": "volume" }), "name must be one of home, lock, siri, side_button, app_switcher"),
+            ("device_button", json!({ "udid": "U", "name": "volume" }), "name must be one of home, lock, siri, side_button, app_switcher, back, volume_up, volume_down"),
             ("device_snapshot", json!({ "udid": "U", "limit": 0 }), "limit must be an integer from 1 to 1000"),
             ("device_snapshot", json!({ "udid": "U", "limit": 1001 }), "limit must be an integer from 1 to 1000"),
             ("device_type", json!({ "udid": "U", "text": "" }), "text must be a non-empty string of at most 4096 bytes"),

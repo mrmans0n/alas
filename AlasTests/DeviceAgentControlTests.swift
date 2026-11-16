@@ -182,16 +182,19 @@ struct DeviceAgentControlTests {
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
-            input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in },
-            install: { _, app in installs.calls.append("install \(app.lastPathComponent)") },
-            launch: { _, bundleID in
-                guard bundleID == "com.example.hello" else { throw SimulatorLaunchError.notInstalled }
-                installs.calls.append("launch \(bundleID)")
-                return 4021
-            },
-            settings: settings,
-            logs: logs,
-            pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
+            backends: [SimulatorBackend(
+                input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in },
+                install: { _, app in installs.calls.append("install \(app.lastPathComponent)") },
+                launch: { _, bundleID in
+                    guard bundleID == "com.example.hello" else { throw SimulatorLaunchError.notInstalled }
+                    installs.calls.append("launch \(bundleID)")
+                    return 4021
+                },
+                settings: settings,
+                logs: logs,
+                pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
+                sleep: sleep
+            )],
             recorder: recorder,
             sleep: sleep
         )
@@ -530,15 +533,18 @@ struct DeviceAgentControlTests {
         let input = FakeInput()
         var listings = 0
         let control = DeviceAgentControl(
-            input: input,
-            devices: {
-                listings += 1
-                let yields = listings == 1 ? 50 : 0
-                for _ in 0..<yields { await Task.yield() }
-                return [Self.booted]
-            },
-            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(),
+            backends: [SimulatorBackend(
+                input: input,
+                devices: {
+                    listings += 1
+                    let yields = listings == 1 ? 50 : 0
+                    for _ in 0..<yields { await Task.yield() }
+                    return [Self.booted]
+                },
+                boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
+            )],
+            recorder: DeviceRecorderTests.recorder(),
             sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
@@ -567,9 +573,12 @@ struct DeviceAgentControlTests {
     @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async throws {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
-            input: FakeInput(), devices: { listed }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(), sleep: Self.untilCancelled
+            backends: [SimulatorBackend(
+                input: FakeInput(), devices: { listed }, boot: { _ in },
+                install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
+            )],
+            recorder: DeviceRecorderTests.recorder(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false, diff: false), sessionID: "s")
@@ -667,15 +676,19 @@ extension DeviceAgentControlTests {
     @Test func theLeaseOutlastsACommandThatRunsPastItsWindow() async {
         let input = FakeInput()
         let window = Duration.seconds(60)
+        // The lease window passes at once; each typing pause lets it fire.
+        let sleep: @MainActor (Duration) async -> Void = { duration in
+            guard duration != window else { return }
+            for _ in 0..<5 { await Task.yield() }
+        }
         let control = DeviceAgentControl(
-            input: input, devices: { [Self.booted] }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(input), recorder: DeviceRecorderTests.recorder(),
-            // The lease window passes at once; each typing pause lets it fire.
-            sleep: { duration in
-                guard duration != window else { return }
-                for _ in 0..<5 { await Task.yield() }
-            },
+            backends: [SimulatorBackend(
+                input: input, devices: { [Self.booted] }, boot: { _ in },
+                install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(input), sleep: sleep
+            )],
+            recorder: DeviceRecorderTests.recorder(),
+            sleep: sleep,
             leaseWindow: window
         )
         #expect(await control.perform(.type(udid: "on", text: "abcdef", includeScreenshot: false, diff: false), sessionID: "s") == .ok)
@@ -764,5 +777,153 @@ extension DeviceAgentControlTests {
         var ran = false
         #expect(await control.whileUserHoldsInput(udid: "on") { ran = true } == false)
         #expect(!ran)
+    }
+
+    // MARK: Android
+
+    /// An Android backend over `FakeInput`: emulator-5554 runs; Pixel_9 boots as emulator-5556.
+    final class FakeBackend: DeviceBackend {
+        let platform = AgentDevice.Platform.android
+        let fakeInput = FakeInput()
+        var input: DeviceInput { fakeInput }
+        var pixelBooted = false
+        var pressed: [String] = []
+
+        func devices() async throws -> [AgentDevice] {
+            [AgentDevice(id: "emulator-5554", name: "Medium Phone", platform: .android, runtime: "Android 16", state: "booted")]
+                + (pixelBooted
+                    ? [AgentDevice(
+                        id: "emulator-5556", name: "Pixel 9", platform: .android, runtime: "Android 16", state: "booted",
+                        alias: "avd:Pixel_9"
+                    )]
+                    : [AgentDevice(id: "avd:Pixel_9", name: "Pixel 9", platform: .android, runtime: "Android", state: "shutdown")])
+        }
+
+        func boot(_ id: String) async throws -> String {
+            pixelBooted = true
+            return "emulator-5556"
+        }
+
+        func ready(_ id: String) async -> Bool { true }
+        func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
+            try DeviceSnapshot.parse(DeviceAgentControlTests.snapshot, generation: generation)
+        }
+
+        func press(_ id: String, _ button: DeviceCommand.Button) -> Bool {
+            guard button != .siri else { return false }
+            pressed.append(button.rawValue)
+            return true
+        }
+
+        func rotate(_ id: String, to orientation: DeviceScreenOrientation) async throws -> DeviceScreenOrientation { orientation }
+        func beginPaste(_ id: String) async throws -> any DevicePasteSession { throw DeviceToolError.unsupported("paste") }
+        func readClipboard(_ id: String) async throws -> String { "" }
+        func writeClipboard(_ id: String, _ text: String) async throws {}
+        func install(_ id: String, path: String) async throws -> (appID: String, name: String) { ("com.example.hello", "Hello") }
+        func launch(_ id: String, appID: String) async throws -> Int { 7 }
+        func isInstalled(_ id: String, appID: String) async -> Bool { true }
+        func openURL(_ id: String, _ url: String) async throws {}
+        func setDisplay(
+            _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
+        ) async throws -> SimulatorDisplaySettings {
+            SimulatorDisplaySettings(appearance: .unknown, textSize: .unknown, increaseContrast: .unknown)
+        }
+        func setAccessibility(_ id: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
+            throw DeviceToolError.unsupported("device_set_accessibility")
+        }
+        func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {}
+        func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {}
+        func push(_ id: String, appID: String, payload: Data) async throws { throw DeviceToolError.unsupported("device_push") }
+        func logs(
+            _ id: String, name: String, since: Int, appID: String?, level: SimulatorLogLevel, includeApple: Bool,
+            query: String?, limit: Int
+        ) async throws -> [String: Any] { [:] }
+    }
+
+    private func bothPlatforms(
+        _ android: FakeBackend, simulators: @escaping () async throws -> [SimulatorDevice] = { [Self.booted] },
+        sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
+    ) -> DeviceAgentControl {
+        let input = FakeInput()
+        return DeviceAgentControl(
+            backends: [
+                SimulatorBackend(
+                    input: input, devices: simulators, boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 },
+                    settings: FakeSettings(), logs: FakeLogs(), pasteboard: Self.pasteboard(input), sleep: sleep
+                ),
+                android,
+            ],
+            recorder: DeviceRecorderTests.recorder(),
+            sleep: sleep
+        )
+    }
+
+    @Test func theListHoldsBothPlatforms() async {
+        let response = await bothPlatforms(FakeBackend()).perform(.list, sessionID: "s")
+        guard case .text(let parts) = response else {
+            Issue.record("\(response)")
+            return
+        }
+        let reply = parts.joined()
+        #expect(reply.contains(#""platform":"ios""#) && reply.contains(#""udid":"on""#))
+        #expect(reply.contains(#""platform":"android""#) && reply.contains(#""udid":"avd:Pixel_9""#))
+    }
+
+    @Test func openingAnAVDAnswersWithItsEmulatorWhichItsOldIDThenPointsTo() async {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        let opened = await control.perform(.open(udid: "avd:Pixel_9"), sessionID: "s")
+        guard case .text(let parts) = opened else {
+            Issue.record("\(opened)")
+            return
+        }
+        #expect(parts.joined().contains(#""udid":"emulator-5556""#))
+        // The agent drives the emulator it booted, so the stage shows it and blocks the user's clicks.
+        guard case .agent = control.driver(udid: "emulator-5556") else {
+            Issue.record("emulator-5556 isn't driven by the agent")
+            return
+        }
+        let stale = await control.perform(.snapshot(udid: "avd:Pixel_9", query: nil, limit: 200), sessionID: "s")
+        #expect(error(stale) == "device_not_found: avd:Pixel_9 is running as emulator-5556; use that udid.")
+        // Opening it again is how an agent finds its serial: no error.
+        let again = await control.perform(.open(udid: "avd:Pixel_9"), sessionID: "s")
+        guard case .text(let againParts) = again else {
+            Issue.record("\(again)")
+            return
+        }
+        #expect(againParts.joined().contains(#""udid":"emulator-5556""#))
+    }
+
+    @Test(arguments: [
+        (DeviceCommand.push(udid: "emulator-5554", bundleID: "com.example.hello", payload: #"{"aps":{}}"#),
+         "device_unsupported: device_push isn't available on Android."),
+        (.button(udid: "emulator-5554", name: .siri, includeScreenshot: false, diff: false),
+         "device_unsupported: The siri button isn't available on android."),
+        (.button(udid: "on", name: .back, includeScreenshot: false, diff: false),
+         "device_unsupported: The back button isn't available on ios."),
+    ])
+    func whatAPlatformLacksIsUnsupported(command: DeviceCommand, message: String) async {
+        #expect(error(await bothPlatforms(FakeBackend()).perform(command, sessionID: "s")) == message)
+    }
+
+    @Test func aSimctlFailureStaysUnavailableBesideAndroid() async {
+        struct Broken: Error, LocalizedError { var errorDescription: String? { "simctl is broken" } }
+        let control = bothPlatforms(FakeBackend(), simulators: { throw Broken() })
+        let response = await control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "s")
+        #expect(error(response) == "device_unavailable: simctl is broken")
+    }
+
+    @Test func anAndroidCallWaitsForTheUserToHandBack() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android, sleep: Self.untilCancelled)
+        control.takeOver(udid: "emulator-5554")
+        async let pressed = control.perform(
+            .button(udid: "emulator-5554", name: .back, includeScreenshot: false, diff: false), sessionID: "s"
+        )
+        try await eventually("call is held") { control.waitingSessions(udid: "emulator-5554") == ["s"] }
+        #expect(android.pressed.isEmpty)
+        control.handBack(udid: "emulator-5554")
+        #expect(await pressed == .ok)
+        #expect(android.pressed == ["back"])
     }
 }

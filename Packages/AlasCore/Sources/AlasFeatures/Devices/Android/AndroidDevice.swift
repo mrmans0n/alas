@@ -72,6 +72,15 @@ public enum AndroidRotation {
         return value
     }
 
+    /// The built-in display's actual rotation from `dumpsys display`, which
+    /// lists it first ("mCurrentOrientation=1"); nil when it doesn't say.
+    /// `dumpsys window displays` lists scrcpy's display first while it streams.
+    public static func parseDisplay(_ output: String) -> Int? {
+        guard let range = output.range(of: "mCurrentOrientation=") else { return nil }
+        guard let value = Int(output[range.upperBound...].prefix { $0.isNumber }), (0...3).contains(value) else { return nil }
+        return value
+    }
+
     public static func turned(_ rotation: Int, left: Bool) -> Int {
         (rotation + (left ? 1 : 3)) % 4
     }
