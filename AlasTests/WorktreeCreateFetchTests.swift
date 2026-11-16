@@ -228,6 +228,35 @@ struct WorktreeCreateFetchTests {
         #expect(upstream.exitCode != 0)
     }
 
+    /// A single-branch clone's fetch mapping skips other branches, and an
+    /// explicit revision has no origin counterpart: both still create.
+    @Test func aFetchedOriginCreationWorksInASingleBranchCloneAndKeepsExplicitRevisions() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        let clone = remote.deletingLastPathComponent().appendingPathComponent("single-\(UUID().uuidString)")
+        defer {
+            for url in [repo, remote, clone] { try? FileManager.default.removeItem(at: url) }
+        }
+        let initial = try await GitService().revParseHEAD(worktreePath: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try "feature content\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["push", "-q", "origin", "feature"], cwd: repo)
+        _ = try await Process.git(["clone", "-q", "--single-branch", "--branch", "main", remote.path, clone.path], cwd: nil)
+
+        let state = AppState(store: TestPersistenceStore())
+        let project = try await state.projectsManager.addProject(path: clone, displayName: "machine", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        for (base, branch, expected) in [("feature", "from-feature", "feature content"), (initial, "from-sha", "base")] {
+            let dest = clone.appendingPathComponent("wt-\(branch)")
+            var request = WorktreeCreateRequest(projectID: project.id, base: base, branch: branch, destination: dest)
+            request.runsStartupScripts = false
+            request.createsFromFetchedOrigin = true
+            _ = try await state.host.worktrees.create(request, caller: .app)
+            let content = try String(contentsOf: dest.appendingPathComponent("a.txt"), encoding: .utf8)
+            #expect(content.contains(expected), "\(base)")
+        }
+    }
+
     @Test func createWorktreeSkipsFetchForLocalBaseWhenSettingEnabled() async throws {
         let (repo, remote) = try await makeRepoWithRemote()
         defer {

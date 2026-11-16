@@ -263,20 +263,22 @@ extension AlasCoreContext {
         projects.setOperationState(for: worktree, state: nil)
     }
 
-    /// Fetches `base` from origin and returns the remote-tracking ref to
-    /// create from. A remote-tracking base is fetched from its own remote.
+    /// Fetches `base` from origin (a remote-tracking base from its own remote)
+    /// and returns the tracking ref to create from. A SHA, a tag or a branch
+    /// the remote lacks has no tracking ref and is returned as given.
     func fetchOriginBase(_ base: String, in repoPath: URL) async -> String {
-        if (try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base)) != nil {
-            await fetchBase(base, in: repoPath)
-            return base
+        let tracked = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base)
+        let remote = tracked?.remote ?? "origin"
+        let branch = tracked?.branch ?? base
+        let trackingRef = "refs/remotes/\(remote)/\(branch)"
+        // An explicit destination: a single-branch clone's fetch mapping would skip it.
+        let fetch = try? await Process.git(["fetch", remote, "+refs/heads/\(branch):\(trackingRef)"], cwd: repoPath)
+        if fetch?.exitCode != 0 {
+            // The create still tries what the checkout has.
+            creationLogger.error("Fetch failed before creating worktree: \(fetch?.stderr ?? "", privacy: .public)")
         }
-        do {
-            _ = try await GitService().fetchRef(worktreePath: repoPath, remote: "origin", branch: base)
-        } catch {
-            // The create still tries the ref it has; a missing one fails with git's message.
-            creationLogger.error("Fetch failed before creating worktree: \(String(describing: error), privacy: .public)")
-        }
-        return "origin/\(base)"
+        let tracking = try? await Process.git(["rev-parse", "--verify", "--quiet", trackingRef], cwd: repoPath)
+        return tracking?.exitCode == 0 ? trackingRef : base
     }
 
     func fetchBase(_ base: String, in repoPath: URL) async {
