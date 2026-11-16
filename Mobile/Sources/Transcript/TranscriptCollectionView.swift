@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import SwiftUI
 import UIKit
 
@@ -11,11 +12,13 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     let loadOlder: () -> Void
     var image: (String) -> UIImage? = { _ in nil }
     var session: TranscriptSession?
+    /// Prompts this phone has sent; a change returns the scroller to the tail.
+    var sendCount = 0
     var onFirstLayout: () -> Void = {}
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
-         session: TranscriptSession? = nil, onFirstLayout: @escaping () -> Void = {})
+         session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {})
     {
         self.items = items
         _expanded = expanded
@@ -23,6 +26,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         self.loadOlder = loadOlder
         self.image = image
         self.session = session
+        self.sendCount = sendCount
         self.onFirstLayout = onFirstLayout
     }
 
@@ -37,7 +41,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
 
     private var input: TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
-              image: image, session: session, onFirstLayout: onFirstLayout)
+              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout)
     }
 }
 
@@ -49,6 +53,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var loadOlder: () -> Void
         var image: (String) -> UIImage?
         var session: TranscriptSession?
+        var sendCount: Int
         var onFirstLayout: () -> Void
     }
 
@@ -66,9 +71,15 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     private var followsTail = true
     /// A row held at a fixed distance from the top of the viewport until the reader scrolls.
     private var anchor: (id: String, screenY: CGFloat)?
+    /// A group header just tapped; its toggle changes the session's items rather than `expanded`.
+    private var tappedGroup: String?
+    /// The `sendCount` this controller last followed to the tail.
+    private var seenSends = 0
 
     init(input: Input) {
         self.input = input
+        // The session outlives the screen; only sends after this controller appears count.
+        seenSends = input.sendCount
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -86,10 +97,18 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             guard let item = itemsByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TranscriptRowView(item: item, isExpanded: shownExpanded.contains(id), image: input.image,
-                                  session: input.session) { [unowned self] in
-                    input.expanded.wrappedValue.formSymmetricDifference([id])
-                    sync()
-                }
+                                  session: input.session, toggle: { [unowned self] in
+                                      if case .groupHeader(let group, _, _, _) = item.kind {
+                                          act(onGroup: id) { $0.toggle(group) }
+                                      } else {
+                                          input.expanded.wrappedValue.formSymmetricDifference([id])
+                                          sync()
+                                      }
+                                  }, showAll: { [unowned self] in
+                                      if case .groupHeader(let group, _, _, _) = item.kind {
+                                          act(onGroup: id) { $0.showAll(group) }
+                                      }
+                                  })
             }
             .margins(.all, 0)
         }
@@ -108,9 +127,19 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         input.onFirstLayout()
     }
 
+    /// The session republishes synchronously, so its new items are synced in this same pass,
+    /// with the header held in place like a tapped row.
+    private func act(onGroup id: String, _ action: (TranscriptSession) -> Void) {
+        guard let session = input.session else { return }
+        tappedGroup = id
+        action(session)
+        input.items = session.items
+        sync()
+    }
+
     /// Brings the collection view in line with `input`. Toggles call it directly so their offset
     /// compensation lands in the same layout pass as the change; the later SwiftUI update then
-    /// finds nothing to do. Only items whose message changed are reconfigured.
+    /// finds nothing to do. Only items that changed are reconfigured.
     func sync() {
         let items = input.items
         let expanded = input.expanded.wrappedValue
@@ -121,26 +150,39 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                 itemsByID[item.id] = item
                 continue
             }
-            if old.message != item.message {
+            if old != item {
                 itemsByID[item.id] = item
                 reconfigure.append(item.id)
             }
         }
+        // A prompt this phone sent hands the viewport back to the tail now, even when it only
+        // queues and no row changes; the echo row is then followed like any growth. Prompts from
+        // other devices leave a reader in history alone.
+        if input.sendCount != seenSends {
+            seenSends = input.sendCount
+            anchor = nil
+            followsTail = true
+            if pinned { scrollToBottom() }
+        }
         let toggled = expanded.symmetricDifference(shownExpanded)
+        let tappedGroup = tappedGroup
+        self.tappedGroup = nil
         guard newIDs != ids || !reconfigure.isEmpty || !toggled.isEmpty else { return }
 
         let visible = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
-        let anchorID: String? = if let tapped = toggled.first(where: visible.contains) {
+        let tapped = toggled.union(tappedGroup.map { [$0] } ?? [])
+        let anchorID: String? = if let tapped = tapped.first(where: visible.contains) {
             tapped
         } else if pinned, newIDs.first != ids.first {
             topVisibleID
         } else {
             nil
         }
-        let prepended = anchorID.map { !toggled.contains($0) } ?? false
+        let prepended = anchorID.map { !tapped.contains($0) } ?? false
         if let anchorID, let y = minY(of: anchorID) {
             anchor = (anchorID, y - collectionView.contentOffset.y)
         }
+        if let held = anchor { anchor = (Self.resolve(held.id, in: items), held.screenY) }
 
         shownExpanded = expanded
         reconfigure += toggled.filter { itemsByID[$0] != nil }
@@ -158,22 +200,36 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         applying = true
         defer { applying = false }
         dataSource.apply(snapshot, animatingDifferences: false)
-        if !toggled.isEmpty {
-            // Only the toggled items: a full invalidation drops every measured height back to
+        if !tapped.isEmpty {
+            // Only the tapped items: a full invalidation drops every measured height back to
             // the estimate and moves everything above the anchor.
             let context = UICollectionViewLayoutInvalidationContext()
-            context.invalidateItems(at: toggled.compactMap { dataSource.indexPath(for: $0) })
+            context.invalidateItems(at: tapped.compactMap { dataSource.indexPath(for: $0) })
             collectionView.collectionViewLayout.invalidateLayout(with: context)
         }
         guard pinned else { return }
 
         // A tap on a row is the reader taking over; the tail must not pull that row away.
-        if !toggled.isEmpty, anchorID != nil { followsTail = false }
+        if !tapped.isEmpty, anchorID != nil { followsTail = false }
         // Lays out now, so a prepend is compensated in this same pass; `holdPosition` runs again
         // after any later pass in which hosted cells finish measuring.
         collectionView.layoutIfNeeded()
         // A prepend lands mid-scroll; holding it past this pass would fight the reader's finger.
         if prepended { anchor = nil }
+    }
+
+    /// A group's id follows its first member, so a page that continues the run re-keys its header.
+    /// Maps a vanished group id to the row now holding that member: the member's own row when it is
+    /// tiled (expanded, or the group dissolved), otherwise the header folding it, as the Mac's
+    /// `resolveStaleRowId` does.
+    private static func resolve(_ id: String, in items: [TranscriptItem]) -> String {
+        guard let member = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: id),
+              !items.contains(where: { $0.id == id }) else { return id }
+        if items.contains(where: { $0.id == member }) { return member }
+        return items.first { item in
+            guard case .groupHeader(let group, _, _, _) = item.kind else { return false }
+            return group.members.contains { $0.stableId == member }
+        }?.id ?? id
     }
 
     /// Runs after every collection view layout pass, once cells have measured themselves.

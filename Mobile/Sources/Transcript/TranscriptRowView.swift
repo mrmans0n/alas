@@ -9,16 +9,32 @@ struct TranscriptRowView: View {
     /// Visual aids render live only with a session to answer through.
     var session: TranscriptSession?
     let toggle: () -> Void
+    /// A group header's "Show earlier".
+    var showAll: () -> Void = {}
 
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
             .padding(.vertical, 6)
+            // Inset behind a rule spanning the row, so a group's members read as one block under its header.
+            .padding(.leading, item.isGroupMember ? 12 : 0)
+            .overlay(alignment: .leading) {
+                if item.isGroupMember { Rectangle().fill(.quaternary).frame(width: 1) }
+            }
+            .padding(.horizontal, 16)
     }
 
     @ViewBuilder
     private var content: some View {
+        if case .groupHeader(_, let summary, let expanded, let hiddenCount) = item.kind {
+            ToolCallGroupRow(summary: summary, expanded: expanded, hiddenCount: hiddenCount, toggle: toggle, showAll: showAll)
+        } else {
+            message
+        }
+    }
+
+    @ViewBuilder
+    private var message: some View {
         switch item.row {
         case .user(let text, _, let images, _):
             VStack(alignment: .trailing, spacing: 6) {
