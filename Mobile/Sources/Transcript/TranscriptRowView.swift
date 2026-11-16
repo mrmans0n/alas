@@ -41,14 +41,10 @@ struct TranscriptRowView: View {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
                         // The same image attached twice shares a uri.
-                        ForEach(Array(images.enumerated()), id: \.offset) { _, attached in
+                        ForEach(Array(images.enumerated()), id: \.offset) { index, attached in
                             if let loaded = image(attached.uri) {
-                                Image(uiImage: loaded)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .accessibilityLabel(attached.name ?? "Image")
+                                AttachmentThumbnail(id: "\(item.id):attachment:\(index)", thumbnail: loaded, uri: attached.uri,
+                                                    name: attached.name ?? "Image", session: session)
                             } else {
                                 bubble("\u{1F5BC} \(attached.name ?? "Image")")
                             }
@@ -60,7 +56,7 @@ struct TranscriptRowView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
         case .agent(let text):
-            AgentMarkdown(id: item.id, text: text)
+            AgentMarkdown(id: item.id, text: text, session: session)
         case .thought(let text):
             Text(text)
                 .font(.callout.italic())
@@ -110,6 +106,11 @@ struct TranscriptRowView: View {
             }
             if isExpanded {
                 Text(call.content).font(.system(.footnote, design: .monospaced))
+                // Indexed before filtering, so an asset keeps its position as the key of its inline data.
+                ForEach(Array(call.assets.enumerated()).filter { Self.isImage($0.element) }, id: \.offset) { index, asset in
+                    TranscriptImage(id: "\(item.id):asset:\(index)", source: asset.uri ?? "", data: asset.data,
+                                    label: Self.label(asset), session: session)
+                }
             }
         }
         .card()
@@ -167,6 +168,24 @@ struct TranscriptRowView: View {
         }
     }
 
+    /// As the Mac's `looksLikeImage`: the kind, an image mime type, or an image file extension.
+    private static func isImage(_ asset: ACPToolCallAsset) -> Bool {
+        if asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true { return true }
+        let candidate = [asset.uri, asset.name].compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        guard let candidate else { return false }
+        let ext = URL(fileURLWithPath: candidate).pathExtension.lowercased()
+        return ["png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp"].contains(ext)
+    }
+
+    /// The name, else the uri's last path component; never a data uri, which can run to megabytes.
+    private static func label(_ asset: ACPToolCallAsset) -> String {
+        if let name = asset.name, !name.isEmpty { return name }
+        guard let uri = asset.uri, !uri.isEmpty, !uri.lowercased().hasPrefix("data:") else { return "Image" }
+        let url = URL(string: uri).flatMap { $0.scheme == nil ? nil : $0 } ?? URL(fileURLWithPath: uri)
+        return url.lastPathComponent.isEmpty ? "Image" : url.lastPathComponent
+    }
+
     private static func planIcon(_ status: String) -> String {
         switch status {
         case "completed": "checkmark.circle.fill"
@@ -198,11 +217,12 @@ private extension View {
 struct AgentMarkdown: View {
     let id: String
     let text: String
+    var session: TranscriptSession?
 
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
@@ -227,6 +247,9 @@ struct AgentMarkdown: View {
                     Text(s).foregroundStyle(.secondary)
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
+                case .image(let source, let alt):
+                    TranscriptImage(id: "\(id):block:\(index)", source: source, label: alt.isEmpty ? "Image" : alt,
+                                    session: session)
                 case .table(let rows):
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
@@ -237,5 +260,35 @@ struct AgentMarkdown: View {
                 }
             }
         }
+    }
+}
+
+/// A user attachment's thumbnail; tapping opens the viewer on the display-size image, with the
+/// thumbnail scaled up until it lands.
+private struct AttachmentThumbnail: View {
+    /// Where it sits, for `transcriptImage`'s inline key.
+    let id: String
+    let thumbnail: UIImage
+    let uri: String
+    let name: String
+    let session: TranscriptSession?
+    @State private var viewing = false
+
+    var body: some View {
+        Image(uiImage: thumbnail)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 96, height: 96)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .accessibilityLabel(name)
+            .onTapGesture { viewing = true }
+            .fullScreenCover(isPresented: $viewing) {
+                TranscriptImageViewer(image: display ?? thumbnail, label: name)
+            }
+    }
+
+    private var display: UIImage? {
+        if case .loaded(let image) = session?.transcriptImage(id: id, source: uri) { return image }
+        return nil
     }
 }

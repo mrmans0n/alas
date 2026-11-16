@@ -163,8 +163,34 @@ final class TranscriptSession {
         case unavailable
     }
 
+    /// An attachment's 96 pt thumbnail, or a markdown or tool-call image sized for the row.
+    private enum ImageSize {
+        case thumbnail, display
+    }
+
+    enum ImageLoad {
+        case loading, loaded(UIImage), failed
+    }
+
+    /// Attachment thumbnails by path: small, so they stay for the session.
     private var images: [String: LoadedImage] = [:]
     @ObservationIgnored private var requestedImages: Set<String> = []
+
+    private enum DisplayLoad {
+        case loading, loaded, failed
+    }
+
+    /// Markdown and tool-call images, keyed `host:<path>` or `inline:<where>:<length>`. A loaded
+    /// one's bitmap lives in `displayImages`, which may evict it; the next view to ask loads it again.
+    @ObservationIgnored private var displayLoads: [String: DisplayLoad] = [:]
+    @ObservationIgnored private let displayImages: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 100 * 1024 * 1024
+        return cache
+    }()
+
+    /// Bumps when a display image lands, so the views reading one re-render.
+    private var displayGeneration = 0
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -222,6 +248,7 @@ final class TranscriptSession {
         MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
         requestedImages = requestedImages.filter { images[$0] != nil }
+        displayLoads = displayLoads.filter { !($0.key.hasPrefix(Self.hostKeyPrefix) && $0.value == .loading) }
     }
 
     /// Bumped by each prompt this phone sends, so the scroller returns to the tail for it.
@@ -431,7 +458,7 @@ final class TranscriptSession {
         refreshCanLoadOlder()
     }
 
-    /// The image's bytes once they arrive. The first call for a path asks the host for them.
+    /// An attachment's thumbnail once its bytes arrive. The first call for a path asks the host for them.
     func image(for path: String) -> UIImage? {
         switch images[path] {
         case .image(let image): return image
@@ -442,6 +469,64 @@ final class TranscriptSession {
             }
             return nil
         }
+    }
+
+    /// A markdown or tool-call image, sized for the row. `source` is a markdown source or an
+    /// asset's uri, `data` an asset's base64 data, tried first as on the Mac. Inline data is
+    /// decoded only off the main actor and keyed by `id`, where it sits (row and position),
+    /// never by its content: a body must not hash megabytes, and sampling them can collide.
+    func transcriptImage(id: String, source: String, data: String? = nil) -> ImageLoad {
+        if let data, !data.isEmpty {
+            let load = inlineImage(data, key: "inline:\(id):data") { .resolve(asset: .image(data: $0)) }
+            if case .failed = load {} else { return load }
+        }
+        if source.drop(while: \.isWhitespace).prefix(5).lowercased() == "data:" {
+            return inlineImage(source, key: "inline:\(id):uri") { .resolve(source: $0) }
+        }
+        guard case .host(let path) = RemoteTranscriptImageSource.resolve(source: source) else { return .failed }
+        return displayImage(key: Self.hostKeyPrefix + path) { [self] in
+            hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
+        }
+    }
+
+    private static let hostKeyPrefix = "host:"
+
+    private func inlineImage(
+        _ string: String, key place: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
+    ) -> ImageLoad {
+        // The length gives a row still streaming its image a fresh entry as it grows.
+        let key = "\(place):\(string.utf8.count)"
+        return displayImage(key: key) {
+            Task { [weak self] in
+                let image = await Self.decodeInline(string, resolve)
+                self?.landDisplay(key, image)
+            }
+        }
+    }
+
+    /// Asks for the image only when it was never asked for or was evicted, and only from a view
+    /// that wants it, so an eviction cannot loop on its own.
+    private func displayImage(key: String, start: () -> Void) -> ImageLoad {
+        _ = displayGeneration
+        if let image = displayImages.object(forKey: key as NSString) { return .loaded(image) }
+        switch displayLoads[key] {
+        case .loading: return .loading
+        case .failed: return .failed
+        case .loaded, nil:
+            displayLoads[key] = .loading
+            start()
+            return .loading
+        }
+    }
+
+    private func landDisplay(_ key: String, _ image: UIImage?) {
+        if let image, let cgImage = image.cgImage {
+            displayImages.setObject(image, forKey: key as NSString, cost: cgImage.width * cgImage.height * 4)
+            displayLoads[key] = .loaded
+        } else {
+            displayLoads[key] = .failed
+        }
+        displayGeneration += 1
     }
 
     /// Resubscribes each time the host comes back online. Observation tracking re-reads the
@@ -533,7 +618,10 @@ final class TranscriptSession {
         fetchingOlder = false
         forgetTransientState()
         hub.send(.subscribe(sessionId: sessionId), to: hostID)
-        for path in requestedImages where images[path] == nil {
+        let displayPaths = displayLoads.compactMap { key, load in
+            load == .loading && key.hasPrefix(Self.hostKeyPrefix) ? String(key.dropFirst(Self.hostKeyPrefix.count)) : nil
+        }
+        for path in Set(requestedImages.filter { images[$0] == nil }).union(displayPaths) {
             hub.send(.readTranscriptImage(sessionId: sessionId, path: path), to: hostID)
         }
         refreshCanLoadOlder()
@@ -546,9 +634,18 @@ final class TranscriptSession {
         }
         switch message {
         case .transcriptImage(let id, let path, let data) where id == sessionId:
-            Task { [weak self] in
-                let image = await Self.thumbnail(data)
-                self?.images[path] = image.map(LoadedImage.image) ?? .unavailable
+            if requestedImages.contains(path), images[path] == nil {
+                Task { [weak self] in
+                    let image = await Self.decode(data, .thumbnail)
+                    self?.images[path] = image.map(LoadedImage.image) ?? .unavailable
+                }
+            }
+            let key = Self.hostKeyPrefix + path
+            if displayLoads[key] == .loading {
+                Task { [weak self] in
+                    let image = await Self.decode(data, .display)
+                    self?.landDisplay(key, image)
+                }
             }
             return
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) where id == sessionId,
@@ -715,13 +812,37 @@ final class TranscriptSession {
     }
 
     /// Decoded and downscaled off the main actor, once on arrival, so neither the frame handler
-    /// nor a cell decodes a full-size photo. 288 px fills the row's 96 pt square at 3x.
+    /// nor a cell decodes a full-size photo.
     @concurrent
-    private nonisolated static func thumbnail(_ data: Data?) async -> UIImage? {
+    private nonisolated static func decodeInline(
+        _ string: String, _ resolve: @Sendable (String) -> RemoteTranscriptImageSource
+    ) async -> UIImage? {
+        guard case .inline(let data) = resolve(string) else { return nil }
+        return await decode(data, .display)
+    }
+
+    @concurrent
+    private nonisolated static func decode(_ data: Data?, _ size: ImageSize) async -> UIImage? {
         guard let data, let image = UIImage(data: data) else { return nil }
-        let scale = 288 / min(image.size.width, image.size.height)
-        let size = scale < 1 ? CGSize(width: image.size.width * scale, height: image.size.height * scale) : image.size
-        return await image.byPreparingThumbnail(ofSize: size) ?? image
+        switch size {
+        case .thumbnail:
+            // 288 px fills the row's 96 pt square at 3x.
+            let scale = 288 / min(image.size.width, image.size.height)
+            let size = scale < 1 ? CGSize(width: image.size.width * scale, height: image.size.height * scale) : image.size
+            return await image.byPreparingThumbnail(ofSize: size) ?? image
+        case .display:
+            // A row is at most ~400 pt wide or 320 pt tall, so 1200 px on the long side is sharp at 3x.
+            let long = max(image.size.width, image.size.height)
+            let fit = 1200 / (long * image.scale)
+            guard fit < 1 else { return await image.byPreparingForDisplay() ?? image }
+            let target = CGSize(width: image.size.width * image.scale * fit, height: image.size.height * image.scale * fit)
+            guard let thumb = await image.byPreparingThumbnail(ofSize: target), let cgImage = thumb.cgImage else {
+                return image
+            }
+            // Only the bitmap shrinks: the point size stays the source's, so the row never upscales it.
+            let pixels = max(thumb.size.width, thumb.size.height) * thumb.scale
+            return UIImage(cgImage: cgImage, scale: pixels / long, orientation: thumb.imageOrientation)
+        }
     }
 
     private func refreshCanLoadOlder() {
