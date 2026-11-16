@@ -32,6 +32,18 @@ public enum RemoteSessionCatalog {
         public let sessionId: String
     }
 
+    public struct SessionID: Hashable, Sendable {
+        public let owner: HostID
+        public let sessionId: String
+    }
+
+    public struct AttentionEntry: Identifiable, Equatable, Sendable {
+        public let id: SessionID
+        public let route: Route
+        public let hostName: String
+        public let title: String
+    }
+
     public struct Host: Identifiable, Equatable, Sendable {
         public let id: HostID
         public let name: String
@@ -77,6 +89,18 @@ public enum RemoteSessionCatalog {
         }.sorted {
             let comparison = $0.name.localizedStandardCompare($1.name)
             return comparison == .orderedSame ? $0.id.sortKey < $1.id.sortKey : comparison == .orderedAscending
+        }
+    }
+
+    /// Select the owner's current report before filtering for pending requests.
+    public static func attentionEntries(from sources: [Source]) -> [AttentionEntry] {
+        hosts(from: sources).flatMap { host in
+            host.sections.flatMap(\.worktrees).flatMap(\.activeSessions).compactMap { session in
+                guard session.status == "awaitingPermission" || session.status == "awaitingInput",
+                      let route = host.route(for: session.id) else { return nil }
+                return AttentionEntry(id: SessionID(owner: host.id, sessionId: session.id),
+                                      route: route, hostName: host.name, title: session.title)
+            }
         }
     }
 
