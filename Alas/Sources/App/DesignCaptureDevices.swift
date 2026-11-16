@@ -186,7 +186,14 @@ enum DesignCaptureDevices {
         @Environment(\.theme) private var theme
 
         var body: some View {
-            DeviceSettingsPopover(udid: DesignCaptureDevices.phone.udid, settings: FakeSettings(), control: control)
+            DeviceSettingsPopover(
+                udid: DesignCaptureDevices.phone.udid,
+                backend: SimulatorBackend(
+                    input: FakeInput(), devices: { [DesignCaptureDevices.phone] }, boot: { _ in }, install: { _, _ in },
+                    launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(), pasteboard: fakePasteboard()
+                ),
+                control: control
+            )
                 .frame(height: 780, alignment: .top)
                 .background(theme.color("bg-2"))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))

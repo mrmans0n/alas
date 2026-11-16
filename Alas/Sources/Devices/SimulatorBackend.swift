@@ -143,6 +143,34 @@ final class SimulatorBackend: DeviceBackend {
         try await settings.setAccessibility(udid: id, change)
     }
 
+    func display(_ id: String) async throws -> SimulatorDisplaySettings {
+        try await settings.display(udid: id)
+    }
+
+    func accessibility(_ id: String) async throws -> SimulatorAccessibility {
+        try await settings.accessibility(udid: id)
+    }
+
+    func userApps(_ id: String) async throws -> [SimulatorApp] {
+        try await settings.userApps(udid: id)
+    }
+
+    func network(_ id: String) async throws -> AndroidNetworkState {
+        throw Self.unsupported("device_set_network")
+    }
+
+    func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState {
+        throw Self.unsupported("device_set_network")
+    }
+
+    func clearData(_ id: String, appID: String) async throws {
+        throw Self.unsupported("device_clear_data")
+    }
+
+    private static func unsupported(_ tool: String) -> DeviceToolError {
+        DeviceToolError(message: "device_unsupported: \(tool) isn't available on iOS.")
+    }
+
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {
         try await settings.setPermission(udid: id, bundleID: appID, service: service, action: action)
     }

@@ -1,3 +1,5 @@
+import Foundation
+
 /// `font_scale` for each text size, one to one, so a value reads back as its size.
 public enum AndroidFontScale {
     private static let table: [(SimulatorTextSize, Double)] = [
@@ -57,6 +59,12 @@ public enum AndroidLogcat {
     }
 
     /// The logcat priority for a level: what `*:<letter>` keeps.
+    /// A `logcat -T` time `seconds` ago by the device's own clock, as a quoted
+    /// shell expression for `adb shell`: the device's time zone may not be the Mac's.
+    public static func since(seconds: Int) -> String {
+        "\"$(date -d @$(( $(date +%s) - \(max(0, seconds)) )) '+%m-%d %H:%M:%S.000')\""
+    }
+
     public static func filter(_ level: SimulatorLogLevel) -> String {
         switch level {
         case .debug: "D"
@@ -88,12 +96,15 @@ public enum AndroidLogcat {
 
 /// A Java crash from `logcat -b crash`.
 public struct AndroidCrash: Equatable, Sendable {
+    /// The package that crashed.
+    public let package: String
     public let time: String
     public let exception: String
     /// The stack's first frames, without "at".
     public let frames: [String]
 
-    public init(time: String, exception: String, frames: [String]) {
+    public init(package: String, time: String, exception: String, frames: [String]) {
+        self.package = package
         self.time = time
         self.exception = exception
         self.frames = frames
@@ -106,15 +117,19 @@ public struct AndroidCrash: Equatable, Sendable {
 }
 
 extension AndroidLogcat {
-    /// AndroidRuntime's FATAL EXCEPTION blocks for `package`, with up to 10 frames each.
-    public static func crashes(_ lines: [SimulatorLogLine], package: String) -> [AndroidCrash] {
+    /// AndroidRuntime's FATAL EXCEPTION blocks for `package`, or every
+    /// package's when it is nil, with up to 10 frames each.
+    public static func crashes(_ lines: [SimulatorLogLine], package: String?) -> [AndroidCrash] {
         let runtime = lines.filter { $0.process == "AndroidRuntime" }
         var crashes: [AndroidCrash] = []
         var index = 0
         while index < runtime.count {
             defer { index += 1 }
+            // "Process: com.example.hello, PID: 4242"
             guard runtime[index].message.hasPrefix("FATAL EXCEPTION"), index + 2 < runtime.count,
-                  runtime[index + 1].message.hasPrefix("Process: \(package),") else { continue }
+                  runtime[index + 1].message.hasPrefix("Process: "),
+                  let crashed = runtime[index + 1].message.dropFirst("Process: ".count).split(separator: ",").first.map(String.init),
+                  package == nil || crashed == package else { continue }
             let exception = runtime[index + 2].message
             var frames: [String] = []
             var next = index + 3
@@ -124,8 +139,78 @@ extension AndroidLogcat {
                 frames.append(String(text.dropFirst(3)))
                 next += 1
             }
-            crashes.append(AndroidCrash(time: runtime[index].time, exception: exception, frames: frames))
+            crashes.append(AndroidCrash(package: crashed, time: runtime[index].time, exception: exception, frames: frames))
         }
         return crashes
+    }
+}
+
+/// Wi-Fi and mobile data, as Android reports them back.
+public enum AndroidNetwork {
+    /// From `cmd wifi status`, whose first line says "Wifi is enabled" or "Wifi is disabled".
+    public static func wifi(_ status: String) -> SimulatorReadBack<Bool> {
+        let first = status.split(whereSeparator: \.isNewline).first.map { $0.trimmingCharacters(in: .whitespaces) }
+        switch first {
+        case "Wifi is enabled": return .value(true)
+        case "Wifi is disabled": return .value(false)
+        default: return .unknown
+        }
+    }
+
+    /// From `settings get global mobile_data`.
+    public static func data(_ setting: String) -> SimulatorReadBack<Bool> {
+        switch setting.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "1": .value(true)
+        case "0": .value(false)
+        default: .unknown
+        }
+    }
+}
+
+public struct AndroidNetworkState: Equatable, Sendable {
+    public var wifi: SimulatorReadBack<Bool>
+    public var data: SimulatorReadBack<Bool>
+
+    public init(wifi: SimulatorReadBack<Bool>, data: SimulatorReadBack<Bool>) {
+        self.wifi = wifi
+        self.data = data
+    }
+
+    /// What `device_set_network` returns.
+    public var json: [String: Any] {
+        ["wifi": wifi.jsonValue, "data": data.jsonValue]
+    }
+}
+
+/// What following an app's logs does when its pid is looked up again.
+public enum AndroidLogFollow: Equatable, Sendable {
+    case keep
+    /// The app started, or restarted under a new pid.
+    case restart(pid: Int)
+    /// The app isn't running.
+    case waitForApp
+
+    public static func next(running: Int?, found: Int?) -> AndroidLogFollow {
+        guard let found else { return .waitForApp }
+        return found == running ? .keep : .restart(pid: found)
+    }
+}
+
+extension AndroidCrash {
+    /// The crash's time on the device's clock, read in this Mac's time zone.
+    public var date: Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter.date(from: time)
+    }
+
+    /// As the Logs tab shows crash reports.
+    public func report() -> SimulatorCrashReport {
+        SimulatorCrashReport(
+            bundleID: package, appName: package, capturedAt: date ?? Date(), exception: exception, frames: frames,
+            // Its time keeps two crashes at the same stack apart: the tab tells reports apart by this text.
+            report: (["\(package) crashed at \(time)", exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
+        )
     }
 }

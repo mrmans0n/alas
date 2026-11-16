@@ -2,7 +2,7 @@ import Foundation
 
 /// A device the `device_*` tools can drive, from either platform.
 public struct AgentDevice: Equatable, Sendable {
-    public enum Platform: String, Sendable { case ios, android }
+    public enum Platform: String, Codable, Sendable { case ios, android }
 
     public let id: String
     public let name: String

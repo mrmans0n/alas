@@ -115,3 +115,44 @@ struct AndroidRecordingAndClipboardTests {
         timers[1].resume()
     }
 }
+
+@MainActor // AndroidLogSource and the stream are main-actor isolated.
+struct AndroidLogSourceTests {
+    /// Choosing an app that isn't running must not leave the previous stream's lines coming.
+    @Test func choosingAnAppThatIsntRunningStopsThePreviousStream() async throws {
+        let fake = try fakeADB(#"*logcat*) sleep 30 ;; *pidof*) exit 1 ;;"#)
+        let source = AndroidLogSource(serial: "S", control: AndroidControl(sdk: AndroidSDK(root: nil, adb: fake.adb, emulator: nil)))
+        let stream = SimulatorLogStream()
+        await source.start(stream, app: nil, level: .default, includeApple: false)
+        #expect(stream.isRunning)
+        await source.start(stream, app: "com.example.hello", level: .default, includeApple: false)
+        try await eventually("pidof asked", within: .seconds(5)) { logged(fake.log).contains("pidof") }
+        #expect(!stream.isRunning)
+        source.stop()
+        stream.stop()
+    }
+}
+
+@MainActor // SimulatorLogSource is main-actor isolated.
+struct SimulatorLogSourceTests {
+    /// A restart that resolves its app after a newer one must not replace the newer stream.
+    @Test func aSupersededStartIsDropped() async throws {
+        var lookups: [CheckedContinuation<[String: String], Never>] = []
+        var started: [SimulatorLogQuery] = []
+        let source = SimulatorLogSource(
+            udid: "U", tracker: { fatalError("unused") },
+            executables: { await withCheckedContinuation { lookups.append($0) } },
+            run: { _, query in started.append(query) }
+        )
+        let stream = SimulatorLogStream()
+        async let older: Void = source.start(stream, app: "com.example.hello", level: .default, includeApple: false)
+        try await eventually("first lookup", within: .seconds(5)) { lookups.count == 1 }
+        async let newer: Void = source.start(stream, app: "com.example.hello", level: .debug, includeApple: true)
+        try await eventually("second lookup", within: .seconds(5)) { lookups.count == 2 }
+        lookups[1].resume(returning: ["com.example.hello": "Hello"])
+        await newer
+        lookups[0].resume(returning: ["com.example.hello": "Hello"])
+        await older
+        #expect(started.map(\.level) == [.debug])
+    }
+}

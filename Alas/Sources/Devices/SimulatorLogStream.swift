@@ -2,7 +2,8 @@ import AlasCore
 import Foundation
 import Observation
 
-/// A running `log stream` on one simulator: its parsed lines, newest last.
+/// A running log stream: a simulator's `log stream`, or an Android device's
+/// `logcat`. Its parsed lines, newest last.
 @MainActor
 @Observable
 final class SimulatorLogStream {
@@ -25,21 +26,27 @@ final class SimulatorLogStream {
     }
 
     func start(udid: String, predicate: String?, levelArguments: [String]) {
+        var args = ["simctl", "spawn", udid, "log", "stream", "--style", "ndjson"] + levelArguments
+        if let predicate { args += ["--predicate", predicate] }
+        start(executable: "/usr/bin/xcrun", args: args, name: "simctl", parse: SimulatorLogLine.parse)
+    }
+
+    /// Runs `executable`, parsing each line of its output with `parse`;
+    /// `name` names it when it stops on its own.
+    func start(executable: String, args: [String], name: String, parse: @escaping @Sendable (Data) -> SimulatorLogLine?) {
         stop()
         generation += 1
         let current = generation
         stopReason = nil
-        var args = ["simctl", "spawn", udid, "log", "stream", "--style", "ndjson"] + levelArguments
-        if let predicate { args += ["--predicate", predicate] }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
         let reader = LineReader()
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let parsed = reader.lines(from: handle.availableData).compactMap(SimulatorLogLine.parse)
+            let parsed = reader.lines(from: handle.availableData).compactMap(parse)
             guard !parsed.isEmpty else { return }
             Task { @MainActor [weak self] in
                 guard let self, self.generation == current else { return }
@@ -52,7 +59,7 @@ final class SimulatorLogStream {
                 guard let self, self.generation == current else { return }
                 self.isRunning = false
                 self.process = nil
-                self.stopReason = "Logging stopped (simctl exited with status \(finished.terminationStatus))."
+                self.stopReason = "Logging stopped (\(name) exited with status \(finished.terminationStatus))."
             }
         }
         do {

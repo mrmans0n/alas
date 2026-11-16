@@ -6,11 +6,14 @@ import SwiftUI
 struct AndroidActions: View {
     let device: AndroidDevice
     let pane: AndroidPaneModel
+    let control: DeviceAgentControl
     let recorder: DeviceRecorder
+    let onOpenLogs: () -> Void
     let onShutDown: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var notice: String?
+    @State private var showsSettings = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -25,6 +28,14 @@ struct AndroidActions: View {
                         withAnimation { self.notice = nil }
                     }
             }
+            ToolbarBtn(icon: "doc.text.magnifyingglass", tooltip: "Logs", action: onOpenLogs)
+            ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Device settings") { showsSettings = true }
+                .disabled(!VMDriver.allowsViewInput(control.driver(udid: device.serial)))
+                .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
+                    if let backend = control.backend(for: .android) {
+                        DeviceSettingsPopover(udid: device.serial, backend: backend, control: control)
+                    }
+                }
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop") { Task { await saveScreenshot() } }
             if device.isEmulator {

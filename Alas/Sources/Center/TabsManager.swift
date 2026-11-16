@@ -1319,8 +1319,10 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusSimulatorLogs(worktreeId: String, udid: String, deviceName: String) -> Tab {
-        let state = SimulatorLogsTabState(worktreeId: worktreeId, udid: udid, deviceName: deviceName)
+    func openOrFocusDeviceLogs(
+        worktreeId: String, udid: String, deviceName: String, platform: AgentDevice.Platform
+    ) -> Tab {
+        let state = SimulatorLogsTabState(worktreeId: worktreeId, udid: udid, deviceName: deviceName, platform: platform)
         if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
             activate(worktreeId: worktreeId, tabId: state.id)
             return existing
