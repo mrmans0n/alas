@@ -225,7 +225,7 @@ final class TranscriptSession {
     }
 
     /// Bumped by each prompt this phone sends, so the scroller returns to the tail for it.
-    @ObservationIgnored private(set) var sendCount = 0
+    private(set) var sendCount = 0
 
     func send(intent: String) {
         let text = draft.text

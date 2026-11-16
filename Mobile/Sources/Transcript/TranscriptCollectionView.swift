@@ -12,11 +12,13 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
     let loadOlder: () -> Void
     var image: (String) -> UIImage? = { _ in nil }
     var session: TranscriptSession?
+    /// Prompts this phone has sent; a change returns the scroller to the tail.
+    var sendCount = 0
     var onFirstLayout: () -> Void = {}
 
     init(items: [TranscriptItem], expanded: Binding<Set<String>>, canLoadOlder: Bool,
          loadOlder: @escaping () -> Void, image: @escaping (String) -> UIImage? = { _ in nil },
-         session: TranscriptSession? = nil, onFirstLayout: @escaping () -> Void = {})
+         session: TranscriptSession? = nil, sendCount: Int = 0, onFirstLayout: @escaping () -> Void = {})
     {
         self.items = items
         _expanded = expanded
@@ -24,6 +26,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
         self.loadOlder = loadOlder
         self.image = image
         self.session = session
+        self.sendCount = sendCount
         self.onFirstLayout = onFirstLayout
     }
 
@@ -38,7 +41,7 @@ struct TranscriptCollectionView: UIViewControllerRepresentable {
 
     private var input: TranscriptCollectionController.Input {
         .init(items: items, expanded: $expanded, canLoadOlder: canLoadOlder, loadOlder: loadOlder,
-              image: image, session: session, onFirstLayout: onFirstLayout)
+              image: image, session: session, sendCount: sendCount, onFirstLayout: onFirstLayout)
     }
 }
 
@@ -50,6 +53,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         var loadOlder: () -> Void
         var image: (String) -> UIImage?
         var session: TranscriptSession?
+        var sendCount: Int
         var onFirstLayout: () -> Void
     }
 
@@ -69,13 +73,13 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     private var anchor: (id: String, screenY: CGFloat)?
     /// A group header just tapped; its toggle changes the session's items rather than `expanded`.
     private var tappedGroup: String?
-    /// The session's `sendCount` this controller last followed to the tail.
+    /// The `sendCount` this controller last followed to the tail.
     private var seenSends = 0
 
     init(input: Input) {
         self.input = input
         // The session outlives the screen; only sends after this controller appears count.
-        seenSends = input.session?.sendCount ?? 0
+        seenSends = input.sendCount
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -151,6 +155,15 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
                 reconfigure.append(item.id)
             }
         }
+        // A prompt this phone sent hands the viewport back to the tail now, even when it only
+        // queues and no row changes; the echo row is then followed like any growth. Prompts from
+        // other devices leave a reader in history alone.
+        if input.sendCount != seenSends {
+            seenSends = input.sendCount
+            anchor = nil
+            followsTail = true
+            if pinned { scrollToBottom() }
+        }
         let toggled = expanded.symmetricDifference(shownExpanded)
         let tappedGroup = tappedGroup
         self.tappedGroup = nil
@@ -198,13 +211,6 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
 
         // A tap on a row is the reader taking over; the tail must not pull that row away.
         if !tapped.isEmpty, anchorID != nil { followsTail = false }
-        // A prompt this phone sent hands the viewport back to the tail, whatever was last tapped.
-        // Prompts from other devices leave a reader in history alone.
-        if let sends = input.session?.sendCount, sends != seenSends {
-            seenSends = sends
-            anchor = nil
-            followsTail = true
-        }
         // Lays out now, so a prepend is compensated in this same pass; `holdPosition` runs again
         // after any later pass in which hosted cells finish measuring.
         collectionView.layoutIfNeeded()
