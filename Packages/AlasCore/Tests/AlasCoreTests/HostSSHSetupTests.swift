@@ -286,22 +286,24 @@ struct HostSSHSetupTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let fake = dir.appendingPathComponent("alas-host")
-        try """
-        #!/bin/sh
-        case "$1 $2" in
-        "project list") printf 'id1  repo  /srv/repo\n' ;;
-        "project add") echo "$3" >> "\(dir.path)/added" ;;
-        esac
-        """.write(to: fake, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        // A shell function, not a script file: on Linux, executing a file just
+        // written fails with ETXTBSY while a process forked by a parallel test
+        // still holds its write descriptor.
+        let fake = """
+        alas_host() {
+          case "$1 $2" in
+          "project list") printf 'id1  repo  /srv/repo\\n' ;;
+          "project add") echo "$3" >> '\(dir.path)/added' ;;
+          esac
+        }
+        """
         let setup = HostSSHSetup(
             destination: "me@mini",
             bundleResources: dir,
-            run: { command, _ in try await Process.run("/bin/sh", args: ["-c", command], timeout: 10) }
+            run: { command, _ in try await Process.run("/bin/sh", args: ["-c", fake + "\n" + command], timeout: 10) }
         )
 
-        try await setup.configure(host: fake.path, options: HostSSHSetupOptions(reachability: "lan", agents: [:], projects: ["/srv/repo", "/srv/repo2"]))
+        try await setup.configure(host: "alas_host", options: HostSSHSetupOptions(reachability: "lan", agents: [:], projects: ["/srv/repo", "/srv/repo2"]))
 
         #expect(try String(contentsOf: dir.appendingPathComponent("added"), encoding: .utf8) == "/srv/repo2\n")
     }

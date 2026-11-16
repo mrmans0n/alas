@@ -341,6 +341,15 @@ jobs:
       - name: Validate entries
         run: swift test --package-path Packages/AlasCore --filter WhatsNewTests
 
+  ios-app:
+    name: iOS app to TestFlight
+    # Nothing waits on it: a TestFlight problem must not hold back the Mac release.
+    uses: ./.github/workflows/ios-release.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+      external: true
+    secrets: inherit
+
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest

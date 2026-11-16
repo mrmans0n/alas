@@ -40,3 +40,7 @@ default.profraw
 # Per-developer signing overrides for Debug builds.
 Config/Local.xcconfig
 Config/AlasMobile-Local.xcconfig
+
+# fastlane run output.
+Mobile/fastlane/report.xml
+Mobile/fastlane/README.md
