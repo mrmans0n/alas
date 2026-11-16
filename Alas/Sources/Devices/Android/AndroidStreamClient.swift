@@ -163,6 +163,10 @@ final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
 
     private func stopped(_ serial: String, reason: String) {
         sessions[serial] = nil
+        // The last frame and size were the stopped stream's: a new one must deliver its own
+        // before anyone treats the device as ready for input.
+        lastFrames[serial] = nil
+        videoSizes[serial] = nil
         for screen in screens[serial]?.values.map({ $0 }) ?? [] { screen.onStop(reason) }
     }
 }

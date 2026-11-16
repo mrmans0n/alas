@@ -26,6 +26,8 @@ final class AndroidBackend: DeviceBackend {
     func devices() async throws -> [AgentDevice] {
         guard pane.control != nil else { return [] }
         await pane.refresh()
+        // A failed refresh leaves the last list in place, which may not be true any more.
+        if let error = pane.listError { throw DeviceToolError(message: "device_unavailable: adb failed: \(error)") }
         let devices = pane.devices ?? []
         let running = Set(devices.compactMap(\.avdName))
         let connected = devices.map { device in
@@ -120,18 +122,29 @@ final class AndroidBackend: DeviceBackend {
         case .portraitUpsideDown: 2
         case .landscapeRight: 3
         }
-        try await control().setRotation(serial: id, rotation)
-        let landscape = orientation.isLandscape
-        for _ in 0..<40 {
-            if let size = streams.videoSizes[id], (size.width > size.height) == landscape { return orientation }
-            try? await Task.sleep(for: .milliseconds(50))
+        let control = try control()
+        try await control.setRotation(serial: id, rotation)
+        // The display's own rotation, which an app locked to one orientation keeps.
+        var actual: Int?
+        for _ in 0..<20 {
+            actual = AndroidRotation.parseDisplay(try await control.adb(id, ["shell", "dumpsys", "display"]))
+            if actual == rotation { break }
+            try? await Task.sleep(for: .milliseconds(100))
         }
-        // An app that supports only portrait stays upright.
-        return .portrait
+        return switch actual {
+        case 1: .landscapeLeft
+        case 2: .portraitUpsideDown
+        case 3: .landscapeRight
+        default: .portrait
+        }
     }
 
     func beginPaste(_ id: String) async throws -> any DevicePasteSession {
-        AndroidPasteSession(serial: id, streams: streams, before: await streams.readClipboard(udid: id))
+        // Without the old text the paste would replace the clipboard for good.
+        guard let before = await streams.readClipboard(udid: id) else {
+            throw DeviceToolError(message: "The device's clipboard couldn't be read, so it couldn't be put back after pasting.")
+        }
+        return AndroidPasteSession(serial: id, streams: streams, before: before)
     }
 
     func readClipboard(_ id: String) async throws -> String {
@@ -299,9 +312,9 @@ final class AndroidBackend: DeviceBackend {
 private final class AndroidPasteSession: DevicePasteSession {
     private let serial: String
     private let streams: AndroidStreamClient
-    private let before: String?
+    private let before: String
 
-    init(serial: String, streams: AndroidStreamClient, before: String?) {
+    init(serial: String, streams: AndroidStreamClient, before: String) {
         self.serial = serial
         self.streams = streams
         self.before = before
@@ -314,6 +327,6 @@ private final class AndroidPasteSession: DevicePasteSession {
     }
 
     func end() async {
-        if let before { streams.setClipboard(udid: serial, text: before, paste: false) }
+        streams.setClipboard(udid: serial, text: before, paste: false)
     }
 }

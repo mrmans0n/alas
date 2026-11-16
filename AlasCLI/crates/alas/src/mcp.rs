@@ -1196,7 +1196,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_record",
-            "description": "Record the device's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes or when the simulator shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
+            "description": "Record the device's screen as a video. start begins a recording; stop ends it and returns the file path and length in seconds. A recording ends by itself after 10 minutes on iOS or 3 minutes on Android, or when the device shuts down; stop still returns it. Recording doesn't touch the screen, so it works while the user drives.",
             "annotations": { "readOnlyHint": false, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",

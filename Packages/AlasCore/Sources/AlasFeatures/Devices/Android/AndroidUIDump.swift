@@ -3,18 +3,14 @@ import Foundation
 /// `uiautomator dump` XML as a `DeviceSnapshot`, frames in dp.
 public enum AndroidUIDump {
     public static func parse(_ xml: Data, density: Double, generation: Int) throws -> DeviceSnapshot {
-        // `uiautomator dump /dev/tty` prints a line after the document.
-        var data = xml
-        if let end = data.range(of: Data("</hierarchy>".utf8)) { data = data.prefix(upTo: end.upperBound) }
-        let collector = NodeCollector()
-        let parser = XMLParser(data: data)
-        parser.delegate = collector
-        guard parser.parse(), let root = collector.nodes.first, let screen = bounds(root["bounds"]) else {
+        // A scan, not XMLParser: Linux keeps that in FoundationXML, and the dump is flat.
+        let nodes = nodeAttributes(String(decoding: xml, as: UTF8.self))
+        guard let root = nodes.first, let screen = bounds(root["bounds"]) else {
             throw DeviceSnapshotError(message: "The device did not describe its screen.")
         }
         let dp = 160 / max(density, 1)
         var elements: [DeviceElement] = []
-        for node in collector.nodes.dropFirst() {
+        for node in nodes.dropFirst() {
             guard let frame = bounds(node["bounds"]), frame.width > 0, frame.height > 0 else { continue }
             let password = node["password"] == "true"
             let label = nonEmpty(password ? nil : node["text"]) ?? nonEmpty(node["content-desc"])
@@ -46,12 +42,62 @@ public enum AndroidUIDump {
         return words.isEmpty ? "view" : words
     }
 
-    /// `[x1,y1][x2,y2]`.
+    /// `[x1,y1][x2,y2]`; anything else isn't a frame.
     static func bounds(_ text: String?) -> CGRectLike? {
         guard let text else { return nil }
-        let numbers = text.split(whereSeparator: { "[],".contains($0) }).compactMap { Double($0) }
-        guard numbers.count == 4 else { return nil }
+        let parts = text.split(whereSeparator: { "[],".contains($0) })
+        let numbers = parts.compactMap { Double($0) }
+        guard parts.count == 4, numbers.count == 4 else { return nil }
         return CGRectLike(minX: numbers[0], minY: numbers[1], width: numbers[2] - numbers[0], height: numbers[3] - numbers[1])
+    }
+
+    /// Each `<node …>` tag's attributes, in document order.
+    static func nodeAttributes(_ xml: String) -> [[String: String]] {
+        var nodes: [[String: String]] = []
+        var rest = xml[...]
+        while let open = rest.range(of: "<node ") {
+            guard let close = rest[open.upperBound...].firstIndex(of: ">") else { break }
+            nodes.append(attributes(rest[open.upperBound..<close]))
+            rest = rest[close...]
+        }
+        return nodes
+    }
+
+    /// `name="value"` pairs; values are quoted with `"`, as uiautomator writes them.
+    private static func attributes(_ tag: Substring) -> [String: String] {
+        var result: [String: String] = [:]
+        var rest = tag
+        while let equals = rest.range(of: "=\"") {
+            let name = rest[..<equals.lowerBound].split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+            guard let end = rest[equals.upperBound...].firstIndex(of: "\"") else { break }
+            result[name] = decodeEntities(rest[equals.upperBound..<end])
+            rest = rest[rest.index(after: end)...]
+        }
+        return result
+    }
+
+    static func decodeEntities(_ text: Substring) -> String {
+        guard text.contains("&") else { return String(text) }
+        var out = ""
+        var rest = text
+        while let amp = rest.firstIndex(of: "&") {
+            out += rest[..<amp]
+            guard let semi = rest[amp...].firstIndex(of: ";") else { break }
+            let entity = rest[rest.index(after: amp)..<semi]
+            switch entity {
+            case "amp": out += "&"
+            case "lt": out += "<"
+            case "gt": out += ">"
+            case "quot": out += "\""
+            case "apos": out += "'"
+            default:
+                let code = entity.hasPrefix("#x") ? UInt32(entity.dropFirst(2), radix: 16)
+                    : entity.hasPrefix("#") ? UInt32(entity.dropFirst()) : nil
+                if let code, let scalar = Unicode.Scalar(code) { out.unicodeScalars.append(scalar) } else { out += "&\(entity);" }
+            }
+            rest = rest[rest.index(after: semi)...]
+        }
+        return out + rest
     }
 
     static func nonEmpty(_ text: String?) -> String? {
@@ -61,16 +107,5 @@ public enum AndroidUIDump {
 
     struct CGRectLike {
         let minX, minY, width, height: Double
-    }
-
-    private final class NodeCollector: NSObject, XMLParserDelegate {
-        var nodes: [[String: String]] = []
-
-        func parser(
-            _ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
-            attributes: [String: String] = [:]
-        ) {
-            if name == "node" { nodes.append(attributes) }
-        }
     }
 }

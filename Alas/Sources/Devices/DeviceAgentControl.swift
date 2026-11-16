@@ -183,14 +183,17 @@ final class DeviceAgentControl {
         case .failure(let refusal): return refusal.response
         case .success(let found): (backend, device) = (found.backend, found.device)
         }
-        if userDriving(udid) { return .error(Self.userDriving) }
+        // Who drives is tracked under the device's own id: an AVD's `avd:` id
+        // names it until it boots, then its emulator's serial does.
+        var driven = device.id
+        if userDriving(driven) { return .error(Self.userDriving) }
 
-        lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
-        inFlight[udid, default: 0] += 1
+        lastCalls[driven] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
+        inFlight[driven, default: 0] += 1
         var leased: String?
         defer {
-            inFlight[udid, default: 1] -= 1
-            lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
+            inFlight[driven, default: 1] -= 1
+            lastCalls[driven] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
             // The idle window starts when the call ends, not when it began.
             if let leased { renewLease(leased) }
         }
@@ -202,6 +205,13 @@ final class DeviceAgentControl {
                 device = (try? await backend.devices().first { $0.id == id })
                     ?? AgentDevice(id: id, name: device.name, platform: device.platform, runtime: device.runtime, state: "booted")
                 routes[id] = backend.platform
+                if id != driven {
+                    inFlight[driven, default: 1] -= 1
+                    lastCalls[driven] = nil
+                    driven = id
+                    inFlight[driven, default: 0] += 1
+                    lastCalls[driven] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
+                }
             } catch let error as DeviceToolError {
                 return .error(error.message)
             } catch {
@@ -445,7 +455,8 @@ final class DeviceAgentControl {
                 failure = failure ?? error
             }
         }
-        if let failure, backends.count == 1 {
+        // A backend that couldn't list may hold the device: say why rather than "not found".
+        if let failure {
             return .failure(Refusal(response: .error("device_unavailable: \(failure.localizedDescription)")))
         }
         return .failure(Refusal(response: .error("device_not_found: No device \(udid). Call device_list.")))

@@ -202,4 +202,22 @@ struct AndroidControlTests {
             frames: ["com.example.hello.Main.onCreate(Main.kt:12)", "android.app.Activity.performCreate(Activity.java:9000)"]
         )])
     }
+
+    @Test func malformedBoundsDropTheNodeAndEntitiesDecode() throws {
+        let xml = Data(#"""
+        <hierarchy rotation="0"><node class="android.widget.FrameLayout" text="" bounds="[0,0][1080,2400]">
+        <node class="android.widget.Button" text="Bad" clickable="true" bounds="[0,0][100,oops][200]" />
+        <node class="android.widget.Button" text="Tom &amp; &quot;Jerry&quot; &#233;" clickable="true" bounds="[0,0][160,160]" />
+        </node></hierarchy>
+        """#.utf8)
+        let snapshot = try AndroidUIDump.parse(xml, density: 160, generation: 1)
+        #expect(snapshot.elements.map(\.label) == ["Tom & \"Jerry\" é"])
+    }
+
+    @Test(arguments: [
+        ("  mCurrentOrientation=2\n  mCurrentOrientation=0", 2 as Int?), ("mCurrentOrientation=1", 1), ("nothing", nil),
+    ])
+    func theDisplaysActualRotationIsRead(output: String, rotation: Int?) {
+        #expect(AndroidRotation.parseDisplay(output) == rotation)
+    }
 }

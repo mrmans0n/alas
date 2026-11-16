@@ -841,13 +841,14 @@ extension DeviceAgentControlTests {
     }
 
     private func bothPlatforms(
-        _ android: FakeBackend, sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
+        _ android: FakeBackend, simulators: @escaping () async throws -> [SimulatorDevice] = { [Self.booted] },
+        sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         let input = FakeInput()
         return DeviceAgentControl(
             backends: [
                 SimulatorBackend(
-                    input: input, devices: { [Self.booted] }, boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 },
+                    input: input, devices: simulators, boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 },
                     settings: FakeSettings(), logs: FakeLogs(), pasteboard: Self.pasteboard(input), sleep: sleep
                 ),
                 android,
@@ -877,6 +878,11 @@ extension DeviceAgentControlTests {
             return
         }
         #expect(parts.joined().contains(#""udid":"emulator-5556""#))
+        // The agent drives the emulator it booted, so the stage shows it and blocks the user's clicks.
+        guard case .agent = control.driver(udid: "emulator-5556") else {
+            Issue.record("emulator-5556 isn't driven by the agent")
+            return
+        }
         let stale = await control.perform(.snapshot(udid: "avd:Pixel_9", query: nil, limit: 200), sessionID: "s")
         #expect(error(stale) == "device_not_found: avd:Pixel_9 is running as emulator-5556; use that udid.")
         // Opening it again is how an agent finds its serial: no error.
@@ -898,6 +904,13 @@ extension DeviceAgentControlTests {
     ])
     func whatAPlatformLacksIsUnsupported(command: DeviceCommand, message: String) async {
         #expect(error(await bothPlatforms(FakeBackend()).perform(command, sessionID: "s")) == message)
+    }
+
+    @Test func aSimctlFailureStaysUnavailableBesideAndroid() async {
+        struct Broken: Error, LocalizedError { var errorDescription: String? { "simctl is broken" } }
+        let control = bothPlatforms(FakeBackend(), simulators: { throw Broken() })
+        let response = await control.perform(.snapshot(udid: "on", query: nil, limit: 200), sessionID: "s")
+        #expect(error(response) == "device_unavailable: simctl is broken")
     }
 
     @Test func anAndroidCallWaitsForTheUserToHandBack() async throws {
