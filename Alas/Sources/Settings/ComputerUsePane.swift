@@ -34,8 +34,8 @@ struct ComputerUsePane: View {
                         AlasToggle(on: state.bind(\.computerUse.enabled))
                     }
                     SettingsRow(
-                        name: "Let agents use iOS simulators",
-                        desc: "Agents in a worktree can list, open, read and drive simulators with the device_* tools. You can take over from the Devices tab."
+                        name: "Let agents use simulators and Android devices",
+                        desc: "Agents in a worktree can list, open, read and drive iOS simulators and Android devices with the device_* tools. You can take over from the Devices tab."
                     ) {
                         AlasToggle(on: state.bind(\.deviceAgentsEnabled))
                     }

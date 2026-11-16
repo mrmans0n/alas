@@ -76,8 +76,12 @@ struct DeviceStage: View {
                     }
                 )
             } else if driver != .idle {
-                driverPill(driver)
-                    .padding(.top, scale.space[2])
+                DeviceDriverPill(
+                    driver: driver, waiting: control.waitingSessions(udid: device.udid).first, agentName: agentName,
+                    pulse: pulse, onTakeOver: { control.takeOver(udid: device.udid) },
+                    onHandBack: { control.handBack(udid: device.udid) }
+                )
+                .padding(.top, scale.space[2])
             }
         }
         .overlay(alignment: .bottom) {
@@ -88,69 +92,6 @@ struct DeviceStage: View {
                 DeviceStagePill { Text(notice).foregroundStyle(theme.color("fg")) }
                     .padding(.bottom, scale.space[3])
             }
-        }
-    }
-
-    private func driverPill(_ driver: VMDriver) -> some View {
-        // The one-line strip, or the same texts and button on two lines when the
-        // screen is too narrow for it.
-        ViewThatFits(in: .horizontal) {
-            driverPillContent(driver, stacked: false)
-            driverPillContent(driver, stacked: true)
-        }
-        .font(scale.caption.font)
-        .background(.ultraThinMaterial, in: Capsule())
-        .background(theme.color("bg-2").opacity(0.6), in: Capsule())
-        .overlay(Capsule().strokeBorder(theme.color("line"), lineWidth: 0.5))
-        .scaleEffect(pulse ? 1.06 : 1)
-        .animation(.easeOut(duration: 0.2), value: pulse)
-    }
-
-    @ViewBuilder
-    private func driverPillContent(_ driver: VMDriver, stacked: Bool) -> some View {
-        let status = HStack(spacing: 6) {
-            switch driver {
-            case .agent(let sessionID, _, _):
-                Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
-                Text("\(agentName(sessionID)) is driving")
-                    .foregroundStyle(theme.color("fg"))
-                    .fixedSize()
-            case .user, .idle:
-                Text("You're driving")
-                    .foregroundStyle(theme.color("fg"))
-                    .fixedSize()
-                if let waiting = control.waitingSessions(udid: device.udid).first {
-                    Text("· \(agentName(waiting)) is waiting")
-                        .foregroundStyle(theme.color("fg-dim"))
-                        .fixedSize()
-                }
-            }
-        }
-        let action = Group {
-            switch driver {
-            case .agent:
-                Button("Take over") { control.takeOver(udid: device.udid) }
-            case .user, .idle:
-                Button("Hand back") { control.handBack(udid: device.udid) }
-            }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(theme.color("accent"))
-        .fixedSize()
-        if stacked {
-            VStack(alignment: .trailing, spacing: scale.space[1]) {
-                status
-                action
-            }
-            .padding(.horizontal, scale.space[3])
-            .padding(.vertical, scale.space[1])
-        } else {
-            HStack(spacing: 6) {
-                status
-                action
-            }
-            .padding(.horizontal, scale.space[3])
-            .frame(height: 24)
         }
     }
 

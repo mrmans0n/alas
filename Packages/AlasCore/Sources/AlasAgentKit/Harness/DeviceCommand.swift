@@ -24,9 +24,10 @@ public enum DeviceCommand: Equatable, Sendable {
 
     /// serve-sim's button names.
     public enum Button: String, Equatable, Sendable {
-        case home, lock, siri
+        case home, lock, siri, back
         case sideButton = "side_button"
         case appSwitcher = "app_switcher"
+        case volumeUp = "volume_up", volumeDown = "volume_down"
     }
 
     case list
