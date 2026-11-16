@@ -10,6 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Set up a machine on first use by finding or cloning the project's checkout before creating a worktree (#2539).
+- Ship a session's pull request from iPhone or iPad and control its shepherd from the session screen (#2537).
 - Run Alas on iPad with sessions beside their worktree list (#2531).
 - Check and push a base branch before creating a worktree on another machine (#2536).
 - Stage, commit, and sync a session's worktree from iPhone or iPad (#2533).
@@ -49,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- Group mobile worktrees by their owning host and deduplicate direct and relayed reports (#2538).
 - Fade the transcript beneath its toolbar and keep inactive stage controls readable (#2532).
 - Lead with sessions that need attention in the sidebar, approval card, right pane, and composer footer (#2524).
 - Update `rusqlite` to 0.43 (#2518).
