@@ -1534,7 +1534,7 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.hydrateIfNeeded(id: reopenedSession.id)
         await manager.attach(to: reopenedSession.id, freshlyCreated: false)
         try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
-            await replacementService.sent.contains { $0.method == "session/prompt" }
+            reopenedSession.queue.isEmpty
         }
         await manager.flushAllPersistence()
 

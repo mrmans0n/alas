@@ -84,18 +84,10 @@ struct AndroidControlTests {
     /// An emulator whose AVD name couldn't be read last poll is asked again,
     /// even though its Android version is known.
     @Test func aMissingAVDNameIsLookedUpAgain() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("alas-adb-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let adb = dir.appendingPathComponent("adb")
-        try """
-        #!/bin/sh
-        case "$*" in
-          "devices -l") printf 'List of devices attached\\nemulator-5554 device model:sdk_gphone64_arm64\\n' ;;
-          *"emu avd name") printf 'Medium_Phone\\r\\nOK\\r\\n' ;;
-          *) echo 16 ;;
-        esac
-        """.write(to: adb, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: adb.path)
+        // A checked-in executable avoids Linux ETXTBSY from writing and then
+        // immediately launching the same fixture.
+        let adb = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/adb_fixture.sh")
         let control = AndroidControl(sdk: AndroidSDK(root: nil, adb: adb.path, emulator: nil))
         let known = AndroidDevice(serial: "emulator-5554", state: .ready, model: "sdk_gphone64_arm64", release: "16")
         let devices = try await control.devices(known: ["emulator-5554": known])

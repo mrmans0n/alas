@@ -16,4 +16,9 @@ int alas_spawn_add_closefrom(void *actions, int from);
 // posix_spawn_file_actions_addchdir_np, likewise a GNU extension.
 int alas_spawn_add_chdir(void *actions, const char *path);
 
+// Replace an unpublished pipe's endpoints using pipe2/dup3 with O_CLOEXEC.
+// Needs two temporary descriptors. Returns 0, or -1 preserving errno; targets
+// may be partially replaced on failure, so the caller must not use them then.
+int alas_replace_pipe_cloexec(int read_fd, int write_fd);
+
 int alas_renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags);

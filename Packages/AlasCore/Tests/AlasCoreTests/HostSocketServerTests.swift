@@ -146,6 +146,7 @@ final class SocketClient {
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
             while true {
                 let count = read(fd, &chunk, chunk.count)
+                if count < 0, errno == EINTR { continue }
                 guard count > 0 else { return }
                 pending.append(contentsOf: chunk[0 ..< count])
                 while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
@@ -162,18 +163,18 @@ final class SocketClient {
         Foundation.close(fd)
     }
 
-    func request(_ request: HostRequest) async throws -> HostResponse {
+    func request(_ request: HostRequest, sourceLocation: SourceLocation = #_sourceLocation) async throws -> HostResponse {
         nextID += 1
         let id = nextID
         var line = try JSONEncoder().encode(HostClientMessage(id: id, request: request))
         line.append(UInt8(ascii: "\n"))
         _ = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        try await eventually(within: .seconds(30)) { await self.responses[id] != nil }
+        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.responses[id] != nil }
         return try #require(responses[id])
     }
 
-    func waitForEvent(_ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
-        try await eventually(within: .seconds(30)) { await self.events.contains(where: matches) }
+    func waitForEvent(sourceLocation: SourceLocation = #_sourceLocation, _ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
+        try await eventually(within: .seconds(30), sourceLocation: sourceLocation) { await self.events.contains(where: matches) }
     }
 
     private func deliver(_ message: HostServerMessage) {

@@ -820,18 +820,28 @@ struct ACPBrokerRawClientTests {
         let service = RawBrokerFixture()
         let initial = rawOutcome(result: "null")
         await service.preloadOutcome(initial, cursor: 3)
-        let client = makeClient(service)
+        let joined = AsyncStream<Void>.makeStream()
+        let client = ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
+            command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
+            backgroundPollIdleIntervalNanoseconds: 60_000_000_000,
+            onReplayJoinedForTesting: { joined.continuation.yield(()) }, wireContext: .rawV2)
         client.preRegisterAwaitedOperationKeys(["key"])
         _ = try await client.start()
         let old = try #require(client.replayedCompletion(forPreRegisteredOperationKey: "key"))
+        // The ACK starts a replay whose page predates the replacement outcome.
+        await service.holdNextAttach()
         old.acknowledgeDurableConsumption()
-        try await client.replayRawBrokerEvents()
+        await service.waitForHeldAttach()
         #expect(client.replayedCompletion(forPreRegisteredOperationKey: "key") == nil)
         #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key") == nil)
         let newer = rawOutcome(result: #"{"new":1e999}"#)
         await service.preloadOutcome(newer, cursor: 4)
         client.preRegisterAwaitedOperationKeys(["key"])
-        try await client.replayRawBrokerEvents()
+        let replay = Task { try await client.replayRawBrokerEvents() }
+        var joins = joined.stream.makeAsyncIterator()
+        _ = await joins.next()
+        await service.releaseHeldAttach()
+        try await replay.value
         old.acknowledgeDurableConsumption()
         #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key") == newer)
         await client.detach()
