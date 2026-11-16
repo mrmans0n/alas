@@ -45,6 +45,18 @@ with that glibc or newer, and need libcurl, SQLite and zlib from the system
 and whatever your agents need (Node for the ACP adapters):
 
 ```bash
+curl -fsSL https://github.com/mrmans0n/alas/releases/latest/download/install-alas-host.sh | sh
+```
+
+It unpacks the latest release into `~/.local/opt/alas-host`, links
+`alas-host` into `~/.local/bin`, starts it as a systemd user service and
+enables lingering so it keeps serving while you are logged out. Rerun it to
+upgrade. `ALAS_HOST_VERSION=<version>` installs a given release and
+`ALAS_HOST_TARBALL=<path>` a tarball you already have.
+
+To install by hand instead:
+
+```bash
 mkdir -p ~/.local/opt/alas-host
 curl -fsSL https://github.com/mrmans0n/alas/releases/download/v<version>/alas-host-<version>-linux-$(uname -m).tar.gz \
   | tar -xz -C ~/.local/opt/alas-host
