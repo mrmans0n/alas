@@ -841,7 +841,7 @@ struct NewWorktreeDialog: View {
                 )
                 // The dialog stays editable meanwhile, so every input below is
                 // read after this point, from the same state.
-                guard !Task.isCancelled, presented, targetProject?.id == project.id else { return }
+                guard !Task.isCancelled, presented, base == chosenBase, targetProject?.id == project.id else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }
