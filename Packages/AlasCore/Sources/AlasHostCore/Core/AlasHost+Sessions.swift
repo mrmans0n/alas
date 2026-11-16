@@ -275,7 +275,7 @@ extension SessionsAPI {
         let lower = max(0, upper - max(limit, 0))
         return HostTranscriptPage(
             revision: TranscriptRevision(epoch: transcript.changeLog.epoch, version: transcript.changeLog.latestVersion),
-            messages: (lower ..< upper).compactMap { HostTranscriptMessage(messages[$0], at: $0) },
+            messages: (lower ..< upper).compactMap { HostTranscriptMessage(messages[$0], at: $0, createdAt: transcript.createdAt(forMessageAt: $0)) },
             messageCount: messages.count
         )
     }
