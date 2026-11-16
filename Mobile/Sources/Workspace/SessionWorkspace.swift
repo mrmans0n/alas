@@ -217,6 +217,11 @@ final class SessionWorkspace {
     /// refusal, worded for the user, or nil once it succeeded.
     func git(_ change: RemoteGitChange) async -> String? {
         guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
+        // A send while the link is down goes nowhere, and the reply would never come.
+        guard hub.state(of: hostID) == .online else {
+            let name = hub.hosts.first { $0.id == hostID }?.name ?? "the Mac"
+            return "Not connected to \(name). Try again once it's back online."
+        }
         let id = hub.nextHostRequestId()
         gitRunning = change
         // Listen until the answer comes, even if the screen that asked has gone.
