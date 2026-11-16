@@ -1,13 +1,8 @@
 import Foundation
 
-/// One rendered transcript row: its index into `ACPTranscript.messages` and the
-/// stable id used as its scroll anchor and SwiftUI identity.
-struct ACPTranscriptVisibleRow: Identifiable, Equatable {
-    let index: Int
-    let stableId: String
-
-    var id: String { stableId }
-
+// `ACPTranscriptVisibleRow` itself lives in AlasRemoteKit; its index points
+// into `ACPTranscript.messages`.
+extension ACPTranscriptVisibleRow {
     /// Messages that never become a row: the toolbar pill renders plans, removed or empty plan
     /// documents show nothing, hidden background
     /// tasks are not shown, a visual aid's answer prompt is shown by its answered card, and an
