@@ -20,6 +20,9 @@ public struct WorktreeCreateRequest: Sendable {
     public var runsStartupScripts = true
     /// Fetch `base` from its remote first, on a best-effort basis.
     public var fetchesBaseFirst = false
+    /// Always fetch, then create from `origin/<base>`: a machine's clone may
+    /// hold a stale `<base>`, and only what is on origin reaches it.
+    public var createsFromFetchedOrigin = false
     /// The branch carries a temporary name that the first prompt replaces, so
     /// it must be new and is recorded as pending right after creation.
     public var namesBranchFromFirstPrompt = false
@@ -165,18 +168,23 @@ extension AlasCoreContext {
             }
         }
         do {
-            if request.fetchesBaseFirst {
+            var base = request.base
+            if request.createsFromFetchedOrigin {
+                base = await fetchOriginBase(request.base, in: repoPath)
+            } else if request.fetchesBaseFirst {
                 await fetchBase(request.base, in: repoPath)
             }
             let created = try await WorktreeLifecycle.performCreateWorktree(
                 repoPath: repoPath,
-                base: request.base,
+                base: base,
                 branch: request.branch,
                 destination: pending.worktree.path,
                 projectId: request.projectID,
                 // A temporary name must never check out an existing branch:
                 // the first prompt would rename that branch.
-                requiresNewBranch: request.namesBranchFromFirstPrompt
+                requiresNewBranch: request.namesBranchFromFirstPrompt,
+                // Tracking origin/<base> would make the branch's first push land on the base.
+                tracksBase: !request.createsFromFetchedOrigin
             )
             guard projects.projects.contains(where: { $0.id == request.projectID }) else { return .projectRemoved }
             // Recorded as soon as the branch exists: a later step failing
@@ -253,6 +261,22 @@ extension AlasCoreContext {
     public func clearLaunchFailure(_ worktree: Worktree) {
         guard case .launchFailed = projects.operationState(for: worktree) else { return }
         projects.setOperationState(for: worktree, state: nil)
+    }
+
+    /// Fetches `base` from origin and returns the remote-tracking ref to
+    /// create from. A remote-tracking base is fetched from its own remote.
+    func fetchOriginBase(_ base: String, in repoPath: URL) async -> String {
+        if (try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base)) != nil {
+            await fetchBase(base, in: repoPath)
+            return base
+        }
+        do {
+            _ = try await GitService().fetchRef(worktreePath: repoPath, remote: "origin", branch: base)
+        } catch {
+            // The create still tries the ref it has; a missing one fails with git's message.
+            creationLogger.error("Fetch failed before creating worktree: \(String(describing: error), privacy: .public)")
+        }
+        return "origin/\(base)"
     }
 
     func fetchBase(_ base: String, in repoPath: URL) async {

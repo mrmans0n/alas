@@ -82,6 +82,24 @@ struct GitServiceRemoteForFetchTests {
         #expect(result?.branch == "release/v1")
     }
 
+    @Test func aBaseIsPushedOnceOriginHasEveryCommit() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let svc = GitService()
+        #expect(try await svc.basePushState(repoPath: repo, base: "main") == .pushed)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local"], cwd: repo)
+        #expect(try await svc.basePushState(repoPath: repo, base: "main") == .ahead(commits: 1))
+        #expect(try await svc.basePushState(repoPath: repo, base: "origin/main") == .pushed)
+        _ = try await Process.git(["branch", "feature"], cwd: repo)
+        #expect(try await svc.basePushState(repoPath: repo, base: "feature") == .notOnOrigin)
+
+        try await svc.pushBase(repoPath: repo, base: "feature")
+        #expect(try await svc.basePushState(repoPath: repo, base: "feature") == .pushed)
+    }
+
     @Test func remoteForFetchReturnsNilWhenNoRemotesExist() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-no-remote-\(UUID().uuidString)")
@@ -174,6 +192,40 @@ struct WorktreeCreateFetchTests {
         // The new worktree should have the latest remote content because fetch ran first
         let wtContent = try String(contentsOf: dest.appendingPathComponent("a.txt"), encoding: .utf8)
         #expect(wtContent.contains("new remote content"))
+    }
+
+    /// A machine creates from what is on origin, not from its clone's own,
+    /// possibly stale, branch.
+    @Test func aFetchedOriginCreationStartsFromOriginsBase() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let remoteClone = remote.deletingLastPathComponent()
+            .appendingPathComponent("remote-clone-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remoteClone) }
+        _ = try await Process.git(["clone", "-q", remote.path, remoteClone.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: remoteClone)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: remoteClone)
+        try "new remote content\n".write(to: remoteClone.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "remote update"], cwd: remoteClone)
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: remoteClone)
+
+        let state = AppState(store: TestPersistenceStore())
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let dest = repo.appendingPathComponent("wt-origin")
+        var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "from-origin", destination: dest)
+        request.runsStartupScripts = false
+        request.createsFromFetchedOrigin = true
+        _ = try await state.host.worktrees.create(request, caller: .app)
+
+        let content = try String(contentsOf: dest.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content.contains("new remote content"))
+        // Not tracking origin/main: the branch's first push must not land on main.
+        let upstream = try await Process.git(["rev-parse", "--abbrev-ref", "from-origin@{upstream}"], cwd: dest)
+        #expect(upstream.exitCode != 0)
     }
 
     @Test func createWorktreeSkipsFetchForLocalBaseWhenSettingEnabled() async throws {
