@@ -96,8 +96,11 @@ private struct DevicesSwitcherPanel: View {
     @Environment(\.designScale) private var scale
     @State private var query = ""
     @State private var showsOlderRuntimes = false
-    /// An index into the flattened rows of every section.
-    @State private var highlight = 0
+    /// The highlighted row; nil or a row that's gone means the first row.
+    /// Keyed by device, so rows shifting under it don't move it.
+    @State private var highlight: DevicesTarget?
+    /// The row under the mouse; only it shows the inline Boot.
+    @State private var hoveredTarget: DevicesTarget?
     /// Bumps only on keyboard navigation, so hovering a row tints it without
     /// scrolling the list under the cursor.
     @State private var keyboardScrollTick = 0
@@ -106,15 +109,16 @@ private struct DevicesSwitcherPanel: View {
     var body: some View {
         let listing = state.switcherListing(query: query, showsOlderRuntimes: showsOlderRuntimes)
         let rows = listing.sections.flatMap(\.rows)
-        let offsets = Self.offsets(listing.sections)
+        let current = rows.firstIndex { $0.target == highlight } ?? 0
+        let highlighted = rows.indices.contains(current) ? rows[current].target : nil
         VStack(spacing: 0) {
             filterBar
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(listing.sections.enumerated()), id: \.element.id) { sectionIndex, section in
-                            sectionView(section, firstIndex: offsets[sectionIndex])
+                        ForEach(listing.sections) { section in
+                            sectionView(section, highlighted: highlighted)
                         }
                         if listing.sections.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty {
                             Text("No matches")
@@ -130,9 +134,9 @@ private struct DevicesSwitcherPanel: View {
                     .padding(.horizontal, scale.space[1])
                 }
                 .onChange(of: keyboardScrollTick) { _, _ in
-                    guard rows.indices.contains(highlight) else { return }
+                    guard let highlighted else { return }
                     withAnimation(.easeOut(duration: 0.10)) {
-                        proxy.scrollTo(rows[highlight].id, anchor: .center)
+                        proxy.scrollTo(highlighted, anchor: .center)
                     }
                 }
             }
@@ -143,16 +147,16 @@ private struct DevicesSwitcherPanel: View {
         .onKeyPress { press in
             switch press.key {
             case .upArrow:
-                highlight = max(0, highlight - 1)
+                if !rows.isEmpty { highlight = rows[max(0, current - 1)].target }
                 keyboardScrollTick &+= 1
                 return .handled
             case .downArrow:
-                highlight = min(max(0, rows.count - 1), highlight + 1)
+                if !rows.isEmpty { highlight = rows[min(rows.count - 1, current + 1)].target }
                 keyboardScrollTick &+= 1
                 return .handled
             case .return:
-                if rows.indices.contains(highlight) {
-                    onSelect(rows[highlight].target)
+                if let highlighted {
+                    onSelect(highlighted)
                 }
                 return .handled
             default:
@@ -163,19 +167,10 @@ private struct DevicesSwitcherPanel: View {
         .onAppear {
             filterFocused = true
             // Start at the selected device, so arrows move from where the user is.
-            if let index = rows.firstIndex(where: { $0.target == state.selected }) {
-                highlight = index
+            if let selected = state.selected, rows.contains(where: { $0.target == selected }) {
+                highlight = selected
                 keyboardScrollTick &+= 1
             }
-        }
-    }
-
-    /// Each section's first index into the flattened rows.
-    private static func offsets(_ sections: [DevicesSwitcherSection]) -> [Int] {
-        var next = 0
-        return sections.map { section in
-            defer { next += section.rows.count }
-            return next
         }
     }
 
@@ -188,14 +183,14 @@ private struct DevicesSwitcherPanel: View {
                 .textFieldStyle(.plain)
                 .font(scale.metaFont)
                 .focused($filterFocused)
-                .onChange(of: query) { _, _ in highlight = 0 }
+                .onChange(of: query) { _, _ in highlight = nil }
         }
         .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
         .background(theme.color("bg-0").opacity(0.6))
     }
 
     @ViewBuilder
-    private func sectionView(_ section: DevicesSwitcherSection, firstIndex: Int) -> some View {
+    private func sectionView(_ section: DevicesSwitcherSection, highlighted: DevicesTarget?) -> some View {
         Text(section.title)
             .font(scale.captionFont)
             .foregroundStyle(theme.color("fg-muted"))
@@ -210,8 +205,8 @@ private struct DevicesSwitcherPanel: View {
                 .padding(.horizontal, scale.space[2])
                 .padding(.vertical, 2)
         }
-        ForEach(Array(section.rows.enumerated()), id: \.element.id) { offset, row in
-            rowView(row, index: firstIndex + offset, running: section.kind == .running)
+        ForEach(section.rows) { row in
+            rowView(row, isHighlighted: row.target == highlighted, running: section.kind == .running)
                 // Data-based id, so filtering doesn't freeze LazyVStack rows.
                 .id(row.id)
         }
@@ -224,10 +219,9 @@ private struct DevicesSwitcherPanel: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: DevicesTabState.Row, index: Int, running: Bool) -> some View {
+    private func rowView(_ row: DevicesTabState.Row, isHighlighted: Bool, running: Bool) -> some View {
         let isSelected = row.target == state.selected
-        let isHighlighted = index == highlight
-        let showsBoot = isHighlighted && row.canBoot
+        let showsBoot = hoveredTarget == row.target && row.canBoot
         HStack(spacing: 0) {
             Button { onSelect(row.target) } label: {
                 HStack(spacing: 6) {
@@ -274,7 +268,12 @@ private struct DevicesSwitcherPanel: View {
         .background(rowBackground(isHighlighted: isHighlighted, isSelected: isSelected))
         .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
         .onHover { hovering in
-            if hovering { highlight = index }
+            if hovering {
+                highlight = row.target
+                hoveredTarget = row.target
+            } else if hoveredTarget == row.target {
+                hoveredTarget = nil
+            }
         }
     }
 
