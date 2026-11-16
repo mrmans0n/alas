@@ -22,11 +22,22 @@ private actor ControlledUpgradeOperation {
 }
 
 @MainActor
-struct GGInstallControllerTests {
+struct HomebrewInstallControllerTests {
+    private func controller(
+        brew: @escaping @Sendable ([String]) async throws -> ProcessResult = { _ in ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+        reprobe: @escaping @MainActor () async -> Bool = { true }
+    ) -> HomebrewInstallController {
+        HomebrewInstallController(formula: "example/tap/tool", tool: "tool", runBrew: brew, reprobe: reprobe)
+    }
+
     @Test func successfulInstallReachesSucceededAndReprobes() async {
+        let calls = BrewCalls()
         var probed = false
-        let controller = GGInstallController(
-            runInstall: { ProcessResult(exitCode: 0, stdout: "installed", stderr: "") },
+        let controller = controller(
+            brew: { args in
+                calls.append(args)
+                return ProcessResult(exitCode: 0, stdout: "installed", stderr: "")
+            },
             reprobe: {
                 probed = true
                 return true
@@ -34,34 +45,28 @@ struct GGInstallControllerTests {
         )
         await controller.installAndWait()
         #expect(controller.phase == .succeeded)
+        #expect(calls.all == [["install", "example/tap/tool"]])
         #expect(probed)
     }
 
     @Test func brewFailureSurfacesStderr() async {
-        let controller = GGInstallController(
-            runInstall: { ProcessResult(exitCode: 1, stdout: "", stderr: "no tap") },
-            reprobe: { true }
-        )
+        let controller = controller(brew: { _ in ProcessResult(exitCode: 1, stdout: "", stderr: "no tap") })
         await controller.installAndWait()
         #expect(controller.phase == .failed("no tap"))
     }
 
     @Test func installedButNotOnPathFails() async {
-        let controller = GGInstallController(
-            runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
-            reprobe: { false }
-        )
+        let controller = controller(reprobe: { false })
         await controller.installAndWait()
-        #expect(controller.phase == .failed("gg is still not on PATH after install."))
+        #expect(controller.phase == .failed("tool is still not on PATH after install."))
     }
 
     @Test func successfulUpgradeReachesSucceededAndReprobes() async {
-        let upgraded = Flag()
+        let calls = BrewCalls()
         var probed = false
-        let controller = GGInstallController(
-            runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
-            runUpgrade: {
-                upgraded.set()
+        let controller = controller(
+            brew: { args in
+                calls.append(args)
                 return ProcessResult(exitCode: 0, stdout: "upgraded", stderr: "")
             },
             reprobe: {
@@ -72,15 +77,14 @@ struct GGInstallControllerTests {
 
         await controller.upgradeAndWait()
         #expect(controller.phase == .succeeded)
-        #expect(upgraded.isSet)
+        #expect(calls.all == [["upgrade", "example/tap/tool"]])
         #expect(probed)
     }
 
     @Test func upgradeFailureSurfacesStderrWithoutReprobe() async {
         var probed = false
-        let controller = GGInstallController(
-            runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
-            runUpgrade: { ProcessResult(exitCode: 1, stdout: "", stderr: "formula unavailable") },
+        let controller = controller(
+            brew: { _ in ProcessResult(exitCode: 1, stdout: "", stderr: "formula unavailable") },
             reprobe: {
                 probed = true
                 return true
@@ -94,10 +98,7 @@ struct GGInstallControllerTests {
 
     @Test func concurrentUpgradeCallsDeduplicateWhileRunning() async throws {
         let operation = ControlledUpgradeOperation()
-        let controller = GGInstallController(
-            runUpgrade: { await operation.run() },
-            reprobe: { true }
-        )
+        let controller = controller(brew: { _ in await operation.run() })
 
         let first = Task { await controller.upgradeAndWait() }
         while await operation.callCount() == 0 {
@@ -114,18 +115,18 @@ struct GGInstallControllerTests {
     }
 }
 
-/// One-shot flag set from a concurrently-executing closure.
+/// The arguments each brew run got, from a concurrently-executing closure.
 ///
-/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
-private final class Flag: @unchecked Sendable {
+/// Safe under `@unchecked Sendable`: `calls` is only ever read or written inside `lock`.
+private final class BrewCalls: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = false
+    private var calls: [[String]] = []
 
-    func set() {
-        lock.withLock { value = true }
+    func append(_ args: [String]) {
+        lock.withLock { calls.append(args) }
     }
 
-    var isSet: Bool {
-        lock.withLock { value }
+    var all: [[String]] {
+        lock.withLock { calls }
     }
 }

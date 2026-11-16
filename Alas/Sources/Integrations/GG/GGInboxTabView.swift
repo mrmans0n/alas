@@ -67,7 +67,7 @@ struct GGInboxTabView: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
-    @State private var ggUpgrade = GGInstallController()
+    @State private var ggUpgrade = HomebrewInstallController.gg()
     private let store = GGInboxStore.shared
     private let service = GGService()
 
