@@ -73,26 +73,42 @@ import Testing
         #expect(try JSONEncoder.sorted.encode(phone) == data)
     }
 
+    enum FoldRow: CaseIterable {
+        case commentary, finalAnswer, read, subagent, emptyPlanDocument
+
+        @MainActor var message: ACPMessage {
+            switch self {
+            case .commentary: .agent(id: UUID(), messageId: nil, StreamingText("thinking aloud", phase: .commentary))
+            case .finalAnswer: .agent(id: UUID(), messageId: nil, StreamingText("done", phase: .finalAnswer))
+            case .read: .toolCall(.init(toolCallId: "t", title: "Read a", kind: "read", status: "completed"))
+            case .subagent: .toolCall(.init(
+                toolCallId: "s", title: "Task", kind: "other", status: "completed",
+                metadata: AnyCodable(["subagent": AnyCodable(["version": AnyCodable(1), "id": AnyCodable("child")])])))
+            // The Mac shows no row for a plan document with neither text nor a file.
+            case .emptyPlanDocument: .planDocument(id: UUID(), ACPPlanDocument(planId: "p", kind: .markdown, markdown: "", file: nil))
+            }
+        }
+
+        var phase: String? { self == .commentary ? "commentary" : nil }
+        var fold: RemoteWireMessage.Fold? {
+            switch self {
+            case .read: .init(joins: true, verb: "read")
+            case .subagent: .init(joins: false, verb: "other")
+            default: nil
+            }
+        }
+        var isHidden: Bool? { self == .emptyPlanDocument ? true : nil }
+    }
+
     @MainActor // `toWire` reads a `StreamingText`.
-    @Test(arguments: ["commentary", "finalAnswer", "read", "subagent"])
-    func toWireCarriesFoldFacts(row: String) {
-        let message: ACPMessage = switch row {
-        case "commentary": .agent(id: UUID(), messageId: nil, StreamingText("thinking aloud", phase: .commentary))
-        case "finalAnswer": .agent(id: UUID(), messageId: nil, StreamingText("done", phase: .finalAnswer))
-        case "read": .toolCall(.init(toolCallId: "t", title: "Read a", kind: "read", status: "completed"))
-        default: .toolCall(.init(
-            toolCallId: "s", title: "Task", kind: "other", status: "completed",
-            metadata: AnyCodable(["subagent": AnyCodable(["version": AnyCodable(1), "id": AnyCodable("child")])])))
-        }
-        let wire = RemoteSessionGateway.toWire(message, index: 0, createdAt: 1_800_000_000_000)
+    @Test(arguments: FoldRow.allCases)
+    func toWireCarriesFoldFacts(row: FoldRow) {
+        let wire = RemoteSessionGateway.toWire(row.message, index: 0, createdAt: 1_800_000_000_000)
         #expect(wire.createdAt == 1_800_000_000_000)
-        #expect(wire.phase == (row == "commentary" ? "commentary" : nil))
-        switch row {
-        case "read": #expect(wire.fold == .init(joins: true, verb: "read"))
-        case "subagent": #expect(wire.fold?.joins == false)
-        default: #expect(wire.fold == nil)
-        }
-        #expect(RemoteSessionGateway.toWire(message, index: 0, createdAt: nil).createdAt == nil)
+        #expect(wire.phase == row.phase)
+        #expect(wire.fold == row.fold)
+        #expect(wire.isHidden == row.isHidden)
+        #expect(RemoteSessionGateway.toWire(row.message, index: 0, createdAt: nil).createdAt == nil)
     }
 
     @Test(arguments: RemoteWireSamples.clientMessages)

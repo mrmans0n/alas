@@ -118,7 +118,8 @@ extension RemoteWireMessage {
             kind: "systemNotice",
             text: Self.oversizedNotice(kind: kind),
             json: nil,
-            index: index
+            index: index,
+            createdAt: createdAt
         )
         let noticeByteCount = notice.transportByteCount
         precondition(
