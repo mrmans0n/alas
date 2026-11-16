@@ -32,7 +32,6 @@ public struct RunOnOption: Equatable, Sendable, Identifiable {
 
 public enum RunOnOptions {
     public static let noOriginReason = "No git remote: only this Mac can run it"
-    public static let needsSetupReason = "Not set up for this project yet"
 
     /// This Mac, then machines with a linked checkout (in Machines order, then
     /// unlisted hosts by name), then listed machines that need setup. Only
@@ -63,7 +62,7 @@ public enum RunOnOptions {
                 label: $0.label,
                 detail: "Will set up in \($0.projectsFolder)",
                 kind: .needsSetup,
-                disabledReason: hasOrigin ? needsSetupReason : noOriginReason
+                disabledReason: hasOrigin ? nil : noOriginReason
             )
         }
         let thisMac = RunOnOption(host: nil, label: "This Mac", detail: primary.path, kind: .thisMac, disabledReason: nil)

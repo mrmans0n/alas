@@ -11,16 +11,15 @@ public enum MachineCheckResult: Equatable, Sendable {
 /// One batch SSH round trip that checks a machine is reachable and that its
 /// projects folder exists, or can be created, and is writable.
 public enum MachineCheck {
-    /// `~` and `~/…` expand on the machine; everything else is quoted as is.
+    /// A path as a shell word: `~` and `~/…` expand on the machine; everything else is quoted as is.
+    public static func shellPath(_ path: String) -> String {
+        if path == "~" { return #""$HOME""# }
+        if path.hasPrefix("~/") { return #""$HOME"/"# + SSHCommand.shellQuote(String(path.dropFirst(2))) }
+        return SSHCommand.shellQuote(path)
+    }
+
     public static func folderCommand(_ projectsFolder: String) -> String {
-        let path: String
-        if projectsFolder == "~" {
-            path = #""$HOME""#
-        } else if projectsFolder.hasPrefix("~/") {
-            path = #""$HOME"/"# + SSHCommand.shellQuote(String(projectsFolder.dropFirst(2)))
-        } else {
-            path = SSHCommand.shellQuote(projectsFolder)
-        }
+        let path = shellPath(projectsFolder)
         return "mkdir -p \(path) && test -w \(path) && echo true"
     }
 

@@ -546,16 +546,32 @@ project; 2d moves settings to the primary and adds Reconnect.
   pushed, remote-tracking, then `pushBase`) and
   `aFetchedOriginCreationStartsFromOriginsBase`.
 
-## PR 4: `feat(remote): set up a machine on first use` (outline)
+## PR 4: `feat(remote): set up a machine on first use`
 
-- **`RemoteCheckoutSetup.ensure(primary:machine:)`** in core, with pure parts
-  that are tested:
-  - `matchingClone(listing: String, identity: String, repoName: String) -> String?`
-  - `freeCloneName(repoName: String, taken: Set<String>) -> String`
-- **Remote clone** with `--progress` streaming and cancel.
-- **Record creation:** link the new record and hide the main path.
-- **Dialog:** enable the rows that need setup, show the progress line, and
-  add Choose folder… with an origin-identity check.
+**Files:** `AlasPlatform/SSH/RemoteCheckoutSetup.swift` (new), `MachineCheck.swift`
+(`shellPath`), `RunOnOptions.swift`, `ProjectsManager.setWorktreeHidden` (public),
+`AppState.swift`, `NewWorktreeDialog.swift`, tests in `RemoteCheckoutSetupTests`
+(new) and `RunOnOptionsTests`.
+
+- **`RemoteCheckoutSetup.ensure(host:projectsFolder:originURL:)`**: one SSH
+  call lists `name<TAB>origin` for each direct child (only real clones, `-d
+  <d>/.git`), after the folder's absolute path. A match is used
+  (`matchingClone`: the repo's name, else first by name); otherwise
+  `git clone --progress` into `freeCloneName` (`<repo>`, `<repo>-2`, …).
+  Returns `Checkout(path:cloned:)`. Exit 255 → `.connection`; clone failures
+  show git's error plus "The machine needs access to <host>." on auth errors.
+- **`RemoteCheckoutSetup.adopt(host:path:originURL:)`** for Choose folder…:
+  must be a checkout whose origin has the primary's identity, else "This
+  clone's origin is X, not Y".
+- **`AppState.setUpLinkedCheckout` / `adoptLinkedCheckout`**: add the SSH
+  record named and iconed like the primary (or reuse an SSH project already
+  at that path), link it, hide a fresh clone's main worktree, save, refresh,
+  start its watcher.
+- **`RunOnOptions`**: needs-setup rows are enabled when the primary has an origin.
+- **Dialog:** a needs-setup machine shows "Create finds or clones the project
+  there first." with Choose folder…; Create runs the push check, then setup
+  with a status line, then the normal create. Cancel cancels the SSH call.
+  Create is disabled while setup runs.
 
 ## PR 5: iOS and Mac remote-client folding (outline)
 

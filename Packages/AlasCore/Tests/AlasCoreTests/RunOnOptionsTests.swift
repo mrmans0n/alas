@@ -49,7 +49,7 @@ struct RunOnOptionsTests {
             ),
             RunOnOption(
                 host: "fresh", label: "fresh", detail: "Will set up in ~/code",
-                kind: .needsSetup, disabledReason: RunOnOptions.needsSetupReason
+                kind: .needsSetup, disabledReason: nil
             ),
         ])
     }
@@ -64,7 +64,7 @@ struct RunOnOptionsTests {
         (last: nil, hasOrigin: true, expected: nil),
         (last: "mini", hasOrigin: true, expected: "mini"),
         (last: "removed", hasOrigin: true, expected: nil),
-        (last: "fresh", hasOrigin: true, expected: nil),
+        (last: "fresh", hasOrigin: true, expected: "fresh"),
         (last: "mini", hasOrigin: false, expected: nil),
     ] as [(last: String?, hasOrigin: Bool, expected: String?)])
     func preselectsTheLastMachineOnlyWhileItCanRunIt(last: String?, hasOrigin: Bool, expected: String?) {
