@@ -5658,6 +5658,83 @@ final class AppState {
         }
     }
 
+    /// The checkout `primaryId` runs from on `machine`: found or cloned in its
+    /// projects folder, then linked to the primary.
+    func setUpLinkedCheckout(primaryId: String, machine: Machine) async throws -> ProjectConfig {
+        let origin = try await primaryOrigin(primaryId)
+        let checkout = try await RemoteCheckoutSetup.ensure(
+            host: machine.destination,
+            projectsFolder: machine.projectsFolder,
+            originURL: origin
+        )
+        return try await addLinkedCheckout(
+            primaryId: primaryId,
+            host: machine.destination,
+            realPath: checkout.path,
+            hidesMain: checkout.cloned
+        )
+    }
+
+    /// A checkout on `host` the user picked; it must be a clone of the primary's origin.
+    func adoptLinkedCheckout(primaryId: String, host: String, path: String) async throws -> ProjectConfig {
+        let origin = try await primaryOrigin(primaryId)
+        let realPath = try await RemoteCheckoutSetup.adopt(host: host, path: path, originURL: origin)
+        return try await addLinkedCheckout(primaryId: primaryId, host: host, realPath: realPath, hidesMain: false)
+    }
+
+    private func primaryOrigin(_ primaryId: String) async throws -> String {
+        guard let primary = projectsManager.projects.first(where: { $0.id == primaryId }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        guard let origin = await Self.originURL(projectPath: primary.path) else {
+            throw RemoteCheckoutSetup.Failure.failed("\(primary.name) has no git remote named origin.")
+        }
+        return origin
+    }
+
+    /// Adds the checkout as a record linked to the primary. A clone Alas made
+    /// keeps its main worktree out of the sidebar: it is not the user's own.
+    private func addLinkedCheckout(primaryId: String, host: String, realPath: String, hidesMain: Bool) async throws -> ProjectConfig {
+        // Setup awaited SSH; another create may have linked this machine meanwhile.
+        if let existing = projectsManager.linkedProjects(of: primaryId).first(where: { $0.host == host }) {
+            return existing
+        }
+        guard let primary = projectsManager.projects.first(where: { $0.id == primaryId }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        let virtualPath = RemotePath.virtual(host: host, realPath: realPath)
+        // An SSH project already at that checkout joins the group instead.
+        let project: ProjectConfig = if let standalone = projectsManager.projects.first(where: {
+            $0.host == host && $0.path == virtualPath && $0.linkedProjectId == nil
+        }) {
+            standalone
+        } else {
+            try await projectsManager.addProject(
+                path: URL(fileURLWithPath: realPath),
+                displayName: primary.name,
+                icon: primary.icon,
+                host: host
+            )
+        }
+        projectsManager.link(project.id, to: primaryId)
+        guard let linked = projectsManager.projects.first(where: { $0.id == project.id }), linked.linkedProjectId == primaryId else {
+            throw RemoteCheckoutSetup.Failure.failed("\(RemotePath.display(virtualPath)) is already part of another project.")
+        }
+        if hidesMain {
+            projectsManager.setWorktreeHidden(projectId: project.id, path: URL(fileURLWithPath: virtualPath), hidden: true)
+        }
+        spacesManager.removeProjectEverywhere(project.id)
+        guard saveProjects() else {
+            projectsManager.removeProject(id: project.id)
+            throw ProjectCreationError.projectPersistenceFailed
+        }
+        saveSpaces()
+        await refreshProjectTopology(projectId: project.id)
+        let refreshed = projectsManager.projects.first { $0.id == project.id } ?? linked
+        startProjectGitWatcher(for: refreshed)
+        return refreshed
+    }
+
     static func originURL(projectPath: String) async -> String? {
         guard let result = try? await Process.git(["remote", "get-url", "origin"], cwd: URL(fileURLWithPath: projectPath)),
               result.exitCode == 0

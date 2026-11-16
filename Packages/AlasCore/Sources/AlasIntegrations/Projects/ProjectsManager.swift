@@ -996,7 +996,7 @@ public final class ProjectsManager {
         copySettings(toRecordsLinkedTo: primaryId)
     }
 
-    @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
+    public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
         var paths = projects[idx].hiddenWorktreePaths

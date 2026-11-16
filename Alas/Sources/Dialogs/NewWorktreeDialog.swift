@@ -55,6 +55,11 @@ struct NewWorktreeDialog: View {
     /// A machine's create stopped on a base origin doesn't have yet.
     @State private var unpushedBase: UnpushedBase?
     @State private var isPushingBase = false
+    /// Shown while a Machine is set up for the project: found or cloned.
+    @State private var setupStatus: String?
+    /// Choose folder…: a checkout on the machine to use instead.
+    @State private var choosingFolder = false
+    @State private var chosenFolder = ""
     @State private var issueState = NewWorktreeIssueState()
     @State private var issueSheetPresentation: AttachIssuePresentation?
     @State private var issueDrivenProjectChangeID: String?
@@ -139,6 +144,9 @@ struct NewWorktreeDialog: View {
                     DialogField(label: "Run on") {
                         RunOnPicker(selection: $runOnHost, options: runOnOptions)
                     }
+                    if runOnNeedsSetup {
+                        machineSetupSection
+                    }
                 }
                 DialogField(label: "Base branch") {
                     BranchPicker(
@@ -220,7 +228,7 @@ struct NewWorktreeDialog: View {
                 ggConfigurationMissing: ggConfigurationMissing,
                 requiresAcpAgent: openAfterCreate && launchMode == .acp,
                 hasAcpAgent: launchAgentId != "none"
-            )
+            ) && setupStatus == nil
         )
         .onAppear {
             refreshClipboardTicket()
@@ -333,6 +341,54 @@ struct NewWorktreeDialog: View {
     private var targetProject: ProjectConfig? {
         guard let runOnHost else { return state.worktreeProjects.first { $0.id == projectId } }
         return state.projectsManager.linkedProjects(of: projectId).first { $0.host == runOnHost }
+    }
+
+    /// The chosen machine has no checkout of the project yet: Create sets one up first.
+    private var runOnNeedsSetup: Bool {
+        runOnHost != nil && runOnOptions.first { $0.host == runOnHost }?.kind == .needsSetup
+    }
+
+    @ViewBuilder
+    private var machineSetupSection: some View {
+        HStack(spacing: 8) {
+            Text(setupStatus ?? "Create finds or clones the project there first.")
+                .font(scale.metaFont)
+                .foregroundColor(theme.color("fg-dim"))
+            Spacer(minLength: 0)
+            if !choosingFolder {
+                AlasButton(title: "Choose folder…", style: .subtle, compact: true) { choosingFolder = true }
+            }
+        }
+        if choosingFolder {
+            HStack(spacing: 8) {
+                AlasField(text: $chosenFolder, placeholder: "~/code/repo on the machine", monospaced: true)
+                AlasButton(title: "Use folder", style: .normal, compact: true) { useChosenFolder() }
+                    .disabled(chosenFolder.trimmingCharacters(in: .whitespaces).isEmpty || setupStatus != nil)
+            }
+        }
+    }
+
+    /// Links the typed checkout, once it proves to be a clone of the project, then creates.
+    private func useChosenFolder() {
+        guard let host = runOnHost else { return }
+        let primaryId = projectId
+        let folder = chosenFolder.trimmingCharacters(in: .whitespaces)
+        createErrorMessage = nil
+        createTask?.cancel()
+        createTask = Task { @MainActor in
+            setupStatus = "Checking \(folder)…"
+            defer { setupStatus = nil }
+            do {
+                _ = try await state.adoptLinkedCheckout(primaryId: primaryId, host: host, path: folder)
+            } catch {
+                if !Task.isCancelled { createErrorMessage = error.localizedDescription }
+                return
+            }
+            guard !Task.isCancelled, presented, projectId == primaryId, runOnHost == host else { return }
+            choosingFolder = false
+            setupStatus = nil
+            create()
+        }
     }
 
     private var runOnOptions: [RunOnOption] {
@@ -811,11 +867,12 @@ struct NewWorktreeDialog: View {
     }
 
     private func create() {
-        guard let project = targetProject else { return }
         // Read now: the dialog stays editable while the create runs.
         let primaryId = projectId
         let chosenHost = runOnHost
         let chosenBase = base
+        let machine = runOnNeedsSetup ? state.config.machines.first { $0.destination == chosenHost } : nil
+        guard targetProject != nil || machine != nil else { return }
         cancelNameSuggestion()
         createTask?.cancel()
         createTask = Task { @MainActor in
@@ -823,13 +880,27 @@ struct NewWorktreeDialog: View {
             if chosenHost != nil, let primary = state.worktreeProjects.first(where: { $0.id == primaryId }) {
                 let pushState = try? await GitService().basePushState(repoPath: URL(fileURLWithPath: primary.path), base: chosenBase)
                 // Create only what was checked: the dialog stays editable meanwhile.
-                guard !Task.isCancelled, presented, base == chosenBase, targetProject?.id == project.id else { return }
+                guard !Task.isCancelled, presented, base == chosenBase, projectId == primaryId, runOnHost == chosenHost else { return }
                 if let notice = pushState?.notice(base: chosenBase) {
                     unpushedBase = UnpushedBase(projectId: primaryId, host: chosenHost, base: chosenBase, notice: notice)
                     return
                 }
             }
             unpushedBase = nil
+            if let machine {
+                setupStatus = "Setting up on \(machine.label)…"
+                do {
+                    _ = try await state.setUpLinkedCheckout(primaryId: primaryId, machine: machine)
+                } catch {
+                    setupStatus = nil
+                    // Never falls back: the error stays on the chosen machine.
+                    if !Task.isCancelled { createErrorMessage = error.localizedDescription }
+                    return
+                }
+                setupStatus = nil
+                guard !Task.isCancelled, presented, base == chosenBase, projectId == primaryId, runOnHost == chosenHost else { return }
+            }
+            guard let project = targetProject else { return }
             if namesBranchFromFirstPrompt {
                 // The picker's branch list loads asynchronously and may be
                 // stale; recheck against Git so a collision picks another
