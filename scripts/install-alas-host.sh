@@ -80,7 +80,14 @@ loginctl enable-linger "$(id -un)" 2>/dev/null \
   || echo "note: run 'sudo loginctl enable-linger $(id -un)' to keep alas-host running while you are logged out"
 
 case ":$PATH:" in
-  *":$bin:"*) pair="alas-host pair" ;;
-  *) pair="$bin/alas-host pair" ; echo "note: $bin is not on your PATH" ;;
+  *":$bin:"*) host="alas-host" ;;
+  *) host="$bin/alas-host" ; echo "note: $bin is not on your PATH" ;;
 esac
-echo "Done. Run '$pair' for a link to pair this server from Alas on your Mac."
+# A new host serves nobody until Remote is reachable; settings it already
+# has are left alone.
+if [ "$("$root/alas-host/alas-host" config get host.reachability 2>/dev/null)" = off ]; then
+  echo "Done. Remote is off: run '$host setup' to choose how your Mac reaches this server and pair it,"
+  echo "or '$host config set host.reachability tailscale --restart' (or lan), then '$host pair'."
+else
+  echo "Done. Run '$host pair' for a link to pair this server from Alas on your Mac."
+fi
