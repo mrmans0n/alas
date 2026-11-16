@@ -1236,7 +1236,7 @@ fn device_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_run_flow",
-            "description": format!("Run a flow file on a booted device: Maestro YAML, in the subset Alas runs itself (launchApp, tapOn, inputText, pressKey, scroll, swipe, assertVisible, assertNotVisible, openLink, waitForAnimationToEnd). Each step waits up to 5 seconds for its element, and the run stops at the first step that fails. Returns {{\"passed\": true, \"steps\": n}}, or failed_step, line and reason. A step waiting for its element can take 5 seconds, so keep a flow short enough to finish within your tool-call time limit. {DEVICE_DRIVING_NOTE}"),
+            "description": format!("Run a flow file on a booted device: Maestro YAML, in the subset Alas runs itself (launchApp, tapOn, inputText, eraseText, pressKey, scroll, swipe, assertVisible, assertNotVisible, openLink, waitForAnimationToEnd). Each step waits up to 5 seconds for its element, and the run stops at the first step that fails. Returns {{\"passed\": true, \"steps\": n}}, or failed_step, line and reason. A step waiting for its element can take 5 seconds, so keep a flow short enough to finish within your tool-call time limit. {DEVICE_DRIVING_NOTE}"),
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",

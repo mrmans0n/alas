@@ -136,7 +136,7 @@ flow survives layout changes.
 
 The hand button in the toolbar records one on a booted device. Each click
 becomes a tap on the element under it, named by its label, else its id, else
-the point; typing becomes text, Return the Enter key, the Home and Back
+the point; typing becomes text, Delete erases, Return the Enter key, the Home and Back
 buttons their keys, and a drag or a scroll a swipe. A recording starts by launching the
 app in front. Click the button again to name the flow and save it.
 
@@ -154,13 +154,16 @@ and runs itself, without Maestro:
 | `launchApp` | Launches the flow's `appId`, or `launchApp: {appId: …}`. |
 | `tapOn: "Save"`, `tapOn: {id: …}`, `tapOn: {point: "50%,80%"}` | Taps the element with that text or id, or a point. |
 | `inputText: "hello"` | Types into the focused field. |
+| `eraseText: 3` | Deletes characters before the cursor (50 without a count). |
 | `pressKey: Home`, `Back` or `Enter` | Presses a button or Return. |
 | `scroll`, `swipe: {direction: UP}` | Scrolls down, or swipes up, down, left or right. |
 | `assertVisible: "Done"`, `assertNotVisible: …` | Waits for the element to appear, or to be gone. |
 | `openLink: "myapp://x"` | Opens a URL. |
 | `waitForAnimationToEnd` | Waits for the screen to settle. |
 
-Text matches a label exactly, then as part of one, ignoring case; Alas
+Values may be bare, in double quotes (with `\n`, `\t` and `\"`) or in single
+quotes (with `''` for an apostrophe). Text matches a label exactly, then as
+part of one, ignoring case; Alas
 doesn't take Maestro's regular expressions. Maestro's other commands, such as
 `runFlow`, `repeat` and conditions, are refused with their line.
 

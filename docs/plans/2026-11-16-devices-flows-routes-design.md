@@ -45,6 +45,7 @@ a list of commands. The subset:
 | `launchApp` | Launch `appId` (or `launchApp: {appId: …}`). |
 | `tapOn: "Save"` / `tapOn: {id: "save"}` / `tapOn: {point: "50%,80%"}` | Tap the element with that text (exact, then contains, case-insensitive), with that id, or a point. |
 | `inputText: "hello"` | Type into the focused field. |
+| `eraseText: 3` | Delete characters before the cursor (50 without a count). |
 | `pressKey: Home \| Back \| Enter` | A hardware button or Return. |
 | `scroll` / `swipe: {direction: UP \| DOWN \| LEFT \| RIGHT}` | Scroll down, or swipe that way. |
 | `assertVisible: "Done"` / `assertNotVisible: …` (text or `{id: …}`) | Wait up to 5 s for it to appear, or to be gone. |

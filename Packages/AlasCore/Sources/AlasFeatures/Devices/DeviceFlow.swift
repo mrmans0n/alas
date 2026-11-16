@@ -37,6 +37,8 @@ public struct DeviceFlow: Equatable, Sendable {
         case launchApp(String?)
         case tapOn(Selector)
         case inputText(String)
+        /// Deletes that many characters before the cursor.
+        case eraseText(Int)
         case pressKey(Key)
         /// Scrolls the content down: a swipe up.
         case scroll
@@ -59,7 +61,7 @@ public struct DeviceFlow: Equatable, Sendable {
     }
 
     private static let commands = [
-        "launchApp", "tapOn", "inputText", "pressKey", "scroll", "swipe", "assertVisible", "assertNotVisible",
+        "launchApp", "tapOn", "inputText", "eraseText", "pressKey", "scroll", "swipe", "assertVisible", "assertNotVisible",
         "openLink", "waitForAnimationToEnd",
     ]
 
@@ -150,6 +152,12 @@ public struct DeviceFlow: Equatable, Sendable {
         case "launchApp": return .launchApp(scalar ?? map["appId"]?.value)
         case "tapOn": return .tapOn(try selector())
         case "inputText": return .inputText(try required("the text to type"))
+        case "eraseText":
+            // Maestro erases 50 characters when no count is given.
+            guard let count = Int(scalar ?? "50"), (1...10000).contains(count) else {
+                throw DeviceFlowError(line: line, message: "eraseText takes a number of characters, not \(scalar ?? "").")
+            }
+            return .eraseText(count)
         case "pressKey":
             let key = try required("a key: Home, Back or Enter")
             guard let found = Key.allCases.first(where: { $0.rawValue.caseInsensitiveCompare(key) == .orderedSame }) else {
@@ -197,16 +205,19 @@ public struct DeviceFlow: Equatable, Sendable {
     private static func splitOutsideQuotes(_ text: String, on separator: Character) -> [String] {
         var parts: [String] = []
         var current = ""
-        var inQuotes = false
+        var quote: Character?
         var escaped = false
+        var previous: Character = " "
         for character in text {
+            defer { previous = character }
             if escaped {
                 escaped = false
-            } else if character == "\\", inQuotes {
+            } else if character == "\\", quote == "\"" {
                 escaped = true
-            } else if character == "\"" {
-                inQuotes.toggle()
-            } else if character == separator, !inQuotes {
+            } else if character == "\"" || (character == "'" && (quote == "'" || " {:'".contains(previous))) {
+                // A single-quoted value's '' toggles twice, staying inside; "don't" opens nothing.
+                if quote == nil { quote = character } else if quote == character { quote = nil }
+            } else if character == separator, quote == nil {
                 parts.append(current)
                 current = ""
                 continue
@@ -217,8 +228,21 @@ public struct DeviceFlow: Equatable, Sendable {
         return parts
     }
 
-    /// A bare value, or one in double quotes with `\"`, `\\`, `\n`, `\r` and `\t` escapes.
+    /// A bare value; one in double quotes with `\"`, `\\`, `\n`, `\r` and `\t`
+    /// escapes; or one in single quotes, where `''` is an apostrophe.
     private static func value(_ text: String, line: Int) throws(DeviceFlowError) -> String {
+        if text.hasPrefix("'") {
+            var out = ""
+            var rest = text.dropFirst()
+            while let quote = rest.firstIndex(of: "'") {
+                out += rest[..<quote]
+                let after = rest[rest.index(after: quote)...]
+                guard after.first == "'" else { return out }
+                out += "'"
+                rest = after.dropFirst()
+            }
+            throw DeviceFlowError(line: line, message: "A quoted value isn't closed.")
+        }
         guard text.hasPrefix("\"") else { return text }
         var out = ""
         var escaped = false
@@ -244,17 +268,18 @@ public struct DeviceFlow: Equatable, Sendable {
 
     /// Drops a `#` comment that starts a line or follows a space, outside quotes.
     private static func stripComment(_ line: String) -> String {
-        var inQuotes = false
+        var quote: Character?
         var escaped = false
         var previous: Character = " "
         for (offset, character) in line.enumerated() {
             if escaped {
                 escaped = false
-            } else if character == "\\", inQuotes {
+            } else if character == "\\", quote == "\"" {
                 escaped = true
-            } else if character == "\"" {
-                inQuotes.toggle()
-            } else if character == "#", !inQuotes, previous == " " {
+            } else if character == "\"" || (character == "'" && (quote == "'" || " {'".contains(previous))) {
+                // An apostrophe inside a bare word ("don't") opens nothing.
+                if quote == nil { quote = character } else if quote == character { quote = nil }
+            } else if character == "#", quote == nil, previous == " " {
                 return String(line.prefix(offset))
             }
             previous = character
@@ -286,6 +311,7 @@ public struct DeviceFlow: Equatable, Sendable {
         case .launchApp(let id?): "- launchApp:\n    appId: \(quote(id))"
         case .tapOn(let target): selector("tapOn", target)
         case .inputText(let text): "- inputText: \(quote(text))"
+        case .eraseText(let count): "- eraseText: \(count)"
         case .pressKey(let key): "- pressKey: \(key.rawValue)"
         case .scroll: "- scroll"
         case .swipe(let direction): "- swipe:\n    direction: \(direction.rawValue)"

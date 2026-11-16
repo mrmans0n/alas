@@ -532,6 +532,15 @@ final class DeviceAgentControl {
             )
             if let paste { await paste.end() }
             if case .error(let message)? = stopped { return message }
+        case .eraseText(let count):
+            // Delete (Backspace).
+            for _ in 0..<count {
+                if Task.isCancelled { return "The call was cancelled." }
+                if userDriving(udid) { return "The user took over." }
+                backend.input.key(udid: udid, usage: 0x2A, down: true)
+                backend.input.key(udid: udid, usage: 0x2A, down: false)
+                await sleep(.milliseconds(20))
+            }
         case .pressKey(.enter):
             backend.input.key(udid: udid, usage: 0x28, down: true)
             backend.input.key(udid: udid, usage: 0x28, down: false)

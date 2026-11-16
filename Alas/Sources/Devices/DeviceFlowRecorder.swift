@@ -97,7 +97,15 @@ final class DeviceFlowRecorder {
                 recording.flushScroll()
                 recording.typed.append(character)
             case "\u{7F}", "\u{8}":
-                if !recording.typed.isEmpty { recording.typed.removeLast() }
+                if !recording.typed.isEmpty {
+                    recording.typed.removeLast()
+                } else if case .eraseText(let count)? = recording.flow.steps.last, recording.scrolled == (0, 0) {
+                    recording.flow.steps[recording.flow.steps.count - 1] = .eraseText(count + 1)
+                } else {
+                    // What an earlier step typed: the device deleted it, so replay does too.
+                    recording.flushScroll()
+                    recording.flow.steps.append(.eraseText(1))
+                }
             default:
                 // Arrow and function keys arrive as private-use characters.
                 let printable = character.unicodeScalars.allSatisfy {

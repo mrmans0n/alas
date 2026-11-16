@@ -1005,16 +1005,19 @@ extension DeviceAgentControlTests {
         - launchApp
         - tapOn: "general"
         - inputText: "hi"
+        - eraseText: 2
         - pressKey: Back
         - assertVisible: Maps
         """)
         let response = await bothPlatforms(android).perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s")
-        #expect(response == .text([#"{"passed":true,"steps":5}"#]))
+        #expect(response == .text([#"{"passed":true,"steps":6}"#]))
         #expect(android.launched == ["com.example.hello"])
         // The General cell's center, (201, 346) on a 402×874 screen.
         let tap = try #require(android.fakeInput.touches.first { $0.phase == "begin" }?.point)
         #expect(abs(tap.x - 201.0 / 402) < 0.001 && abs(tap.y - 346.0 / 874) < 0.001)
-        #expect(android.fakeInput.keys.filter(\.down).count == 2)
+        // Two letters, then Delete (HID 0x2A) twice.
+        #expect(android.fakeInput.keys.filter(\.down).map(\.usage).suffix(2) == [0x2A, 0x2A])
+        #expect(android.fakeInput.keys.filter(\.down).count == 4)
         #expect(android.pressed == ["back"])
     }
 
