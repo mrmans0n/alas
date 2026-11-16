@@ -5704,9 +5704,10 @@ final class AppState {
         }
         let virtualPath = RemotePath.virtual(host: host, realPath: realPath)
         // An SSH project already at that checkout joins the group instead.
-        let project: ProjectConfig = if let standalone = projectsManager.projects.first(where: {
+        let standalone = projectsManager.projects.first {
             $0.host == host && $0.path == virtualPath && $0.linkedProjectId == nil
-        }) {
+        }
+        let project: ProjectConfig = if let standalone {
             standalone
         } else {
             try await projectsManager.addProject(
@@ -5723,11 +5724,16 @@ final class AppState {
         if hidesMain {
             projectsManager.setWorktreeHidden(projectId: project.id, path: URL(fileURLWithPath: virtualPath), hidden: true)
         }
-        spacesManager.removeProjectEverywhere(project.id)
         guard saveProjects() else {
-            projectsManager.removeProject(id: project.id)
+            // A project the user already had stays, as it was.
+            if standalone == nil {
+                projectsManager.removeProject(id: project.id)
+            } else {
+                projectsManager.unlink(project.id)
+            }
             throw ProjectCreationError.projectPersistenceFailed
         }
+        spacesManager.removeProjectEverywhere(project.id)
         saveSpaces()
         await refreshProjectTopology(projectId: project.id)
         let refreshed = projectsManager.projects.first { $0.id == project.id } ?? linked

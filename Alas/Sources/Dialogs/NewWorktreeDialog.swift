@@ -1265,7 +1265,8 @@ struct NewWorktreeDialog: View {
 
     private var launchEligibleAgents: [AgentDefinition] {
         Self.launchEligibleAgents(
-            isRemoteProject: targetProject?.host != nil,
+            // A machine still to be set up runs the same agents as one already linked.
+            isRemoteProject: runOnHost != nil || targetProject?.host != nil,
             configuredEnabledAgents: configuredEnabledAgents,
             locallyEnabledAgents: state.agentRegistry.enabled()
         )
