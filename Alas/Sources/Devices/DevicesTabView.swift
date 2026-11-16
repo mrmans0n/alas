@@ -74,7 +74,10 @@ struct DevicesTabView: View {
             vmCard(guest, status: status, now: now)
         case .android(let target, .ready):
             if let device = target.device {
-                AndroidDeviceStage(device: device, client: state.androidStreams, pane: state.androidPane)
+                AndroidDeviceStage(
+                    device: device, client: state.androidStreams, pane: state.androidPane, control: state.deviceControl,
+                    agentName: { state.computerUseAgentName($0) }, now: now
+                )
                     .id(device.serial)
             }
         case .android(let target, .booting):
