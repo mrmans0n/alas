@@ -21,6 +21,7 @@
 		28905A744E97862B779D9BBB /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5675178FB5741806BEB65930 /* InboxView.swift */; };
 		2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */; };
 		3035A23ED932E711B9CAD674 /* UsageRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF74CBCBAC2A5734FA01CA /* UsageRing.swift */; };
+		355DF88ED367BFDE2D26FA63 /* ToolCallGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C04ACB163ACCFBE2BBD194 /* ToolCallGroupRow.swift */; };
 		3EE566AA82CA5B1B212F5ADE /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E84291A6AA43082A7F684D /* HostStore.swift */; };
 		422DAC40738CAE3A2226AE92 /* SessionWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1547D85F76565F3FE516B06A /* SessionWorkspace.swift */; };
 		44A03A7927549A1980B38D23 /* ElicitationFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1633AE6084EE45BCB8106F /* ElicitationFormView.swift */; };
@@ -95,6 +96,7 @@
 		0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlocks.swift; sourceTree = "<group>"; };
 		1010E3A2D0C79ABD0D0199CC /* AlasCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AlasCore; path = ../Packages/AlasCore; sourceTree = SOURCE_ROOT; };
 		12B9C6A3301AE2534EFB6328 /* SpikeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeScreen.swift; sourceTree = "<group>"; };
+		14C04ACB163ACCFBE2BBD194 /* ToolCallGroupRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallGroupRow.swift; sourceTree = "<group>"; };
 		1547D85F76565F3FE516B06A /* SessionWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionWorkspace.swift; sourceTree = "<group>"; };
 		18514DE5113754F3401217CA /* TranscriptRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRowView.swift; sourceTree = "<group>"; };
 		1E48FA0BE7E008A99E5968A8 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
@@ -300,6 +302,7 @@
 				0F1651D2C2702696A78CAB15 /* MarkdownBlocks.swift */,
 				21408E08006F4C64E22701EE /* SessionRegistry.swift */,
 				F87BC206DEF14AC803AD0244 /* SessionSettingsSheet.swift */,
+				14C04ACB163ACCFBE2BBD194 /* ToolCallGroupRow.swift */,
 				1F535D80188C622125CD73B0 /* TranscriptCollectionView.swift */,
 				18514DE5113754F3401217CA /* TranscriptRowView.swift */,
 				372565FA395364953D615BC3 /* TranscriptScreen.swift */,
@@ -522,6 +525,7 @@
 				56AB129852CC6503F3A8D52F /* TerminalConsole.swift in Sources */,
 				ADC23C11ED7EB665B1C1BAED /* TerminalScreen.swift in Sources */,
 				D8B8FBA1F9B4014A6DFF2679 /* TerminalsList.swift in Sources */,
+				355DF88ED367BFDE2D26FA63 /* ToolCallGroupRow.swift in Sources */,
 				2C627A690435E714F7811AD2 /* TranscriptCollectionView.swift in Sources */,
 				5BAE5DB8CB923C7AC98F2884 /* TranscriptRowView.swift in Sources */,
 				FE38E919C60DB03596D4E124 /* TranscriptScreen.swift in Sources */,

@@ -2,17 +2,38 @@ import AlasRemoteKit
 import Observation
 import UIKit
 
-/// One transcript row as the scroller shows it. `id` is the message's `stableId`; the scroller
-/// reconfigures the row when `message` changes.
+/// One transcript row as the scroller shows it: a message, keyed by its `stableId`, or the header
+/// of a folded activity group, keyed by the group's id. The scroller reconfigures a row when it changes.
 struct TranscriptItem: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case message
+        case groupHeader(ACPTranscriptToolCallGroup, ACPToolCallGroupSummary, expanded: Bool, hiddenCount: Int)
+    }
+
     let id: String
+    let kind: Kind
+    /// A header carries its first member's.
     let row: RemoteTranscriptRow
     let message: RemoteWireMessage
+    /// Decoded once per message change, so a fold does not decode every tool call again.
+    let foldItem: ACPTranscriptFoldItem
+    /// Shown inside an expanded group.
+    var isGroupMember = false
 
     init(message: RemoteWireMessage) {
         id = message.stableId
+        kind = .message
         row = RemoteTranscriptRow(message: message)
         self.message = message
+        foldItem = RemoteTranscriptFold.item(for: message)
+    }
+
+    init(header kind: Kind, id: String, first: TranscriptItem) {
+        self.id = id
+        self.kind = kind
+        row = first.row
+        message = first.message
+        foldItem = first.foldItem
     }
 }
 
@@ -103,7 +124,17 @@ final class TranscriptSession {
 
     @ObservationIgnored private let hub: HostHub
     @ObservationIgnored private var state: RemoteTranscriptState<OpaqueHostMessage, OpaqueHostMessage>
-    @ObservationIgnored private var shownGeneration: UInt64?
+    /// Which activity groups are open. Expansion shapes `items`, so a change republishes.
+    @ObservationIgnored let seeds = ACPToolCallGroupExpansionSeeds()
+    @ObservationIgnored private var shownFold: FoldKey?
+    /// The message items of the last fold by `stableId`, reused while their message is unchanged.
+    @ObservationIgnored private var messageItems: [String: TranscriptItem] = [:]
+
+    private struct FoldKey: Equatable {
+        let messages: UInt64
+        let expansion: UInt64
+        let isTurnActive: Bool
+    }
     @ObservationIgnored private var fetchingOlder = false
     @ObservationIgnored private var listener: ListenerToken?
     @ObservationIgnored private var subscription: ListenerToken?
@@ -139,6 +170,7 @@ final class TranscriptSession {
         self.hostID = hostID
         self.sessionId = sessionId
         state = RemoteTranscriptState(sessionId: sessionId)
+        seeds.onChange = { [weak self] in self?.publish() }
     }
 
     /// The session as the hub last listed it. Kept after it leaves the list, so an ended
@@ -185,7 +217,8 @@ final class TranscriptSession {
         // until every sent draft has an outcome, so a refusal still lands in the draft.
         if unsettled.isEmpty { listener = nil }
         watchGeneration += 1
-        MarkdownBlockCache.shared.remove(ids: items.map(\.id))
+        // By message: a collapsed group's answers are cached but not in `items`.
+        MarkdownBlockCache.shared.remove(ids: Array(messageItems.keys))
         // Unanswered reads die with the subscription; a reopened row asks again.
         requestedImages = requestedImages.filter { images[$0] != nil }
     }
@@ -374,6 +407,15 @@ final class TranscriptSession {
         if !state.canDrive { takeOver() }
         hub.send(message, to: hostID)
         return true
+    }
+
+    func toggle(_ group: ACPTranscriptToolCallGroup) {
+        seeds.setExpanded(!seeds.isExpanded(group), members: group.members.map(\.stableId))
+    }
+
+    /// Lifts a live group's cap on shown members.
+    func showAll(_ group: ACPTranscriptToolCallGroup) {
+        seeds.setExpanded(true, members: group.members.map(\.stableId))
     }
 
     func loadOlder() {
@@ -570,16 +612,14 @@ final class TranscriptSession {
         publish()
     }
 
-    /// Copies what the screen reads out of the sync state, rebuilding `items` only when the
-    /// rows changed and reusing every item whose message did not.
+    /// Copies what the screen reads out of the sync state, refolding `items` only when the rows,
+    /// the turn's activity or a group's expansion changed, and reusing every item whose message did not.
     private func publish() {
-        if state.messagesGeneration != shownGeneration {
-            shownGeneration = state.messagesGeneration
-            let previous = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
-            items = state.messages.map { message in
-                if let old = previous[message.stableId], old.message == message { return old }
-                return TranscriptItem(message: message)
-            }
+        let fold = FoldKey(messages: state.messagesGeneration, expansion: seeds.generation,
+                           isTurnActive: state.streamingState != "idle")
+        if fold != shownFold {
+            shownFold = fold
+            items = foldedItems(isTurnActive: fold.isTurnActive)
         }
         if hasSnapshot != (state.epoch != nil) { hasSnapshot = state.epoch != nil }
         if isClosed != state.isClosed { isClosed = state.isClosed }
@@ -612,6 +652,43 @@ final class TranscriptSession {
             }
         }
         refreshCanLoadOlder()
+    }
+
+    /// Folds thinking and tool calls into activity groups as the Mac's transcript does.
+    /// `state.messages` already leaves out hidden rows.
+    private func foldedItems(isTurnActive: Bool) -> [TranscriptItem] {
+        let messages = state.messages
+        let base = messages.map { message in
+            if let old = messageItems[message.stableId], old.message == message { return old }
+            return TranscriptItem(message: message)
+        }
+        messageItems = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
+        let foldItems = base.map(\.foldItem)
+        let rows = RemoteTranscriptFold.renderRows(
+            messages: messages, items: foldItems, isTurnActive: isTurnActive,
+            isExpanded: { [seeds] in seeds.isExpanded($0) }, memberLimit: { [seeds] in seeds.memberLimit($0) })
+        return rows.map { row in
+            switch row {
+            case .message(let visible):
+                return base[visible.index]
+            case .toolCallGroupMember(let visible, _):
+                var member = base[visible.index]
+                member.isGroupMember = true
+                return member
+            case .toolCallGroup(let group), .toolCallGroupHeader(let group):
+                let members = group.members.map(\.stableId)
+                // Keeps a collapse or expand sticking while the run grows past what the user touched.
+                seeds.syncLineage(members: members)
+                seeds.syncCollapsed(members: members)
+                let summary = ACPToolCallGroupSummary(
+                    toolCalls: RemoteTranscriptFold.summaryToolCalls(of: group, items: foldItems),
+                    kind: group.kind, isLive: group.isLive)
+                let expanded = if case .toolCallGroupHeader = row { true } else { false }
+                let hidden = expanded ? members.count - (seeds.memberLimit(group) ?? members.count) : 0
+                return TranscriptItem(header: .groupHeader(group, summary, expanded: expanded, hiddenCount: max(0, hidden)),
+                                      id: group.id, first: base[group.members[0].index])
+            }
+        }
     }
 
     /// A request that resolves is kept briefly: on a resubscribe or take-over the host resolves
