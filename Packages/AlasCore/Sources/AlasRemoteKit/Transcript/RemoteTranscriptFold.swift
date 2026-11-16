@@ -11,11 +11,25 @@ public enum RemoteTranscriptFold {
         isExpanded: (ACPTranscriptToolCallGroup) -> Bool,
         memberLimit: (ACPTranscriptToolCallGroup) -> Int?
     ) -> [ACPTranscriptRenderRow] {
+        renderRows(
+            messages: messages, items: messages.map(item(for:)), isTurnActive: isTurnActive,
+            isExpanded: isExpanded, memberLimit: memberLimit
+        )
+    }
+
+    /// `items[i]` must be `item(for: messages[i])`; a caller that caches them
+    /// per row avoids decoding every tool call on each change.
+    public static func renderRows(
+        messages: [RemoteWireMessage],
+        items: [ACPTranscriptFoldItem],
+        isTurnActive: Bool,
+        isExpanded: (ACPTranscriptToolCallGroup) -> Bool,
+        memberLimit: (ACPTranscriptToolCallGroup) -> Int?
+    ) -> [ACPTranscriptRenderRow] {
+        precondition(items.count == messages.count, "One fold item per message")
         let rows = messages.enumerated().compactMap { position, message in
             message.isHidden == true ? nil : ACPTranscriptVisibleRow(index: position, stableId: message.stableId)
         }
-        // The fold reads most items, several times; decode each tool call once.
-        let items = messages.map(item(for:))
         let source = ACPTranscriptFoldSource(
             count: messages.count,
             item: { items[$0] },
@@ -70,6 +84,17 @@ public enum RemoteTranscriptFold {
     ) -> [ACPTranscriptFoldToolCall] {
         group.members.compactMap {
             guard case .toolCall(let call) = item(for: messages[$0.index]) else { return nil }
+            return call
+        }
+    }
+
+    /// `items` indexed like the messages the group was folded from, as in `renderRows`.
+    public static func summaryToolCalls(
+        of group: ACPTranscriptToolCallGroup,
+        items: [ACPTranscriptFoldItem]
+    ) -> [ACPTranscriptFoldToolCall] {
+        group.members.compactMap {
+            guard case .toolCall(let call) = items[$0.index] else { return nil }
             return call
         }
     }

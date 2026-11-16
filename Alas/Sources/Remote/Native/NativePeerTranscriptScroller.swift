@@ -89,7 +89,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             let enabled: Bool
             let expansion: UInt64
         }
-        private var fold: (key: FoldKey, rows: [ACPTranscriptRenderRow], proxies: [ACPMessage])?
+        private var fold: (key: FoldKey, rows: [ACPTranscriptRenderRow], items: [ACPTranscriptFoldItem])?
 
         func attach(scroller: ACPTranscriptScrollerView, host: NativePeerTranscriptScroller) {
             self.scroller = scroller
@@ -162,7 +162,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
         // MARK: Rows
 
-        private func renderRows(host: NativePeerTranscriptScroller) -> (rows: [ACPTranscriptRenderRow], proxies: [ACPMessage]) {
+        private func renderRows(host: NativePeerTranscriptScroller) -> (rows: [ACPTranscriptRenderRow], items: [ACPTranscriptFoldItem]) {
             let transcript = host.transcript
             let key = FoldKey(
                 generation: transcript.messagesGeneration,
@@ -170,20 +170,21 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 enabled: host.collapsesFinishedToolCalls,
                 expansion: expansionSeeds.generation
             )
-            if let fold, fold.key == key { return (fold.rows, fold.proxies) }
+            if let fold, fold.key == key { return (fold.rows, fold.items) }
             if fold?.key.generation != key.generation {
                 rowCache.sync(transcript.messages)
             }
-            let proxies = rowCache.proxies(for: transcript.messages)
+            let items = rowCache.foldItems(for: transcript.messages)
             let rows = NativePeerTranscriptFold.renderRows(
                 messages: transcript.messages,
+                items: items,
                 isTurnActive: key.isTurnActive,
                 enabled: key.enabled,
                 isExpanded: { [expansionSeeds] in expansionSeeds.isExpanded($0) },
                 memberLimit: { [expansionSeeds] in expansionSeeds.memberLimit($0) }
             )
-            fold = (key, rows, proxies)
-            return (rows, proxies)
+            fold = (key, rows, items)
+            return (rows, items)
         }
 
         func specs(host: NativePeerTranscriptScroller) -> [ACPTranscriptRowSpec] {
@@ -208,12 +209,9 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let (rows, proxies) = renderRows(host: host)
+            let (rows, items) = renderRows(host: host)
             let messages = host.transcript.messages
-            let currentTurnUserIndex = proxies.lastIndex {
-                if case .user = $0 { return true }
-                return false
-            } ?? 0
+            let currentTurnUserIndex = items.lastIndex(of: .user) ?? 0
             let isTurnActive = host.transcript.streamingState != "idle"
             let isPlanActive = host.transcript.streamingState == "sending"
                 || host.transcript.streamingState == "streaming"
@@ -231,11 +229,11 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                         isPlanActive: isPlanActive && row.index >= currentTurnUserIndex, host: host))
                     indices = [row.index]
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
-                    specs.append(groupHeaderSpec(group, messages: messages, host: host))
+                    specs.append(groupHeaderSpec(group, items: items, host: host))
                     indices = group.members.map(\.index)
                 }
                 let hasLiveTool = indices.contains { index in
-                    guard case .toolCall(let call) = proxies[index] else { return false }
+                    guard case .toolCall(let call) = items[index] else { return false }
                     return call.status == "pending" || call.status == "in_progress"
                 }
                 if hasLiveTool || (isTurnActive && indices.contains { $0 >= currentTurnUserIndex }) {
@@ -310,10 +308,10 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         /// Mirrors the local transcript's bundle header: one row id whether
         /// collapsed or expanded, with members tiled as sibling rows.
         private func groupHeaderSpec(
-            _ group: ACPTranscriptToolCallGroup, messages: [RemoteWireMessage], host: NativePeerTranscriptScroller
+            _ group: ACPTranscriptToolCallGroup, items: [ACPTranscriptFoldItem], host: NativePeerTranscriptScroller
         ) -> ACPTranscriptRowSpec {
             let summary = ACPToolCallGroupSummary(
-                toolCalls: RemoteTranscriptFold.summaryToolCalls(of: group, in: messages),
+                toolCalls: RemoteTranscriptFold.summaryToolCalls(of: group, items: items),
                 kind: group.kind, isLive: group.isLive
             )
             let memberStableIds = group.members.map(\.stableId)

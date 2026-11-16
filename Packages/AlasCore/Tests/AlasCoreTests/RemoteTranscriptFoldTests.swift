@@ -59,6 +59,8 @@ struct RemoteTranscriptFoldTests {
         #expect(rows.map(\.id) == ["u", "tcg-r1", "a"])
         let group = try #require(collapsedGroup(rows[1]))
         #expect(group.members.map(\.index) == [1, 2, 3])
+        #expect(RemoteTranscriptFold.summaryToolCalls(of: group, items: messages.map(RemoteTranscriptFold.item(for:)))
+            == RemoteTranscriptFold.summaryToolCalls(of: group, in: messages))
         #expect(group.kind == .completedTurn(duration: nil))
         #expect(label(group, in: messages) == "Worked · read 2 files, ran 1 command")
     }
