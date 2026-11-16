@@ -56,6 +56,23 @@ public enum RemoteTranscriptFold {
     /// Fold facts for one wire row; falls back when an older Mac sent no `fold`.
     /// A hidden row is transparent to runs, like a plan.
     public static func item(for message: RemoteWireMessage) -> ACPTranscriptFoldItem {
+        item(for: message) {
+            message.json.flatMap { try? JSONDecoder().decode(ACPToolCall.self, from: Data($0.utf8)) }
+        }
+    }
+
+    /// `item(for:)` from a row already decoded from `message`, so its tool call is not decoded again.
+    public static func item(for message: RemoteWireMessage, row: RemoteTranscriptRow) -> ACPTranscriptFoldItem {
+        item(for: message) {
+            guard case .toolCall(let call) = row else { return nil }
+            return call
+        }
+    }
+
+    private static func item(
+        for message: RemoteWireMessage,
+        toolCall: () -> ACPToolCall?
+    ) -> ACPTranscriptFoldItem {
         if message.isHidden == true { return .plan }
         switch message.kind {
         case "user": return .user
@@ -64,9 +81,7 @@ public enum RemoteTranscriptFold {
         case "plan": return .plan
         case "toolCall":
             // An undecodable call renders as a notice, so it folds as one.
-            guard let json = message.json,
-                  let call = try? JSONDecoder().decode(ACPToolCall.self, from: Data(json.utf8))
-            else { return .other }
+            guard let call = toolCall() else { return .other }
             guard let fold = message.fold else {
                 return .toolCall(.init(status: call.status, joins: true, verb: verb(forKind: call.kind)))
             }

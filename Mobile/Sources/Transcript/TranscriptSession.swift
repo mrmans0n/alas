@@ -23,9 +23,10 @@ struct TranscriptItem: Identifiable, Equatable {
     init(message: RemoteWireMessage) {
         id = message.stableId
         kind = .message
-        row = RemoteTranscriptRow(message: message)
+        let row = RemoteTranscriptRow(message: message)
+        self.row = row
         self.message = message
-        foldItem = RemoteTranscriptFold.item(for: message)
+        foldItem = RemoteTranscriptFold.item(for: message, row: row)
     }
 
     init(header kind: Kind, id: String, first: TranscriptItem) {
@@ -250,6 +251,9 @@ final class TranscriptSession {
         displayLoads = displayLoads.filter { !($0.key.hasPrefix(Self.hostKeyPrefix) && $0.value == .loading) }
     }
 
+    /// Bumped by each prompt this phone sends, so the scroller returns to the tail for it.
+    @ObservationIgnored private(set) var sendCount = 0
+
     func send(intent: String) {
         let text = draft.text
         let attachments = draft.images.map {
@@ -261,6 +265,7 @@ final class TranscriptSession {
         let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
                          offline: "Your message wasn't sent.")
         guard sent else { return }
+        sendCount += 1
         unsettled.append(Unsettled(draft: draft, rowFloor: state.totalCount, priorQueue: Set(state.queue.map(\.id))))
         draft = ComposerDraft()
     }

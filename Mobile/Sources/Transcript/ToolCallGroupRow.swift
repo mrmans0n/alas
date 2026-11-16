@@ -2,7 +2,8 @@ import AlasRemoteKit
 import SwiftUI
 
 /// The header of a folded run of thinking and tool calls, as the Mac's `ACPToolCallGroupHeaderRow`.
-/// The whole row toggles; members, when expanded, are sibling rows below it.
+/// The header toggles; "Show N earlier" is its own button so VoiceOver reaches it. Members, when
+/// expanded, are sibling rows below it.
 struct ToolCallGroupRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
@@ -12,21 +13,24 @@ struct ToolCallGroupRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: summary.iconSystemName).accessibilityHidden(true)
-                label.lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.tertiary)
+            Button(action: toggle) {
+                HStack(spacing: 8) {
+                    Image(systemName: summary.iconSystemName).accessibilityHidden(true)
+                    label.lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.tertiary)
+                }
+                .font(.subheadline)
+                .contentShape(Rectangle())
             }
-            .font(.subheadline)
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: summary.label))
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if hiddenCount > 0 {
                 Button("Show \(hiddenCount) earlier", action: showAll).font(.caption)
             }
         }
         .foregroundStyle(.secondary)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
-        .accessibilityAddTraits(.isButton)
     }
 
     private var label: Text {
