@@ -67,6 +67,9 @@ final class SessionWorkspace {
     @ObservationIgnored private var hostWasOnline = false
     @ObservationIgnored private var holders = 0
     @ObservationIgnored private var treeRequested = false
+    /// The git action in flight; one at a time, as the Mac's worktree gate allows.
+    private(set) var gitRunning: RemoteGitChange?
+    @ObservationIgnored private var gitWaiter: (id: Int, resume: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>)?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -194,12 +197,66 @@ final class SessionWorkspace {
 
     // MARK: Replies
 
+    // MARK: Git
+
+    /// The session's own worktree on its host, which git actions name. A session a gateway relays
+    /// lives on another Mac, whose worktrees this connection can't name; nor can it name one in an
+    /// SSH project, whose summary carries a display path (`host:/repo`), not the stored one.
+    private var gitTarget: (projectID: String, worktree: RemoteWorktreeSummary)? {
+        guard let summary = hub.sessions(of: hostID).first(where: { $0.id == sessionId }), summary.serverId == nil,
+              let projectID = summary.projectId, let worktree = summary.worktree, worktree.path.hasPrefix("/") else { return nil }
+        return (projectID, worktree)
+    }
+
+    var canUseGit: Bool {
+        gitTarget != nil && (hub.supports(HostProtocolCapability.worktreesGitPhoneV1, on: hostID)
+            || hub.supports(HostProtocolCapability.worktreesGitV1, on: hostID))
+    }
+
+    /// Runs `change` on the session's worktree and refreshes the change list. Returns the host's
+    /// refusal, worded for the user, or nil once it succeeded.
+    func git(_ change: RemoteGitChange) async -> String? {
+        guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
+        // A send while the link is down goes nowhere, and the reply would never come.
+        guard hub.state(of: hostID) == .online else {
+            let name = hub.hosts.first { $0.id == hostID }?.name ?? "the Mac"
+            return "Not connected to \(name). Try again once it's back online."
+        }
+        let id = hub.nextHostRequestId()
+        gitRunning = change
+        // Listen until the answer comes, even if the screen that asked has gone.
+        let hold = activate()
+        defer {
+            gitRunning = nil
+            refreshChanges()
+            hold.cancel()
+        }
+        send(.host(RemoteGitRequest.message(id: id, projectID: target.projectID, path: target.worktree.path,
+                                            branch: target.worktree.branch, change: change)))
+        // ponytail: a fixed wait; a push to a slow remote that outlasts it reads as lost.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(120))
+            self?.finishGit(id, .failure(RemoteGitFailure("The Mac didn't answer. Check the worktree there.")))
+        }
+        let result = await withCheckedContinuation { gitWaiter = (id, $0) }
+        if case .failure(let failure) = result { return failure.message }
+        return nil
+    }
+
+    private func finishGit(_ id: Int, _ result: Result<Void, RemoteGitFailure>) {
+        guard let waiter = gitWaiter, waiter.id == id else { return }
+        gitWaiter = nil
+        waiter.resume.resume(returning: result)
+    }
+
     private func send(_ message: PhoneClientMessage) {
         hub.send(message, to: hostID)
     }
 
     private func receive(_ message: PhoneServerMessage) {
         switch message {
+        case .host(let reply):
+            if let waiter = gitWaiter, let result = RemoteGitRequest.reply(to: waiter.id, in: reply) { finishGit(waiter.id, result) }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
             changes = .loaded(ChangeListReply(

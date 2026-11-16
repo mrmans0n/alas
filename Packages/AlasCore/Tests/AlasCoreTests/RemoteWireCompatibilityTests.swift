@@ -8,6 +8,36 @@ import Testing
     typealias PhoneServerMessage = RemoteServerMessageOf<OpaqueHostMessage, OpaqueHostMessage>
     typealias PhoneClientMessage = RemoteClientMessageOf<OpaqueHostMessage, OpaqueHostMessage>
 
+    /// The phone builds git actions without HostProtocol; they must read on the Mac as these requests.
+    @Test(arguments: [
+        (RemoteGitChange.stage(paths: ["a", "b"]), HostWorktreeChange.stage(paths: ["a", "b"])),
+        (.unstage(paths: ["a"]), .unstage(paths: ["a"])),
+        (.discard(paths: ["a"]), .discard(paths: ["a"])),
+        (.commit(subject: "Fix", body: "Why"), .commit(subject: "Fix", body: "Why", amend: false)),
+        (.push, .push(forceWithLease: false)),
+        (.pull, .pull),
+        (.fetch, .fetch),
+    ] as [(RemoteGitChange, HostWorktreeChange)])
+    func phoneGitRequestsDecodeOnTheMac(change: RemoteGitChange, expected: HostWorktreeChange) throws {
+        let json = RemoteGitRequest.message(id: 7, projectID: "p", path: "/r", branch: "main", change: change).json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: json) == HostClientMessage(
+            id: 7, request: .mutateWorktree(worktree: WorktreeRef(projectID: "p", path: "/r"), branch: "main", change: expected)))
+    }
+
+    @Test(arguments: [
+        (HostResponse.done, nil),
+        (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
+        (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
+    ] as [(HostResponse, String?)])
+    func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))
+        #expect(RemoteGitRequest.reply(to: 8, in: reply) == nil)
+        switch try #require(RemoteGitRequest.reply(to: 7, in: reply)) {
+        case .success: #expect(failure == nil)
+        case .failure(let error): #expect(error.message == failure)
+        }
+    }
+
     @Test(arguments: RemoteWireSamples.serverMessages)
     func macEncodedServerMessageDecodesOnThePhone(_ message: RemoteServerMessage) throws {
         let data = try JSONEncoder.sorted.encode(message)

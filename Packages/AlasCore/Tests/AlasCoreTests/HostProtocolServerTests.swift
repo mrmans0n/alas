@@ -983,6 +983,29 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-list", "--count", "HEAD"], cwd: repo).stdout == "2\n")
     }
 
+    /// An app host keeps git to the user at it, and to the user's own phone;
+    /// another paired Mac stays refused.
+    @Test(arguments: [(RemoteDeviceKind.phone, true), (.alasInstance, false)])
+    func anAppHostServesGitOnlyToThePhone(kind: RemoteDeviceKind, served: Bool) async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment())
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        let server = HostProtocolServer(host: fixture.host)
+        server.delegationPairing = RemotePairingService(store: MemoryDeviceStore(devices: [RemoteDevice(
+            id: "d1", name: "d1", tokenHash: "d1", createdAt: .distantPast, lastSeenAt: nil, kind: kind
+        )]))
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d1"), send: client.receive)
+        await connection.receive(HostClientMessage(id: 1, request: .mutateWorktree(
+            worktree: ref, branch: "main", change: .stage(paths: ["new.txt"]))))
+        guard case .response(1, let result) = client.messages.last else {
+            Issue.record("no response")
+            return
+        }
+        #expect(result == (served ? .done : .failure(error: .invalidRequest(reason: "This host does not serve git actions."))))
+    }
+
     enum Refusal: CaseIterable {
         case branchChanged, checkedOutSinceListed, staleDiscard, staleConflict, conflictedDirectory, nothingStaged, tooManyPaths,
             pendingCheckpoint, appHost, hidden, archivedWhileQueued

@@ -71,6 +71,14 @@ final class HostHub {
         states[id] ?? (connections[id] == nil ? .unauthorized : .idle)
     }
 
+    @ObservationIgnored private var hostRequestSeq = 0
+
+    /// A fresh id for a host-protocol request, unique for the app's life.
+    func nextHostRequestId() -> Int {
+        hostRequestSeq += 1
+        return hostRequestSeq
+    }
+
     func onlineCount(of id: UUID) -> Int { onlineCounts[id] ?? 0 }
 
     /// Whether the host's hello on this connection advertised `capability`.
