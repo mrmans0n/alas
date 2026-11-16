@@ -41,9 +41,10 @@ struct TranscriptRowView: View {
                 if !images.isEmpty {
                     HStack(spacing: 6) {
                         // The same image attached twice shares a uri.
-                        ForEach(Array(images.enumerated()), id: \.offset) { _, attached in
+                        ForEach(Array(images.enumerated()), id: \.offset) { index, attached in
                             if let loaded = image(attached.uri) {
-                                AttachmentThumbnail(thumbnail: loaded, uri: attached.uri, name: attached.name ?? "Image", session: session)
+                                AttachmentThumbnail(id: "\(item.id):attachment:\(index)", thumbnail: loaded, uri: attached.uri,
+                                                    name: attached.name ?? "Image", session: session)
                             } else {
                                 bubble("\u{1F5BC} \(attached.name ?? "Image")")
                             }
@@ -105,8 +106,10 @@ struct TranscriptRowView: View {
             }
             if isExpanded {
                 Text(call.content).font(.system(.footnote, design: .monospaced))
-                ForEach(Array(call.assets.filter(Self.isImage).enumerated()), id: \.offset) { _, asset in
-                    TranscriptImage(source: asset.uri ?? "", data: asset.data, label: Self.label(asset), session: session)
+                // Indexed before filtering, so an asset keeps its position as the key of its inline data.
+                ForEach(Array(call.assets.enumerated()).filter { Self.isImage($0.element) }, id: \.offset) { index, asset in
+                    TranscriptImage(id: "\(item.id):asset:\(index)", source: asset.uri ?? "", data: asset.data,
+                                    label: Self.label(asset), session: session)
                 }
             }
         }
@@ -219,7 +222,7 @@ struct AgentMarkdown: View {
     var body: some View {
         let blocks = MarkdownBlockCache.shared.blocks(id: id, text: text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
@@ -245,7 +248,8 @@ struct AgentMarkdown: View {
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.tertiary).frame(width: 3) }
                 case .image(let source, let alt):
-                    TranscriptImage(source: source, label: alt.isEmpty ? "Image" : alt, session: session)
+                    TranscriptImage(id: "\(id):block:\(index)", source: source, label: alt.isEmpty ? "Image" : alt,
+                                    session: session)
                 case .table(let rows):
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { i, cells in
@@ -262,6 +266,8 @@ struct AgentMarkdown: View {
 /// A user attachment's thumbnail; tapping opens the viewer on the display-size image, with the
 /// thumbnail scaled up until it lands.
 private struct AttachmentThumbnail: View {
+    /// Where it sits, for `transcriptImage`'s inline key.
+    let id: String
     let thumbnail: UIImage
     let uri: String
     let name: String
@@ -282,7 +288,7 @@ private struct AttachmentThumbnail: View {
     }
 
     private var display: UIImage? {
-        if case .loaded(let image) = session?.transcriptImage(source: uri) { return image }
+        if case .loaded(let image) = session?.transcriptImage(id: id, source: uri) { return image }
         return nil
     }
 }

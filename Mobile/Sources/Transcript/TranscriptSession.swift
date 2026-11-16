@@ -180,7 +180,7 @@ final class TranscriptSession {
         case loading, loaded, failed
     }
 
-    /// Markdown and tool-call images, keyed `host:<path>` or `inline:<fingerprint>`. A loaded
+    /// Markdown and tool-call images, keyed `host:<path>` or `inline:<where>:<length>`. A loaded
     /// one's bitmap lives in `displayImages`, which may evict it; the next view to ask loads it again.
     @ObservationIgnored private var displayLoads: [String: DisplayLoad] = [:]
     @ObservationIgnored private let displayImages: NSCache<NSString, UIImage> = {
@@ -473,14 +473,15 @@ final class TranscriptSession {
 
     /// A markdown or tool-call image, sized for the row. `source` is a markdown source or an
     /// asset's uri, `data` an asset's base64 data, tried first as on the Mac. Inline data is
-    /// decoded only off the main actor, so a body pays for a short fingerprint, not the bytes.
-    func transcriptImage(source: String, data: String? = nil) -> ImageLoad {
+    /// decoded only off the main actor and keyed by `id`, where it sits (row and position),
+    /// never by its content: a body must not hash megabytes, and sampling them can collide.
+    func transcriptImage(id: String, source: String, data: String? = nil) -> ImageLoad {
         if let data, !data.isEmpty {
-            let load = inlineImage(data) { .resolve(asset: .image(data: $0)) }
+            let load = inlineImage(data, key: "inline:\(id):data") { .resolve(asset: .image(data: $0)) }
             if case .failed = load {} else { return load }
         }
         if source.drop(while: \.isWhitespace).prefix(5).lowercased() == "data:" {
-            return inlineImage(source) { .resolve(source: $0) }
+            return inlineImage(source, key: "inline:\(id):uri") { .resolve(source: $0) }
         }
         guard case .host(let path) = RemoteTranscriptImageSource.resolve(source: source) else { return .failed }
         return displayImage(key: Self.hostKeyPrefix + path) { [self] in
@@ -491,9 +492,10 @@ final class TranscriptSession {
     private static let hostKeyPrefix = "host:"
 
     private func inlineImage(
-        _ string: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
+        _ string: String, key place: String, resolve: @escaping @Sendable (String) -> RemoteTranscriptImageSource
     ) -> ImageLoad {
-        let key = "inline:\(string.utf8.count):\(string.prefix(64)):\(string.suffix(64))"
+        // The length gives a row still streaming its image a fresh entry as it grows.
+        let key = "\(place):\(string.utf8.count)"
         return displayImage(key: key) {
             Task { [weak self] in
                 let image = await Self.decodeInline(string, resolve)

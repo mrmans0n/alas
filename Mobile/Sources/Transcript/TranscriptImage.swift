@@ -3,6 +3,8 @@ import SwiftUI
 /// A markdown or tool-call image: full width, never upscaled, at most 320 pt tall.
 /// It reads as its label with a spinner while loading, and as the label alone when it cannot load.
 struct TranscriptImage: View {
+    /// Where the image sits, the row's id and its block or asset index: inline data is keyed by it.
+    let id: String
     /// A markdown image source or an asset's uri.
     let source: String
     /// An asset's base64 data, tried before `source`. Passed undecoded: the session decodes it off the main actor.
@@ -51,6 +53,6 @@ struct TranscriptImage: View {
     }
 
     private var load: TranscriptSession.ImageLoad {
-        session?.transcriptImage(source: source, data: data) ?? .failed
+        session?.transcriptImage(id: id, source: source, data: data) ?? .failed
     }
 }
