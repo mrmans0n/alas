@@ -51,6 +51,8 @@ public final class RemoteTranscriptSync {
     /// client fetched. ponytail: never trimmed, so it grows to what the
     /// client has scrolled through; trim to a window if memory matters.
     public var messages: [Int: ACPMessage] = [:]
+    /// When each message in `messages` was created, in epoch milliseconds.
+    public var createdAts: [Int: Int64] = [:]
     public var messageCount = 0
     public var streamingState: ACPSession.StreamingState = .idle
     /// The session's last state from the follow; nil until the first.

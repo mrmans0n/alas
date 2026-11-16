@@ -24,6 +24,7 @@ struct DeviceCommandTests {
          .swipe(udid: "U", gesture: .points(fromX: 1, fromY: 2, toX: 3, toY: 4), durationMs: 50, includeScreenshot: false)),
         ("device_type", #"{"udid":"U","text":" "}"#, .type(udid: "U", text: " ", includeScreenshot: false)),
         ("device_button", #"{"udid":"U","name":"home"}"#, .button(udid: "U", name: .home, includeScreenshot: false)),
+        ("device_button", #"{"udid":"U","name":"volume_up"}"#, .button(udid: "U", name: .volumeUp, includeScreenshot: false)),
         ("device_install", #"{"udid":"U","app_path":"/b/Hello.app"}"#, .install(udid: "U", appPath: "/b/Hello.app")),
         ("device_launch", #"{"udid":"U","bundle_id":"com.example.hello"}"#, .launch(udid: "U", bundleID: "com.example.hello")),
         ("device_set_appearance", #"{"udid":"U","appearance":"dark","text_size":"large"}"#,

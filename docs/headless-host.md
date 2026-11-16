@@ -25,9 +25,16 @@ brew install --cask mrmans0n/tap/alas-host
 ```
 
 The `alas-host` cask is published with each release from the first one that
-ships it. The two casks link the same command, so install one or the other. Outside
-Homebrew, the binary is inside the app at
+ships it. The two casks link the same command, so install one or the other.
+Outside Homebrew, the binary is inside the app at
 `Alas.app/Contents/Resources/alas-host/alas-host`.
+
+For unattended setup, use [Set up from another Mac](#set-up-from-another-mac).
+After Homebrew installs a standalone host, Alas verifies the host, CLI and zmx
+signatures against its release publisher before clearing that release directory's
+download-confirmation quarantine. Homebrew still verifies the release's SHA256.
+This changes neither system-wide Gatekeeper settings nor the `alas` app cask's
+quarantine policy.
 
 ### On a Linux server
 
@@ -36,6 +43,18 @@ Each release attaches `alas-host-<version>-linux-x86_64.tar.gz` and
 with that glibc or newer, and need libcurl, SQLite and zlib from the system
 (`apt install libcurl4 libsqlite3-0 zlib1g` on Debian and Ubuntu), plus git
 and whatever your agents need (Node for the ACP adapters):
+
+```bash
+curl -fsSL https://github.com/mrmans0n/alas/releases/latest/download/install-alas-host.sh | sh
+```
+
+It unpacks the latest release into `~/.local/opt/alas-host`, links
+`alas-host` into `~/.local/bin`, starts it as a systemd user service and
+enables lingering so it keeps serving while you are logged out. Rerun it to
+upgrade. `ALAS_HOST_VERSION=<version>` installs a given release and
+`ALAS_HOST_TARBALL=<path>` a tarball you already have.
+
+To install by hand instead:
 
 ```bash
 mkdir -p ~/.local/opt/alas-host
@@ -78,12 +97,29 @@ host (ending its running sessions), and **Host log**, which shows the end of its
 log.
 
 Any paired host that runs from the `alas-host` or `alas` cask as its launch
-agent also shows **Update host** while it is online, set up over SSH or not: the
-host runs `brew upgrade --cask` itself and restarts on the new version, ending
-its running sessions. A peer's status names the host's release and says when it
-is older than the Mac's Alas. Such a host also shows in the Inbox under
-**Host updates**, with **Update** and **Dismiss**; a dismissed host comes back
-once it runs another version.
+agent also shows **Update host** while it is online, set up over SSH or not.
+The host finishes `brew upgrade --cask` before stopping, so replacing its
+executable cannot interrupt installation. Standalone `alas-host` installs and
+updates over SSH or a peer verify and authorize the release as above. On macOS, an
+independent launchd helper waits for the old host to exit and explicitly starts
+the service, even if launchd missed Homebrew replacing its executable symlink.
+Linux's systemd service restarts it instead. Updating ends running agent sessions.
+
+When an update disconnects a peer, the Mac waits up to 90 seconds for that
+same peer's host channel to reconnect and finish subscribing. A disconnect
+alone is not success; a timeout reports recovery guidance. An already-current
+host keeps serving without restarting.
+
+These host-side safeguards take effect once the updated host is installed.
+An older host still runs its old updater for that first upgrade. Use the updated
+Mac app's SSH setup flow to bootstrap an affected host. Its installed CLI must
+be able to start for the SSH probe; an existing macOS security prompt blocking
+that CLI must be resolved on the host first.
+
+A peer's status names the host's release and says when it is older than the
+Mac's Alas. Such a host also shows in the Inbox under **Host updates**, with
+**Update** and **Dismiss**; a dismissed host comes back once it runs another
+version.
 
 ## Run
 

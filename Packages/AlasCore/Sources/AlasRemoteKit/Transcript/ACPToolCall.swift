@@ -364,4 +364,13 @@ public struct ACPToolCall: Codable, Equatable, Hashable, Sendable {
         content = newContent
         contentRevision &+= 1
     }
+
+    /// The one allowlist of terminal tool-call statuses, shared by the
+    /// session and the transcript fold so the two can never drift.
+    public static func isFinalStatus(_ status: String) -> Bool {
+        switch status {
+        case "completed", "failed", "canceled", "cancelled": true
+        default: false
+        }
+    }
 }

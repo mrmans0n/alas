@@ -8,16 +8,24 @@ struct AndroidDeviceStage: View {
     let device: AndroidDevice
     let client: AndroidStreamClient
     let pane: AndroidPaneModel
+    let control: DeviceAgentControl
+    /// Names the agent session driving the device.
+    let agentName: (String) -> String
+    let now: Date
     @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
     @State private var streamError: String?
     @State private var streamGeneration = 0
     @State private var dropTargeted = false
+    @State private var pulse = false
 
     var body: some View {
+        let driver = control.driver(udid: device.serial, at: now)
+        let allowsInput = VMDriver.allowsViewInput(driver)
         DeviceStageFrame(shape: shape, landscape: false, dropTargeted: dropTargeted) {
-            screen
+            screen(driver: driver, allowsInput: allowsInput)
         } gutter: {
-            DeviceGutter(enabled: streamError == nil) {
+            DeviceGutter(enabled: streamError == nil && allowsInput) {
                 button("arrow.uturn.backward", "Back", "back")
                 button("circle", "Home", "home")
                 button("square.on.square", "Recents", "app_switch")
@@ -37,10 +45,11 @@ struct AndroidDeviceStage: View {
         }
     }
 
-    private var screen: some View {
-        ZStack {
+    private func screen(driver: VMDriver, allowsInput: Bool) -> some View {
+        ZStack(alignment: .top) {
             DeviceScreenView(
                 udid: device.serial, client: client, onStopped: { streamError = $0 },
+                allowsInput: allowsInput, onBlockedClick: pulsePill,
                 onDropApp: { apk in Task { await pane.installAndLaunch(apk, on: device) } },
                 onDropTargeted: { dropTargeted = $0 },
                 canDrop: { $0.pathExtension.lowercased() == "apk" },
@@ -56,6 +65,13 @@ struct AndroidDeviceStage: View {
                         streamGeneration += 1
                     }
                 )
+            } else if driver != .idle {
+                DeviceDriverPill(
+                    driver: driver, waiting: control.waitingSessions(udid: device.serial).first, agentName: agentName,
+                    pulse: pulse, onTakeOver: { control.takeOver(udid: device.serial) },
+                    onHandBack: { control.handBack(udid: device.serial) }
+                )
+                .padding(.top, scale.space[2])
             }
         }
         .overlay(alignment: .bottom) {
@@ -64,6 +80,15 @@ struct AndroidDeviceStage: View {
             } else if let notice = pane.notices[device.serial] {
                 DeviceStagePill { Text(notice).foregroundStyle(theme.color("fg")) }
             }
+        }
+    }
+
+    /// A click while an agent drives: draw the eye to Take over.
+    private func pulsePill() {
+        pulse = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            pulse = false
         }
     }
 

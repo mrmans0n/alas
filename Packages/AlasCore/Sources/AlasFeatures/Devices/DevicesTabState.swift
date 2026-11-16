@@ -141,7 +141,8 @@ public struct DevicesTabState: Equatable, Sendable {
             Row(
                 target: .android(entry.target.id), title: entry.target.title,
                 detail: Self.detail(of: entry.stage, device: entry.target.device),
-                tone: entry.stage == .ready ? .live : entry.stage == .booting ? .busy : .idle
+                tone: agentDriving.contains(.android(entry.target.id)) || entry.stage == .booting ? .busy
+                    : entry.stage == .ready ? .live : .idle
             )
         }
         let chosen = choose(selection: selection, simulators: listed, vms: vms, android: androidEntries)

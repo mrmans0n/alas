@@ -167,7 +167,7 @@ struct NativePeerTranscriptTests {
                                   question: nil, presentation: presentation, createdAt: .distantPast)
         let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 2)
         let cache = NativePeerRowCache()
-        guard case .visualAid(let decoded) = try #require(cache.proxies(for: [wire]).first) else {
+        guard case .visualAid(let decoded) = cache.row(for: wire) else {
             Issue.record("Expected a visual instead of a title-only notice")
             return
         }
@@ -188,7 +188,7 @@ struct NativePeerTranscriptTests {
             question: .init(prompt: "Which?", options: [.init(id: "a", label: "A"), .init(id: "b", label: "B")],
                             allowMultiple: true), answer: answer, createdAt: .distantPast)
         let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 0)
-        guard case .visualAid(let decoded) = try #require(NativePeerRowCache().proxies(for: [wire]).first) else {
+        guard case .visualAid(let decoded) = NativePeerRowCache().row(for: wire) else {
             Issue.record("Expected a visual question")
             return
         }

@@ -73,6 +73,44 @@ import Testing
         #expect(try JSONEncoder.sorted.encode(phone) == data)
     }
 
+    enum FoldRow: CaseIterable {
+        case commentary, finalAnswer, read, subagent, emptyPlanDocument
+
+        @MainActor var message: ACPMessage {
+            switch self {
+            case .commentary: .agent(id: UUID(), messageId: nil, StreamingText("thinking aloud", phase: .commentary))
+            case .finalAnswer: .agent(id: UUID(), messageId: nil, StreamingText("done", phase: .finalAnswer))
+            case .read: .toolCall(.init(toolCallId: "t", title: "Read a", kind: "read", status: "completed"))
+            case .subagent: .toolCall(.init(
+                toolCallId: "s", title: "Task", kind: "other", status: "completed",
+                metadata: AnyCodable(["subagent": AnyCodable(["version": AnyCodable(1), "id": AnyCodable("child")])])))
+            // The Mac shows no row for a plan document with neither text nor a file.
+            case .emptyPlanDocument: .planDocument(id: UUID(), ACPPlanDocument(planId: "p", kind: .markdown, markdown: "", file: nil))
+            }
+        }
+
+        var phase: String? { self == .commentary ? "commentary" : nil }
+        var fold: RemoteWireMessage.Fold? {
+            switch self {
+            case .read: .init(joins: true, verb: "read")
+            case .subagent: .init(joins: false, verb: "other")
+            default: nil
+            }
+        }
+        var isHidden: Bool? { self == .emptyPlanDocument ? true : nil }
+    }
+
+    @MainActor // `toWire` reads a `StreamingText`.
+    @Test(arguments: FoldRow.allCases)
+    func toWireCarriesFoldFacts(row: FoldRow) {
+        let wire = RemoteSessionGateway.toWire(row.message, index: 0, createdAt: 1_800_000_000_000)
+        #expect(wire.createdAt == 1_800_000_000_000)
+        #expect(wire.phase == row.phase)
+        #expect(wire.fold == row.fold)
+        #expect(wire.isHidden == row.isHidden)
+        #expect(RemoteSessionGateway.toWire(row.message, index: 0, createdAt: nil).createdAt == nil)
+    }
+
     @Test(arguments: RemoteWireSamples.clientMessages)
     func phoneEncodedClientMessageDecodesOnTheMac(_ message: RemoteClientMessage) throws {
         let data = try JSONEncoder.sorted.encode(message)
@@ -163,6 +201,17 @@ enum RemoteWireSamples {
                     json: #"{"title":"swift test","status":"completed"}"#, index: 5, isHidden: false),
             ],
             epoch: 1, revision: 9, hasCancellableBackgroundWork: true),
+        .transcriptDelta(
+            sessionId: "s1", streamingState: "idle", canDrive: true,
+            upserts: [
+                RemoteWireMessage(
+                    stableId: "m6", kind: "agent", text: "Looking around", json: nil, index: 6,
+                    phase: "commentary", createdAt: 1_800_000_000_123),
+                RemoteWireMessage(
+                    stableId: "m7", kind: "toolCall", text: nil, json: #"{"title":"Read a"}"#, index: 7,
+                    createdAt: 1_800_000_000_456, fold: .init(joins: true, verb: "read")),
+            ],
+            epoch: 1, revision: 10, hasCancellableBackgroundWork: false),
         .permissionRequest(sessionId: "s1", payload: RemotePermissionPayload(
             requestId: 7, toolName: "Bash",
             options: [RemotePermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")],
