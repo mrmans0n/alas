@@ -120,24 +120,24 @@ struct PeerPortForwardTests {
             resolve: { _ in running.withLock { $0 } ? ("127.0.0.1", serverPort) : nil },
             send: { _, event in forwarderBox.withLock { $0 }?.receive(event) }
         )
-        let freePort = try await EchoServer.start()
-        let endpointPort = freePort.port
-        freePort.stop()
-        // The listener was on IPv4; wait until its port is free there, whatever the client dials.
-        try await eventually { (try? await TestClient.connect(host: "127.0.0.1", port: endpointPort)) == nil }
-        let endpoint = try #require(URL(string: "http://\(endpointHost):\(endpointPort)/app?x=1"))
+        // Let the forwarder bind its own port. A port released by a separate
+        // listener can be taken by another parallel test before this bind.
+        let endpoint = try #require(URL(string: "http://\(endpointHost):0/app?x=1"))
         let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint) { host.receive($0, from: connection) }
         forwarderBox.withLock { $0 = forwarder }
         defer { forwarder.stop() }
 
         let url = try await forwarder.start()
-        #expect(url == endpoint)
+        let endpointPort = try #require(url.port)
+        #expect(endpointPort > 0)
+        var expected = try #require(URLComponents(url: endpoint, resolvingAgainstBaseURL: false))
+        expected.port = endpointPort
+        #expect(url == expected.url)
 
         // The endpoint's port is now taken, so another forward binds elsewhere.
-        let other = PeerPortForwarder(runID: "run", endpoint: endpoint) { _ in }
+        let other = PeerPortForwarder(runID: "run", endpoint: url) { _ in }
         defer { other.stop() }
         let otherURL = try await other.start()
-        var expected = try #require(URLComponents(url: endpoint, resolvingAgainstBaseURL: false))
         expected.port = otherURL.port
         #expect(otherURL.port != endpointPort)
         #expect(otherURL == expected.url)

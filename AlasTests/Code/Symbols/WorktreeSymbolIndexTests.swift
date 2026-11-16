@@ -72,14 +72,13 @@ struct WorktreeSymbolIndexTests {
         let index = WorktreeSymbolIndex()
 
         let (older, gate) = await gatedUpdates(index, root: root)
-        let olderReader = Task { await lastSnapshot(older) }
         let newer = try #require(await lastSnapshot(index.updates(root: root) { ["A.swift", "B.swift"] }))
         #expect(Set(newer.symbols.map(\.name)) == ["Alpha", "Beta"])
 
-        // The older listing has not returned, yet its stream already ended
-        // with the newer result: stopping the reader keeps what it was sent.
-        olderReader.cancel()
-        let olderResult = await olderReader.value
+        // The older listing has not returned, yet the newer refresh must end
+        // its stream with the newer result. Drain it: the newer consumer may
+        // finish before the actor has sent the final snapshot to the older one.
+        let olderResult = await lastSnapshot(older)
         // Released last, the older listing, taken before B.swift existed,
         // commits nothing.
         gate.resume(returning: ["A.swift"])

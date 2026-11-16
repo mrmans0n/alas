@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @testable import AlasHostCore
+import AlasPlatform
 
 @MainActor
 struct AlasHostExecutableTests {
@@ -286,10 +287,12 @@ struct AlasHostExecutableTests {
         #expect(try await pairAsMac() == key)
     }
 
-    /// Copies the built host, ~100 MB, off the main actor so the copy does
-    /// not stall the other main-actor suites running in parallel.
+    /// Copies the built host, ~100 MB, in a short-lived process. Keeping the
+    /// writer in that process avoids Linux ETXTBSY when a test immediately
+    /// launches the copied executable.
     private func copyHost(to destination: URL) async throws {
-        try await BlockingWork.run { try FileManager.default.copyItem(at: AlasHostProcess.binary, to: destination) }
+        let result = try await Process.run("/bin/cp", args: ["-p", AlasHostProcess.binary.path, destination.path])
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
     }
 
     /// A port nothing listens on now, for a host to bind.
