@@ -10,9 +10,21 @@ struct TranscriptImage: View {
     let label: String
     /// Loads through the session's caches; without one the image reads as its label.
     let session: TranscriptSession?
-    @State private var viewing = false
+    /// Held here, not read from the cache, so an eviction cannot close the open viewer.
+    @State private var presented: Presented?
+
+    private struct Presented: Identifiable {
+        let id = UUID()
+        let image: UIImage
+    }
 
     var body: some View {
+        content
+            .fullScreenCover(item: $presented) { TranscriptImageViewer(image: $0.image, label: label) }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch load {
         case .loaded(let image):
             Image(uiImage: image)
@@ -22,8 +34,7 @@ struct TranscriptImage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(label)
                 .contentShape(Rectangle())
-                .onTapGesture { viewing = true }
-                .fullScreenCover(isPresented: $viewing) { TranscriptImageViewer(image: image, label: label) }
+                .onTapGesture { presented = Presented(image: image) }
         case .loading:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
