@@ -8,7 +8,7 @@ name: iOS Release
 # (archive signs for development, export re-signs for distribution; with both
 # in the keychain Xcode never mints a new certificate on the runner).
 # ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_BASE64 are an App Store Connect API
-# key with the App Manager role. MACOS_NOTARY_TEAM_ID is the shared team id.
+# key with the Admin role (Xcode needs it to manage signing). MACOS_NOTARY_TEAM_ID is the shared team id.
 # The repository variable IOS_TESTFLIGHT_GROUPS lists the external groups.
 
 on:
