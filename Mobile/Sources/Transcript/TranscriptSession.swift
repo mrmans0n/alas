@@ -23,9 +23,10 @@ struct TranscriptItem: Identifiable, Equatable {
     init(message: RemoteWireMessage) {
         id = message.stableId
         kind = .message
-        row = RemoteTranscriptRow(message: message)
+        let row = RemoteTranscriptRow(message: message)
+        self.row = row
         self.message = message
-        foldItem = RemoteTranscriptFold.item(for: message)
+        foldItem = RemoteTranscriptFold.item(for: message, row: row)
     }
 
     init(header kind: Kind, id: String, first: TranscriptItem) {

@@ -107,6 +107,16 @@ struct RemoteTranscriptFoldTests {
             == .toolCall(.init(status: "completed", joins: true, verb: expectedVerb)))
     }
 
+    @Test(arguments: ["toolCall", "hidden", "commentary"])
+    func itemFromDecodedRowMatchesItemFromMessage(_ variant: String) throws {
+        var message = variant == "commentary" ? row("c", "agent", 0, phase: "commentary")
+            : try tool("t", 0, kind: "read", fold: nil)
+        message.isHidden = variant == "hidden" ? true : nil
+
+        #expect(RemoteTranscriptFold.item(for: message, row: RemoteTranscriptRow(message: message))
+            == RemoteTranscriptFold.item(for: message))
+    }
+
     @Test func commentaryIsNotTheAnswer() throws {
         let messages = [
             row("u", "user", 0),

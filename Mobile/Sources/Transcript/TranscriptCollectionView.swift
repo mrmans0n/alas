@@ -162,6 +162,8 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             nil
         }
         let prepended = anchorID.map { !tapped.contains($0) } ?? false
+        // A message the reader just sent hands the viewport back to the tail, whatever they last tapped.
+        let sent = items.last.map { if case .user = $0.row { !ids.contains($0.id) } else { false } } ?? false
         if let anchorID, let y = minY(of: anchorID) {
             anchor = (anchorID, y - collectionView.contentOffset.y)
         }
@@ -194,6 +196,10 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
 
         // A tap on a row is the reader taking over; the tail must not pull that row away.
         if !tapped.isEmpty, anchorID != nil { followsTail = false }
+        if sent {
+            anchor = nil
+            followsTail = true
+        }
         // Lays out now, so a prepend is compensated in this same pass; `holdPosition` runs again
         // after any later pass in which hosted cells finish measuring.
         collectionView.layoutIfNeeded()
