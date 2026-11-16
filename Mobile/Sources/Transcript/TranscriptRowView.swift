@@ -43,12 +43,7 @@ struct TranscriptRowView: View {
                         // The same image attached twice shares a uri.
                         ForEach(Array(images.enumerated()), id: \.offset) { _, attached in
                             if let loaded = image(attached.uri) {
-                                Image(uiImage: loaded)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .accessibilityLabel(attached.name ?? "Image")
+                                AttachmentThumbnail(thumbnail: loaded, uri: attached.uri, name: attached.name ?? "Image", session: session)
                             } else {
                                 bubble("\u{1F5BC} \(attached.name ?? "Image")")
                             }
@@ -261,5 +256,33 @@ struct AgentMarkdown: View {
                 }
             }
         }
+    }
+}
+
+/// A user attachment's thumbnail; tapping opens the viewer on the display-size image, with the
+/// thumbnail scaled up until it lands.
+private struct AttachmentThumbnail: View {
+    let thumbnail: UIImage
+    let uri: String
+    let name: String
+    let session: TranscriptSession?
+    @State private var viewing = false
+
+    var body: some View {
+        Image(uiImage: thumbnail)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 96, height: 96)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .accessibilityLabel(name)
+            .onTapGesture { viewing = true }
+            .fullScreenCover(isPresented: $viewing) {
+                TranscriptImageViewer(image: display ?? thumbnail, label: name)
+            }
+    }
+
+    private var display: UIImage? {
+        if case .loaded(let image) = session?.transcriptImage(source: uri) { return image }
+        return nil
     }
 }

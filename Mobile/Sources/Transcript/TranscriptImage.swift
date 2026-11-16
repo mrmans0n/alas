@@ -10,8 +10,7 @@ struct TranscriptImage: View {
     let label: String
     /// Loads through the session's caches; without one the image reads as its label.
     let session: TranscriptSession?
-    /// Opens the viewer once there is an image; nil leaves it inert.
-    var onTap: ((UIImage) -> Void)?
+    @State private var viewing = false
 
     var body: some View {
         switch load {
@@ -23,9 +22,8 @@ struct TranscriptImage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(label)
                 .contentShape(Rectangle())
-                .onTapGesture { onTap?(image) }
-                // Inert, a tap falls through to the row (a tool call's expand toggle).
-                .allowsHitTesting(onTap != nil)
+                .onTapGesture { viewing = true }
+                .fullScreenCover(isPresented: $viewing) { TranscriptImageViewer(image: image, label: label) }
         case .loading:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
