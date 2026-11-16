@@ -34,6 +34,9 @@ struct RemoteServerPane: View {
                     .font(scale.metaFont).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, scale.space[3])
 
+                iPhoneBetaCard
+                    .padding(.bottom, scale.space[4])
+
                 SettingsGroup(title: "Remote access") {
                     SettingsRow(
                         name: "Enable remote control",
@@ -393,6 +396,48 @@ struct RemoteServerPane: View {
         } message: { _ in
             Text("Updating restarts the host and ends its running sessions.")
         }
+    }
+
+    static let testFlightURL = "https://testflight.apple.com/join/npVHNyMD"
+
+    /// Invites people to the iPhone app beta. Shows the QR until an iPhone
+    /// app has paired, then shrinks to one line so it stays out of the way.
+    @ViewBuilder private var iPhoneBetaCard: some View {
+        let hasPhone = state.remotePairing.devices.contains { $0.kind == .phone }
+        let actions = HStack(spacing: scale.space[2]) {
+            AlasButton(title: "Open TestFlight", style: hasPhone ? .subtle : .primary) {
+                if let url = URL(string: Self.testFlightURL) { NSWorkspace.shared.open(url) }
+            }
+            AlasButton(title: "Copy link", style: .subtle) {
+                copyAddress(Self.testFlightURL)
+            }
+        }
+        HStack(alignment: .center, spacing: scale.space[4]) {
+            if hasPhone {
+                Text("Alas for iPhone beta")
+                    .font(scale.body.font(weight: .medium))
+                Spacer(minLength: 0)
+                actions
+            } else {
+                QRView(text: Self.testFlightURL)
+                    .frame(width: 96, height: 96)
+                    .padding(6)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: scale.radius.medium))
+                    .accessibilityLabel("TestFlight invite QR code")
+                VStack(alignment: .leading, spacing: scale.space[1]) {
+                    Text("Alas for iPhone is in beta")
+                        .font(scale.body.font(weight: .semibold))
+                    Text("Scan with your iPhone camera to join on TestFlight, or open the link on this Mac.")
+                        .font(scale.metaFont)
+                        .foregroundColor(theme.color("fg-dim"))
+                        .fixedSize(horizontal: false, vertical: true)
+                    actions.padding(.top, scale.space[1])
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(scale.space[3])
+        .background(theme.color("accent-soft"), in: RoundedRectangle(cornerRadius: scale.radius.medium))
     }
 
     private func updatesOverPeer(_ peer: RemotePeer) -> Bool {
