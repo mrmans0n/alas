@@ -342,20 +342,21 @@ public enum ACPMCPPromptPreamble: Sendable {
                         + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools. "
                         + "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.")
                     if deviceToolsAvailable {
-                        lines.append("Device tools drive an iOS simulator the user also sees in the Devices tab: "
+                        lines.append("Device tools drive iOS simulators and Android devices the user also sees in the Devices tab: "
                             + builtInToolNames.filter { $0.hasPrefix("device_") }.joined(separator: ", ")
-                            + ". Call device_list, then device_open (it boots the simulator if needed). "
+                            + ". Call device_list, then device_open (it boots the device if needed; an Android AVD comes back under its serial, which later calls use). "
                             + "Prefer refs from device_snapshot (valid until the next snapshot of that device); "
                             + "x/y are pixels in the latest device_screenshot. "
                             + "Device actions return what changed on the screen, and refs you hold stay valid while their element is on screen; call device_snapshot only when you need the whole screen. "
-                            + "While the user drives a simulator, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
-                            + "To run an app, build it for the simulator with xcodebuild, then call device_install and device_launch. "
+                            + "While the user drives a device, a device call waits up to 50 seconds for them to hand it back; device_user_active means it is still theirs: try again later. "
+                            + "To run an app, build it for the simulator with xcodebuild, or an .apk with Gradle for Android, then call device_install and device_launch. "
                             + "To test dark mode, Dynamic Type, accessibility settings, permissions, location, notifications or deep links, use "
                             + "device_set_appearance, device_set_accessibility, device_set_permission, device_set_location, device_push and device_open_url. "
                             + "Read the app's logs and crash reports with device_logs. "
-                            + "device_type types any text; read or set the simulator's pasteboard with device_clipboard. "
+                            + "device_type types any text; read or set the device's clipboard with device_clipboard. "
+                            + "device_push and device_set_accessibility are iOS only. "
                             + "Rotate with device_rotate and record the screen with device_record. "
-                            + "device_disabled means the user hasn't let agents use iOS simulators; ask them instead of retrying.")
+                            + "device_disabled means the user hasn't let agents use simulators and Android devices; ask them instead of retrying.")
                     }
                 }
             }

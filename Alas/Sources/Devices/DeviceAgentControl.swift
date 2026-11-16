@@ -30,7 +30,7 @@ extension SimulatorStreamClient: DeviceInput {}
 @Observable
 final class DeviceAgentControl {
     static let disabled =
-        "device_disabled: Agents can't use iOS simulators. Ask the user to turn on Settings › Computer Use › Let agents use iOS simulators."
+        "device_disabled: Agents can't use simulators or Android devices. Ask the user to turn on Settings › Computer Use › Let agents use simulators and Android devices."
     static let userDriving = "device_user_active: The user took over this simulator. Try again after they hand it back."
     static let stillDriving = "device_user_active: The user is still driving this simulator. Try again in a minute."
     /// The agent cancelled the call, or its MCP server went away.
