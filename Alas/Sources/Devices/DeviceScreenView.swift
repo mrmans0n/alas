@@ -335,6 +335,8 @@ final class DeviceScreenNSView: NSView {
             if let characters = event.characters { onText?(characters) }
         } else if event.isARepeat, let udid, let usage = HIDKeyboardUsage.usage(forKeyCode: event.keyCode) {
             client?.keyRepeat(udid: udid, usage: usage)
+            // The device typed it again (a simulator repeats on its own, at about the Mac's rate).
+            if let characters = event.characters { onText?(characters) }
         }
     }
 
