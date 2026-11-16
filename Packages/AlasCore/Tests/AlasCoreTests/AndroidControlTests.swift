@@ -268,4 +268,11 @@ struct AndroidControlTests {
         #expect(report.frames == ["a.B.c(B.kt:1)"])
         #expect(Calendar(identifier: .gregorian).component(.second, from: report.capturedAt) == 2)
     }
+
+    /// The Logs tab tells crashes apart by their report: the same stack twice is two crashes.
+    @Test func twoCrashesAtTheSameStackAreTwoReports() {
+        let first = AndroidCrash(time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        let again = AndroidCrash(time: "2026-11-16 10:05:00.000", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        #expect(first.report(bundleID: "p").report != again.report(bundleID: "p").report)
+    }
 }

@@ -59,6 +59,12 @@ public enum AndroidLogcat {
     }
 
     /// The logcat priority for a level: what `*:<letter>` keeps.
+    /// A `logcat -T` time `seconds` ago by the device's own clock, as a quoted
+    /// shell expression for `adb shell`: the device's time zone may not be the Mac's.
+    public static func since(seconds: Int) -> String {
+        "\"$(date -d @$(( $(date +%s) - \(max(0, seconds)) )) '+%m-%d %H:%M:%S.000')\""
+    }
+
     public static func filter(_ level: SimulatorLogLevel) -> String {
         switch level {
         case .debug: "D"
@@ -196,7 +202,8 @@ extension AndroidCrash {
     public func report(bundleID: String) -> SimulatorCrashReport {
         SimulatorCrashReport(
             bundleID: bundleID, appName: bundleID, capturedAt: date ?? Date(), exception: exception, frames: frames,
-            report: ([exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
+            // Its time keeps two crashes at the same stack apart: the tab tells reports apart by this text.
+            report: (["\(bundleID) crashed at \(time)", exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
         )
     }
 }

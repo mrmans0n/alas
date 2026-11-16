@@ -47,6 +47,8 @@ final class AndroidLogSource: DeviceLogSource {
 
     func start(_ stream: SimulatorLogStream, app: String?, level: SimulatorLogLevel, includeApple: Bool) async {
         following?.cancel()
+        // The previous source's lines stop now, even if the new app isn't running yet.
+        stream.stop()
         guard let app else {
             run(stream, pid: nil, level: level)
             return
@@ -57,6 +59,8 @@ final class AndroidLogSource: DeviceLogSource {
             while !Task.isCancelled, let self {
                 let found = (try? await self.control.adb(self.serial, ["shell", "pidof", app]))?
                     .split(whereSeparator: \.isWhitespace).first.flatMap { Int($0) }
+                // Replaced while asking: the stream is the new source's now.
+                guard !Task.isCancelled else { return }
                 switch AndroidLogFollow.next(running: running, found: found) {
                 case .keep: break
                 case .restart(let pid):
@@ -83,11 +87,9 @@ final class AndroidLogSource: DeviceLogSource {
 
     func crashes(app: String?, since: Date) async -> [SimulatorCrashReport] {
         guard let app else { return [] }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm:ss.SSS"
+        let seconds = Int(Date().timeIntervalSince(since).rounded(.up))
         let output = (try? await control.adb(serial, [
-            "shell", "logcat -d -b crash -v threadtime -T '\(formatter.string(from: since))'",
+            "shell", "logcat -d -b crash -v threadtime -T \(AndroidLogcat.since(seconds: seconds))",
         ])) ?? ""
         let year = Calendar.current.component(.year, from: Date())
         return AndroidLogcat.crashes(AndroidLogcat.parse(output, year: year), package: app).map { $0.report(bundleID: app) }

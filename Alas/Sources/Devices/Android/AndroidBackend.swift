@@ -345,7 +345,7 @@ final class AndroidBackend: DeviceBackend {
         guard await isInstalled(id, appID: app) else { throw DeviceAppNotInstalled(appID: app) }
         let year = Calendar.current.component(.year, from: Date())
         // Lines since `since` seconds ago by the device's own clock.
-        let start = "\"$(date -d @$(( $(date +%s) - \(since) )) '+%m-%d %H:%M:%S.000')\""
+        let start = AndroidLogcat.since(seconds: since)
         let pid = (try? await control.adb(id, ["shell", "pidof", app]))?
             .split(whereSeparator: \.isWhitespace).first.map(String.init)
         var lines: [SimulatorLogLine] = []

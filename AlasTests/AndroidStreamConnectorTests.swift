@@ -115,3 +115,20 @@ struct AndroidRecordingAndClipboardTests {
         timers[1].resume()
     }
 }
+
+@MainActor // AndroidLogSource and the stream are main-actor isolated.
+struct AndroidLogSourceTests {
+    /// Choosing an app that isn't running must not leave the previous stream's lines coming.
+    @Test func choosingAnAppThatIsntRunningStopsThePreviousStream() async throws {
+        let fake = try fakeADB(#"*logcat*) sleep 30 ;; *pidof*) exit 1 ;;"#)
+        let source = AndroidLogSource(serial: "S", control: AndroidControl(sdk: AndroidSDK(root: nil, adb: fake.adb, emulator: nil)))
+        let stream = SimulatorLogStream()
+        await source.start(stream, app: nil, level: .default, includeApple: false)
+        #expect(stream.isRunning)
+        await source.start(stream, app: "com.example.hello", level: .default, includeApple: false)
+        try await eventually("pidof asked", within: .seconds(5)) { logged(fake.log).contains("pidof") }
+        #expect(!stream.isRunning)
+        source.stop()
+        stream.stop()
+    }
+}
