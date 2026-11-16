@@ -224,6 +224,9 @@ final class TranscriptSession {
         requestedImages = requestedImages.filter { images[$0] != nil }
     }
 
+    /// Bumped by each prompt this phone sends, so the scroller returns to the tail for it.
+    @ObservationIgnored private(set) var sendCount = 0
+
     func send(intent: String) {
         let text = draft.text
         let attachments = draft.images.map {
@@ -235,6 +238,7 @@ final class TranscriptSession {
         let sent = drive(.sendPrompt(sessionId: sessionId, text: text, attachments: attachments, intent: intent, mentions: mentions),
                          offline: "Your message wasn't sent.")
         guard sent else { return }
+        sendCount += 1
         unsettled.append(Unsettled(draft: draft, rowFloor: state.totalCount, priorQueue: Set(state.queue.map(\.id))))
         draft = ComposerDraft()
     }

@@ -69,9 +69,13 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
     private var anchor: (id: String, screenY: CGFloat)?
     /// A group header just tapped; its toggle changes the session's items rather than `expanded`.
     private var tappedGroup: String?
+    /// The session's `sendCount` this controller last followed to the tail.
+    private var seenSends = 0
 
     init(input: Input) {
         self.input = input
+        // The session outlives the screen; only sends after this controller appears count.
+        seenSends = input.session?.sendCount ?? 0
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -162,8 +166,6 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
             nil
         }
         let prepended = anchorID.map { !tapped.contains($0) } ?? false
-        // A message the reader just sent hands the viewport back to the tail, whatever they last tapped.
-        let sent = items.last.map { if case .user = $0.row { !ids.contains($0.id) } else { false } } ?? false
         if let anchorID, let y = minY(of: anchorID) {
             anchor = (anchorID, y - collectionView.contentOffset.y)
         }
@@ -196,7 +198,10 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
 
         // A tap on a row is the reader taking over; the tail must not pull that row away.
         if !tapped.isEmpty, anchorID != nil { followsTail = false }
-        if sent {
+        // A prompt this phone sent hands the viewport back to the tail, whatever was last tapped.
+        // Prompts from other devices leave a reader in history alone.
+        if let sends = input.session?.sendCount, sends != seenSends {
+            seenSends = sends
             anchor = nil
             followsTail = true
         }
