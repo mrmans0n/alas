@@ -31,6 +31,7 @@ mkdir -p "$out"
 
 xcodebuild -project Mobile/AlasMobile.xcodeproj -scheme AlasMobile -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$out/Alas.xcarchive" \
+  -skipPackagePluginValidation \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} \
   CURRENT_PROJECT_VERSION="$build" archive
 
