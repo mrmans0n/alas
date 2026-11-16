@@ -42,7 +42,9 @@ struct SocketTCPTests {
         try #require(socketpair(AF_UNIX, streamSocketType, 0, &fds) == 0)
         defer { Foundation.close(fds[1]) }
         SocketTCPStream(fd: fds[0]).cancel()
-        #expect(fcntl(fds[0], F_GETFD) == -1)
+        // Another parallel test can reuse the closed descriptor. Observe the peer instead.
+        var byte: UInt8 = 0
+        #expect(recv(fds[1], &byte, 1, Int32(MSG_DONTWAIT)) == 0)
     }
 
     @Test func aRefusedConnectionReportsFailure() async throws {
