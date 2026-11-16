@@ -32,6 +32,16 @@ Shapes, Reduce Transparency, a color filter and the Liquid Glass look. Apps
 pick changes up while they run. With VoiceOver on, a click selects an element
 and a double click activates it.
 
+The settings' Memory section slims the simulator with
+[simslim](https://github.com/MobAI-App/simslim): it turns off about 150
+background services the simulator doesn't need, which cuts its memory from
+about 3.9 GB to under 1 GB, so more simulators fit on the Mac. Siri,
+Spotlight, iCloud, widgets and the Photos and Contacts pickers stop working;
+push notifications and universal links keep working. The switch applies
+without a reboot, and on iOS 18.5 and newer the simulator stays slim across
+reboots until you turn it off. Without simslim, Install simslim… installs it
+with Homebrew (`brew install mobai-app/tap/simslim`).
+
 The accessibility button in the toolbar outlines the screen's accessibility
 elements over it. Hover one to see its role, label, value and id. Buttons,
 fields and other controls without a label are outlined in the warning color, since
@@ -162,6 +172,7 @@ MCP server:
 | `device_push` | Sends a push notification to an installed app. iOS only. |
 | `device_set_network` | Turns Wi-Fi and mobile data on or off, and returns both. Android only. |
 | `device_clear_data` | Clears an installed app's data, as a fresh install has it. Android only. |
+| `device_set_slim` | Slims a simulator with simslim, or brings it back to stock, and returns its memory. iOS only; needs simslim. |
 | `device_open_url` | Opens a web page or a deep link. |
 | `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
 | `device_clipboard` | Reads the device's clipboard, or sets it. |
