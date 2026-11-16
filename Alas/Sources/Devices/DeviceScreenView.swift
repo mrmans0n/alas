@@ -296,7 +296,8 @@ final class DeviceScreenNSView: NSView {
         let scale = event.hasPreciseScrollingDeltas ? 0.1 : 1
         let (dx, dy) = (Double(event.scrollingDeltaX) * scale, Double(event.scrollingDeltaY) * scale)
         client?.scroll(udid: udid, point: at, dx: dx, dy: dy)
-        onScroll?(dx, dy)
+        // A simulator ignores the wheel: replaying it as a swipe would move what never moved.
+        if client?.takesScroll == true { onScroll?(dx, dy) }
     }
 
     override func updateTrackingAreas() {

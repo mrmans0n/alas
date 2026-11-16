@@ -17,11 +17,15 @@ protocol DeviceScreenSource: AnyObject {
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double)
     /// A held key repeated on the Mac.
     func keyRepeat(udid: String, usage: UInt32)
+    /// Whether `scroll` reaches the device, so a recorded flow keeps it.
+    var takesScroll: Bool { get }
 }
 
 extension DeviceScreenSource {
     /// Simulators take scrolls as drags; they ignore the wheel.
     func scroll(udid: String, point: DeviceScreenPoint, dx: Double, dy: Double) {}
+
+    var takesScroll: Bool { false }
 
     /// Simulators repeat a held key themselves.
     func keyRepeat(udid: String, usage: UInt32) {}
