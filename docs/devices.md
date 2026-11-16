@@ -137,7 +137,9 @@ flow survives layout changes.
 The hand button in the toolbar records one on a booted device. Each click
 becomes a tap on the element under it, named by its label, else its id, else
 the point; typing becomes text, Delete erases, Return the Enter key, the Home and Back
-buttons their keys, and a drag or a scroll a swipe. A recording starts by launching the
+buttons their keys, and a drag or a scroll a swipe. A paste is recorded as the
+text it pasted; tabs and newlines in it replay as Tab and Return, as typed
+ones do. A recording starts by launching the
 app in front. Click the button again to name the flow and save it.
 
 The play button lists the worktree's flows and runs one; while you hold the
