@@ -55,6 +55,7 @@ end
   ".claude/skills/lassie/SKILL.md",
   ".alas/icon.png",
   ".github/workflows/release.yml",
+  ".github/workflows/ios-release.yml",
   ".github/workflows/nightly.yml",
   ".github/workflows/update-cask.py"
 ].each do |file|

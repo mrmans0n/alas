@@ -1,0 +1,54 @@
+# App Store Connect steps for the iOS app. scripts/ios-testflight.sh builds
+# and signs; these lanes upload and promote. Both read the API key from
+# ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the .p8 file).
+#
+#   bundle exec fastlane beta ipa:<path> [groups:"A,B"] [changelog:"..."]
+#   bundle exec fastlane submit build:<build number> version:<marketing version>
+
+opt_out_usage
+default_platform(:ios)
+
+APP_ID = "io.nlopez.alas"
+
+def asc_key
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_filepath: ENV.fetch("ASC_KEY_PATH")
+  )
+end
+
+platform :ios do
+  desc "Upload an .ipa to TestFlight; with groups, also send it to those external groups"
+  lane :beta do |options|
+    groups = options[:groups].to_s.split(",").map(&:strip).reject(&:empty?)
+    upload_to_testflight(
+      api_key: asc_key,
+      app_identifier: APP_ID,
+      ipa: options.fetch(:ipa),
+      changelog: options[:changelog],
+      distribute_external: groups.any?,
+      groups: groups,
+      # Internal testers get it once processing ends; external groups need it processed first.
+      skip_waiting_for_build_processing: groups.empty?
+    )
+  end
+
+  desc "Submit an uploaded build for App Store review"
+  lane :submit do |options|
+    deliver(
+      api_key: asc_key,
+      app_identifier: APP_ID,
+      app_version: options.fetch(:version),
+      build_number: options.fetch(:build).to_s,
+      submit_for_review: true,
+      # Metadata and screenshots are kept in App Store Connect, not here.
+      skip_binary_upload: true,
+      skip_metadata: true,
+      skip_screenshots: true,
+      force: true,
+      precheck_include_in_app_purchases: false,
+      submission_information: { add_id_info_uses_idfa: false }
+    )
+  end
+end

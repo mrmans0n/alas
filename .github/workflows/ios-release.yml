@@ -1,0 +1,114 @@
+name: iOS Release
+
+# Builds the iOS app from any ref and uploads it to TestFlight, or submits an
+# uploaded build for App Store review. release.yml calls it for every v* tag.
+#
+# Secrets: IOS_SIGNING_P12_BASE64 and IOS_SIGNING_P12_PASSWORD hold the Apple
+# Development and Apple Distribution identities exported together as one .p12
+# (archive signs for development, export re-signs for distribution; with both
+# in the keychain Xcode never mints a new certificate on the runner).
+# ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_BASE64 are an App Store Connect API
+# key with the App Manager role. MACOS_NOTARY_TEAM_ID is the shared team id.
+# The repository variable IOS_TESTFLIGHT_GROUPS lists the external groups.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit to build"
+        default: main
+        type: string
+      external:
+        description: "Also send the build to the external TestFlight groups"
+        default: false
+        type: boolean
+      submit_build:
+        description: "Skip building; submit this uploaded build number for App Store review (version read from Mobile/project.yml at ref)"
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      external:
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          working-directory: Mobile
+
+      - name: Write the App Store Connect key
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-key.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc-key.p8" >> "$GITHUB_ENV"
+
+      - name: Submit build ${{ inputs.submit_build }} for App Store review
+        if: inputs.submit_build != ''
+        working-directory: Mobile
+        env:
+          BUILD: ${{ inputs.submit_build }}
+        run: |
+          version=$(sed -n 's/^ *MARKETING_VERSION: "\(.*\)"/\1/p' project.yml)
+          bundle exec fastlane submit build:"$BUILD" version:"$version"
+
+      - name: Import signing identities
+        if: inputs.submit_build == ''
+        env:
+          P12_BASE64: ${{ secrets.IOS_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_SIGNING_P12_PASSWORD }}
+        # Same keychain path as sign-and-notarize.sh, so cleanup-signing-keychain.sh removes it.
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kc_password=$(uuidgen)
+          security create-keychain -p "$kc_password" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kc_password" "$kc"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/ios-signing.p12"
+          security import "$RUNNER_TEMP/ios-signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/ios-signing.p12"
+          # Without this, codesign waits forever on an "Always Allow" dialog.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_password" "$kc" >/dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$kc"
+
+      - name: Archive and export
+        id: build
+        if: inputs.submit_build == ''
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: scripts/ios-testflight.sh --no-upload
+
+      - name: Upload to TestFlight
+        if: inputs.submit_build == ''
+        working-directory: Mobile
+        env:
+          IPA: ${{ steps.build.outputs.ipa }}
+          TESTFLIGHT_GROUPS: ${{ inputs.external && vars.IOS_TESTFLIGHT_GROUPS || '' }}
+          CHANGELOG: "Alas ${{ inputs.ref }} (${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.ref }})"
+        run: bundle exec fastlane beta ipa:"$IPA" groups:"$TESTFLIGHT_GROUPS" changelog:"$CHANGELOG"
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: scripts/cleanup-signing-keychain.sh
