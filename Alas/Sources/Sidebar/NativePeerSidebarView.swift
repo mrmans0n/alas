@@ -164,7 +164,10 @@ struct NativePeerSidebarView: View {
                 .padding(.trailing, scale.space[1])
             }
             if let hosts = client.hosts, let projectId = repo.projectId {
-                let archived = (hosts.archivedWorktrees[peer.serverId] ?? []).filter { $0.project.id == projectId }
+                let archived = (hosts.archivedWorktrees[peer.serverId] ?? []).filter {
+                    // A Machine checkout's archived rows sit with its local project, like its live ones.
+                    ($0.project.linkedProjectId ?? $0.project.id) == projectId
+                }
                 ForEach(archived, id: \.snapshot.worktree.id) { worktree in
                     NativePeerArchivedWorktreeRow(worktree: worktree)
                         .contextMenu { archivedWorktreeMenu(worktree, hosts: hosts, peer: peer) }
