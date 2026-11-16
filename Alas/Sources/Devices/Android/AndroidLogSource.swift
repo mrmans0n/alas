@@ -85,14 +85,14 @@ final class AndroidLogSource: DeviceLogSource {
         }
     }
 
+    /// Every package's crashes for All Processes (nil), as the iOS source does.
     func crashes(app: String?, since: Date) async -> [SimulatorCrashReport] {
-        guard let app else { return [] }
         let seconds = Int(Date().timeIntervalSince(since).rounded(.up))
         let output = (try? await control.adb(serial, [
             "shell", "logcat -d -b crash -v threadtime -T \(AndroidLogcat.since(seconds: seconds))",
         ])) ?? ""
         let year = Calendar.current.component(.year, from: Date())
-        return AndroidLogcat.crashes(AndroidLogcat.parse(output, year: year), package: app).map { $0.report(bundleID: app) }
+        return AndroidLogcat.crashes(AndroidLogcat.parse(output, year: year), package: app).map { $0.report() }
     }
 
     func stop() {

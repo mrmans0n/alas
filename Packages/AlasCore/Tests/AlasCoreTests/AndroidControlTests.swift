@@ -198,9 +198,11 @@ struct AndroidControlTests {
         """, year: 2026)
         let crashes = AndroidLogcat.crashes(lines, package: "com.example.hello")
         #expect(crashes == [AndroidCrash(
-            time: "2026-11-16 10:01:02.100", exception: "java.lang.IllegalStateException: boom",
+            package: "com.example.hello", time: "2026-11-16 10:01:02.100", exception: "java.lang.IllegalStateException: boom",
             frames: ["com.example.hello.Main.onCreate(Main.kt:12)", "android.app.Activity.performCreate(Activity.java:9000)"]
         )])
+        // All Processes: every package's crashes, each naming its package.
+        #expect(AndroidLogcat.crashes(lines, package: nil).map(\.package) == ["com.example.hello", "com.other"])
     }
 
     @Test func malformedBoundsDropTheNodeAndEntitiesDecode() throws {
@@ -262,8 +264,8 @@ struct AndroidControlTests {
     }
 
     @Test func aCrashBecomesACrashReport() {
-        let crash = AndroidCrash(time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
-        let report = crash.report(bundleID: "com.example.hello")
+        let crash = AndroidCrash(package: "com.example.hello", time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        let report = crash.report()
         #expect(report.exception == "java.lang.X: boom")
         #expect(report.frames == ["a.B.c(B.kt:1)"])
         #expect(Calendar(identifier: .gregorian).component(.second, from: report.capturedAt) == 2)
@@ -271,8 +273,8 @@ struct AndroidControlTests {
 
     /// The Logs tab tells crashes apart by their report: the same stack twice is two crashes.
     @Test func twoCrashesAtTheSameStackAreTwoReports() {
-        let first = AndroidCrash(time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
-        let again = AndroidCrash(time: "2026-11-16 10:05:00.000", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
-        #expect(first.report(bundleID: "p").report != again.report(bundleID: "p").report)
+        let first = AndroidCrash(package: "p", time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        let again = AndroidCrash(package: "p", time: "2026-11-16 10:05:00.000", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        #expect(first.report().report != again.report().report)
     }
 }

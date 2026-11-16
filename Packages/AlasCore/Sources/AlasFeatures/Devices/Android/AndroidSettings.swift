@@ -96,12 +96,15 @@ public enum AndroidLogcat {
 
 /// A Java crash from `logcat -b crash`.
 public struct AndroidCrash: Equatable, Sendable {
+    /// The package that crashed.
+    public let package: String
     public let time: String
     public let exception: String
     /// The stack's first frames, without "at".
     public let frames: [String]
 
-    public init(time: String, exception: String, frames: [String]) {
+    public init(package: String, time: String, exception: String, frames: [String]) {
+        self.package = package
         self.time = time
         self.exception = exception
         self.frames = frames
@@ -114,15 +117,19 @@ public struct AndroidCrash: Equatable, Sendable {
 }
 
 extension AndroidLogcat {
-    /// AndroidRuntime's FATAL EXCEPTION blocks for `package`, with up to 10 frames each.
-    public static func crashes(_ lines: [SimulatorLogLine], package: String) -> [AndroidCrash] {
+    /// AndroidRuntime's FATAL EXCEPTION blocks for `package`, or every
+    /// package's when it is nil, with up to 10 frames each.
+    public static func crashes(_ lines: [SimulatorLogLine], package: String?) -> [AndroidCrash] {
         let runtime = lines.filter { $0.process == "AndroidRuntime" }
         var crashes: [AndroidCrash] = []
         var index = 0
         while index < runtime.count {
             defer { index += 1 }
+            // "Process: com.example.hello, PID: 4242"
             guard runtime[index].message.hasPrefix("FATAL EXCEPTION"), index + 2 < runtime.count,
-                  runtime[index + 1].message.hasPrefix("Process: \(package),") else { continue }
+                  runtime[index + 1].message.hasPrefix("Process: "),
+                  let crashed = runtime[index + 1].message.dropFirst("Process: ".count).split(separator: ",").first.map(String.init),
+                  package == nil || crashed == package else { continue }
             let exception = runtime[index + 2].message
             var frames: [String] = []
             var next = index + 3
@@ -132,7 +139,7 @@ extension AndroidLogcat {
                 frames.append(String(text.dropFirst(3)))
                 next += 1
             }
-            crashes.append(AndroidCrash(time: runtime[index].time, exception: exception, frames: frames))
+            crashes.append(AndroidCrash(package: crashed, time: runtime[index].time, exception: exception, frames: frames))
         }
         return crashes
     }
@@ -199,11 +206,11 @@ extension AndroidCrash {
     }
 
     /// As the Logs tab shows crash reports.
-    public func report(bundleID: String) -> SimulatorCrashReport {
+    public func report() -> SimulatorCrashReport {
         SimulatorCrashReport(
-            bundleID: bundleID, appName: bundleID, capturedAt: date ?? Date(), exception: exception, frames: frames,
+            bundleID: package, appName: package, capturedAt: date ?? Date(), exception: exception, frames: frames,
             // Its time keeps two crashes at the same stack apart: the tab tells reports apart by this text.
-            report: (["\(bundleID) crashed at \(time)", exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
+            report: (["\(package) crashed at \(time)", exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
         )
     }
 }
