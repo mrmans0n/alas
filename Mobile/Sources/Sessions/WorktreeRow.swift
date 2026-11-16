@@ -77,6 +77,8 @@ struct RepoTile: View {
 /// tappable sub-rows. `open` reports the tapped session.
 struct WorktreeRow: View {
     let entry: RemoteWorktreeEntry
+    /// The session shown beside the list, where there is one (iPad).
+    var selectedSessionId: String? = nil
     let open: (RemoteSessionSummary) -> Void
 
     var body: some View {
@@ -112,7 +114,7 @@ struct WorktreeRow: View {
             }
             .padding(.leading, 22)
             ForEach(entry.activeSessions, id: \.id) { session in
-                Button { open(session) } label: { SessionLine(session: session) }
+                Button { open(session) } label: { SessionLine(session: session, isSelected: session.id == selectedSessionId) }
                     .buttonStyle(.plain)
             }
         }
@@ -122,6 +124,7 @@ struct WorktreeRow: View {
 
 private struct SessionLine: View {
     let session: RemoteSessionSummary
+    var isSelected = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -141,7 +144,9 @@ private struct SessionLine: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.quaternary.opacity(0.5)),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .padding(.leading, 22)
         .contentShape(Rectangle())
     }

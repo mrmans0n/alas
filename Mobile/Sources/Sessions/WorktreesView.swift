@@ -24,6 +24,9 @@ struct WorktreesView: View {
     var onPairMac: () -> Void = {}
 
     @State private var path: [SessionRoute] = []
+    /// The session in the detail column, where there is room for one (iPad).
+    @State private var selected: SessionRoute?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var searchPresented: Bool
     @State private var newSessionPresented = false
 
@@ -62,7 +65,41 @@ struct WorktreesView: View {
         let visible = all.filter {
             !RemoteSessionDirectory.filter([$0.section], by: filter, query: query).isEmpty
         }
-        NavigationStack(path: $path) {
+        if sizeClass == .regular {
+            NavigationSplitView {
+                directory(all: all, counts: counts, visible: visible)
+            } detail: {
+                // Its own stack, for the diffs and files a session pushes.
+                NavigationStack {
+                    if let selected {
+                        TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
+                    } else {
+                        ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
+                                               description: Text("Choose a session from the list."))
+                    }
+                }
+            }
+        } else {
+            NavigationStack(path: $path) {
+                directory(all: all, counts: counts, visible: visible)
+                    .navigationDestination(for: SessionRoute.self) { route in
+                        TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
+                    }
+            }
+        }
+    }
+
+    private func open(_ route: SessionRoute) {
+        if sizeClass == .regular {
+            selected = route
+        } else if path.last != route {
+            // A double tap must not push the same transcript twice.
+            path.append(route)
+        }
+    }
+
+    @ViewBuilder
+    private func directory(all: [HostSection], counts: [RemoteSessionFilter: Int], visible: [HostSection]) -> some View {
             Group {
                 if hub.hosts.isEmpty {
                     ContentUnavailableView {
@@ -98,19 +135,18 @@ struct WorktreesView: View {
             .sheet(isPresented: $newSessionPresented) {
                 NewSessionSheet(hub: hub) { route in
                     newSessionPresented = false
-                    path.append(route)
+                    open(route)
                 }
-            }
-            .navigationDestination(for: SessionRoute.self) { route in
-                TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
             }
             .onChange(of: searchActive) { _, active in searchPresented = active }
             // A forgotten Mac's transcripts pop instead of reading as ended.
-            .onChange(of: hub.hosts.map(\.id)) { _, ids in path.removeAll { !ids.contains($0.hostID) } }
+            .onChange(of: hub.hosts.map(\.id)) { _, ids in
+                path.removeAll { !ids.contains($0.hostID) }
+                if let selected, !ids.contains(selected.hostID) { self.selected = nil }
+            }
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }
-        }
     }
 
     private func list(_ visible: [HostSection]) -> some View {
@@ -121,10 +157,9 @@ struct WorktreesView: View {
                     let entries = RemoteSessionDirectory.filter([item.section], by: filter, query: query)
                         .first?.worktrees ?? []
                     ForEach(entries) { entry in
-                        WorktreeRow(entry: entry) { session in
-                            let route = SessionRoute(hostID: item.host.id, sessionId: session.id)
-                            // A double tap must not push the same transcript twice.
-                            if path.last != route { path.append(route) }
+                        WorktreeRow(entry: entry,
+                                    selectedSessionId: selected?.hostID == item.host.id ? selected?.sessionId : nil) { session in
+                            open(SessionRoute(hostID: item.host.id, sessionId: session.id))
                         }
                     }
                 } header: {
