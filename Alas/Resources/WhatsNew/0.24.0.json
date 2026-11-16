@@ -1,0 +1,16 @@
+{
+  "version": "0.24.0",
+  "headline": {
+    "title": "Alas on iOS",
+    "body": "Pair with your Mac or host to follow sessions, answer requests, and keep work moving from your iPhone or iPad.",
+    "media": "media/0.24.0-alas-ios.png"
+  },
+  "also": [
+    {
+      "title": "Run worktrees on any machine"
+    },
+    {
+      "title": "Drive Android devices"
+    }
+  ]
+}

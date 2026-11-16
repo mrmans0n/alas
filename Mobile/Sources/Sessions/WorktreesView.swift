@@ -1,11 +1,13 @@
 import AlasRemoteKit
 import SwiftUI
 
-/// Query and filter shared by the Worktrees and Search tabs.
+/// List choices shared by the Worktrees and Search tabs.
 @MainActor @Observable
 final class WorktreesModel {
     var query = ""
     var filter = RemoteSessionFilter.all
+    var selectedHost: RemoteSessionCatalog.HostID?
+    var collapsedHosts: Set<RemoteSessionCatalog.HostID> = []
 }
 
 /// Where a tapped session lives: enough to resolve it from the hub later.
@@ -14,7 +16,7 @@ struct SessionRoute: Hashable {
     let sessionId: String
 }
 
-/// Every paired Mac's sessions, grouped by repo and worktree.
+/// Sessions grouped by their owning Mac, then repo and worktree.
 struct WorktreesView: View {
     let hub: HostHub
     @Bindable var model: WorktreesModel
@@ -46,29 +48,48 @@ struct WorktreesView: View {
     private var isSearch: Bool { title == "Search" }
     private var query: String { isSearch ? model.query : "" }
 
-    private struct HostSection: Identifiable {
-        let host: PairedHost
-        let section: RemoteRepoSection
-        var id: String { "\(host.id)|\(section.id)" }
+    private struct HostGroup: Identifiable {
+        let host: RemoteSessionCatalog.Host
+        let sections: [RemoteRepoSection]
+        var id: RemoteSessionCatalog.HostID { host.id }
+
+        var rows: [CatalogRow] {
+            sections.flatMap { section in
+                [CatalogRow(id: .project(section.id), content: .project(section.title))]
+                    + section.worktrees.map {
+                        CatalogRow(id: .worktree(section.id, $0.id), content: .worktree($0))
+                    }
+            }
+        }
     }
 
-    private var allSections: [HostSection] {
-        hub.hosts.flatMap { host in
-            RemoteSessionDirectory.sections(hub.sessions(of: host.id), localHostName: host.name)
-                .map { HostSection(host: host, section: $0) }
-        }
+    private struct CatalogRow: Identifiable {
+        enum ID: Hashable { case project(String), worktree(String, String) }
+        enum Content { case project(String), worktree(RemoteWorktreeEntry) }
+        let id: ID
+        let content: Content
+    }
+
+    private var allHosts: [RemoteSessionCatalog.Host] {
+        RemoteSessionCatalog.hosts(from: hub.hosts.map { host in
+            RemoteSessionCatalog.Source(id: host.id, serverId: host.serverId, name: host.name,
+                                        isLive: hub.freshSessions(of: host.id) != nil,
+                                        sessions: hub.sessions(of: host.id))
+        })
     }
 
     var body: some View {
-        let all = allSections
-        let counts = RemoteSessionDirectory.counts(all.map(\.section))
-        let visible = all.filter {
-            !RemoteSessionDirectory.filter([$0.section], by: filter, query: query).isEmpty
-        }
+        let hosts = allHosts
+        let scoped = hosts.filter { model.selectedHost == nil || $0.id == model.selectedHost }
+        let all = scoped.flatMap(\.sections)
+        let counts = RemoteSessionDirectory.counts(all)
+        let visible = scoped.map {
+            HostGroup(host: $0, sections: RemoteSessionDirectory.filter($0.sections, by: filter, query: query))
+        }.filter { !$0.sections.isEmpty }
         Group {
             if sizeClass == .regular {
                 NavigationSplitView {
-                    directory(all: all, counts: counts, visible: visible)
+                    directory(hosts: hosts, all: all, counts: counts, visible: visible)
                 } detail: {
                     // Its own stack, for the diffs and files a session pushes.
                     NavigationStack {
@@ -82,7 +103,7 @@ struct WorktreesView: View {
                 }
             } else {
                 NavigationStack(path: $path) {
-                    directory(all: all, counts: counts, visible: visible)
+                    directory(hosts: hosts, all: all, counts: counts, visible: visible)
                         .navigationDestination(for: SessionRoute.self) { route in
                             TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
                         }
@@ -111,7 +132,8 @@ struct WorktreesView: View {
     }
 
     @ViewBuilder
-    private func directory(all: [HostSection], counts: [RemoteSessionFilter: Int], visible: [HostSection]) -> some View {
+    private func directory(hosts: [RemoteSessionCatalog.Host], all: [RemoteRepoSection],
+                           counts: [RemoteSessionFilter: Int], visible: [HostGroup]) -> some View {
             Group {
                 if hub.hosts.isEmpty {
                     ContentUnavailableView {
@@ -138,6 +160,11 @@ struct WorktreesView: View {
             .navigationTitle(title)
             .modifier(SearchField(enabled: isSearch, text: $model.query, presented: $searchPresented))
             .toolbar {
+                if hosts.count > 1 {
+                    ToolbarItem(placement: .topBarLeading) {
+                        hostPicker(hosts)
+                    }
+                }
                 if !hub.hosts.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Button("New session", systemImage: "plus") { newSessionPresented = true }
@@ -156,42 +183,99 @@ struct WorktreesView: View {
                 path.removeAll { !ids.contains($0.hostID) }
                 if let selected, !ids.contains(selected.hostID) { self.selected = nil }
             }
+            .onChange(of: hosts.map(\.id), initial: true) { _, ids in
+                if let selected = model.selectedHost, !ids.contains(selected) { model.selectedHost = nil }
+                model.collapsedHosts.formIntersection(ids)
+            }
             .safeAreaInset(edge: .bottom) {
                 if !all.isEmpty { filterBar(counts) }
             }
     }
 
-    private func list(_ visible: [HostSection]) -> some View {
-        let showHost = hub.hosts.count > 1
+    private var revealingMatches: Bool {
+        filter != .all || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func list(_ visible: [HostGroup]) -> some View {
         return List {
-            ForEach(visible) { item in
+            ForEach(visible) { group in
                 Section {
-                    let entries = RemoteSessionDirectory.filter([item.section], by: filter, query: query)
-                        .first?.worktrees ?? []
-                    ForEach(entries) { entry in
-                        WorktreeRow(entry: entry,
-                                    selectedSessionId: selected?.hostID == item.host.id ? selected?.sessionId : nil) { session in
-                            open(SessionRoute(hostID: item.host.id, sessionId: session.id))
-                        }
-                    }
-                } header: {
-                    HStack(spacing: 10) {
-                        RepoTile(name: item.section.title)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(item.section.title).font(.headline).foregroundStyle(.primary)
-                            if showHost || item.section.hostName != nil {
-                                Text(item.section.hostName ?? item.host.name)
-                                    .font(.caption).foregroundStyle(.secondary)
+                    if revealingMatches || !model.collapsedHosts.contains(group.id) {
+                        ForEach(group.rows) { row in
+                            VStack(alignment: .leading) {
+                                switch row.content {
+                                case .project(let title):
+                                    HStack(spacing: 10) {
+                                        RepoTile(name: title)
+                                        Text(title).font(.headline)
+                                    }
+                                    .padding(.top, 8)
+                                    .accessibilityAddTraits(.isHeader)
+                                case .worktree(let entry):
+                                    WorktreeRow(entry: entry, selectedSessionId: selectedSessionID(in: entry, on: group.host)) { session in
+                                        guard let target = group.host.route(for: session.id) else { return }
+                                        open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
+                                    }
+                                }
                             }
                         }
                     }
+                } header: {
+                    Button {
+                        if !model.collapsedHosts.insert(group.id).inserted {
+                            model.collapsedHosts.remove(group.id)
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "laptopcomputer")
+                            Text(group.host.name).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text("\(group.host.worktreeCount) worktrees")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Image(systemName: model.collapsedHosts.contains(group.id) && !revealingMatches
+                                  ? "chevron.right" : "chevron.down")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(revealingMatches)
+                    .accessibilityValue(model.collapsedHosts.contains(group.id) && !revealingMatches ? "Collapsed" : "Expanded")
                     .textCase(nil)
-                    .padding(.bottom, 4)
                 }
             }
         }
         .listStyle(.plain)
         .contentMargins(.bottom, 56, for: .scrollContent)
+    }
+
+    private func hostPicker(_ hosts: [RemoteSessionCatalog.Host]) -> some View {
+        Menu {
+            Picker("Host", selection: $model.selectedHost) {
+                Text("All hosts").tag(RemoteSessionCatalog.HostID?.none)
+                ForEach(hosts) { host in
+                    Text(host.name).tag(Optional(host.id))
+                }
+            }
+        } label: {
+            Label(hosts.first { $0.id == model.selectedHost }?.name ?? "All hosts",
+                  systemImage: "line.3.horizontal.decrease")
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+        }
+        .accessibilityLabel("Filter by host")
+        .accessibilityValue(hosts.first { $0.id == model.selectedHost }?.name ?? "All hosts")
+    }
+
+    private func selectedSessionID(in entry: RemoteWorktreeEntry, on host: RemoteSessionCatalog.Host) -> String? {
+        guard let selected else { return nil }
+        return entry.activeSessions.first { session in
+            guard let route = host.route(for: session.id) else { return false }
+            return selected == SessionRoute(hostID: route.hostID, sessionId: route.sessionId)
+        }?.id
     }
 
     private func filterBar(_ counts: [RemoteSessionFilter: Int]) -> some View {

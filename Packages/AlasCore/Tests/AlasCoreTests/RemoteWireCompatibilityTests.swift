@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 /// The phone decodes the Mac's wire messages with the host channel left
 /// opaque, and what it re-encodes is what the Mac sent.
@@ -28,6 +29,7 @@ import Testing
         (HostResponse.done, nil),
         (.failure(error: .failed(message: "Nothing is staged to commit.")), "Nothing is staged to commit."),
         (.failure(error: .operationInProgress), "Another operation is running in this worktree. Try again when it finishes."),
+        (.failure(error: .session(refusal: .notWriter)), "Another device is driving this session."),
     ] as [(HostResponse, String?)])
     func phoneReadsTheMacsGitReply(result: HostResponse, failure: String?) throws {
         let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(id: 7, result: result)))
@@ -36,6 +38,32 @@ import Testing
         case .success: #expect(failure == nil)
         case .failure(let error): #expect(error.message == failure)
         }
+    }
+
+    @Test func phoneShepherdRequestsDecodeOnTheMac() throws {
+        let list = try JSONDecoder().decode(HostClientMessage.self, from: RemoteShepherdRequest.list(id: 3).json)
+        #expect(list == HostClientMessage(id: 3, request: .listSessions))
+        let act = RemoteShepherdRequest.act(id: 4, sessionID: "s", action: .enableAutoMerge).json
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: act)
+            == HostClientMessage(id: 4, request: .shepherdSession(sessionID: "s", action: .enableAutoMerge)))
+    }
+
+    @Test func phoneReadsASessionsShepherdFromTheMacsList() throws {
+        func summary(_ id: String, _ shepherd: HostSessionShepherd?) -> HostSessionSummary {
+            var summary = HostSessionSummary(owner: .worktree("w"), id: id, agentId: "codex", title: "t", remoteSessionId: nil,
+                                             createdAt: 1, updatedAt: 2, lastOpenedAt: 3, streamingState: nil, isWriter: true)
+            summary.shepherd = shepherd
+            return summary
+        }
+        let shepherd = HostSessionShepherd(badge: "fixing", number: "#12", tooltip: "#12 · fixing", resumable: false,
+                                           phaseLine: "fixing", autoFix: true, autoMerge: false)
+        let reply = OpaqueHostMessage(json: try JSONEncoder().encode(HostServerMessage.response(
+            id: 5, result: .sessions(sessions: [summary("a", nil), summary("b", shepherd)]))))
+        #expect(RemoteShepherdRequest.shepherd(of: "b", replying: 5, in: reply) == .some(RemoteShepherd(
+            badge: "fixing", number: "#12", tooltip: "#12 · fixing", resumable: false, phaseLine: "fixing", autoFix: true, autoMerge: false)))
+        #expect(RemoteShepherdRequest.shepherd(of: "a", replying: 5, in: reply) == .some(nil))
+        #expect(RemoteShepherdRequest.shepherd(of: "c", replying: 5, in: reply) == nil)
+        #expect(RemoteShepherdRequest.shepherd(of: "b", replying: 6, in: reply) == nil)
     }
 
     @Test(arguments: RemoteWireSamples.serverMessages)

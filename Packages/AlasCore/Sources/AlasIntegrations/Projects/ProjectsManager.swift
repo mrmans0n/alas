@@ -221,6 +221,12 @@ public final class ProjectsManager {
         projects[idx].lastRunOnHost = host
     }
 
+    /// Makes `projectId` a standalone project again.
+    public func unlink(_ projectId: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].linkedProjectId = nil
+    }
+
     /// Makes every record linked to `primaryId` a standalone project again.
     public func unlinkAll(from primaryId: String) {
         for index in projects.indices where projects[index].linkedProjectId == primaryId {
@@ -996,7 +1002,7 @@ public final class ProjectsManager {
         copySettings(toRecordsLinkedTo: primaryId)
     }
 
-    @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
+    public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
         var paths = projects[idx].hiddenWorktreePaths

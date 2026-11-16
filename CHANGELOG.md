@@ -6,13 +6,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Features
+## [0.24.0] - 2026-11-16
 
-- Let the local chat attachment picker select any file, keeping images and supported PDFs as attachments and showing other files as inline filename badges.
+### ✨ Features
 
-### Fixes
+- Set up a machine on first use by finding or cloning the project's checkout before creating a worktree (#2539).
+- Ship a session's pull request from iPhone or iPad and control its shepherd from the session screen (#2537).
+- Run Alas on iPad with sessions beside their worktree list (#2531).
+- Check and push a base branch before creating a worktree on another machine (#2536).
+- Stage, commit, and sync a session's worktree from iPhone or iPad (#2533).
+- Choose whether a new worktree runs on this Mac or a paired machine (#2534).
+- View and control a worktree's terminals from iPhone or iPad (#2530).
+- View and control Android devices from the Devices tab (#2528).
+- Install, package, and update `alas-host` on Linux (#2527).
+- Choose which alerts each Mac sends and receive alerts when turns finish (#2526).
+- Give linked SSH projects their local project's settings (#2525).
+- Run `alas-host` on Linux (#2517).
+- List linked SSH projects under their local project throughout the app (#2520).
+- Change Simulator accessibility settings and inspect accessibility elements in an overlay (#2521).
+- Send iOS push notifications when a session needs input or permission (#2515).
+- Show lifecycle hook states for agents in persistent SSH terminals (#2513).
+- Fold linked SSH projects into their local project's sidebar group (#2516).
+- Link SSH projects to a matching local project (#2508).
+- Hold agent device calls while the user controls a worktree VM (#2507).
+- Return changed text, screenshots, and other results after agent Simulator actions (#2501).
+- Manage SSH machines in Settings (#2503).
+- Run chat-agent schedules for SSH projects (#2505).
+- Add Changes, Files, visual aids, new sessions, and a cached session list to the iOS app (#2496).
+- Show a host shepherd's switches and actions in the review drawer (#2502).
+- Offer Shepherd in an eligible host worktree's review drawer (#2499).
+- Show a host's Ship and shepherd turns as cards on the Mac (#2497).
+- Land and reorder a host's gg stack from the Mac (#2495).
+- Compose and queue prompts, answer requests, and change session settings from iPhone or iPad (#2492).
+- Sync, rebase, continue, and abort a host gg stack from the Mac (#2493).
+- Show a host worktree's gg stack in the Changes tab (#2491).
+- Run `/ship` in host sessions and adopt the branch's open pull request (#2490).
+- Set a host project's gg mode from the Mac (#2489).
+- Pair the iOS app with Macs or hosts, list sessions, and open live transcripts (#2482).
+- Add the native iOS app target and a large-transcript performance prototype (#2480).
+- Start new worktree VMs from a reusable per-project template (#2477).
+- Rotate and record Simulators, and hide device tools when agent control is disabled (#2478).
+- Copy and paste Unicode text through the Simulator clipboard (#2473).
+- Select any file from the chat attachment picker, attaching supported media and inserting other files as references (#2474).
 
-- Prevent a crash during worktree refresh when symlink aliases resolve to the same directory, and clear cached stack summaries for every alias when its branch changes.
+### 🐛 Fixes
+
+- Group mobile worktrees by their owning host and deduplicate direct and relayed reports (#2538).
+- Fade the transcript beneath its toolbar and keep inactive stage controls readable (#2532).
+- Lead with sessions that need attention in the sidebar, approval card, right pane, and composer footer (#2524).
+- Update `rusqlite` to 0.43 (#2518).
+- Prevent listener starvation and repair timing-sensitive fixtures (#2519).
+- Detect agents in persistent SSH terminals without offering local hook installation (#2510).
+- Detect Claude Code and Codex running in persistent local terminals (#2506).
+- Leave gg stacks without reviews out of remote stack inventory (#2504).
+- Show the full branch name where it matters and improve hover, secondary text, and icon contrast (#2500).
+- Clarify section hierarchy, failure states, approval cards, and light-mode selection contrast (#2498).
+- Show short line counts in the working tree to match the sidebar (#2494).
+- Apply the configured branch prefix to worktrees created on a peer (#2488).
+- Group the composer footer by job, with input tools on the left and turn settings in one tray (#2481).
+- Use one compact stat format per sidebar row and remove the redundant diff bar (#2479).
+- Prevent topology refresh crashes when symlink aliases resolve to the same directory (#2476).
+- Show Ship's loading row as soon as the session accepts the prompt (#2472).
+
+### 🏗️ Internal
+
+- Refine the iOS session, Changes, and new-session screens (#2529).
+- Add a script that archives and uploads the iOS app to TestFlight (#2523).
+- Update Node.js to 26 (#2522).
+- Build the ACP, session, and agent modules on Linux (#2514).
+- Build the platform, feature, integration, and code modules on Linux (#2512).
+- Plan Linux support and make the lowest-level modules build on Linux (#2509).
+- Extract an iOS-buildable `AlasRemoteKit` package (#2475).
+- Update `tree-sitter-scala` to 0.26.13 (#2471).
 
 ## [0.23.7] - 2026-11-13
 

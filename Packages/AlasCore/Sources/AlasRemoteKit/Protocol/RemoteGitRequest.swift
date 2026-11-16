@@ -68,6 +68,11 @@ public enum RemoteGitRequest {
         if let invalid = error["invalidRequest"] as? [String: Any], let reason = invalid["reason"] as? String { return reason }
         if error["operationInProgress"] != nil { return "Another operation is running in this worktree. Try again when it finishes." }
         if error["notFound"] != nil { return "This worktree is no longer on the Mac." }
+        if let refusal = (error["session"] as? [String: Any])?["refusal"] as? [String: Any] {
+            if refusal["notWriter"] != nil { return "Another device is driving this session." }
+            if refusal["notFound"] != nil { return "The Mac no longer lists this session." }
+            if refusal["promptRejected"] != nil { return "The session didn't take the prompt." }
+        }
         return "The Mac couldn't do that."
     }
 }

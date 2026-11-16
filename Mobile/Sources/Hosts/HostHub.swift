@@ -34,7 +34,7 @@ final class HostHub {
     /// looks still reads as new: the host forgot whatever the old socket held.
     private var onlineCounts: [UUID: Int] = [:]
     /// Hosts whose list arrived on the live connection, not from the cache.
-    @ObservationIgnored private var listedLive: Set<UUID> = []
+    private var listedLive: Set<UUID> = []
     /// What each host's hello advertised, for this connection.
     @ObservationIgnored private var capabilities: [UUID: Set<String>] = [:]
 

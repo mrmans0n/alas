@@ -69,7 +69,13 @@ final class SessionWorkspace {
     @ObservationIgnored private var treeRequested = false
     /// The git action in flight; one at a time, as the Mac's worktree gate allows.
     private(set) var gitRunning: RemoteGitChange?
-    @ObservationIgnored private var gitWaiter: (id: Int, resume: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>)?
+    /// Host requests awaiting their answer, by request id.
+    @ObservationIgnored private var hostWaiters: [Int: CheckedContinuation<Result<Void, RemoteGitFailure>, Never>] = [:]
+    /// The session's PR shepherd, once the host's session list said; nil without one.
+    private(set) var shepherd: RemoteShepherd?
+    private(set) var shepherdLoaded = false
+    private(set) var shepherdRunning: RemoteShepherdAction?
+    @ObservationIgnored private var shepherdListId: Int?
 
     init(hub: HostHub, hostID: UUID, sessionId: String) {
         self.hub = hub
@@ -93,6 +99,7 @@ final class SessionWorkspace {
             if hostWasOnline { replay() }
             watchGeneration += 1
             watchHost(generation: watchGeneration)
+            pollShepherd(generation: watchGeneration)
         }
         return ListenerToken { [weak self] in
             guard let self else { return }
@@ -124,6 +131,7 @@ final class SessionWorkspace {
         if case .idle = changes {} else { refreshChanges() }
         if let diff { send(.fileDiff(sessionId: sessionId, path: diff.key.path, stage: diff.key.stage)) }
         if treeRequested { loadTree() }
+        refreshShepherd()
         if let file {
             self.file = (file.path, .loading)
             send(.readFile(sessionId: sessionId, path: file.path))
@@ -152,6 +160,8 @@ final class SessionWorkspace {
     func noteStreaming(_ state: String) {
         defer { streaming = state }
         guard state == "idle", streaming != "idle" else { return }
+        // A Ship turn that ends has usually opened the pull request.
+        refreshShepherd()
         if treeRequested { loadTree() }
         if case .idle = changes { return }
         scheduleRefresh()
@@ -217,36 +227,82 @@ final class SessionWorkspace {
     /// refusal, worded for the user, or nil once it succeeded.
     func git(_ change: RemoteGitChange) async -> String? {
         guard gitRunning == nil, let target = gitTarget else { return "This worktree can't be changed from here." }
+        gitRunning = change
+        defer {
+            gitRunning = nil
+            refreshChanges()
+        }
+        return await hostRequest {
+            RemoteGitRequest.message(id: $0, projectID: target.projectID, path: target.worktree.path,
+                                     branch: target.worktree.branch, change: change)
+        }
+    }
+
+    // MARK: Shepherd
+
+    /// A session this host runs itself, on a host that lets the phone shepherd it.
+    var canShepherd: Bool {
+        hub.sessions(of: hostID).first { $0.id == sessionId }?.serverId == nil
+            && hub.supports(HostProtocolCapability.shepherdsPhoneV1, on: hostID)
+    }
+
+    /// Asks the host for its session list, which carries the shepherd.
+    func refreshShepherd() {
+        guard canShepherd, hub.state(of: hostID) == .online else { return }
+        let id = hub.nextHostRequestId()
+        shepherdListId = id
+        send(.host(RemoteShepherdRequest.list(id: id)))
+    }
+
+    /// ponytail: polls while the session is open, since the host pushes the phone no shepherd
+    /// changes; an event subscription replaces it if the list gets heavy.
+    private func pollShepherd(generation: Int) {
+        Task { @MainActor [weak self] in
+            // The first list goes out with the replay; this one keeps it fresh.
+            while true {
+                try? await Task.sleep(for: .seconds(20))
+                guard let self, generation == self.watchGeneration else { return }
+                self.refreshShepherd()
+            }
+        }
+    }
+
+    /// Ships, resumes, stops or switches the session's shepherd. Returns the host's refusal,
+    /// worded for the user, or nil once it took it.
+    func shepherd(_ action: RemoteShepherdAction) async -> String? {
+        guard shepherdRunning == nil, canShepherd else { return "This session can't be shipped from here." }
+        shepherdRunning = action
+        defer {
+            shepherdRunning = nil
+            refreshShepherd()
+        }
+        return await hostRequest { RemoteShepherdRequest.act(id: $0, sessionID: self.sessionId, action: action) }
+    }
+
+    /// Sends the request `make` builds and waits for the host's answer, even if the screen that
+    /// asked has gone. Returns the refusal, worded for the user, or nil once it succeeded.
+    private func hostRequest(_ make: (Int) -> OpaqueHostMessage) async -> String? {
         // A send while the link is down goes nowhere, and the reply would never come.
         guard hub.state(of: hostID) == .online else {
             let name = hub.hosts.first { $0.id == hostID }?.name ?? "the Mac"
             return "Not connected to \(name). Try again once it's back online."
         }
         let id = hub.nextHostRequestId()
-        gitRunning = change
-        // Listen until the answer comes, even if the screen that asked has gone.
         let hold = activate()
-        defer {
-            gitRunning = nil
-            refreshChanges()
-            hold.cancel()
-        }
-        send(.host(RemoteGitRequest.message(id: id, projectID: target.projectID, path: target.worktree.path,
-                                            branch: target.worktree.branch, change: change)))
+        defer { hold.cancel() }
+        send(.host(make(id)))
         // ponytail: a fixed wait; a push to a slow remote that outlasts it reads as lost.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(120))
-            self?.finishGit(id, .failure(RemoteGitFailure("The Mac didn't answer. Check the worktree there.")))
+            self?.finishHostRequest(id, .failure(RemoteGitFailure("The Mac didn't answer. Check the session there.")))
         }
-        let result = await withCheckedContinuation { gitWaiter = (id, $0) }
+        let result = await withCheckedContinuation { hostWaiters[id] = $0 }
         if case .failure(let failure) = result { return failure.message }
         return nil
     }
 
-    private func finishGit(_ id: Int, _ result: Result<Void, RemoteGitFailure>) {
-        guard let waiter = gitWaiter, waiter.id == id else { return }
-        gitWaiter = nil
-        waiter.resume.resume(returning: result)
+    private func finishHostRequest(_ id: Int, _ result: Result<Void, RemoteGitFailure>) {
+        hostWaiters.removeValue(forKey: id)?.resume(returning: result)
     }
 
     private func send(_ message: PhoneClientMessage) {
@@ -256,7 +312,14 @@ final class SessionWorkspace {
     private func receive(_ message: PhoneServerMessage) {
         switch message {
         case .host(let reply):
-            if let waiter = gitWaiter, let result = RemoteGitRequest.reply(to: waiter.id, in: reply) { finishGit(waiter.id, result) }
+            if let id = shepherdListId, let found = RemoteShepherdRequest.shepherd(of: sessionId, replying: id, in: reply) {
+                shepherd = found
+                shepherdLoaded = true
+                return
+            }
+            for id in hostWaiters.keys {
+                if let result = RemoteGitRequest.reply(to: id, in: reply) { return finishHostRequest(id, result) }
+            }
         case .changeList(let id, let ref, let metrics, let files, let staged, let unstaged, let commits,
                          let truncated, let commitsTruncated, _, _) where id == sessionId:
             changes = .loaded(ChangeListReply(
