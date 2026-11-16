@@ -97,13 +97,15 @@ final class DeviceFlowRecorder {
                 recording.flushScroll()
                 recording.typed.append(character)
             case "\u{7F}", "\u{8}":
-                if !recording.typed.isEmpty {
+                // A Tab moved focus: Delete then works in the next field, not on the Tab.
+                if let last = recording.typed.last, last != "\t" {
                     recording.typed.removeLast()
-                } else if case .eraseText(let count)? = recording.flow.steps.last, recording.scrolled == (0, 0) {
+                } else if recording.typed.isEmpty, case .eraseText(let count)? = recording.flow.steps.last,
+                          recording.scrolled == (0, 0) {
                     recording.flow.steps[recording.flow.steps.count - 1] = .eraseText(count + 1)
                 } else {
                     // What an earlier step typed: the device deleted it, so replay does too.
-                    recording.flushScroll()
+                    recording.flush()
                     recording.flow.steps.append(.eraseText(1))
                 }
             default:

@@ -133,9 +133,22 @@ public struct DeviceFlow: Equatable, Sendable {
         return DeviceFlow(appID: appID, steps: steps, lines: stepLines)
     }
 
+    /// The options each command takes; any other would change what the step does.
+    private static let options: [String: Set<String>] = [
+        "launchApp": ["appId"], "tapOn": ["text", "id", "point"], "assertVisible": ["text", "id"],
+        "assertNotVisible": ["text", "id"], "swipe": ["direction"],
+    ]
+
     private static func step(
         _ name: String, scalar: String?, map: [String: (value: String, line: Int)], line: Int
     ) throws(DeviceFlowError) -> Step {
+        if commands.contains(name) {
+            let allowed = options[name] ?? []
+            if let (key, entry) = map.sorted(by: { $0.value.line < $1.value.line }).first(where: { !allowed.contains($0.key) }) {
+                let takes = allowed.isEmpty ? "no options" : allowed.sorted().joined(separator: ", ")
+                throw DeviceFlowError(line: entry.line, message: "Alas doesn't run \(name)'s \(key); \(name) takes \(takes).")
+            }
+        }
         func required(_ what: String) throws(DeviceFlowError) -> String {
             guard let scalar else { throw DeviceFlowError(line: line, message: "\(name) needs \(what).") }
             return scalar
@@ -228,8 +241,9 @@ public struct DeviceFlow: Equatable, Sendable {
         return parts
     }
 
-    /// A bare value; one in double quotes with `\"`, `\\`, `\n`, `\r` and `\t`
-    /// escapes; or one in single quotes, where `''` is an apostrophe.
+    /// A bare value; one in double quotes with YAML's common escapes (`\n`, `\t`,
+    /// `\"`, `\\`, `\xXX`, `\uXXXX`, …), refusing others; or one in single
+    /// quotes, where `''` is an apostrophe.
     private static func value(_ text: String, line: Int) throws(DeviceFlowError) -> String {
         if text.hasPrefix("'") {
             var out = ""
@@ -245,22 +259,36 @@ public struct DeviceFlow: Equatable, Sendable {
         }
         guard text.hasPrefix("\"") else { return text }
         var out = ""
-        var escaped = false
-        for character in text.dropFirst() {
-            if escaped {
-                switch character {
-                case "n": out.append("\n")
-                case "r": out.append("\r")
-                case "t": out.append("\t")
-                default: out.append(character)
-                }
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                return out
-            } else {
+        let characters = Array(text.dropFirst())
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            index += 1
+            if character == "\"" { return out }
+            guard character == "\\" else {
                 out.append(character)
+                continue
+            }
+            guard index < characters.count else { break }
+            let escape = characters[index]
+            index += 1
+            switch escape {
+            case "n": out.append("\n")
+            case "r": out.append("\r")
+            case "t": out.append("\t")
+            case "0": out.append("\0")
+            case "\"", "\\", "/", " ": out.append(escape)
+            case "x", "u", "U":
+                // YAML's hex escapes: two, four or eight digits.
+                let digits = escape == "x" ? 2 : escape == "u" ? 4 : 8
+                let hex = String(characters[index..<min(index + digits, characters.count)])
+                guard hex.count == digits, let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) else {
+                    throw DeviceFlowError(line: line, message: "\\\(escape) needs \(digits) hex digits of a character.")
+                }
+                out.unicodeScalars.append(scalar)
+                index += digits
+            default:
+                throw DeviceFlowError(line: line, message: "Alas doesn't read the escape \\\(escape).")
             }
         }
         throw DeviceFlowError(line: line, message: "A quoted value isn't closed.")

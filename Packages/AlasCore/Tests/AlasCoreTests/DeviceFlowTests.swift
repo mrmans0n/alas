@@ -31,6 +31,7 @@ struct DeviceFlowTests {
     - eraseText: 2
     - inputText: 'it''s # not a comment' # a comment
     - tapOn: {id: 'c, d'}
+    - inputText: "caf\u00e9\x21 \U0001F600\/"
     """#
 
     @Test func everyCommandOfTheSubsetIsRead() throws {
@@ -42,6 +43,7 @@ struct DeviceFlowTests {
             .assertVisible(.text("Done")), .assertNotVisible(.id("spinner")), .openLink("myapp://x#y"), .waitForAnimationToEnd,
             .launchApp("com.other"), .tapOn(.id("a, b")), .tapOn(.point(x: 0.1, y: 0.2)), .swipe(.right),
             .inputText("one\ntwo\t\"three\"\\"), .eraseText(2), .inputText("it's # not a comment"), .tapOn(.id("c, d")),
+            .inputText("café! 😀/"),
         ])
         #expect(flow.lines.prefix(3) == [4, 5, 6])
     }
@@ -58,6 +60,12 @@ struct DeviceFlowTests {
         ("---\n- tapOn:\n    point: \"half\"\n", 3, "point"),
         ("---\n- swipe:\n    direction: SIDEWAYS\n", 2, "SIDEWAYS"),
         ("---\n- eraseText: none\n", 2, "eraseText"),
+        // Options the subset lacks would change what the step does, so they are refused.
+        ("---\n- launchApp:\n    clearState: true\n", 3, "clearState"),
+        ("---\n- launchApp: {clearState: true}\n", 2, "clearState"),
+        ("---\n- tapOn: {text: Save, index: 2}\n", 2, "index"),
+        ("---\n- inputText: \"a\\qb\"\n", 2, "\\q"),
+        ("---\n- inputText: \"\\u00g9\"\n", 2, "\\u"),
         ("---\n- inputText: 'open\n", 2, "isn't closed"),
     ])
     func whatTheSubsetLacksIsRefusedByLine(yaml: String, line: Int, mentions: String) {

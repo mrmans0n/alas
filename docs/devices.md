@@ -161,8 +161,9 @@ and runs itself, without Maestro:
 | `openLink: "myapp://x"` | Opens a URL. |
 | `waitForAnimationToEnd` | Waits for the screen to settle. |
 
-Values may be bare, in double quotes (with `\n`, `\t` and `\"`) or in single
-quotes (with `''` for an apostrophe). Text matches a label exactly, then as
+Values may be bare, in double quotes (with YAML's escapes such as `\n`, `\"`
+and `\u00e9`) or in single quotes (with `''` for an apostrophe). Options a
+command doesn't take here, such as `launchApp`'s `clearState`, are refused. Text matches a label exactly, then as
 part of one, ignoring case; Alas
 doesn't take Maestro's regular expressions. Maestro's other commands, such as
 `runFlow`, `repeat` and conditions, are refused with their line.
