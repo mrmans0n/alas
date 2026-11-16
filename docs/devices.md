@@ -127,6 +127,51 @@ the app's restarts, with a banner for each Java crash.
 The screen streams with scrcpy's server, which Alas bundles and copies to
 the device each time it shows the screen.
 
+## Flows
+
+A flow is a script of steps on a device, kept in the worktree as
+`.maestro/<name>.yaml`, that runs again on any simulator or Android device.
+Steps name elements by their text or id rather than by where they were, so a
+flow survives layout changes.
+
+The hand button in the toolbar records one on a booted device. Each click
+becomes a tap on the element under it, named by its label, else its id, else
+the point; typing becomes text, Return the Enter key, the Home and Back
+buttons their keys, and a drag a swipe. A recording starts by launching the
+app in front. Click the button again to name the flow and save it.
+
+The play button lists the worktree's flows and runs one. Each step waits up
+to 5 seconds for its element, and the run stops at the first step that
+fails; a popover then says which step and line failed and why. While a flow
+runs, the pill on the screen shows its step, and Take over stops it.
+
+Flows are a subset of [Maestro](https://maestro.dev)'s YAML, which Alas reads
+and runs itself, without Maestro:
+
+| Command | What it does |
+|---|---|
+| `launchApp` | Launches the flow's `appId`, or `launchApp: {appId: …}`. |
+| `tapOn: "Save"`, `tapOn: {id: …}`, `tapOn: {point: "50%,80%"}` | Taps the element with that text or id, or a point. |
+| `inputText: "hello"` | Types into the focused field. |
+| `pressKey: Home`, `Back` or `Enter` | Presses a button or Return. |
+| `scroll`, `swipe: {direction: UP}` | Scrolls down, or swipes up, down, left or right. |
+| `assertVisible: "Done"`, `assertNotVisible: …` | Waits for the element to appear, or to be gone. |
+| `openLink: "myapp://x"` | Opens a URL. |
+| `waitForAnimationToEnd` | Waits for the screen to settle. |
+
+Text matches a label exactly, then as part of one, ignoring case; Alas
+doesn't take Maestro's regular expressions. Maestro's other commands, such as
+`runFlow`, `repeat` and conditions, are refused with their line.
+
+## Routes
+
+The settings popover's Route menu moves the simulated location along a path:
+City Walk (5 km/h), Bike Ride (18 km/h) or Freeway Drive (100 km/h) around
+Apple Park, or a GPX file's track at the speed beside the menu. A route stays
+at its last point when it ends; Stop, Clear or a new location ends it sooner.
+On Android the popover shows how far along it is. On iOS, routes need iOS 17
+or later.
+
 ## VMs
 
 A VM's screen opens in a center tab. In the Devices tab, its card says
@@ -167,6 +212,9 @@ MCP server:
 | `device_clipboard` | Reads the device's clipboard, or sets it. |
 | `device_rotate` | Turns the device, and returns the device and interface orientations. |
 | `device_record` | Starts or stops a screen recording; stop returns the video's path. |
+| `device_flow_record` | Records the agent's own calls on a device as a flow in `.maestro/`. |
+| `device_run_flow` | Runs a flow and returns whether it passed, or the step, line and reason it failed. |
+| `device_set_route` | Moves the simulated location along waypoints or a GPX file at a speed. |
 
 Taps, swipes, typing, buttons, launching, opening URLs and rotating wait for
 the screen to settle and return what changed since the agent's last look:
@@ -197,5 +245,9 @@ running keep them, and their calls fail with `device_disabled`. An agent's
 calls keep the simulator's stream running for a minute after its last call,
 so screenshots work with the Devices tab closed.
 
-Not yet: Android and physical devices. The follow-up list is in
+A flow run is one call, held while you drive like any other. A step waiting
+for its element can take 5 seconds, and some agents end a call after 60
+seconds (Codex by default), so keep the flows agents run short.
+
+Not yet: physical iOS devices. The follow-up list is in
 `docs/plans/2026-11-04-device-panel-design.md`.
