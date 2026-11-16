@@ -177,7 +177,6 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             let proxies = rowCache.proxies(for: transcript.messages)
             let rows = NativePeerTranscriptFold.renderRows(
                 messages: transcript.messages,
-                proxies: proxies,
                 isTurnActive: key.isTurnActive,
                 enabled: key.enabled,
                 isExpanded: { [expansionSeeds] in expansionSeeds.isExpanded($0) },
@@ -232,7 +231,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                         isPlanActive: isPlanActive && row.index >= currentTurnUserIndex, host: host))
                     indices = [row.index]
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
-                    specs.append(groupHeaderSpec(group, proxies: proxies, host: host))
+                    specs.append(groupHeaderSpec(group, messages: messages, host: host))
                     indices = group.members.map(\.index)
                 }
                 let hasLiveTool = indices.contains { index in
@@ -311,13 +310,12 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         /// Mirrors the local transcript's bundle header: one row id whether
         /// collapsed or expanded, with members tiled as sibling rows.
         private func groupHeaderSpec(
-            _ group: ACPTranscriptToolCallGroup, proxies: [ACPMessage], host: NativePeerTranscriptScroller
+            _ group: ACPTranscriptToolCallGroup, messages: [RemoteWireMessage], host: NativePeerTranscriptScroller
         ) -> ACPTranscriptRowSpec {
-            let toolCalls: [ACPMessage.ToolCall] = group.members.compactMap {
-                guard case .toolCall(let call) = proxies[$0.index] else { return nil }
-                return call
-            }
-            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls, kind: group.kind, isLive: group.isLive)
+            let summary = ACPToolCallGroupSummary(
+                toolCalls: RemoteTranscriptFold.summaryToolCalls(of: group, in: messages),
+                kind: group.kind, isLive: group.isLive
+            )
             let memberStableIds = group.members.map(\.stableId)
             expansionSeeds.syncLineage(members: memberStableIds)
             expansionSeeds.syncCollapsed(members: memberStableIds)
