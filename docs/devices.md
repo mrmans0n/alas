@@ -137,10 +137,11 @@ flow survives layout changes.
 The hand button in the toolbar records one on a booted device. Each click
 becomes a tap on the element under it, named by its label, else its id, else
 the point; typing becomes text, Return the Enter key, the Home and Back
-buttons their keys, and a drag a swipe. A recording starts by launching the
+buttons their keys, and a drag or a scroll a swipe. A recording starts by launching the
 app in front. Click the button again to name the flow and save it.
 
-The play button lists the worktree's flows and runs one. Each step waits up
+The play button lists the worktree's flows and runs one; while you hold the
+device, hand it back first. Each step waits up
 to 5 seconds for its element, and the run stops at the first step that
 fails; a popover then says which step and line failed and why. While a flow
 runs, the pill on the screen shows its step, and Take over stops it.
