@@ -1651,6 +1651,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve those same verbs to a device paired as the native
     /// phone app, an app host included: the phone is its user.
     public static let worktreesGitPhoneV1 = "host.worktrees.git.phone.v1"
+    /// Hosts that serve `shepherdSession`, and list each session's shepherd,
+    /// to a device paired as the native phone app, an app host included.
+    public static let shepherdsPhoneV1 = "host.shepherds.phone.v1"
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"
