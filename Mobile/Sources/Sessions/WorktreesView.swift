@@ -71,11 +71,7 @@ struct WorktreesView: View {
     }
 
     private var allHosts: [RemoteSessionCatalog.Host] {
-        RemoteSessionCatalog.hosts(from: hub.hosts.map { host in
-            RemoteSessionCatalog.Source(id: host.id, serverId: host.serverId, name: host.name,
-                                        isLive: hub.freshSessions(of: host.id) != nil,
-                                        sessions: hub.sessions(of: host.id))
-        })
+        RemoteSessionCatalog.hosts(from: hub.sessionSources)
     }
 
     var body: some View {

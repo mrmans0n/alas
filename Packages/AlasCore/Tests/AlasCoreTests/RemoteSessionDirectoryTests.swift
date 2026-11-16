@@ -189,4 +189,60 @@ import Testing
         #expect(host.sections.first?.worktrees.first?.activeSessions.map(\.id) == [nativeID])
         #expect(host.route(for: nativeID)?.sessionId == "owner:\(nativeID)")
     }
+
+    @Test(arguments: ["awaitingPermission", "awaitingInput"])
+    func inboxShowsOneEntryForDirectAndRelayedCopies(status: String) throws {
+        let owner = source(1, sessions: [session("s1", status: status)])
+        let reports = [owner] + (2...3).map { gateway in
+            source(gateway, serverId: "gateway\(gateway)", sessions: [
+                session("owner:s1", status: status, serverId: "owner", serverName: "Owner"),
+            ])
+        }
+        let entries = RemoteSessionCatalog.attentionEntries(from: reports)
+        #expect(entries.count == 1)
+        let entry = try #require(entries.first)
+        #expect(entry.id.owner == .server("owner"))
+        #expect(entry.id.sessionId == "s1")
+        #expect(entry.route.hostID == owner.id)
+        #expect(entry.route.sessionId == "s1")
+        #expect(entry.hostName == "Mac 1")
+    }
+
+    @Test func inboxFiltersPendingRequestsAfterReconcilingOwnerState() {
+        let owner = source(1, sessions: [
+            session("waiting", status: "awaitingInput"),
+            session("answered", status: "idle"),
+            session("closed", status: "awaitingPermission", active: false),
+        ])
+        let relay = source(2, serverId: "gateway", sessions: ["waiting", "answered", "closed", "removed"].map {
+            session("owner:\($0)", status: "awaitingPermission", serverId: "owner")
+        })
+        let entries = RemoteSessionCatalog.attentionEntries(from: [owner, relay])
+        #expect(entries.map(\.id.sessionId) == ["waiting"])
+    }
+
+    @Test func inboxIdentityStaysStableWhenItsPreferredRouteChanges() throws {
+        let sessions = [session("s1", status: "awaitingPermission")]
+        let relay = source(2, serverId: "gateway", sessions: [
+            session("owner:s1", status: "awaitingPermission", serverId: "owner"),
+        ])
+        let cached = source(1, live: false, sessions: sessions)
+        let online = source(1, live: true, sessions: sessions)
+        let before = try #require(RemoteSessionCatalog.attentionEntries(from: [cached, relay]).first)
+        let after = try #require(RemoteSessionCatalog.attentionEntries(from: [online, relay]).first)
+        #expect(before.id == after.id)
+        #expect(before.route.hostID == relay.id)
+        #expect(before.route.sessionId == "owner:s1")
+        #expect(after.route.hostID == online.id)
+        #expect(after.route.sessionId == "s1")
+    }
+
+    @Test func inboxKeepsIdenticalSessionIDsOnDifferentOwnersSeparate() {
+        let entries = RemoteSessionCatalog.attentionEntries(from: [
+            source(1, serverId: "owner1", sessions: [session("s1", status: "awaitingPermission")]),
+            source(2, serverId: "owner2", sessions: [session("s1", status: "awaitingPermission")]),
+        ])
+        #expect(entries.count == 2)
+        #expect(Set(entries.map(\.id)).count == 2)
+    }
 }

@@ -95,6 +95,14 @@ final class HostHub {
         listedLive.contains(id) ? sessions(of: id) : nil
     }
 
+    var sessionSources: [RemoteSessionCatalog.Source] {
+        hosts.map { host in
+            RemoteSessionCatalog.Source(id: host.id, serverId: host.serverId, name: host.name,
+                                        isLive: freshSessions(of: host.id) != nil,
+                                        sessions: sessions(of: host.id))
+        }
+    }
+
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
         let result = try await pairingClient.pair(origins: origins, code: code, deviceName: "Alas for iOS", client: "ios")
         var allOrigins = [result.origin]
