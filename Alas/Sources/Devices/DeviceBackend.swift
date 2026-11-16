@@ -12,6 +12,15 @@ struct DeviceToolError: Error, LocalizedError {
     }
 }
 
+/// A route playing on a device, for the settings popover.
+struct DeviceRouteProgress: Equatable {
+    let name: String
+    /// Meters along the route; nil where the platform doesn't report it (iOS).
+    let travelled: Double?
+    /// Meters.
+    let length: Double
+}
+
 /// The app isn't installed; the control names the device.
 struct DeviceAppNotInstalled: Error {
     let appID: String
@@ -55,7 +64,12 @@ protocol DeviceBackend: AnyObject {
     func setNetwork(_ id: String, wifi: Bool?, data: Bool?) async throws -> AndroidNetworkState
     func clearData(_ id: String, appID: String) async throws
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws
+    /// A fixed location, or nil to clear it; either stops a route.
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws
+    /// Moves the simulated location along `route`, replacing a fixed location or another route.
+    func startRoute(_ id: String, _ route: DeviceRoute) async throws
+    /// The route playing on `id`, while it plays.
+    func routeProgress(_ id: String) -> DeviceRouteProgress?
     func push(_ id: String, appID: String, payload: Data) async throws
     /// device_logs' reply; `name` is the device's, for messages.
     func logs(

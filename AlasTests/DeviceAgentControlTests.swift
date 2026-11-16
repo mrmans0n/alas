@@ -158,6 +158,7 @@ struct DeviceAgentControlTests {
             calls.append("privacy \(action.rawValue) \(service.rawValue) \(bundleID)")
         }
         func setLocation(udid: String, _ location: SimulatorLocation?) async throws { calls.append("location") }
+        func startRoute(udid: String, _ route: DeviceRoute) async throws { calls.append("route \(route.points.count)") }
         func push(udid: String, bundleID: String, payload: Data) async throws { calls.append("push \(bundleID)") }
         func openURL(udid: String, url: String) async throws { calls.append("open \(url)") }
         func userApps(udid: String) async throws -> [SimulatorApp] { [] }
@@ -790,6 +791,10 @@ extension DeviceAgentControlTests {
         var pressed: [String] = []
         var network = AndroidNetworkState(wifi: .value(true), data: .value(true))
         var cleared: [String] = []
+        var launched: [String] = []
+        var routes: [DeviceRoute] = []
+        /// Runs inside `launch`, as the user taking over mid-flow would.
+        var onLaunch: () -> Void = {}
 
         func devices() async throws -> [AgentDevice] {
             [AgentDevice(id: "emulator-5554", name: "Medium Phone", platform: .android, runtime: "Android 16", state: "booted")]
@@ -822,7 +827,11 @@ extension DeviceAgentControlTests {
         func readClipboard(_ id: String) async throws -> String { "" }
         func writeClipboard(_ id: String, _ text: String) async throws {}
         func install(_ id: String, path: String) async throws -> (appID: String, name: String) { ("com.example.hello", "Hello") }
-        func launch(_ id: String, appID: String) async throws -> Int { 7 }
+        func launch(_ id: String, appID: String) async throws -> Int {
+            launched.append(appID)
+            onLaunch()
+            return 7
+        }
         func isInstalled(_ id: String, appID: String) async -> Bool { appID != "com.example.gone" }
         func display(_ id: String) async throws -> SimulatorDisplaySettings {
             SimulatorDisplaySettings(appearance: .unknown, textSize: .unknown, increaseContrast: .unknown)
@@ -849,6 +858,8 @@ extension DeviceAgentControlTests {
         }
         func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {}
         func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {}
+        func startRoute(_ id: String, _ route: DeviceRoute) async throws { routes.append(route) }
+        func routeProgress(_ id: String) -> DeviceRouteProgress? { nil }
         func push(_ id: String, appID: String, payload: Data) async throws { throw DeviceToolError.unsupported("device_push") }
         func logs(
             _ id: String, name: String, since: Int, appID: String?, level: SimulatorLogLevel, includeApple: Bool,
@@ -961,5 +972,118 @@ extension DeviceAgentControlTests {
         control.handBack(udid: "emulator-5554")
         #expect(await pressed == .ok)
         #expect(android.pressed == ["back"])
+    }
+
+    // MARK: Flows
+
+    private static func flowFile(_ yaml: String) throws -> URL {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-flow-\(UUID().uuidString).yaml")
+        try yaml.write(to: file, atomically: true, encoding: .utf8)
+        return file
+    }
+
+    @Test func aFlowRunsItsStepsThroughTheTools() async throws {
+        let android = FakeBackend()
+        let file = try Self.flowFile("""
+        appId: com.example.hello
+        ---
+        - launchApp
+        - tapOn: "general"
+        - inputText: "hi"
+        - pressKey: Back
+        - assertVisible: Maps
+        """)
+        let response = await bothPlatforms(android).perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s")
+        #expect(response == .text([#"{"passed":true,"steps":5}"#]))
+        #expect(android.launched == ["com.example.hello"])
+        // The General cell's center, (201, 346) on a 402×874 screen.
+        let tap = try #require(android.fakeInput.touches.first { $0.phase == "begin" }?.point)
+        #expect(abs(tap.x - 201.0 / 402) < 0.001 && abs(tap.y - 346.0 / 874) < 0.001)
+        #expect(android.fakeInput.keys.filter(\.down).count == 2)
+        #expect(android.pressed == ["back"])
+    }
+
+    @Test(arguments: [
+        ("---\n- tapOn: General\n- tapOn: Missing\n- pressKey: Back\n", 2, 3, #"No element with text "Missing" after 5 s."#),
+        ("---\n- assertNotVisible:\n    id: nothing\n- assertNotVisible: Maps\n", 2, 4, #""Maps" is still visible after 5 s."#),
+        ("---\n- launchApp\n", 1, 2, "launchApp needs an appId in the flow's header."),
+    ])
+    func aFlowStopsAtTheStepThatFails(yaml: String, step: Int, line: Int, reason: String) async throws {
+        let android = FakeBackend()
+        let response = await bothPlatforms(android).perform(
+            .runFlow(udid: "emulator-5554", path: try Self.flowFile(yaml).path), sessionID: "s"
+        )
+        let reply = try Self.reply(response)
+        #expect(reply["passed"] as? Bool == false)
+        #expect(reply["failed_step"] as? Int == step)
+        #expect(reply["line"] as? Int == line)
+        #expect(reply["reason"] as? String == reason)
+        #expect(android.pressed.isEmpty)
+    }
+
+    @Test func aFlowStopsWhenTheUserTakesOver() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        android.onLaunch = { control.takeOver(udid: "emulator-5554") }
+        let file = try Self.flowFile("---\n- launchApp: com.example.hello\n- tapOn: General\n")
+        let reply = try Self.reply(await control.perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s"))
+        #expect(reply["failed_step"] as? Int == 2)
+        #expect(reply["reason"] as? String == "The user took over.")
+        #expect(android.fakeInput.touches.isEmpty)
+    }
+
+    @Test func anAgentsCallsAreRecordedAsAFlow() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString)/.maestro/login.yaml")
+        #expect(await control.perform(.recordFlow(udid: "emulator-5554", path: file.path), sessionID: "s") == .text([#"{"recording":true}"#]))
+        _ = await control.perform(.snapshot(udid: "emulator-5554", query: nil, limit: 200), sessionID: "s")
+        _ = await control.perform(.launch(udid: "emulator-5554", bundleID: "com.example.hello", diff: false), sessionID: "s")
+        _ = await control.perform(.tap(udid: "emulator-5554", target: .ref("s1e2"), includeScreenshot: false, diff: false), sessionID: "s")
+        // Another session's calls, and calls that fail, are not steps.
+        _ = await control.perform(.button(udid: "emulator-5554", name: .home, includeScreenshot: false, diff: false), sessionID: "other")
+        _ = await control.perform(.button(udid: "emulator-5554", name: .siri, includeScreenshot: false, diff: false), sessionID: "s")
+        _ = await control.perform(.type(udid: "emulator-5554", text: "hi", includeScreenshot: false, diff: false), sessionID: "s")
+        _ = await control.perform(.button(udid: "emulator-5554", name: .back, includeScreenshot: false, diff: false), sessionID: "s")
+        let stopped = await control.perform(.recordFlow(udid: "emulator-5554", path: nil), sessionID: "s")
+        let reply = try Self.reply(stopped)
+        #expect(reply["path"] as? String == file.path)
+        #expect(reply["steps"] as? Int == 4)
+        let flow = try DeviceFlow.parse(String(contentsOf: file, encoding: .utf8))
+        #expect(flow.appID == "com.example.hello")
+        #expect(flow.steps == [.launchApp(nil), .tapOn(.text("General")), .inputText("hi"), .pressKey(.back)])
+        let again = await control.perform(.recordFlow(udid: "emulator-5554", path: nil), sessionID: "s")
+        #expect(error(again) == "device_not_recording: No flow is being recorded on Medium Phone by this session.")
+    }
+
+    // MARK: Routes
+
+    @Test func aRouteComesFromWaypointsOrAGPXFile() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        // 0.001° of latitude is about 111 m; at 36 km/h, 11 s.
+        let line = [SimulatorLocation(latitude: 37, longitude: -122), SimulatorLocation(latitude: 37.001, longitude: -122)]
+        let played = await control.perform(.setRoute(udid: "emulator-5554", waypoints: line, gpxPath: nil, speedKmh: 36), sessionID: "s")
+        #expect(played == .text([#"{"km":0.11,"points":2,"seconds":11}"#]))
+        let gpx = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(UUID().uuidString).gpx")
+        try #"<gpx><trkpt lat="1" lon="2"/><trkpt lat="1.01" lon="2"/><trkpt lat="1.02" lon="2"/></gpx>"#
+            .write(to: gpx, atomically: true, encoding: .utf8)
+        _ = await control.perform(.setRoute(udid: "emulator-5554", waypoints: nil, gpxPath: gpx.path, speedKmh: 30), sessionID: "s")
+        #expect(android.routes.map(\.points.count) == [2, 3])
+        #expect(android.routes.last?.name == gpx.deletingPathExtension().lastPathComponent)
+        let missing = await control.perform(.setRoute(udid: "emulator-5554", waypoints: nil, gpxPath: "/nonexistent.gpx", speedKmh: 30), sessionID: "s")
+        #expect(error(missing)?.hasPrefix("device_route_invalid:") == true)
+    }
+
+    @Test func routesNeedIOS17() async {
+        let old = SimulatorDevice(udid: "old", name: "iPhone 14", runtimeName: "iOS 16.4", state: .booted)
+        let control = bothPlatforms(FakeBackend(), simulators: { [old] })
+        let line = [SimulatorLocation(latitude: 37, longitude: -122), SimulatorLocation(latitude: 37.001, longitude: -122)]
+        let response = await control.perform(.setRoute(udid: "old", waypoints: line, gpxPath: nil, speedKmh: 30), sessionID: "s")
+        #expect(error(response) == "device_unsupported: Routes need iOS 17 or later; iPhone 14 runs iOS 16.4.")
+        let settings = FakeSettings()
+        _ = await self.control(FakeInput(), settings: settings)
+            .perform(.setRoute(udid: "on", waypoints: line, gpxPath: nil, speedKmh: 30), sessionID: "s")
+        #expect(settings.calls == ["route 2"])
     }
 }

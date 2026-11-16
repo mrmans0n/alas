@@ -276,6 +276,15 @@ public struct DeviceFlow: Equatable, Sendable {
         }
     }
 
+    /// The smallest element with a label or id under `point` (0…1 of the upright screen), for recording a tap.
+    public static func element(at point: DeviceScreenPoint, in snapshot: DeviceSnapshot) -> DeviceElement? {
+        let x = point.x * snapshot.screenWidth
+        let y = point.y * snapshot.screenHeight
+        return snapshot.elements
+            .filter { ($0.label != nil || $0.id != nil) && $0.x <= x && x <= $0.x + $0.width && $0.y <= y && y <= $0.y + $0.height }
+            .min { $0.width * $0.height < $1.width * $1.height }
+    }
+
     /// How a recording names what was tapped: its label, else its id, else the
     /// point in whole percents.
     public static func selector(for element: DeviceElement?, at point: DeviceScreenPoint) -> Selector {

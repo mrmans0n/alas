@@ -189,6 +189,8 @@ public protocol SimulatorSettingsControl: Sendable {
     ) async throws -> SimulatorDisplaySettings
     func setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws
     func setLocation(udid: String, _ location: SimulatorLocation?) async throws
+    /// Moves the simulated location along `route`; `setLocation` replaces or clears it.
+    func startRoute(udid: String, _ route: DeviceRoute) async throws
     func push(udid: String, bundleID: String, payload: Data) async throws
     func openURL(udid: String, url: String) async throws
     func userApps(udid: String) async throws -> [SimulatorApp]
@@ -227,6 +229,10 @@ public struct LiveSimulatorSettings: SimulatorSettingsControl {
 
     public func setLocation(udid: String, _ location: SimulatorLocation?) async throws {
         try await SimulatorControl.location(udid: udid, location)
+    }
+
+    public func startRoute(udid: String, _ route: DeviceRoute) async throws {
+        try await SimulatorControl.locationRoute(udid: udid, route)
     }
 
     public func push(udid: String, bundleID: String, payload: Data) async throws {

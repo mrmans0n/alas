@@ -94,6 +94,7 @@ enum DesignCaptureDevices {
         ) async throws -> SimulatorDisplaySettings { Self.display }
         func setPermission(udid: String, bundleID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {}
         func setLocation(udid: String, _ location: SimulatorLocation?) async throws {}
+        func startRoute(udid: String, _ route: DeviceRoute) async throws {}
         func push(udid: String, bundleID: String, payload: Data) async throws {}
         func openURL(udid: String, url: String) async throws {}
         func userApps(udid: String) async throws -> [SimulatorApp] {

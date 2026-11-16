@@ -79,6 +79,15 @@ struct DeviceFlowTests {
         #expect(DeviceFlow.find(selector, in: Self.snapshot)?.ref == ref)
     }
 
+    @Test(arguments: [
+        (DeviceScreenPoint(x: 0.1, y: 700.0 / 800 + 0.01), "s1e2" as String?), // the button, not the whole-width title
+        (DeviceScreenPoint(x: 0.5, y: 0.01), "s1e1"),
+        (DeviceScreenPoint(x: 0.5, y: 0.5), nil),
+    ])
+    func aPointNamesTheSmallestNamedElementUnderIt(point: DeviceScreenPoint, ref: String?) {
+        #expect(DeviceFlow.element(at: point, in: Self.snapshot)?.ref == ref)
+    }
+
     @Test func theRecorderNamesByLabelThenIDThenPoint() {
         let labelled = Self.snapshot.elements[1]
         let idOnly = DeviceElement(ref: "e", role: "button", label: nil, value: nil, id: "go", x: 0, y: 0, width: 1, height: 1, enabled: true)
