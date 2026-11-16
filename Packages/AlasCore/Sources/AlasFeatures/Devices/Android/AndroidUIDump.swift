@@ -2,11 +2,27 @@ import Foundation
 
 /// `uiautomator dump` XML as a `DeviceSnapshot`, frames in dp.
 public enum AndroidUIDump {
-    public static func parse(_ xml: Data, density: Double, generation: Int) throws -> DeviceSnapshot {
+    /// `displaySize` is the display's natural size in pixels (`wm size`); the
+    /// dump's rotation turns it. Without it the first node's bounds stand in,
+    /// which is only the display when no dialog or inset window is on top.
+    public static func parse(
+        _ xml: Data, density: Double, displaySize: (width: Double, height: Double)? = nil, generation: Int
+    ) throws -> DeviceSnapshot {
         // A scan, not XMLParser: Linux keeps that in FoundationXML, and the dump is flat.
-        let nodes = nodeAttributes(String(decoding: xml, as: UTF8.self))
-        guard let root = nodes.first, let screen = bounds(root["bounds"]) else {
+        let text = String(decoding: xml, as: UTF8.self)
+        let nodes = nodeAttributes(text)
+        guard let root = nodes.first, let rootBounds = bounds(root["bounds"]) else {
             throw DeviceSnapshotError(message: "The device did not describe its screen.")
+        }
+        let screen: CGRectLike
+        if let displaySize {
+            let turned = (rotation(text) ?? 0) % 2 == 1
+            screen = CGRectLike(
+                minX: 0, minY: 0,
+                width: turned ? displaySize.height : displaySize.width, height: turned ? displaySize.width : displaySize.height
+            )
+        } else {
+            screen = rootBounds
         }
         let dp = 160 / max(density, 1)
         var elements: [DeviceElement] = []
@@ -49,6 +65,23 @@ public enum AndroidUIDump {
         let numbers = parts.compactMap { Double($0) }
         guard parts.count == 4, numbers.count == 4 else { return nil }
         return CGRectLike(minX: numbers[0], minY: numbers[1], width: numbers[2] - numbers[0], height: numbers[3] - numbers[1])
+    }
+
+    /// `<hierarchy rotation="1">`'s quarter turns.
+    static func rotation(_ xml: String) -> Int? {
+        guard let start = xml.range(of: "<hierarchy "),
+              let end = xml[start.upperBound...].firstIndex(of: ">") else { return nil }
+        return attributes(xml[start.upperBound..<end])["rotation"].flatMap { Int($0) }
+    }
+
+    /// The display's size from `wm size`: "Override size" when set, else "Physical size".
+    public static func displaySize(_ output: String) -> (width: Double, height: Double)? {
+        func size(_ label: String) -> (width: Double, height: Double)? {
+            guard let line = output.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix(label) }) else { return nil }
+            let parts = line.dropFirst(label.count).trimmingCharacters(in: .whitespaces).split(separator: "x").compactMap { Double($0) }
+            return parts.count == 2 ? (parts[0], parts[1]) : nil
+        }
+        return size("Override size:") ?? size("Physical size:")
     }
 
     /// Each `<node …>` tag's attributes, in document order.

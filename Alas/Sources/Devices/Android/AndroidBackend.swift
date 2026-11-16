@@ -12,6 +12,8 @@ final class AndroidBackend: DeviceBackend {
     private let streams: AndroidStreamClient
     /// `wm density` by serial; it doesn't change while a device runs.
     private var densities: [String: Double] = [:]
+    /// `wm size` by serial: the display's natural size in pixels.
+    private var displaySizes: [String: (width: Double, height: Double)] = [:]
 
     init(pane: AndroidPaneModel, streams: AndroidStreamClient) {
         self.pane = pane
@@ -75,17 +77,26 @@ final class AndroidBackend: DeviceBackend {
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
         let control = try control()
         let density = try await density(id, control: control)
+        let displaySize = try await displaySize(id, control: control)
         // uiautomator can't read a window still coming up; one retry covers an app that just launched.
         for attempt in 0..<2 {
             let dump = try await Process.runData(
                 control.sdk.adb, args: ["-s", id, "exec-out", "uiautomator", "dump", "/dev/tty"], timeout: 20
             )
-            if dump.exitCode == 0, let snapshot = try? AndroidUIDump.parse(dump.stdout, density: density, generation: generation) {
+            if dump.exitCode == 0,
+               let snapshot = try? AndroidUIDump.parse(dump.stdout, density: density, displaySize: displaySize, generation: generation) {
                 return snapshot
             }
             if attempt == 0 { try? await Task.sleep(for: .milliseconds(500)) }
         }
         throw DeviceToolError(message: "device_unavailable: Android didn't describe its screen. Try again in a moment.")
+    }
+
+    private func displaySize(_ id: String, control: AndroidControl) async throws -> (width: Double, height: Double)? {
+        if let known = displaySizes[id] { return known }
+        let size = AndroidUIDump.displaySize(try await control.adb(id, ["shell", "wm", "size"]))
+        if let size { displaySizes[id] = size }
+        return size
     }
 
     private func density(_ id: String, control: AndroidControl) async throws -> Double {

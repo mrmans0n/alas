@@ -220,4 +220,23 @@ struct AndroidControlTests {
     func theDisplaysActualRotationIsRead(output: String, rotation: Int?) {
         #expect(AndroidRotation.parseDisplay(output) == rotation)
     }
+
+    /// The first node can be a dialog's window, not the display: the screen comes from the display's size.
+    @Test(arguments: [("0", 1080.0, 2400.0), ("1", 2400.0, 1080.0)])
+    func theScreenIsTheDisplayTurnedByTheDumpsRotation(rotation: String, width: Double, height: Double) throws {
+        let xml = Data("""
+        <hierarchy rotation="\(rotation)"><node class="android.widget.FrameLayout" text="" bounds="[100,500][980,1500]">
+        <node class="android.widget.Button" text="OK" clickable="true" bounds="[500,1300][900,1450]" />
+        </node></hierarchy>
+        """.utf8)
+        let snapshot = try AndroidUIDump.parse(xml, density: 160, displaySize: (1080, 2400), generation: 1)
+        #expect(snapshot.screenWidth == width && snapshot.screenHeight == height)
+        #expect(snapshot.elements.map(\.label) == ["OK"])
+    }
+
+    @Test(arguments: [("Physical size: 1080x2400\n", 1080.0, 2400.0), ("Physical size: 1080x2400\nOverride size: 720x1600", 720, 1600)])
+    func theDisplaySizePrefersAnOverride(output: String, width: Double, height: Double) {
+        let size = AndroidUIDump.displaySize(output)
+        #expect(size?.width == width && size?.height == height)
+    }
 }
