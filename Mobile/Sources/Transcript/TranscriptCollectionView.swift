@@ -1,3 +1,4 @@
+import AlasRemoteKit
 import SwiftUI
 import UIKit
 
@@ -164,6 +165,7 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         if let anchorID, let y = minY(of: anchorID) {
             anchor = (anchorID, y - collectionView.contentOffset.y)
         }
+        if let held = anchor { anchor = (Self.resolve(held.id, in: items), held.screenY) }
 
         shownExpanded = expanded
         reconfigure += toggled.filter { itemsByID[$0] != nil }
@@ -181,11 +183,11 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         applying = true
         defer { applying = false }
         dataSource.apply(snapshot, animatingDifferences: false)
-        if !toggled.isEmpty {
-            // Only the toggled items: a full invalidation drops every measured height back to
+        if !tapped.isEmpty {
+            // Only the tapped items: a full invalidation drops every measured height back to
             // the estimate and moves everything above the anchor.
             let context = UICollectionViewLayoutInvalidationContext()
-            context.invalidateItems(at: toggled.compactMap { dataSource.indexPath(for: $0) })
+            context.invalidateItems(at: tapped.compactMap { dataSource.indexPath(for: $0) })
             collectionView.collectionViewLayout.invalidateLayout(with: context)
         }
         guard pinned else { return }
@@ -197,6 +199,20 @@ final class TranscriptCollectionController: UIViewController, UICollectionViewDe
         collectionView.layoutIfNeeded()
         // A prepend lands mid-scroll; holding it past this pass would fight the reader's finger.
         if prepended { anchor = nil }
+    }
+
+    /// A group's id follows its first member, so a page that continues the run re-keys its header.
+    /// Maps a vanished group id to the row now holding that member: the member's own row when it is
+    /// tiled (expanded, or the group dissolved), otherwise the header folding it, as the Mac's
+    /// `resolveStaleRowId` does.
+    private static func resolve(_ id: String, in items: [TranscriptItem]) -> String {
+        guard let member = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: id),
+              !items.contains(where: { $0.id == id }) else { return id }
+        if items.contains(where: { $0.id == member }) { return member }
+        return items.first { item in
+            guard case .groupHeader(let group, _, _, _) = item.kind else { return false }
+            return group.members.contains { $0.stableId == member }
+        }?.id ?? id
     }
 
     /// Runs after every collection view layout pass, once cells have measured themselves.
