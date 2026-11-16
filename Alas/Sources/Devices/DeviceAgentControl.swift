@@ -636,6 +636,11 @@ final class DeviceAgentControl {
         return .text([Self.json(["devices": devices])])
     }
 
+    /// The live backend of a platform, for views that change settings outside an agent's call.
+    func backend(for platform: AgentDevice.Platform) -> (any DeviceBackend)? {
+        backends.first { $0.platform == platform }
+    }
+
     /// The input of the backend `udid` was last found in; by its shape before that.
     private func input(_ udid: String) -> DeviceInput? {
         let platform = routes[udid] ?? (AgentDevice.isSimulatorID(udid) ? .ios : .android)

@@ -311,7 +311,9 @@ struct RightPaneView: View {
     private func devicesActions(rps: RightPaneState) -> AnyView? {
         let tabState = state.devicesTabState(worktree: worktree, selection: rps.devicesSelection)
         if case .android(let target, .ready) = tabState.stage, let device = target.device {
-            return AnyView(AndroidActions(device: device, pane: state.androidPane, recorder: state.deviceRecorder) {
+            return AnyView(AndroidActions(
+                device: device, pane: state.androidPane, control: state.deviceControl, recorder: state.deviceRecorder
+            ) {
                 Task {
                     // Saves a recording before the device goes.
                     await state.deviceRecorder.simulatorStopped(udid: device.serial)

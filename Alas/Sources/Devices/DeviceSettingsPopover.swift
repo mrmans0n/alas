@@ -1,13 +1,13 @@
 import AlasCore
 import SwiftUI
 
-/// The selected simulator's settings: display, accessibility, an app's
-/// permissions and notifications, location and URLs. Reads its values each time it opens.
-/// Changes take the simulator's input turn, so they never land in the middle
-/// of an agent's call.
+/// The selected device's settings: display, accessibility (iOS), network
+/// (Android), an app's permissions and notifications (iOS) or data (Android),
+/// location and URLs. Reads its values each time it opens. Changes take the
+/// device's input turn, so they never land in the middle of an agent's call.
 struct DeviceSettingsPopover: View {
     let udid: String
-    let settings: any SimulatorSettingsControl
+    let backend: any DeviceBackend
     let control: DeviceAgentControl
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -16,6 +16,9 @@ struct DeviceSettingsPopover: View {
     @State private var displayError: String?
     @State private var accessibility: SimulatorAccessibility?
     @State private var accessibilityError: String?
+    @State private var network: AndroidNetworkState?
+    @State private var networkError: String?
+    @State private var confirmsClear = false
     @State private var apps: [SimulatorApp] = []
     @State private var appID: String?
     @State private var service = SimulatorPrivacyService.photos
@@ -37,8 +40,14 @@ struct DeviceSettingsPopover: View {
         VStack(alignment: .leading, spacing: scale.space[4]) {
             section("Display") { displayRows }
             Divider()
-            section("Accessibility") { accessibilityRows }
-            Divider()
+            if platform == .ios {
+                section("Accessibility") { accessibilityRows }
+                Divider()
+            }
+            if platform == .android {
+                section("Network") { networkRows }
+                Divider()
+            }
             section("App") { appRows }
             Divider()
             section("Device") { deviceRows }
@@ -48,6 +57,8 @@ struct DeviceSettingsPopover: View {
         .frame(width: 340)
         .task { await load() }
     }
+
+    private var platform: AgentDevice.Platform { backend.platform }
 
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -67,7 +78,7 @@ struct DeviceSettingsPopover: View {
                 Picker("", selection: Binding(
                     get: { if case .value(let value) = display.appearance { value } else { .light } },
                     set: { value in
-                        change { try await settings.setDisplay(udid: udid, appearance: value, textSize: nil, increaseContrast: nil) }
+                        change { try await backend.setDisplay(udid, appearance: value, textSize: nil, increaseContrast: nil) }
                     }
                 )) {
                     Text("Light").tag(SimulatorAppearance.light)
@@ -88,7 +99,7 @@ struct DeviceSettingsPopover: View {
                 Toggle("", isOn: Binding(
                     get: { display.increaseContrast == .value(true) },
                     set: { value in
-                        change { try await settings.setDisplay(udid: udid, appearance: nil, textSize: nil, increaseContrast: value) }
+                        change { try await backend.setDisplay(udid, appearance: nil, textSize: nil, increaseContrast: value) }
                     }
                 ))
                 .toggleStyle(.switch)
@@ -123,7 +134,7 @@ struct DeviceSettingsPopover: View {
         let sizes = SimulatorTextSize.allCases
         let next = index + delta
         guard sizes.indices.contains(next) else { return }
-        change { try await settings.setDisplay(udid: udid, appearance: nil, textSize: sizes[next], increaseContrast: nil) }
+        change { try await backend.setDisplay(udid, appearance: nil, textSize: sizes[next], increaseContrast: nil) }
     }
 
     /// Applies a display change and shows what simctl read back.
@@ -201,7 +212,7 @@ struct DeviceSettingsPopover: View {
     private func changeAccessibility(_ change: SimulatorAccessibilityChange) {
         mutate(report: { accessibilityError = $0 }) {
             do {
-                accessibility = try await settings.setAccessibility(udid: udid, change)
+                accessibility = try await backend.setAccessibility(udid, change)
                 accessibilityError = nil
             } catch {
                 accessibilityError = error.localizedDescription
@@ -214,7 +225,7 @@ struct DeviceSettingsPopover: View {
     @ViewBuilder
     private var appRows: some View {
         if apps.isEmpty {
-            note("None of your apps are installed on this simulator.", tone: "fg-faint")
+            note("None of your apps are installed on this device.", tone: "fg-faint")
         } else {
             Picker("App", selection: $appID) {
                 ForEach(apps) { Text($0.name).tag(Optional($0.bundleID)) }
@@ -229,13 +240,25 @@ struct DeviceSettingsPopover: View {
                 }
             }
             .controlSize(.small)
-            TextEditor(text: $payload)
-                .font(scale.meta.font(design: .monospaced))
-                .frame(height: 54)
-                .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
-            HStack {
-                Spacer()
-                Button("Send Notification", action: sendPush).controlSize(.small)
+            if platform == .ios {
+                TextEditor(text: $payload)
+                    .font(scale.meta.font(design: .monospaced))
+                    .frame(height: 54)
+                    .overlay(RoundedRectangle(cornerRadius: scale.radius.small).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                HStack {
+                    Spacer()
+                    Button("Send Notification", action: sendPush).controlSize(.small)
+                }
+            } else {
+                HStack {
+                    Spacer()
+                    Button("Clear Data…") { confirmsClear = true }.controlSize(.small)
+                }
+                .confirmationDialog("Clear the data of \(appName)?", isPresented: $confirmsClear) {
+                    Button("Clear Data", role: .destructive, action: clearData)
+                } message: {
+                    Text("The app starts over as freshly installed, and stops if it's running.")
+                }
             }
             if let appMessage { note(appMessage, tone: "fg-dim") }
         }
@@ -248,13 +271,25 @@ struct DeviceSettingsPopover: View {
         let service = service
         mutate(report: { appMessage = $0 }) {
             do {
-                try await settings.setPermission(udid: udid, bundleID: appID, service: service, action: action)
+                try await backend.setPermission(udid, appID: appID, service: service, action: action)
                 let verb = switch action {
                 case .grant: "Granted"
                 case .revoke: "Revoked"
                 case .reset: "Reset"
                 }
                 appMessage = "\(verb) \(service.label) for \(appName). A change may end the running app."
+            } catch {
+                appMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func clearData() {
+        guard let appID else { return }
+        mutate(report: { appMessage = $0 }) {
+            do {
+                try await backend.clearData(udid, appID: appID)
+                appMessage = "Cleared the data of \(appName)."
             } catch {
                 appMessage = error.localizedDescription
             }
@@ -270,11 +305,49 @@ struct DeviceSettingsPopover: View {
         }
         mutate(report: { appMessage = $0 }) {
             do {
-                try await settings.push(udid: udid, bundleID: appID, payload: data)
+                try await backend.push(udid, appID: appID, payload: data)
                 appMessage = "Sent a notification to \(appName)."
             } catch {
                 appMessage = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: Network
+
+    @ViewBuilder
+    private var networkRows: some View {
+        if let network {
+            networkRow("Wi-Fi", network.wifi) { SetNetwork(wifi: $0) }
+            networkRow("Mobile data", network.data) { SetNetwork(data: $0) }
+        } else if networkError == nil {
+            ProgressView().controlSize(.small)
+        }
+        if let networkError { note(networkError, tone: "warn") }
+    }
+
+    /// Which switch a network change turns.
+    private struct SetNetwork {
+        var wifi: Bool?
+        var data: Bool?
+    }
+
+    private func networkRow(_ title: String, _ value: SimulatorReadBack<Bool>, change: @escaping (Bool) -> SetNetwork) -> some View {
+        row(title, supported: value) {
+            Toggle("", isOn: Binding(get: { value == .value(true) }, set: { on in
+                let set = change(on)
+                mutate(report: { networkError = $0 }) {
+                    do {
+                        network = try await backend.setNetwork(udid, wifi: set.wifi, data: set.data)
+                        networkError = nil
+                    } catch {
+                        networkError = error.localizedDescription
+                    }
+                }
+            }))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .controlSize(.small)
         }
     }
 
@@ -319,7 +392,7 @@ struct DeviceSettingsPopover: View {
     private func setLocation(_ location: SimulatorLocation?) {
         mutate(report: { deviceMessage = $0 }) {
             do {
-                try await settings.setLocation(udid: udid, location)
+                try await backend.setLocation(udid, location)
                 deviceMessage = location.map { "Location set to \($0.latitude), \($0.longitude)." } ?? "Location cleared."
             } catch {
                 deviceMessage = error.localizedDescription
@@ -335,7 +408,7 @@ struct DeviceSettingsPopover: View {
         }
         mutate(report: { deviceMessage = $0 }) {
             do {
-                try await settings.openURL(udid: udid, url: target)
+                try await backend.openURL(udid, target)
                 deviceMessage = "Opened \(target)."
             } catch {
                 deviceMessage = error.localizedDescription
@@ -352,17 +425,25 @@ struct DeviceSettingsPopover: View {
 
     private func load() async {
         do {
-            display = try await settings.display(udid: udid)
+            display = try await backend.display(udid)
         } catch {
             displayError = error.localizedDescription
         }
         // Separately, so a missing helper doesn't hide the display settings.
-        do {
-            accessibility = try await settings.accessibility(udid: udid)
-        } catch {
-            accessibilityError = error.localizedDescription
+        if platform == .ios {
+            do {
+                accessibility = try await backend.accessibility(udid)
+            } catch {
+                accessibilityError = error.localizedDescription
+            }
+        } else {
+            do {
+                network = try await backend.network(udid)
+            } catch {
+                networkError = error.localizedDescription
+            }
         }
-        apps = (try? await settings.userApps(udid: udid)) ?? []
+        apps = (try? await backend.userApps(udid)) ?? []
         if appID == nil || !apps.contains(where: { $0.bundleID == appID }) { appID = apps.first?.bundleID }
     }
 }

@@ -126,7 +126,9 @@ struct DevicesActions: View {
             ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Simulator settings") { showsSettings = true }
                 .disabled(!canChangeSettings)
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                    DeviceSettingsPopover(udid: device.udid, settings: LiveSimulatorSettings.bundled, control: control)
+                    if let backend = control.backend(for: .ios) {
+                        DeviceSettingsPopover(udid: device.udid, backend: backend, control: control)
+                    }
                 }
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop", action: saveScreenshot)
