@@ -233,6 +233,7 @@ struct DevicesTabStateTests {
 
     @Test(arguments: [
         ("16e", [DevicesTarget.simulator("old")]),
+        ("ipad", [.simulator("mid")]),
         ("ios 18", [.simulator("old")]),
         ("android", [.android("emulator-5554"), .android("avd:Pixel_9")]),
         ("linux", [.vm(.linux)]),
@@ -240,7 +241,7 @@ struct DevicesTabStateTests {
     ])
     func theFilterMatchesEveryToken(query: String, expected: [DevicesTarget]) {
         let state = resolve(
-            simulators: [Self.old, Self.off], vms: [.linux: .stopped],
+            simulators: [Self.old, Self.off, Self.mid], vms: [.linux: .stopped],
             android: AndroidListing(devices: [Self.emulator], avds: ["Medium_Phone", "Pixel_9"], bootingAVDs: [], note: nil)
         )
         let listing = state.switcherListing(query: query, showsOlderRuntimes: false)

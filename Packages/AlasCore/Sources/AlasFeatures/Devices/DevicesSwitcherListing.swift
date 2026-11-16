@@ -90,7 +90,7 @@ extension DevicesTabState {
 
     private static func platformWord(_ platform: DevicesPlatform) -> String {
         switch platform {
-        case .ios: "ios iphone ipad simulator"
+        case .ios: "ios simulator"
         case .android: "android"
         case .vm(let guest): guest == .macOS ? "vm macos" : "vm linux"
         }
