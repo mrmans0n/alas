@@ -326,4 +326,14 @@ struct RemotePairingServiceTests {
         #expect(svc.validate(token: phone) != nil)
         #expect(svc.devices.count == 2)
     }
+
+    /// The iOS app paired as a browser before it sent `client: "ios"`; browsers get no terminals.
+    @Test(arguments: [(RemotePairingClient.iosDeviceName, RemoteDeviceKind.phone), ("Mozilla/5.0 (iPhone)", .browser)])
+    func legacyIOSPairingsLoadAsPhones(name: String, expected: RemoteDeviceKind) {
+        let store = InMemoryDeviceStore()
+        store.save([RemoteDevice(id: "d1", name: name, tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil, kind: .browser)])
+        let svc = RemotePairingService(store: store)
+        #expect(svc.devices.map(\.kind) == [expected])
+        #expect(store.saved.map(\.kind) == [expected])
+    }
 }
