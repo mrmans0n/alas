@@ -239,4 +239,41 @@ struct AndroidControlTests {
         let size = AndroidUIDump.displaySize(output)
         #expect(size?.width == width && size?.height == height)
     }
+
+    @Test(arguments: [("Wifi is enabled\nWifi scanning…", SimulatorReadBack<Bool>.value(true)), ("Wifi is disabled", .value(false)), ("", .unknown)])
+    func wifiReadsFromItsStatus(status: String, expected: SimulatorReadBack<Bool>) {
+        #expect(AndroidNetwork.wifi(status) == expected)
+    }
+
+    @Test(arguments: [("1\n", SimulatorReadBack<Bool>.value(true)), ("0", .value(false)), ("null", .unknown)])
+    func mobileDataReadsFromItsSetting(setting: String, expected: SimulatorReadBack<Bool>) {
+        #expect(AndroidNetwork.data(setting) == expected)
+    }
+
+    @Test func aLineSplitAcrossReadsIsReadOnce() {
+        var reader = LogcatLineReader()
+        let first = reader.lines(Data("11-16 10:00:00.000  1  1 W A: one\n11-16 10:00:01.000  1  1 W B: tw".utf8), year: 2026)
+        let second = reader.lines(Data("o\n".utf8), year: 2026)
+        #expect(first.map(\.message) == ["one"])
+        #expect(second.map(\.message) == ["two"])
+    }
+
+    @Test(arguments: [
+        (nil as Int?, 42 as Int?, AndroidLogFollow.restart(pid: 42)),
+        (42, 42, .keep),
+        (42, 43, .restart(pid: 43)),
+        (42, nil, .waitForApp),
+        (nil, nil, .waitForApp),
+    ])
+    func followingAnAppRestartsOnANewPID(running: Int?, found: Int?, next: AndroidLogFollow) {
+        #expect(AndroidLogFollow.next(running: running, found: found) == next)
+    }
+
+    @Test func aCrashBecomesACrashReport() {
+        let crash = AndroidCrash(time: "2026-11-16 10:01:02.100", exception: "java.lang.X: boom", frames: ["a.B.c(B.kt:1)"])
+        let report = crash.report(bundleID: "com.example.hello")
+        #expect(report.exception == "java.lang.X: boom")
+        #expect(report.frames == ["a.B.c(B.kt:1)"])
+        #expect(Calendar(identifier: .gregorian).component(.second, from: report.capturedAt) == 2)
+    }
 }

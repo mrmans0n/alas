@@ -1,3 +1,5 @@
+import Foundation
+
 /// `font_scale` for each text size, one to one, so a value reads back as its size.
 public enum AndroidFontScale {
     private static let table: [(SimulatorTextSize, Double)] = [
@@ -127,5 +129,90 @@ extension AndroidLogcat {
             crashes.append(AndroidCrash(time: runtime[index].time, exception: exception, frames: frames))
         }
         return crashes
+    }
+}
+
+/// Wi-Fi and mobile data, as Android reports them back.
+public enum AndroidNetwork {
+    /// From `cmd wifi status`, whose first line says "Wifi is enabled" or "Wifi is disabled".
+    public static func wifi(_ status: String) -> SimulatorReadBack<Bool> {
+        let first = status.split(whereSeparator: \.isNewline).first.map { $0.trimmingCharacters(in: .whitespaces) }
+        switch first {
+        case "Wifi is enabled": return .value(true)
+        case "Wifi is disabled": return .value(false)
+        default: return .unknown
+        }
+    }
+
+    /// From `settings get global mobile_data`.
+    public static func data(_ setting: String) -> SimulatorReadBack<Bool> {
+        switch setting.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "1": .value(true)
+        case "0": .value(false)
+        default: .unknown
+        }
+    }
+}
+
+public struct AndroidNetworkState: Equatable, Sendable {
+    public var wifi: SimulatorReadBack<Bool>
+    public var data: SimulatorReadBack<Bool>
+
+    public init(wifi: SimulatorReadBack<Bool>, data: SimulatorReadBack<Bool>) {
+        self.wifi = wifi
+        self.data = data
+    }
+
+    /// What `device_set_network` returns.
+    public var json: [String: Any] {
+        ["wifi": wifi.jsonValue, "data": data.jsonValue]
+    }
+}
+
+/// `logcat -v threadtime` lines as they stream: a line cut between reads is
+/// kept until the rest arrives.
+public struct LogcatLineReader: Sendable {
+    private var partial = Data()
+
+    public init() {}
+
+    public mutating func lines(_ chunk: Data, year: Int) -> [SimulatorLogLine] {
+        partial += chunk
+        guard let last = partial.lastIndex(of: UInt8(ascii: "\n")) else { return [] }
+        let complete = partial[partial.startIndex...last]
+        partial = Data(partial[partial.index(after: last)...])
+        return AndroidLogcat.parse(String(decoding: complete, as: UTF8.self), year: year)
+    }
+}
+
+/// What following an app's logs does when its pid is looked up again.
+public enum AndroidLogFollow: Equatable, Sendable {
+    case keep
+    /// The app started, or restarted under a new pid.
+    case restart(pid: Int)
+    /// The app isn't running.
+    case waitForApp
+
+    public static func next(running: Int?, found: Int?) -> AndroidLogFollow {
+        guard let found else { return .waitForApp }
+        return found == running ? .keep : .restart(pid: found)
+    }
+}
+
+extension AndroidCrash {
+    /// The crash's time on the device's clock, read in this Mac's time zone.
+    public var date: Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter.date(from: time)
+    }
+
+    /// As the Logs tab shows crash reports.
+    public func report(bundleID: String) -> SimulatorCrashReport {
+        SimulatorCrashReport(
+            bundleID: bundleID, appName: bundleID, capturedAt: date ?? Date(), exception: exception, frames: frames,
+            report: ([exception] + frames.map { "\tat " + $0 }).joined(separator: "\n")
+        )
     }
 }
