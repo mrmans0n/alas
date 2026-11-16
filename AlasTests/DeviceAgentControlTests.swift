@@ -182,16 +182,19 @@ struct DeviceAgentControlTests {
         sleep: @escaping @MainActor (Duration) async -> Void = { _ in }
     ) -> DeviceAgentControl {
         DeviceAgentControl(
-            input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in },
-            install: { _, app in installs.calls.append("install \(app.lastPathComponent)") },
-            launch: { _, bundleID in
-                guard bundleID == "com.example.hello" else { throw SimulatorLaunchError.notInstalled }
-                installs.calls.append("launch \(bundleID)")
-                return 4021
-            },
-            settings: settings,
-            logs: logs,
-            pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
+            backends: [SimulatorBackend(
+                input: input, devices: { [Self.booted, Self.shutDown] }, boot: { _ in },
+                install: { _, app in installs.calls.append("install \(app.lastPathComponent)") },
+                launch: { _, bundleID in
+                    guard bundleID == "com.example.hello" else { throw SimulatorLaunchError.notInstalled }
+                    installs.calls.append("launch \(bundleID)")
+                    return 4021
+                },
+                settings: settings,
+                logs: logs,
+                pasteboard: DevicePasteboard(input: input, pasteboard: pasteboard, frontmostApp: { _ in "com.example.app" }, sleep: sleep),
+                sleep: sleep
+            )],
             recorder: recorder,
             sleep: sleep
         )
@@ -530,15 +533,18 @@ struct DeviceAgentControlTests {
         let input = FakeInput()
         var listings = 0
         let control = DeviceAgentControl(
-            input: input,
-            devices: {
-                listings += 1
-                let yields = listings == 1 ? 50 : 0
-                for _ in 0..<yields { await Task.yield() }
-                return [Self.booted]
-            },
-            boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(),
+            backends: [SimulatorBackend(
+                input: input,
+                devices: {
+                    listings += 1
+                    let yields = listings == 1 ? 50 : 0
+                    for _ in 0..<yields { await Task.yield() }
+                    return [Self.booted]
+                },
+                boot: { _ in }, install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
+            )],
+            recorder: DeviceRecorderTests.recorder(),
             sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
@@ -567,9 +573,12 @@ struct DeviceAgentControlTests {
     @Test func aSimulatorShutDownDuringTheTakeoverFailsTheHeldCall() async throws {
         var listed = [Self.booted]
         let control = DeviceAgentControl(
-            input: FakeInput(), devices: { listed }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(), recorder: DeviceRecorderTests.recorder(), sleep: Self.untilCancelled
+            backends: [SimulatorBackend(
+                input: FakeInput(), devices: { listed }, boot: { _ in },
+                install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(), sleep: Self.untilCancelled
+            )],
+            recorder: DeviceRecorderTests.recorder(), sleep: Self.untilCancelled
         )
         control.takeOver(udid: "on")
         async let call = control.perform(.button(udid: "on", name: .home, includeScreenshot: false, diff: false), sessionID: "s")
@@ -667,15 +676,19 @@ extension DeviceAgentControlTests {
     @Test func theLeaseOutlastsACommandThatRunsPastItsWindow() async {
         let input = FakeInput()
         let window = Duration.seconds(60)
+        // The lease window passes at once; each typing pause lets it fire.
+        let sleep: @MainActor (Duration) async -> Void = { duration in
+            guard duration != window else { return }
+            for _ in 0..<5 { await Task.yield() }
+        }
         let control = DeviceAgentControl(
-            input: input, devices: { [Self.booted] }, boot: { _ in },
-            install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
-            pasteboard: Self.pasteboard(input), recorder: DeviceRecorderTests.recorder(),
-            // The lease window passes at once; each typing pause lets it fire.
-            sleep: { duration in
-                guard duration != window else { return }
-                for _ in 0..<5 { await Task.yield() }
-            },
+            backends: [SimulatorBackend(
+                input: input, devices: { [Self.booted] }, boot: { _ in },
+                install: { _, _ in }, launch: { _, _ in 0 }, settings: FakeSettings(), logs: FakeLogs(),
+                pasteboard: Self.pasteboard(input), sleep: sleep
+            )],
+            recorder: DeviceRecorderTests.recorder(),
+            sleep: sleep,
             leaseWindow: window
         )
         #expect(await control.perform(.type(udid: "on", text: "abcdef", includeScreenshot: false, diff: false), sessionID: "s") == .ok)

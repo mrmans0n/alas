@@ -11,13 +11,16 @@ public struct AgentDevice: Equatable, Sendable {
     public let runtime: String
     /// booted, booting, shutdown, shutting_down, unauthorized, offline.
     public let state: String
+    /// Another id that names this device: a running emulator's `avd:<name>`.
+    public let alias: String?
 
-    public init(id: String, name: String, platform: Platform, runtime: String, state: String) {
+    public init(id: String, name: String, platform: Platform, runtime: String, state: String, alias: String? = nil) {
         self.id = id
         self.name = name
         self.platform = platform
         self.runtime = runtime
         self.state = state
+        self.alias = alias
     }
 
     public var isBooted: Bool { state == "booted" }

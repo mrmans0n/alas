@@ -23,8 +23,9 @@ protocol DeviceInput: AnyObject {
 
 extension SimulatorStreamClient: DeviceInput {}
 
-/// Runs the `device_*` tools for agents, and tracks who drives each
-/// simulator so the Devices tab can show it and the user can take over.
+/// Runs the `device_*` tools for agents on simulators and Android devices,
+/// through one backend per platform, and tracks who drives each device so
+/// the Devices tab can show it and the user can take over.
 @MainActor
 @Observable
 final class DeviceAgentControl {
@@ -41,14 +42,7 @@ final class DeviceAgentControl {
         let at: Date
     }
 
-    @ObservationIgnored private let input: DeviceInput
-    @ObservationIgnored private let devices: () async throws -> [SimulatorDevice]
-    @ObservationIgnored private let boot: (String) async throws -> Void
-    @ObservationIgnored private let install: (String, URL) async throws -> Void
-    @ObservationIgnored private let launch: (String, String) async throws -> Int32
-    @ObservationIgnored private let settings: any SimulatorSettingsControl
-    @ObservationIgnored private let logs: any SimulatorLogsControl
-    @ObservationIgnored private let pasteboard: DevicePasteboard
+    @ObservationIgnored private let backends: [any DeviceBackend]
     @ObservationIgnored private let recorder: DeviceRecorder
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async -> Void
@@ -75,30 +69,18 @@ final class DeviceAgentControl {
     @ObservationIgnored private var inputTurns: [String: [UUID]] = [:]
     /// Calls waiting for their turn to come up.
     @ObservationIgnored private var inputWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    /// The backend each device was last found in, for the paths that don't list devices.
+    @ObservationIgnored private var routes: [String: AgentDevice.Platform] = [:]
 
     init(
-        input: DeviceInput,
-        devices: @escaping () async throws -> [SimulatorDevice],
-        boot: @escaping (String) async throws -> Void,
-        install: @escaping (String, URL) async throws -> Void,
-        launch: @escaping (String, String) async throws -> Int32,
-        settings: any SimulatorSettingsControl,
-        logs: any SimulatorLogsControl,
-        pasteboard: DevicePasteboard,
+        backends: [any DeviceBackend],
         recorder: DeviceRecorder,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         leaseWindow: Duration = .seconds(60),
         holdLimit: Duration = .seconds(50)
     ) {
-        self.input = input
-        self.devices = devices
-        self.boot = boot
-        self.install = install
-        self.launch = launch
-        self.settings = settings
-        self.logs = logs
-        self.pasteboard = pasteboard
+        self.backends = backends
         self.recorder = recorder
         self.now = now
         self.sleep = sleep
@@ -170,8 +152,8 @@ final class DeviceAgentControl {
         if case .clipboard(_, nil) = command {
             switch await bootedDevice(udid) {
             case .failure(let refusal): return refusal.response
-            case .success:
-                do { return .text([Self.json(["text": try await pasteboard.read(udid: udid)])]) } catch {
+            case .success(let found):
+                do { return .text([Self.json(["text": try await found.backend.readClipboard(udid)])]) } catch {
                     return .error("device_clipboard_failed: \(error.localizedDescription)")
                 }
             }
@@ -193,40 +175,41 @@ final class DeviceAgentControl {
         // Taken before the device listing below, whose calls can finish in any order.
         if isInput, inputTurn == nil { inputTurn = takeInputTurn(udid) }
         defer { if let inputTurn { endInputTurn(udid, inputTurn) } }
-        let listed: [SimulatorDevice]
-        do {
-            listed = try await devices()
-        } catch {
-            return .error("device_unavailable: \(error.localizedDescription)")
-        }
-        guard var device = listed.first(where: { $0.udid == udid }) else {
-            return .error("device_not_found: No iOS simulator \(udid). Call device_list.")
+        let backend: any DeviceBackend
+        var device: AgentDevice
+        switch await locate(udid) {
+        case .failure(let refusal): return refusal.response
+        case .success(let found): (backend, device) = (found.backend, found.device)
         }
         if userDriving(udid) { return .error(Self.userDriving) }
 
         lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
         inFlight[udid, default: 0] += 1
-        var leased = false
+        var leased: String?
         defer {
             inFlight[udid, default: 1] -= 1
             lastCalls[udid] = AgentCall(sessionID: sessionID, tool: command.toolName, at: now())
             // The idle window starts when the call ends, not when it began.
-            if leased { renewLease(udid) }
+            if let leased { renewLease(leased) }
         }
 
-        if case .open = command, device.state != .booted {
+        if case .open = command, !device.isBooted {
             do {
-                try await boot(udid)
-                device = SimulatorDevice(udid: udid, name: device.name, runtimeName: device.runtimeName, state: .booted)
+                // An AVD comes back as its emulator, under a new id.
+                let id = try await backend.boot(udid)
+                device = (try? await backend.devices().first { $0.id == id })
+                    ?? AgentDevice(id: id, name: device.name, platform: device.platform, runtime: device.runtime, state: "booted")
+                routes[id] = backend.platform
+            } catch let error as DeviceToolError {
+                return .error(error.message)
             } catch {
                 return .error("device_not_booted: \(error.localizedDescription)")
             }
         }
-        guard device.state == .booted else {
-            return .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")
-        }
-        renewLease(udid)
-        leased = true
+        if let refusal = Self.notReady(device) { return refusal.response }
+        // The device's own id: after device_open of an AVD, its emulator's.
+        renewLease(device.id)
+        leased = device.id
 
         if let inputTurn {
             await waitForInputTurn(udid, inputTurn)
@@ -238,7 +221,7 @@ final class DeviceAgentControl {
         case .list:
             return await list()
         case .open:
-            return .text([Self.json(Self.describe(device))])
+            return .text([Self.json(device.json)])
         case .snapshot(_, let query, let limit):
             do {
                 let snapshot = try await takeSnapshot(udid)
@@ -262,9 +245,9 @@ final class DeviceAgentControl {
             case .success(let resolved): point = resolved
             case .failure(let failure): return .error(failure.message)
             }
-            input.touch(udid: udid, phase: "begin", point: point)
+            backend.input.touch(udid: udid, phase: "begin", point: point)
             await sleep(.milliseconds(50))
-            input.touch(udid: udid, phase: "end", point: point)
+            backend.input.touch(udid: udid, phase: "end", point: point)
             return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .swipe(_, let gesture, let durationMs, let includeScreenshot, let diff):
             let from: DeviceScreenPoint
@@ -275,137 +258,128 @@ final class DeviceAgentControl {
             }
             let steps = max(1, durationMs / 16)
             var current = from
-            input.touch(udid: udid, phase: "begin", point: from)
+            backend.input.touch(udid: udid, phase: "begin", point: from)
             for step in 1...steps {
                 await sleep(.milliseconds(16))
                 if userDriving(udid) || Task.isCancelled {
-                    input.touch(udid: udid, phase: "end", point: current)
+                    backend.input.touch(udid: udid, phase: "end", point: current)
                     return .error(Task.isCancelled ? Self.cancelled : Self.userDriving)
                 }
                 let fraction = Double(step) / Double(steps)
                 current = DeviceScreenPoint(
                     x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction
                 )
-                input.touch(udid: udid, phase: step == steps ? "end" : "move", point: current)
+                backend.input.touch(udid: udid, phase: step == steps ? "end" : "move", point: current)
             }
             return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .type(_, let text, let includeScreenshot, let diff):
             let runs = DeviceTextInput.runs(for: text)
             let total = runs.reduce(0) { $0 + $1.characterCount }
-            var paste: DevicePasteboard.Paste?
-            let stopped = await typeRuns(runs, total: total, udid: udid, paste: &paste)
-            if let paste { await pasteboard.close(paste) }
+            var paste: (any DevicePasteSession)?
+            let stopped = await typeRuns(runs, total: total, udid: udid, backend: backend, paste: &paste)
+            if let paste { await paste.end() }
             if let stopped { return stopped }
             return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .button(_, let name, let includeScreenshot, let diff):
-            input.button(udid: udid, name: name.rawValue)
+            guard backend.press(udid, name) else {
+                return .error("device_unsupported: The \(name.rawValue) button isn't available on \(device.platform.rawValue).")
+            }
             return await finish(udid, includeScreenshot: includeScreenshot, diff: diff, sessionID: sessionID)
         case .install(_, let appPath):
-            let app: SimulatorAppBundle
             do {
-                app = try SimulatorAppBundle.read(URL(fileURLWithPath: appPath))
-            } catch let problem as SimulatorAppBundle.Problem {
-                return .error(problem.message(udid: udid))
-            } catch {
-                return .error("device_app_invalid: \(error.localizedDescription)")
-            }
-            do {
-                try await install(udid, app.url)
+                let app = try await backend.install(udid, path: appPath)
+                return .text([Self.json(["bundle_id": app.appID, "name": app.name])])
+            } catch let error as DeviceToolError {
+                return .error(error.message)
             } catch {
                 return .error("device_install_failed: \(error.localizedDescription)")
             }
-            return .text([Self.json(["bundle_id": app.bundleID, "name": app.name])])
         case .launch(_, let bundleID, let diff):
             do {
-                let pid = Int(try await launch(udid, bundleID))
+                let pid = try await backend.launch(udid, appID: bundleID)
                 return .text([Self.json(await withDiff(["pid": pid], udid: udid, diff: diff, sessionID: sessionID))])
-            } catch SimulatorLaunchError.notInstalled {
+            } catch is DeviceAppNotInstalled {
                 return Self.notInstalled(bundleID, on: device)
+            } catch let error as DeviceToolError {
+                return .error(error.message)
             } catch {
                 return .error("device_launch_failed: \(error.localizedDescription)")
             }
         case .setAppearance(_, let appearance, let textSize, let increaseContrast):
             return await settingsCall {
-                .text([Self.json(try await settings.setDisplay(
-                    udid: udid, appearance: appearance, textSize: textSize, increaseContrast: increaseContrast
+                .text([Self.json(try await backend.setDisplay(
+                    udid, appearance: appearance, textSize: textSize, increaseContrast: increaseContrast
                 ).json)])
             }
         case .setAccessibility(_, let change):
             return await settingsCall {
-                .text([Self.json(try await settings.setAccessibility(udid: udid, change).json)])
+                .text([Self.json(try await backend.setAccessibility(udid, change).json)])
             }
         case .setPermission(_, let bundleID, let service, let action):
-            guard await settings.isInstalled(udid: udid, bundleID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
+            guard await backend.isInstalled(udid, appID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
             return await settingsCall {
-                try await settings.setPermission(udid: udid, bundleID: bundleID, service: service, action: action)
+                try await backend.setPermission(udid, appID: bundleID, service: service, action: action)
                 return .text([Self.json(["ok": true])])
             }
         case .setLocation(_, let location):
             return await settingsCall {
-                try await settings.setLocation(udid: udid, location)
+                try await backend.setLocation(udid, location)
                 return .text([Self.json(["ok": true])])
             }
         case .push(_, let bundleID, let payload):
-            guard await settings.isInstalled(udid: udid, bundleID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
+            guard await backend.isInstalled(udid, appID: bundleID) else { return Self.notInstalled(bundleID, on: device) }
             return await settingsCall {
-                try await settings.push(udid: udid, bundleID: bundleID, payload: Data(payload.utf8))
+                try await backend.push(udid, appID: bundleID, payload: Data(payload.utf8))
                 return .text([Self.json(["ok": true])])
             }
         case .openURL(_, let url, let diff):
             do {
-                try await settings.openURL(udid: udid, url: url)
+                try await backend.openURL(udid, url)
+            } catch let error as DeviceToolError {
+                return .error(error.message)
             } catch {
                 return .error("device_settings_failed: \(error.localizedDescription)")
             }
             return .text([Self.json(await withDiff(["ok": true], udid: udid, diff: diff, sessionID: sessionID))])
         case .clipboard(_, let text):
             do {
-                try await pasteboard.write(udid: udid, text: text ?? "")
+                try await backend.writeClipboard(udid, text ?? "")
                 return .text([Self.json(["ok": true])])
             } catch {
                 return .error("device_clipboard_failed: \(error.localizedDescription)")
             }
         case .rotate(_, let orientation, let diff):
-            return await rotate(udid, to: orientation, diff: diff, sessionID: sessionID)
+            return await rotate(udid, backend: backend, to: orientation, diff: diff, sessionID: sessionID)
         case .logs, .record:
             // Answered before the hold.
             return .error("device_unavailable: The call took the wrong path.")
         }
     }
 
-    /// Turns the device, then waits up to 2 s for a frame in the new
-    /// orientation; an app that supports only portrait never sends one.
     private func rotate(
-        _ udid: String, to orientation: DeviceScreenOrientation, diff: Bool, sessionID: String
+        _ udid: String, backend: any DeviceBackend, to orientation: DeviceScreenOrientation, diff: Bool, sessionID: String
     ) async -> AlasCLIResponse {
-        // The service rotates through the device's stream, which the lease just started.
-        for _ in 0..<100 where input.lastFrame(udid: udid) == nil {
-            await sleep(.milliseconds(50))
-        }
+        let interface: DeviceScreenOrientation
         do {
-            try await input.rotate(udid: udid, to: orientation)
+            interface = try await backend.rotate(udid, to: orientation)
         } catch {
             return .error("device_rotate_failed: \(error.localizedDescription)")
         }
-        for _ in 0..<40 where input.lastFrame(udid: udid)?.orientation != orientation {
-            await sleep(.milliseconds(50))
-        }
-        let interface = input.lastFrame(udid: udid)?.orientation ?? .portrait
         let reply: [String: Any] = ["device": orientation.rawValue, "interface": interface.rawValue]
         return .text([Self.json(await withDiff(reply, udid: udid, diff: diff, sessionID: sessionID))])
     }
 
     private func record(udid: String, start: Bool, sessionID: String) async -> AlasCLIResponse {
-        let device: SimulatorDevice
+        let device: AgentDevice
         if start {
             switch await bootedDevice(udid) {
             case .failure(let refusal): return refusal.response
-            case .success(let found): device = found
+            case .success(let found): device = found.device
             }
         } else {
             // A recording that ended at shutdown is still collected.
-            let listed = try? await devices().first { $0.udid == udid }
-            device = listed ?? SimulatorDevice(udid: udid, name: udid, runtimeName: "", state: .shutdown)
+            let listed = try? await locate(udid).get().device
+            device = listed ?? AgentDevice(id: udid, name: udid, platform: .ios, runtime: "", state: "shutdown")
         }
         let owner = DeviceRecorder.Owner.agent(sessionID: sessionID)
         do throws(DeviceRecorder.Failure) {
@@ -438,26 +412,60 @@ final class DeviceAgentControl {
         let response: AlasCLIResponse
     }
 
-    private func bootedDevice(_ udid: String) async -> Result<SimulatorDevice, Refusal> {
-        let device: SimulatorDevice
-        do {
-            guard let found = try await devices().first(where: { $0.udid == udid }) else {
-                return .failure(Refusal(response: .error("device_not_found: No iOS simulator \(udid). Call device_list.")))
+    /// Finds `udid` in the backend its shape suggests first (a UUID is a
+    /// simulator), then the others, and remembers where it was.
+    private func locate(_ udid: String) async -> Result<(backend: any DeviceBackend, device: AgentDevice), Refusal> {
+        let preferred: AgentDevice.Platform = AgentDevice.isSimulatorID(udid) ? .ios : .android
+        let ordered = backends.filter { $0.platform == preferred } + backends.filter { $0.platform != preferred }
+        var failure: (any Error)?
+        for backend in ordered {
+            do {
+                if let device = try await backend.devices().first(where: { $0.id == udid || $0.alias == udid }) {
+                    if device.id != udid {
+                        return .failure(Refusal(response: .error(
+                            "device_not_found: \(udid) is running as \(device.id); use that udid."
+                        )))
+                    }
+                    routes[udid] = backend.platform
+                    return .success((backend, device))
+                }
+            } catch {
+                failure = failure ?? error
             }
-            device = found
-        } catch {
-            return .failure(Refusal(response: .error("device_unavailable: \(error.localizedDescription)")))
         }
-        guard device.state == .booted else {
-            return .failure(Refusal(response: .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it.")))
+        if let failure, backends.count == 1 {
+            return .failure(Refusal(response: .error("device_unavailable: \(failure.localizedDescription)")))
         }
-        return .success(device)
+        return .failure(Refusal(response: .error("device_not_found: No device \(udid). Call device_list.")))
+    }
+
+    private func bootedDevice(_ udid: String) async -> Result<(backend: any DeviceBackend, device: AgentDevice), Refusal> {
+        switch await locate(udid) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let found):
+            if let refusal = Self.notReady(found.device) { return .failure(refusal) }
+            return .success(found)
+        }
+    }
+
+    /// Why a device can't take a call yet, or nil when it is booted.
+    private static func notReady(_ device: AgentDevice) -> Refusal? {
+        switch device.state {
+        case "booted": nil
+        case "shutdown", "shutting_down":
+            Refusal(response: .error("device_not_booted: \(device.name) is shut down. Call device_open to boot it."))
+        case "unauthorized":
+            Refusal(response: .error("device_not_ready: \(device.name) hasn't allowed USB debugging; ask the user to allow it on the phone."))
+        default:
+            Refusal(response: .error("device_not_ready: \(device.name) is \(device.state)."))
+        }
     }
 
     /// Types key runs and pastes the rest, opening the paste on the first
     /// paste run. Returns the response that stopped it, or nil when all of it went in.
     private func typeRuns(
-        _ runs: [DeviceTextInput.Run], total: Int, udid: String, paste: inout DevicePasteboard.Paste?
+        _ runs: [DeviceTextInput.Run], total: Int, udid: String, backend: any DeviceBackend,
+        paste: inout (any DevicePasteSession)?
     ) async -> AlasCLIResponse? {
         let shift: UInt32 = 0xE1
         var typed = 0
@@ -475,23 +483,23 @@ final class DeviceAgentControl {
             case .keys(let presses):
                 for press in presses {
                     if let stopped = stop() { return stopped }
-                    if press.shift { input.key(udid: udid, usage: shift, down: true) }
-                    input.key(udid: udid, usage: press.usage, down: true)
-                    input.key(udid: udid, usage: press.usage, down: false)
-                    if press.shift { input.key(udid: udid, usage: shift, down: false) }
+                    if press.shift { backend.input.key(udid: udid, usage: shift, down: true) }
+                    backend.input.key(udid: udid, usage: press.usage, down: true)
+                    backend.input.key(udid: udid, usage: press.usage, down: false)
+                    if press.shift { backend.input.key(udid: udid, usage: shift, down: false) }
                     await sleep(.milliseconds(20))
                     typed += 1
                 }
             case .paste(let text):
                 if let stopped = stop() { return stopped }
                 do {
-                    let open: DevicePasteboard.Paste
+                    let open: any DevicePasteSession
                     if let paste { open = paste } else {
-                        open = try await pasteboard.open(udid: udid, keepText: true)
+                        open = try await backend.beginPaste(udid)
                         paste = open
                     }
                     if let stopped = stop() { return stopped }
-                    try await pasteboard.paste(text, in: open)
+                    try await open.paste(text)
                 } catch {
                     return .error("device_paste_failed: \(error.localizedDescription) \(typed) of \(total) characters were typed.")
                 }
@@ -504,27 +512,21 @@ final class DeviceAgentControl {
     private func readLogs(
         udid: String, since: Int, bundleID: String?, level: SimulatorLogLevel, includeApple: Bool, query: String?, limit: Int
     ) async -> AlasCLIResponse {
-        let device: SimulatorDevice
+        let backend: any DeviceBackend
+        let device: AgentDevice
         switch await bootedDevice(udid) {
         case .failure(let refusal): return refusal.response
-        case .success(let found): device = found
+        case .success(let found): (backend, device) = (found.backend, found.device)
         }
-        var app = bundleID
-        if app == nil { app = await logs.frontmostApp(udid: udid) }
-        guard let app else { return .error("device_no_app: No app is in front on \(device.name). Pass bundle_id.") }
         do {
-            guard let executable = try await logs.executables(udid: udid)[app] else { return Self.notInstalled(app, on: device) }
-            let all = try await logs.logShow(
-                udid: udid, query: SimulatorLogQuery(executable: executable, level: level, includeApple: includeApple), seconds: since
-            )
-            let matching = query.map { query in all.filter { $0.matches(query) } } ?? all
-            let crashes = await logs.crashReports(udid: udid, bundleID: app, since: now().addingTimeInterval(-Double(since)))
-            return .text([Self.json([
-                "app": app,
-                "lines": matching.suffix(limit).map(\.json),
-                "truncated": matching.count > limit,
-                "crashes": crashes.map(\.json),
-            ])])
+            return .text([Self.json(try await backend.logs(
+                udid, name: device.name, since: since, appID: bundleID, level: level, includeApple: includeApple,
+                query: query, limit: limit
+            ))])
+        } catch let missing as DeviceAppNotInstalled {
+            return Self.notInstalled(missing.appID, on: device)
+        } catch let error as DeviceToolError {
+            return .error(error.message)
         } catch {
             return .error("device_logs_failed: \(error.localizedDescription)")
         }
@@ -533,12 +535,14 @@ final class DeviceAgentControl {
     private func settingsCall(_ body: () async throws -> AlasCLIResponse) async -> AlasCLIResponse {
         do {
             return try await body()
+        } catch let error as DeviceToolError {
+            return .error(error.message)
         } catch {
             return .error("device_settings_failed: \(error.localizedDescription)")
         }
     }
 
-    private static func notInstalled(_ bundleID: String, on device: SimulatorDevice) -> AlasCLIResponse {
+    private static func notInstalled(_ bundleID: String, on device: AgentDevice) -> AlasCLIResponse {
         .error("device_app_not_installed: \(bundleID) isn't installed on \(device.name).")
     }
 
@@ -578,12 +582,30 @@ final class DeviceAgentControl {
         }
     }
 
+    /// Every backend's devices; a backend that fails is left out unless all do.
     private func list() async -> AlasCLIResponse {
-        do {
-            return .text([Self.json(["devices": try await devices().map(Self.describe)])])
-        } catch {
-            return .error("device_unavailable: \(error.localizedDescription)")
+        var devices: [[String: Any]] = []
+        var failure: (any Error)?
+        var listed = false
+        for backend in backends {
+            do {
+                for device in try await backend.devices() {
+                    routes[device.id] = backend.platform
+                    devices.append(device.json)
+                }
+                listed = true
+            } catch {
+                failure = failure ?? error
+            }
         }
+        if !listed, let failure { return .error("device_unavailable: \(failure.localizedDescription)") }
+        return .text([Self.json(["devices": devices])])
+    }
+
+    /// The input of the backend `udid` was last found in; by its shape before that.
+    private func input(_ udid: String) -> DeviceInput? {
+        let platform = routes[udid] ?? (AgentDevice.isSimulatorID(udid) ? .ios : .android)
+        return (backends.first { $0.platform == platform } ?? backends.first)?.input
     }
 
     private func finish(_ udid: String, includeScreenshot: Bool, diff: Bool, sessionID: String) async -> AlasCLIResponse {
@@ -651,7 +673,7 @@ final class DeviceAgentControl {
         for _ in 0..<60 {
             await sleep(.milliseconds(50))
             if userDriving(udid) || Task.isCancelled { return false }
-            guard let surface = input.lastFrame(udid: udid)?.surface,
+            guard let surface = input(udid)?.lastFrame(udid: udid)?.surface,
                   let print = DeviceFrameFingerprint(surface) else { continue }
             if let reference, reference.matches(print) {
                 same += 1
@@ -668,7 +690,11 @@ final class DeviceAgentControl {
         // Reserved before the await, so overlapping snapshots never share refs.
         let generation = (generations[udid] ?? 0) + 1
         generations[udid] = generation
-        return try DeviceSnapshot.parse(try await input.describe(udid: udid), generation: generation)
+        let platform = routes[udid] ?? (AgentDevice.isSimulatorID(udid) ? .ios : .android)
+        guard let backend = backends.first(where: { $0.platform == platform }) ?? backends.first else {
+            throw DeviceToolError(message: "device_not_found: No device \(udid). Call device_list.")
+        }
+        return try await backend.snapshot(udid, generation: generation)
     }
 
     private static func snapshotError(_ error: any Error) -> String {
@@ -701,7 +727,7 @@ final class DeviceAgentControl {
 
     /// Snapshot refs, screenshot pixels and swipe directions are upright; touches go to the portrait panel.
     private func panelPoint(_ upright: DeviceScreenPoint, udid: String) -> DeviceScreenPoint {
-        (input.lastFrame(udid: udid)?.orientation ?? .portrait).panelPoint(upright)
+        (input(udid)?.lastFrame(udid: udid)?.orientation ?? .portrait).panelPoint(upright)
     }
 
     private func swipeEnds(
@@ -743,15 +769,15 @@ final class DeviceAgentControl {
     // MARK: Screenshots and leases
 
     private func screenshot(_ udid: String) async -> AlasCLIResponse {
-        var frame = input.lastFrame(udid: udid)
+        var frame = input(udid)?.lastFrame(udid: udid)
         var waited = 0
         while frame == nil, waited < 100 {
             await sleep(.milliseconds(50))
             waited += 1
-            frame = input.lastFrame(udid: udid)
+            frame = input(udid)?.lastFrame(udid: udid)
         }
         guard let frame else {
-            return .error("device_unavailable: The simulator sent no frame. Try again in a moment.")
+            return .error("device_unavailable: The device sent no frame. Try again in a moment.")
         }
         guard let png = DeviceScreenshot.png(frame, maxLongEdge: 1280) else {
             return .error("device_unavailable: The screenshot could not be encoded.")
@@ -768,6 +794,7 @@ final class DeviceAgentControl {
     /// after its last call ends, so screenshots work with the Devices tab
     /// closed. A call still running keeps it, however long it takes.
     private func renewLease(_ udid: String) {
+        guard let input = input(udid) else { return }
         let token = leases[udid]?.token
             ?? input.subscribe(udid: udid, onFrame: { _ in }, onStop: { [weak self] _ in self?.dropLease(udid) })
         leases[udid]?.release.cancel()
@@ -777,7 +804,7 @@ final class DeviceAgentControl {
             guard !Task.isCancelled, let self, self.leases[udid]?.token == token,
                   (self.inFlight[udid] ?? 0) == 0 else { return }
             self.leases[udid] = nil
-            self.input.unsubscribe(udid: udid, token: token)
+            input.unsubscribe(udid: udid, token: token)
         }
         leases[udid] = (token, release)
     }
@@ -787,21 +814,10 @@ final class DeviceAgentControl {
     private func dropLease(_ udid: String) {
         guard let lease = leases.removeValue(forKey: udid) else { return }
         lease.release.cancel()
-        input.unsubscribe(udid: udid, token: lease.token)
+        input(udid)?.unsubscribe(udid: udid, token: lease.token)
     }
 
     // MARK: JSON
-
-    private static func describe(_ device: SimulatorDevice) -> [String: Any] {
-        let state: String = switch device.state {
-        case .booted: "booted"
-        case .booting: "booting"
-        case .shutdown: "shutdown"
-        case .shuttingDown: "shutting_down"
-        case .other(let value): value
-        }
-        return ["udid": device.udid, "name": device.name, "runtime": device.runtimeName, "state": state]
-    }
 
     private static func json(_ object: Any) -> String {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
