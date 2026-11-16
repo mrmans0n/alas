@@ -188,15 +188,118 @@ struct HostSSHSetupTests {
         #expect(warnings[0].contains("command not found: npm"))
     }
 
-    @Test func homebrewRunsWithoutItsCleanup() async throws {
-        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "\(Self.brewHost)\n", stderr: "") }
-        let probe = HostSSHProbe(os: "Darwin", arch: "arm64", brew: Self.brew)
+    @Test(arguments: [
+        (operation: "install", validSignature: true),
+        (operation: "upgrade", validSignature: true),
+        (operation: "upgrade", validSignature: false),
+        (operation: "app", validSignature: true),
+    ])
+    func homebrewPreparesOnlyVerifiedStandaloneInstalls(operation: String, validSignature: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("host brew's \(UUID().uuidString)")
+            .resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bin = directory.appendingPathComponent("bin")
+        let root = directory.appendingPathComponent("Caskroom/alas-host/1.0")
+        let installedHost = root.appendingPathComponent("alas-host/alas-host")
+        let host = bin.appendingPathComponent("alas-host")
+        let log = directory.appendingPathComponent("brew.log")
+        let verificationLog = directory.appendingPathComponent("verified.log")
+        let quarantineLog = directory.appendingPathComponent("quarantine.log")
+        let verifier = bin.appendingPathComponent("verify")
+        let clear = bin.appendingPathComponent("clear")
+        let tools: [(URL, String)] = [
+            (bin.appendingPathComponent("brew"), """
+            #!/bin/sh
+            {
+                printf '%s\\n' "$HOMEBREW_NO_INSTALL_CLEANUP" "$HOMEBREW_NO_ENV_HINTS" "$HOMEBREW_NO_ASK"
+                printf '%s\\n' "$@"
+            } > \(SSHCommand.shellQuote(log.path))
+            echo 'Homebrew install output'
+            """),
+            (verifier, """
+            #!/bin/sh
+            for argument do last=$argument; done
+            printf '%s\\n' "$last" >> \(SSHCommand.shellQuote(verificationLog.path))
+            exit \(validSignature ? 0 : 37)
+            """),
+            (clear, """
+            #!/bin/sh
+            printf '%s\\n' "$@" > \(SSHCommand.shellQuote(quarantineLog.path))
+            """),
+            (installedHost, "#!/bin/sh\nexit 0\n"),
+            (root.appendingPathComponent("zmx/zmx"), "#!/bin/sh\nexit 0\n"),
+            (root.appendingPathComponent("alas-cli/alas"), "#!/bin/sh\nexit 0\n"),
+        ]
+        for (tool, body) in tools {
+            try FileManager.default.createDirectory(at: tool.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try body.write(to: tool, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+        try FileManager.default.createSymbolicLink(at: host, withDestinationURL: installedHost)
+        let resolvedRoot = root.resolvingSymlinksInPath()
+        let resolvedHost = installedHost.resolvingSymlinksInPath()
+        // Execute the real preparation script, replacing only its system tools.
+        // Production supplies neither optional argument.
+        let preparation = """
+        exec /bin/sh -c \(SSHCommand.shellQuote(HostSelfUpdate.prepareStandaloneInstallScript)) sh "$1" \
+        \(SSHCommand.shellQuote(verifier.path)) \(SSHCommand.shellQuote(clear.path))
+        """
+        let setup = HostSSHSetup(
+            destination: "me@mini",
+            bundleResources: directory,
+            run: { command, _ in
+                let isolated = command.replacingOccurrences(
+                    of: SSHCommand.shellQuote(HostSelfUpdate.prepareStandaloneInstallScript),
+                    with: SSHCommand.shellQuote(preparation)
+                )
+                return try await Process.run(
+                    "/usr/bin/env",
+                    args: ["-i", "PATH=\(bin.path):/usr/bin:/bin", "HOME=\(directory.path)", "/bin/sh", "-c", isolated],
+                    timeout: 10
+                )
+            }
+        )
+        let probe = HostSSHProbe(
+            os: "Darwin",
+            arch: HostSSHSetup.bundleArch,
+            brew: bin.appendingPathComponent("brew").path,
+            cask: operation == "install" ? nil : operation == "app" ? "alas" : "alas-host",
+            hostPath: operation == "install" ? nil : host.path
+        )
 
-        #expect(try await remote.setup().install(probe, progress: { _ in }) == Self.brewHost)
-
-        let command = try #require(remote.commands.withLock { $0.first })
-        #expect(command.contains("HOMEBREW_NO_INSTALL_CLEANUP=1"))
-        #expect(command.contains("install --cask mrmans0n/tap/alas-host"))
+        if validSignature {
+            #expect(try await setup.install(probe, progress: { _ in }) == host.path)
+        } else {
+            await #expect(throws: HostSSHSetup.Failure.self) {
+                try await setup.install(probe, progress: { _ in })
+            }
+        }
+        if operation == "app" {
+            #expect(!FileManager.default.fileExists(atPath: log.path))
+            #expect(!FileManager.default.fileExists(atPath: verificationLog.path))
+            #expect(!FileManager.default.fileExists(atPath: quarantineLog.path))
+        } else {
+            let arguments = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map(String.init)
+            // Exact argv rules out removed flags, checksum bypasses and unrelated casks.
+            #expect(arguments == [
+                "1", "1", "1", operation, "--cask",
+                operation == "install" ? "mrmans0n/tap/alas-host" : "alas-host",
+            ])
+            let verified = try String(contentsOf: verificationLog, encoding: .utf8).split(separator: "\n")
+                .map { URL(fileURLWithPath: String($0)).resolvingSymlinksInPath().path }
+            #expect(verified == (validSignature
+                ? [resolvedHost.path, resolvedRoot.appendingPathComponent("zmx/zmx").path, resolvedRoot.appendingPathComponent("alas-cli/alas").path]
+                : [resolvedHost.path]))
+            if validSignature {
+                let cleared = try String(contentsOf: quarantineLog, encoding: .utf8).split(separator: "\n").map(String.init)
+                let clearedRoot = try #require(cleared.last)
+                #expect(Array(cleared.dropLast()) == ["-dr", "com.apple.quarantine"])
+                #expect(URL(fileURLWithPath: clearedRoot).resolvingSymlinksInPath().path == resolvedRoot.path)
+            } else {
+                #expect(!FileManager.default.fileExists(atPath: quarantineLog.path))
+            }
+        }
     }
 
     @Test func aFailedHomebrewInstallFallsBackToCopyingTheHost() async throws {
@@ -359,6 +462,75 @@ struct HostSSHSetupTests {
         await #expect(throws: HostSSHSetup.Failure.self) { try await remote.setup().pair(host: "h") }
         #expect(remote.sleeps.withLock { $0.count } == 30)
     }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func aSelfUpdateDoesNotStopTheHostBeforeInstallationFinishes(fails: Bool) async throws {
+        var replaced = false
+        var events: [String] = []
+        let lifecycle = HostSelfUpdate.Lifecycle(
+            wasReplaced: { replaced },
+            restart: { events.append("restart scheduled") },
+            stop: { events.append("stopped") }
+        )
+        do {
+            try await lifecycle.install {
+                replaced = true
+                lifecycle.executableChanged()
+                await Task.yield()
+                #expect(events.isEmpty)
+                if fails { throw HostError.failed(message: "install failed") }
+                events.append("installed")
+            }
+            #expect(!fails)
+        } catch {
+            #expect(fails)
+        }
+        #expect(events == (fails ? [] : ["installed", "restart scheduled", "stopped"]))
+    }
+
+    @Test
+    @MainActor
+    func anUpToDateHostDoesNotScheduleARestart() async throws {
+        let lifecycle = HostSelfUpdate.Lifecycle(
+            wasReplaced: { false },
+            restart: { Issue.record("An unchanged host must not restart") },
+            stop: { Issue.record("An unchanged host must keep serving") }
+        )
+        try await lifecycle.install {}
+    }
+
+    #if os(macOS)
+    @Test(arguments: [0, 17])
+    func theRestartHelperWaitsForHostExitAndRemovesItsJobEvenIfRestartFails(status: Int) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-restart-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let exited = root.appendingPathComponent("host-exited")
+        let launcher = root.appendingPathComponent("launchctl")
+        try """
+        #!/bin/sh
+        if [ "$1" = kickstart ]; then
+            [ -f \(SSHCommand.shellQuote(exited.path)) ] || exit 42
+            printf 'started %s\\n' "$2"
+            exit \(status)
+        fi
+        printf 'removed %s\\n' "$2"
+        """.write(to: launcher, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+        // Model the old process exiting on the first poll, without real sleeps.
+        let script = """
+        kill() { [ ! -f \(SSHCommand.shellQuote(exited.path)) ]; }
+        sleep() { touch \(SSHCommand.shellQuote(exited.path)); }
+        \(HostSelfUpdate.restartScript)
+        """
+        let result = try await Process.run(
+            "/bin/sh", args: ["-c", script, "sh", "123", "gui/501/host", "host.update", launcher.path], timeout: 5
+        )
+        #expect(result.exitCode == status)
+        #expect(result.stdout == "started gui/501/host\nremoved host.update\n")
+    }
+    #endif
 
     @Test(arguments: [
         ("/opt/homebrew/Caskroom/alas-host/0.41.0/alas-host/alas-host", "alas-host", "0.41.0"),
