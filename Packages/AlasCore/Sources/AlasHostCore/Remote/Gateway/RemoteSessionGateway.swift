@@ -382,7 +382,10 @@ public final class RemoteSessionGateway {
                 // drops it; the follow's reset follows.
                 if page.revision.epoch == state.epoch {
                     for message in page.messages {
-                        if let decoded = Self.decode(message) { state.messages[message.index] = decoded }
+                        if let decoded = Self.decode(message) {
+                            state.messages[message.index] = decoded
+                            state.createdAts[message.index] = message.createdAt
+                        }
                     }
                 }
                 let hi = min(max(beforeIndex, 0), page.messageCount)
@@ -844,11 +847,18 @@ public final class RemoteSessionGateway {
 
     private func applyTranscript(_ delta: HostTranscriptDelta, id: String) async {
         guard let state = syncStates[id] else { return }
-        if delta.reset { state.messages.removeAll() }
+        if delta.reset {
+            state.messages.removeAll()
+            state.createdAts.removeAll()
+        }
         for message in delta.messages {
-            if let decoded = Self.decode(message) { state.messages[message.index] = decoded }
+            if let decoded = Self.decode(message) {
+                state.messages[message.index] = decoded
+                state.createdAts[message.index] = message.createdAt
+            }
         }
         state.messages = state.messages.filter { $0.key < delta.messageCount }
+        state.createdAts = state.createdAts.filter { $0.key < delta.messageCount }
         state.messageCount = delta.messageCount
         state.streamingState = delta.streamingState
         if delta.reset {
@@ -1051,7 +1061,8 @@ public final class RemoteSessionGateway {
         }
         return Self.toWire(
             message, index: index,
-            fullToolCallContent: await cachedFullToolCallContent(sessionId: id, state: state, message: message)
+            fullToolCallContent: await cachedFullToolCallContent(sessionId: id, state: state, message: message),
+            createdAt: state.createdAts[index]
         ).boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
     }
 
@@ -1399,7 +1410,27 @@ public final class RemoteSessionGateway {
     public static func toWire(
         _ message: ACPMessage,
         index: Int,
-        fullToolCallContent: String? = nil
+        fullToolCallContent: String? = nil,
+        createdAt: Int64? = nil
+    ) -> RemoteWireMessage {
+        var wire = toWireRow(message, index: index, fullToolCallContent: fullToolCallContent)
+        wire.createdAt = createdAt
+        if case .agent(_, _, let streaming) = message, streaming.phase == .commentary {
+            wire.phase = "commentary"
+        }
+        // The phone folds runs of quiet tool calls as the Mac does; a hidden
+        // marker never joins a run.
+        if case .toolCall = message, wire.isHidden != true,
+           case .toolCall(let facts) = ACPTranscriptFoldItem(message, hiddenToolCallIds: []) {
+            wire.fold = .init(joins: facts.joins, verb: facts.verb.rawValue)
+        }
+        return wire
+    }
+
+    private static func toWireRow(
+        _ message: ACPMessage,
+        index: Int,
+        fullToolCallContent: String?
     ) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
@@ -1463,7 +1494,7 @@ public final class RemoteSessionGateway {
                 stableId: sid, kind: "planDocument",
                 text: document.kind == .file ? document.file.map { "Plan file: \($0.path)" } : document.markdown,
                 json: Self.encodeJSON(remote), index: index,
-                isHidden: document.hidden ? true : nil)
+                isHidden: document.display == nil ? true : nil)
         case .questionAnswer(let answer):
             return .init(stableId: sid, kind: "system", text: answer.displayText, json: nil, index: index)
         case .outcomeCard(let card):

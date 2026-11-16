@@ -78,9 +78,9 @@ raise "AlasCore dependency resolution must use the bounded acquisition retry hel
   core_resolve&.fetch("run", "") ==
     "scripts/retry-ci-acquisition.sh swift package resolve --package-path Packages/AlasCore --disable-automatic-resolution --skip-update"
 core_test = builder_steps.find { |step| step["name"] == "Test AlasCore" }
-raise "AlasCore tests must run once without implicit dependency resolution" unless
+raise "AlasCore tests must run once, under the stall watchdog, without implicit dependency resolution" unless
   core_test&.fetch("run", "") ==
-    "swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update" &&
+    "scripts/run-with-stall-watchdog.sh 600 swift test --package-path Packages/AlasCore --disable-automatic-resolution --skip-update" &&
   builder_steps.count { |step| step.fetch("run", "").include?("swift test --package-path Packages/AlasCore") } == 1
 raise "test plan must assign four shards" unless builder_steps.any? do |step|
   step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"

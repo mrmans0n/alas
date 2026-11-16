@@ -89,6 +89,9 @@ extension RemoteWireMessage {
         if isHidden != nil { count += 17 }
         if let checkpointId { count += 18 + Self.escapedTransportByteCount(checkpointId) }
         if let card { count += 10 + Self.escapedTransportByteCount(card) }
+        if phase != nil { count += 24 }
+        if createdAt != nil { count += 32 }
+        if let fold { count += 40 + Self.escapedTransportByteCount(fold.verb) }
         if let images {
             count += 12
             for image in images {
@@ -115,7 +118,8 @@ extension RemoteWireMessage {
             kind: "systemNotice",
             text: Self.oversizedNotice(kind: kind),
             json: nil,
-            index: index
+            index: index,
+            createdAt: createdAt
         )
         let noticeByteCount = notice.transportByteCount
         precondition(

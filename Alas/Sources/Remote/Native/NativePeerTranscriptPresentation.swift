@@ -13,7 +13,7 @@ final class NativePeerRowCache {
     private struct Decoded {
         let source: RemoteWireMessage
         let row: NativePeerRow
-        let proxy: ACPMessage
+        let foldItem: ACPTranscriptFoldItem
     }
 
     private let decodeRow: (RemoteWireMessage) -> NativePeerRow
@@ -52,10 +52,9 @@ final class NativePeerRowCache {
         entry(for: message).row
     }
 
-    /// The local message each row stands for, in the same order, so the
-    /// local transcript's activity fold can run over peer rows.
-    func proxies(for messages: [RemoteWireMessage]) -> [ACPMessage] {
-        messages.map { entry(for: $0).proxy }
+    /// Each row's fold facts, in the same order, decoded once per change.
+    func foldItems(for messages: [RemoteWireMessage]) -> [ACPTranscriptFoldItem] {
+        messages.map { entry(for: $0).foldItem }
     }
 
     /// Grows a thought buffer in place while the forwarded text only gains a
@@ -79,69 +78,32 @@ final class NativePeerRowCache {
     private func entry(for message: RemoteWireMessage) -> Decoded {
         if let cached = decoded[message.stableId], cached.source == message { return cached }
         let row = decodeRow(message)
-        let entry = Decoded(source: message, row: row, proxy: proxy(for: row, stableId: message.stableId))
+        let entry = Decoded(
+            source: message, row: row, foldItem: RemoteTranscriptFold.item(for: message)
+        )
         decoded[message.stableId] = entry
         return entry
-    }
-
-    private func proxy(for row: NativePeerRow, stableId: String) -> ACPMessage {
-        switch row {
-        case .user(let text, _, _, _):
-            .user(id: UUID(), messageId: nil, text: text, attachments: [])
-        case .agent(let text):
-            .agent(id: UUID(), messageId: nil, StreamingText(text))
-        case .thought(let text):
-            .thought(id: UUID(), messageId: nil, thoughtBuffer(for: stableId, seed: text))
-        case .toolCall(let call):
-            .toolCall(call)
-        case .fileEdit(let edit):
-            .fileEdit(id: UUID(), edit)
-        case .plan(let items):
-            .plan(id: UUID(), items)
-        case .planDocument(let document):
-            .planDocument(id: UUID(), document)
-        case .visualAid(let visual):
-            .visualAid(visual)
-        case .systemNotice(let text):
-            .systemNotice(id: UUID(), text: text)
-        }
     }
 }
 
 /// Folds a peer transcript's thinking and tool calls into the same
 /// activity and completed-work disclosures the local transcript shows.
 enum NativePeerTranscriptFold {
-    /// `proxies` must line up with `messages`. Row indices are positions in
-    /// that local array, not the wire `index`: a paged transcript starts
-    /// mid-history, and the fold indexes `proxies` directly.
-    @MainActor
+    /// Row indices are positions in `messages`, not the wire `index`: a
+    /// paged transcript starts mid-history.
     static func renderRows(
         messages: [RemoteWireMessage],
-        proxies: [ACPMessage],
+        items: [ACPTranscriptFoldItem],
         isTurnActive: Bool,
         enabled: Bool,
         isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false },
         memberLimit: (ACPTranscriptToolCallGroup) -> Int? = { _ in nil }
     ) -> [ACPTranscriptRenderRow] {
-        let rows = messages.enumerated().map {
-            ACPTranscriptVisibleRow(index: $0.offset, stableId: $0.element.stableId)
+        guard enabled else {
+            return messages.enumerated().map { .message(.init(index: $0.offset, stableId: $0.element.stableId)) }
         }
-        let latestUserIndex = proxies.lastIndex {
-            if case .user = $0 { return true }
-            return false
-        }
-        let options = ACPToolCallGrouping.Options(
-            enabled: enabled,
-            currentTurnAnswerIndex: ACPToolCallGrouping.currentTurnAnswerIndex(
-                messages: proxies,
-                currentTurnUserIndex: latestUserIndex,
-                isTurnActive: isTurnActive
-            ),
-            isTurnActive: isTurnActive
-        )
-        return ACPToolCallGrouping.fold(
-            rows: rows, messages: proxies, options: options,
-            isExpanded: isExpanded, memberLimit: memberLimit
+        return RemoteTranscriptFold.renderRows(
+            messages: messages, items: items, isTurnActive: isTurnActive, isExpanded: isExpanded, memberLimit: memberLimit
         )
     }
 }
