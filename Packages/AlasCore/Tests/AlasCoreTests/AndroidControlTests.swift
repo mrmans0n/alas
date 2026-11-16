@@ -250,14 +250,6 @@ struct AndroidControlTests {
         #expect(AndroidNetwork.data(setting) == expected)
     }
 
-    @Test func aLineSplitAcrossReadsIsReadOnce() {
-        var reader = LogcatLineReader()
-        let first = reader.lines(Data("11-16 10:00:00.000  1  1 W A: one\n11-16 10:00:01.000  1  1 W B: tw".utf8), year: 2026)
-        let second = reader.lines(Data("o\n".utf8), year: 2026)
-        #expect(first.map(\.message) == ["one"])
-        #expect(second.map(\.message) == ["two"])
-    }
-
     @Test(arguments: [
         (nil as Int?, 42 as Int?, AndroidLogFollow.restart(pid: 42)),
         (42, 42, .keep),

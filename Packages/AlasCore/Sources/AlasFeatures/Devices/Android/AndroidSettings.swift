@@ -169,22 +169,6 @@ public struct AndroidNetworkState: Equatable, Sendable {
     }
 }
 
-/// `logcat -v threadtime` lines as they stream: a line cut between reads is
-/// kept until the rest arrives.
-public struct LogcatLineReader: Sendable {
-    private var partial = Data()
-
-    public init() {}
-
-    public mutating func lines(_ chunk: Data, year: Int) -> [SimulatorLogLine] {
-        partial += chunk
-        guard let last = partial.lastIndex(of: UInt8(ascii: "\n")) else { return [] }
-        let complete = partial[partial.startIndex...last]
-        partial = Data(partial[partial.index(after: last)...])
-        return AndroidLogcat.parse(String(decoding: complete, as: UTF8.self), year: year)
-    }
-}
-
 /// What following an app's logs does when its pid is looked up again.
 public enum AndroidLogFollow: Equatable, Sendable {
     case keep

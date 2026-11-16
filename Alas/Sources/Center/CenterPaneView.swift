@@ -737,8 +737,16 @@ struct CenterPaneView: View {
                         RunReportTabView(state: state, tabState: s)
                             .id(s.id)
                     case .simulatorLogs(let s):
-                        SimulatorLogsTabView(state: state, tabState: s)
-                            .id(s.id)
+                        Group {
+                            if let source = state.deviceLogSource(for: s) {
+                                DeviceLogsTabView(tabState: s, source: source)
+                            } else {
+                                DevicesEmptyState(
+                                    symbol: "candybarphone", title: "Android logs need the Android SDK", detail: AndroidPaneModel.noSDK
+                                )
+                            }
+                        }
+                        .id(s.id)
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,

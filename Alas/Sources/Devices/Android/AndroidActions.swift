@@ -8,6 +8,7 @@ struct AndroidActions: View {
     let pane: AndroidPaneModel
     let control: DeviceAgentControl
     let recorder: DeviceRecorder
+    let onOpenLogs: () -> Void
     let onShutDown: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
@@ -27,6 +28,7 @@ struct AndroidActions: View {
                         withAnimation { self.notice = nil }
                     }
             }
+            ToolbarBtn(icon: "doc.text.magnifyingglass", tooltip: "Logs", action: onOpenLogs)
             ToolbarBtn(icon: "slider.horizontal.3", tooltip: "Device settings") { showsSettings = true }
                 .disabled(!VMDriver.allowsViewInput(control.driver(udid: device.serial)))
                 .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
