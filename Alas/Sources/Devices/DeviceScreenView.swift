@@ -34,6 +34,8 @@ struct DeviceScreenView: NSViewRepresentable {
     var onGesture: ((DeviceScreenPoint, DeviceScreenPoint) -> Void)?
     /// The characters of a key press sent to the device, for recording a flow.
     var onText: ((String) -> Void)?
+    /// A scroll's deltas as sent to the device, for recording a flow.
+    var onScroll: ((Double, Double) -> Void)?
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
@@ -49,6 +51,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onUserInput = onUserInput
         view.onGesture = onGesture
         view.onText = onText
+        view.onScroll = onScroll
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -67,6 +70,7 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onUserInput = onUserInput
         view.onGesture = onGesture
         view.onText = onText
+        view.onScroll = onScroll
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -99,6 +103,7 @@ final class DeviceScreenNSView: NSView {
     var onUserInput: () -> Void = {}
     var onGesture: ((DeviceScreenPoint, DeviceScreenPoint) -> Void)?
     var onText: ((String) -> Void)?
+    var onScroll: ((Double, Double) -> Void)?
     /// Where the current click started, upright.
     private var gestureStart: DeviceScreenPoint?
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
@@ -289,9 +294,9 @@ final class DeviceScreenNSView: NSView {
         }
         // A trackpad's deltas are points; a wheel's are lines, one step each.
         let scale = event.hasPreciseScrollingDeltas ? 0.1 : 1
-        client?.scroll(
-            udid: udid, point: at, dx: Double(event.scrollingDeltaX) * scale, dy: Double(event.scrollingDeltaY) * scale
-        )
+        let (dx, dy) = (Double(event.scrollingDeltaX) * scale, Double(event.scrollingDeltaY) * scale)
+        client?.scroll(udid: udid, point: at, dx: dx, dy: dy)
+        onScroll?(dx, dy)
     }
 
     override func updateTrackingAreas() {

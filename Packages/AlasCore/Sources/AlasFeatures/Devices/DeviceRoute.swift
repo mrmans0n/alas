@@ -26,13 +26,27 @@ public struct DeviceRoute: Equatable, Sendable {
 
     /// A route from a GPX file's track points, else its route points, else its waypoints.
     public static func gpx(_ text: String, name: String, speedKmh: Double) throws -> DeviceRoute {
+        // Tags in comments and CDATA aren't points.
+        let markup = removing("<!--", "-->", from: removing("<![CDATA[", "]]>", from: text))
         for tag in ["trkpt", "rtept", "wpt"] {
-            let found = try points(tag, in: text)
+            let found = try points(tag, in: markup)
             guard !found.isEmpty else { continue }
             guard found.count >= 2 else { throw DeviceRouteError("A route needs at least two points; \(name) has one.") }
             return DeviceRoute(name: name, points: found, speed: speedKmh / 3.6)
         }
         throw DeviceRouteError("\(name) has no track, route or waypoints.")
+    }
+
+    /// `text` without each span from `open` to `close`; an unclosed one runs to the end.
+    private static func removing(_ open: String, _ close: String, from text: String) -> String {
+        var out = ""
+        var rest = text[...]
+        while let start = rest.range(of: open) {
+            out += rest[..<start.lowerBound]
+            guard let end = rest[start.upperBound...].range(of: close) else { return out }
+            rest = rest[end.upperBound...]
+        }
+        return out + rest
     }
 
     /// `<tag lat=".." lon="..">` in document order; a point without both, or out of range, is refused.
@@ -98,12 +112,19 @@ public struct DeviceRoute: Equatable, Sendable {
                 let fraction = remaining / segment
                 return SimulatorLocation(
                     latitude: from.latitude + (to.latitude - from.latitude) * fraction,
-                    longitude: from.longitude + (to.longitude - from.longitude) * fraction
+                    // The short way, across the antimeridian when that is shorter.
+                    longitude: Self.wrapped(from.longitude + Self.wrapped(to.longitude - from.longitude) * fraction)
                 )
             }
             remaining -= segment
         }
         return points.last ?? first
+    }
+
+    /// A longitude, or a difference of two, in -180…180.
+    private static func wrapped(_ degrees: Double) -> Double {
+        let turned = (degrees + 180).truncatingRemainder(dividingBy: 360)
+        return (turned < 0 ? turned + 360 : turned) - 180
     }
 
     /// Great-circle distance in meters.

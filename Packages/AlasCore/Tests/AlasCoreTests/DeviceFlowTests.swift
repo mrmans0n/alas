@@ -23,6 +23,11 @@ struct DeviceFlowTests {
         id: spinner
     - openLink: "myapp://x#y"
     - waitForAnimationToEnd
+    - launchApp: {appId: "com.other"}
+    - tapOn: {id: "a, b", text: "ignored"}
+    - tapOn: { point: "10%,20%" }
+    - swipe: {direction: RIGHT}
+    - inputText: "one\ntwo\t\"three\"\\"
     """#
 
     @Test func everyCommandOfTheSubsetIsRead() throws {
@@ -32,6 +37,8 @@ struct DeviceFlowTests {
             .launchApp(nil), .tapOn(.text("Save")), .tapOn(.id("save_button")), .tapOn(.point(x: 0.5, y: 0.8)),
             .inputText(#"Ada "Lovelace""#), .pressKey(.back), .scroll, .swipe(.left),
             .assertVisible(.text("Done")), .assertNotVisible(.id("spinner")), .openLink("myapp://x#y"), .waitForAnimationToEnd,
+            .launchApp("com.other"), .tapOn(.id("a, b")), .tapOn(.point(x: 0.1, y: 0.2)), .swipe(.right),
+            .inputText("one\ntwo\t\"three\"\\"),
         ])
         #expect(flow.lines.prefix(3) == [4, 5, 6])
     }

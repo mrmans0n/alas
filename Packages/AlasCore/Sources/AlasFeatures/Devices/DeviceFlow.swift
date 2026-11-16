@@ -93,13 +93,25 @@ public struct DeviceFlow: Equatable, Sendable {
             let lineNumber = index + 1
             var name = command
             var scalar: String?
+            // The command's own `key: value` pairs: inline in braces, or on lines indented under it.
+            var map: [String: (value: String, line: Int)] = [:]
             if let colon = command.firstIndex(of: ":") {
                 name = String(command[..<colon]).trimmingCharacters(in: .whitespaces)
                 let rest = String(command[command.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-                scalar = rest.isEmpty ? nil : try value(rest, line: lineNumber)
+                if rest.hasPrefix("{") {
+                    guard rest.hasSuffix("}") else {
+                        throw DeviceFlowError(line: lineNumber, message: "A { map } isn't closed on its line.")
+                    }
+                    for pair in splitOutsideQuotes(String(rest.dropFirst().dropLast()), on: ",") {
+                        let trimmed = pair.trimmingCharacters(in: .whitespaces)
+                        guard !trimmed.isEmpty else { continue }
+                        let (key, entry) = try keyValue(trimmed, line: lineNumber)
+                        map[key] = (entry, lineNumber)
+                    }
+                } else if !rest.isEmpty {
+                    scalar = try value(rest, line: lineNumber)
+                }
             }
-            // The command's own `key: value` lines, indented under it.
-            var map: [String: (value: String, line: Int)] = [:]
             index += 1
             while index < lines.count {
                 let next = stripComment(lines[index])
@@ -128,8 +140,9 @@ public struct DeviceFlow: Equatable, Sendable {
         }
         func selector() throws(DeviceFlowError) -> Selector {
             if let scalar { return .text(scalar) }
-            if let text = map["text"] { return .text(text.value) }
+            // An id is the more specific of the two.
             if let id = map["id"] { return .id(id.value) }
+            if let text = map["text"] { return .text(text.value) }
             if let point = map["point"] { return try parsePoint(point.value, line: point.line) }
             throw DeviceFlowError(line: line, message: "\(name) needs text, an id or a point.")
         }
@@ -180,14 +193,43 @@ public struct DeviceFlow: Equatable, Sendable {
         return (key, try value(String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces), line: number))
     }
 
-    /// A bare value, or one in double quotes with `\"` and `\\` escapes.
+    /// `text` split at each `separator` outside double quotes.
+    private static func splitOutsideQuotes(_ text: String, on separator: Character) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var inQuotes = false
+        var escaped = false
+        for character in text {
+            if escaped {
+                escaped = false
+            } else if character == "\\", inQuotes {
+                escaped = true
+            } else if character == "\"" {
+                inQuotes.toggle()
+            } else if character == separator, !inQuotes {
+                parts.append(current)
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        parts.append(current)
+        return parts
+    }
+
+    /// A bare value, or one in double quotes with `\"`, `\\`, `\n`, `\r` and `\t` escapes.
     private static func value(_ text: String, line: Int) throws(DeviceFlowError) -> String {
         guard text.hasPrefix("\"") else { return text }
         var out = ""
         var escaped = false
         for character in text.dropFirst() {
             if escaped {
-                out.append(character)
+                switch character {
+                case "n": out.append("\n")
+                case "r": out.append("\r")
+                case "t": out.append("\t")
+                default: out.append(character)
+                }
                 escaped = false
             } else if character == "\\" {
                 escaped = true
@@ -254,8 +296,21 @@ public struct DeviceFlow: Equatable, Sendable {
         }
     }
 
+    /// In double quotes, with the escapes `value` reads, so a value never spans lines.
     private static func quote(_ text: String) -> String {
-        "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        var out = "\""
+        for character in text {
+            switch character {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\r\n": out += "\\r\\n"
+            case "\t": out += "\\t"
+            default: out.append(character)
+            }
+        }
+        return out + "\""
     }
 
     // MARK: Elements
@@ -283,6 +338,14 @@ public struct DeviceFlow: Equatable, Sendable {
         let dx = to.x - from.x
         let dy = to.y - from.y
         guard (dx * dx + dy * dy).squareRoot() >= 0.05 else { return nil }
+        return abs(dx) > abs(dy) ? (dx < 0 ? .left : .right) : (dy < 0 ? .up : .down)
+    }
+
+    /// How a recording names a wheel or trackpad scroll from its summed Mac
+    /// deltas: the content moves the way the deltas point, as under a finger
+    /// swiping that way. Nil for less than a point.
+    public static func scrollDirection(dx: Double, dy: Double) -> Direction? {
+        guard abs(dx) >= 1 || abs(dy) >= 1 else { return nil }
         return abs(dx) > abs(dy) ? (dx < 0 ? .left : .right) : (dy < 0 ? .up : .down)
     }
 

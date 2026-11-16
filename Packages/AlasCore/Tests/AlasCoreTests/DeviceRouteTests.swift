@@ -7,6 +7,7 @@ struct DeviceRouteTests {
         #"<gpx><trk><trkseg><trkpt lat="37.0" lon="-122.0"></trkpt><trkpt lat='37.001' lon='-122.0'/></trkseg></trk><wpt lat="1" lon="1"/></gpx>"#,
         #"<gpx><rte><rtept lat="37.0" lon="-122.0"/><rtept lat="37.001" lon="-122.0"/></rte></gpx>"#,
         #"<gpx><wpt lon="-122.0" lat="37.0"/><wpt lat="37.001" lon="-122.0"/></gpx>"#,
+        #"<gpx><!-- <trkpt>an old example</trkpt> --><desc><![CDATA[<trkpt lat="9">]]></desc><trkpt lat="37.0" lon="-122.0"/><trkpt lat="37.001" lon="-122.0"/></gpx>"#,
     ])
     func gpxTakesTracksThenRoutesThenWaypoints(gpx: String) throws {
         let route = try DeviceRoute.gpx(gpx, name: "Walk", speedKmh: 36)
@@ -41,6 +42,16 @@ struct DeviceRouteTests {
     }
 
     static let route2HalfTime = 111.19 / 2 / 10
+
+    @Test func aRouteAcrossTheAntimeridianTakesTheShortWay() {
+        let route = DeviceRoute(
+            name: "Dateline", points: [SimulatorLocation(latitude: 0, longitude: 179), SimulatorLocation(latitude: 0, longitude: -179)],
+            speed: 10
+        )
+        #expect(abs(route.length - 222_390) < 100)
+        #expect(abs(abs(route.position(after: route.duration / 2).longitude) - 180) < 0.000_001)
+        #expect(abs(route.position(after: route.duration / 4).longitude - 179.5) < 0.000_001)
+    }
 
     @Test func presetsAreWalkBikeAndDrive() {
         #expect(DeviceRoute.presets.map(\.name) == ["City Walk", "Bike Ride", "Freeway Drive"])

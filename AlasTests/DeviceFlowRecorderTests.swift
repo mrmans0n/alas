@@ -18,11 +18,16 @@ struct DeviceFlowRecorderTests {
         recorder.pressed("emulator-5554", .back)
         recorder.gesture("emulator-5554", from: DeviceScreenPoint(x: 0.5, y: 0.8), to: DeviceScreenPoint(x: 0.5, y: 0.2))
         recorder.typed("emulator-5554", "end")
+        // A scroll's events add up to one swipe, the way the content moved, before the next step.
+        recorder.scrolled("emulator-5554", dx: 1, dy: -4)
+        recorder.scrolled("emulator-5554", dx: 0, dy: -30)
+        recorder.pressed("emulator-5554", .home)
+        recorder.scrolled("emulator-5554", dx: -12, dy: 2)
         let flow = try #require(recorder.stop("emulator-5554"))
         #expect(flow.appID == "com.example.hello")
         #expect(flow.steps == [
             .launchApp(nil), .tapOn(.text("General")), .inputText("ho"), .pressKey(.enter), .inputText("more"),
-            .pressKey(.back), .swipe(.up), .inputText("end"),
+            .pressKey(.back), .swipe(.up), .inputText("end"), .swipe(.up), .pressKey(.home), .swipe(.left),
         ])
         #expect(!recorder.isRecording("emulator-5554"))
     }

@@ -38,7 +38,9 @@ struct DeviceFlowButtons: View {
         .popover(isPresented: Binding(get: { recorded != nil }, set: { if !$0 { recorded = nil } }), arrowEdge: .bottom) {
             saveForm
         }
-        ToolbarMenuButton(iconName: "play.rectangle", help: "Run flow") {
+        // A flow you start runs only on an idle device: taking it from you here would let held agent calls in first.
+        let held = control.driver(udid: udid) == .user
+        ToolbarMenuButton(iconName: "play.rectangle", help: held ? "Hand the device back to run a flow" : "Run flow") {
             let flows = Self.flows(in: folder)
             if flows.isEmpty {
                 Text("No flows in .maestro")
@@ -47,7 +49,7 @@ struct DeviceFlowButtons: View {
                 Button(file.deletingPathExtension().lastPathComponent) { run(file) }
             }
         }
-        .disabled(!enabled || recording)
+        .disabled(!enabled || recording || held)
         .popover(isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } }), arrowEdge: .bottom) {
             Text(result ?? "")
                 .font(scale.meta.font)
@@ -109,8 +111,6 @@ struct DeviceFlowButtons: View {
 
     /// Runs as the "flow" session, so the stage shows its progress and Take over stops it.
     private func run(_ file: URL) {
-        // Running a flow hands the device to it.
-        if case .user = control.driver(udid: udid) { control.handBack(udid: udid) }
         Task {
             let response = await control.perform(
                 .runFlow(udid: udid, path: file.path), sessionID: DeviceAgentControl.userFlowSession

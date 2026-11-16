@@ -56,7 +56,8 @@ struct AndroidDeviceStage: View {
                 canDrop: { $0.pathExtension.lowercased() == "apk" },
                 onPaste: paste, onCopy: copy,
                 onGesture: flowRecorder.isRecording(device.serial) ? { flowRecorder.gesture(device.serial, from: $0, to: $1) } : nil,
-                onText: flowRecorder.isRecording(device.serial) ? { flowRecorder.typed(device.serial, $0) } : nil
+                onText: flowRecorder.isRecording(device.serial) ? { flowRecorder.typed(device.serial, $0) } : nil,
+                onScroll: flowRecorder.isRecording(device.serial) ? { flowRecorder.scrolled(device.serial, dx: $0, dy: $1) } : nil
             )
             .id("\(device.serial):\(streamGeneration)")
             if let streamError {
