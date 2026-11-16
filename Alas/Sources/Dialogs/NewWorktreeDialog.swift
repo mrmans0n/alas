@@ -21,6 +21,11 @@ struct NewWorktreeDialog: View {
     var presetProjectId: String?
 
     @State private var projectId: String
+    /// The Machine the worktree runs on; nil for this Mac.
+    @State private var runOnHost: String?
+    @State private var primaryHasOrigin = false
+    /// The Machine a preset linked project lives on, chosen once origin is known.
+    @State private var presetRunOnHost: String?
     // `base` is seeded from the persisted Worktrees settings in .onAppear
     // (this literal is a placeholder only — the real default comes from
     // state.config.worktrees.baseBranch). `branch`/`stackName` hold a bare
@@ -66,7 +71,15 @@ struct NewWorktreeDialog: View {
     ) {
         self.state = state
         self._presented = presented
+        // A linked SSH project presets its primary, run on its machine.
+        let preset = state.projects.first { $0.id == presetProjectId }
+        let presetProjectId = preset?.linkedProjectId ?? presetProjectId
         self.presetProjectId = presetProjectId
+        let presetHost = preset?.linkedProjectId == nil ? nil : preset?.host
+        self._presetRunOnHost = State(initialValue: presetHost)
+        // Target the machine from the start: Create must not fall back to This Mac
+        // while the origin lookup that confirms it is still running.
+        self._runOnHost = State(initialValue: presetHost)
         let initialSelection = Self.initialSelection(
             presetProjectId: presetProjectId,
             projects: state.worktreeProjects,
@@ -117,6 +130,11 @@ struct NewWorktreeDialog: View {
                             projects: state.worktreeProjects,
                             icon: { state.effectiveIcon(for: $0) }
                         )
+                    }
+                }
+                if runOnOptions.count > 1 {
+                    DialogField(label: "Run on") {
+                        RunOnPicker(selection: $runOnHost, options: runOnOptions)
                     }
                 }
                 DialogField(label: "Base branch") {
@@ -213,6 +231,20 @@ struct NewWorktreeDialog: View {
         .onChange(of: branches) { _, _ in
             refreshAutoNamePlaceholder()
         }
+        .task(id: projectId) { await refreshRunOn() }
+        .onChange(of: runOnHost) { _, _ in
+            // The machine decides which agents can run there, and whether gg pins the base.
+            // Keep the chosen surface (an attached issue may have picked Chat); only
+            // swap an agent the new machine can't run.
+            (launchMode, launchAgentId) = Self.launchAfterRunOnChange(
+                mode: launchMode,
+                agentId: launchAgentId,
+                fallbackAgentId: effectiveAutoLaunchAgent?.id,
+                enabledAgents: launchEligibleAgents
+            )
+            if let pinned = stackPinnedBase { base = pinned }
+            refreshAutoNamePlaceholder()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboardTicket()
         }
@@ -227,6 +259,9 @@ struct NewWorktreeDialog: View {
                 issueDrivenProjectID: issueDrivenProjectChangeID
             )
             issueDrivenProjectChangeID = nil
+            // The previous repo's machine and origin say nothing about this one.
+            runOnHost = nil
+            primaryHasOrigin = false
             applyGGModeDefault(for: projectId)
             if shouldApplyLaunchDefaults {
                 applyLaunchDefaults(for: projectId)
@@ -278,6 +313,48 @@ struct NewWorktreeDialog: View {
 
     private var presetProject: ProjectConfig? {
         Self.resolvedPresetProject(presetProjectId: presetProjectId, projects: state.worktreeProjects)
+    }
+
+    /// The project the worktree is created in: the chosen one, or its linked
+    /// checkout on the Run on machine. Never another location.
+    private var targetProject: ProjectConfig? {
+        guard let runOnHost else { return state.worktreeProjects.first { $0.id == projectId } }
+        return state.projectsManager.linkedProjects(of: projectId).first { $0.host == runOnHost }
+    }
+
+    private var runOnOptions: [RunOnOption] {
+        // A standalone SSH project already names its machine.
+        guard let primary = state.worktreeProjects.first(where: { $0.id == projectId }), primary.host == nil else { return [] }
+        return RunOnOptions.make(
+            primary: primary,
+            hasOrigin: primaryHasOrigin,
+            linked: state.projectsManager.linkedProjects(of: projectId),
+            machines: state.config.machines,
+            reachability: { RemoteHostStatusStore.shared.reachability(for: $0) }
+        )
+    }
+
+    /// Reads the primary's origin, which decides whether a Machine can run it,
+    /// then preselects the preset machine or the last one used.
+    private func refreshRunOn() async {
+        let selected = projectId
+        guard let primary = state.worktreeProjects.first(where: { $0.id == selected }), primary.host == nil else { return }
+        let hostBefore = runOnHost
+        let launchBefore = (launchMode, launchAgentId, openAfterCreate)
+        let origin = await AppState.originURL(projectPath: primary.path)
+        guard selected == projectId else { return }
+        primaryHasOrigin = origin.flatMap(GitRemoteIdentity.normalized) != nil
+        // A location the user picked during the lookup stands while it can still run the project.
+        let wanted = runOnHost != hostBefore ? runOnHost : presetRunOnHost ?? primary.lastRunOnHost
+        let preselected = RunOnOptions.preselectedHost(in: runOnOptions, lastRunOnHost: wanted)
+        presetRunOnHost = nil
+        guard preselected != runOnHost else { return }
+        runOnHost = preselected
+        // An automatic choice resolves the defaults for its machine; a launch choice
+        // made during the lookup, by the user or an attached issue, still stands.
+        if issueState.draft == nil, (launchMode, launchAgentId, openAfterCreate) == launchBefore {
+            applyLaunchDefaults(for: selected)
+        }
     }
 
     private var showsRepositorySelector: Bool {
@@ -333,7 +410,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var ggStackAvailability: GGStackCreateMode.Availability {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return .hidden }
+        guard let project = targetProject else { return .hidden }
         let gatePassed = state.config.changes.stackedDiffsEnabled
             && GGAvailability.shared.isInstalled
             && project.host == nil
@@ -345,7 +422,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var createsGGStack: Bool {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return false }
+        guard let project = targetProject else { return false }
         return GGStackCreateMode.createsStack(
             masterEnabled: state.config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
@@ -357,7 +434,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var stackedDiffsRequested: Bool {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return false }
+        guard let project = targetProject else { return false }
         return GGStackCreateMode.createsStack(
             masterEnabled: state.config.changes.stackedDiffsEnabled,
             ggInstalled: true,
@@ -386,7 +463,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func composedBranch(name: String) -> String {
-        let project = state.worktreeProjects.first(where: { $0.id == projectId })
+        let project = targetProject
         return WorktreeBranchName.compose(
             name: name,
             prefix: state.config.worktrees.branchPrefix,
@@ -410,8 +487,8 @@ struct NewWorktreeDialog: View {
     /// worktree, or a directory: `git worktree add` would otherwise check out
     /// that existing branch instead of creating a fresh one.
     private func refreshAutoNamePlaceholder(alsoTaken localBranches: Set<String> = []) {
-        let projectWorktrees = state.projectsManager.worktrees(projectId: projectId)
-        let isLocal = state.worktreeProjects.first(where: { $0.id == projectId })?.host == nil
+        let projectWorktrees = state.projectsManager.worktrees(projectId: targetProject?.id ?? projectId)
+        let isLocal = targetProject?.host == nil
         func isTaken(_ name: String) -> Bool {
             let candidate = composedBranch(name: name)
             if branches.contains(candidate) || localBranches.contains(candidate)
@@ -432,7 +509,7 @@ struct NewWorktreeDialog: View {
     /// off/unavailable or gg config records no base (then the picker stays free).
     private var stackPinnedBase: String? {
         guard createsGGStack, case .enabled = ggStackAvailability,
-              let project = state.worktreeProjects.first(where: { $0.id == projectId })
+              let project = targetProject
         else { return nil }
         return GGConfigReader.defaultBase(repoPath: project.path)
     }
@@ -440,7 +517,7 @@ struct NewWorktreeDialog: View {
     /// Where the worktree will land, once there is a name to place it; the
     /// base branch is already in the field below.
     private var subtitleText: String {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else {
+        guard let project = targetProject else {
             return "Create a worktree."
         }
         guard !activeName.isEmpty || namesBranchFromFirstPrompt else { return "Create a worktree in \(project.name)." }
@@ -457,7 +534,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var effectiveAutoLaunchAgent: AgentDefinition? {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return nil }
+        guard let project = targetProject else { return nil }
         let agentId = Self.resolvedAutoLaunchAgentID(
             globalAgentId: state.config.agents.worktreeAutoLaunch.agentId,
             projectMode: project.startupScripts.worktreeAgentMode,
@@ -472,7 +549,7 @@ struct NewWorktreeDialog: View {
     /// installed, enabled agent. The worktree being created does not exist
     /// yet, so this resolves from the primary checkout. Local projects only.
     private var repoDefaultAgentId: String? {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }),
+        guard let project = targetProject,
               project.host == nil,
               let candidate = state.repoConfig(
                   worktreeRoot: URL(fileURLWithPath: project.path, isDirectory: true)
@@ -496,7 +573,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func renderedPath(branch: String) -> String {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return "" }
+        guard let project = targetProject else { return "" }
         return WorktreePathTemplateRenderer.render(
             template: state.config.worktrees.pathTemplate,
             worktreeRoot: state.config.worktrees.rootPath,
@@ -721,7 +798,10 @@ struct NewWorktreeDialog: View {
     }
 
     private func create() {
-        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return }
+        guard let project = targetProject else { return }
+        // Read now: the dialog stays editable while the create runs.
+        let primaryId = projectId
+        let chosenHost = runOnHost
         cancelNameSuggestion()
         createTask?.cancel()
         createTask = Task { @MainActor in
@@ -731,11 +811,12 @@ struct NewWorktreeDialog: View {
                 // temporary name rather than failing the create.
                 let refs = try? await Process.git(
                     ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                    // The chosen checkout; a Machine's path runs over SSH.
                     cwd: URL(fileURLWithPath: project.path)
                 )
                 // The dialog stays editable meanwhile, so every input below is
                 // read after this point, from the same state.
-                guard !Task.isCancelled, presented, projectId == project.id else { return }
+                guard !Task.isCancelled, presented, targetProject?.id == project.id else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }
@@ -777,6 +858,7 @@ struct NewWorktreeDialog: View {
                 createErrorMessage = "A worktree already exists at this path."
                 return
             }
+            state.projectsManager.setLastRunOnHost(projectId: primaryId, host: chosenHost)
             state.setWorktreeLaunchDefaults(
                 projectId: project.id,
                 openAfterCreate: openAfterCreate,
@@ -1067,7 +1149,7 @@ struct NewWorktreeDialog: View {
 
     private var launchEligibleAgents: [AgentDefinition] {
         Self.launchEligibleAgents(
-            isRemoteProject: state.worktreeProjects.first(where: { $0.id == projectId })?.host != nil,
+            isRemoteProject: targetProject?.host != nil,
             configuredEnabledAgents: configuredEnabledAgents,
             locallyEnabledAgents: state.agentRegistry.enabled()
         )
@@ -1209,6 +1291,20 @@ struct NewWorktreeDialog: View {
         case .overrideGlobal, .appendToGlobal:
             return enabled(projectAgentId)
         }
+    }
+
+    /// The launch surface after Run on moves to another machine: the current
+    /// choice stays while the machine can run it; an agent it can't run gives
+    /// way to the fallback, and Chat to Terminal when no agent there speaks ACP.
+    nonisolated static func launchAfterRunOnChange(
+        mode: AppConfig.LauncherMode,
+        agentId: String,
+        fallbackAgentId: String?,
+        enabledAgents: [AgentDefinition]
+    ) -> (mode: AppConfig.LauncherMode, agentId: String) {
+        let mode: AppConfig.LauncherMode = mode == .acp && !acpSegmentEnabled(enabledAgents: enabledAgents) ? .terminal : mode
+        let agent = agentId == "none" || enabledAgents.contains { $0.id == agentId } ? agentId : fallbackAgentId ?? "none"
+        return (mode, resolvedLaunchAgent(initialAgentId: agent, mode: mode, enabledAgents: enabledAgents))
     }
 
     nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {

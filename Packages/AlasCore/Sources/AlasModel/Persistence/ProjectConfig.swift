@@ -173,6 +173,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     /// The local project this SSH project is a checkout of, by git origin.
     /// A linked record has no sidebar group or settings of its own.
     public var linkedProjectId: String?
+    /// Where New Worktree last created for this project: a Machine's
+    /// destination, or nil for this Mac. Kept on the primary.
+    public var lastRunOnHost: String?
     /// Omitted from disk for `.git`, so git projects encode exactly as before.
     public var kind: ProjectKind = .git
     public var isFolder: Bool { kind == .folder }
@@ -215,7 +218,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     public enum CodingKeys: String, CodingKey, Sendable {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, linkedProjectId, kind, ggMode,
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, linkedProjectId, lastRunOnHost, kind, ggMode,
              ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs,
              shepherd, vmForNewWorktrees, vmGuestSetupScript
@@ -309,6 +312,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         }
         host = try? c.decode(String.self, forKey: .host)
         linkedProjectId = try? c.decodeIfPresent(String.self, forKey: .linkedProjectId)
+        lastRunOnHost = try? c.decodeIfPresent(String.self, forKey: .lastRunOnHost)
         kind = (try? c.decode(ProjectKind.self, forKey: .kind)) ?? .git
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
@@ -419,6 +423,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(worktreeBranchTemplate, forKey: .worktreeBranchTemplate)
         try c.encodeIfPresent(host, forKey: .host)
         try c.encodeIfPresent(linkedProjectId, forKey: .linkedProjectId)
+        try c.encodeIfPresent(lastRunOnHost, forKey: .lastRunOnHost)
         if kind != .git {
             try c.encode(kind, forKey: .kind)
         }

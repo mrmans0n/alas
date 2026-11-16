@@ -5656,7 +5656,7 @@ final class AppState {
         }
     }
 
-    private static func originURL(projectPath: String) async -> String? {
+    static func originURL(projectPath: String) async -> String? {
         guard let result = try? await Process.git(["remote", "get-url", "origin"], cwd: URL(fileURLWithPath: projectPath)),
               result.exitCode == 0
         else { return nil }
@@ -5897,7 +5897,9 @@ final class AppState {
     }
 
     /// Projects that can have worktrees: everything but folder projects.
-    var worktreeProjects: [ProjectConfig] { projects.filter { !$0.isFolder } }
+    /// Projects New Worktree offers. A linked SSH project is reached through
+    /// its primary's Run on picker instead.
+    var worktreeProjects: [ProjectConfig] { projectsManager.primaryProjects.filter { !$0.isFolder } }
 
     /// Resolved through the owning project: a git project and a folder project
     /// may register the same path.
