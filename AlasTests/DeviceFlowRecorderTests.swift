@@ -15,6 +15,8 @@ struct DeviceFlowRecorderTests {
         recorder.gesture("emulator-5554", from: general, to: general)
         recorder.typed("emulator-5554", "hi\u{7F}o\u{F700}\r")
         recorder.typed("emulator-5554", "more")
+        // Pasted text is typed as is: its newline is text, not the Enter key.
+        recorder.pasted("emulator-5554", " pass\nword")
         recorder.pressed("emulator-5554", .back)
         recorder.gesture("emulator-5554", from: DeviceScreenPoint(x: 0.5, y: 0.8), to: DeviceScreenPoint(x: 0.5, y: 0.2))
         recorder.typed("emulator-5554", "end")
@@ -26,9 +28,26 @@ struct DeviceFlowRecorderTests {
         let flow = try #require(recorder.stop("emulator-5554"))
         #expect(flow.appID == "com.example.hello")
         #expect(flow.steps == [
-            .launchApp(nil), .tapOn(.text("General")), .inputText("ho"), .pressKey(.enter), .inputText("more"),
+            .launchApp(nil), .tapOn(.text("General")), .inputText("ho"), .pressKey(.enter), .inputText("more pass\nword"),
             .pressKey(.back), .swipe(.up), .inputText("end"), .swipe(.up), .pressKey(.home), .swipe(.left),
         ])
         #expect(!recorder.isRecording("emulator-5554"))
+    }
+
+    @Test func inputWhileTheRecordingStartsStillFollowsTheLaunch() async throws {
+        let backend = DeviceAgentControlTests.FakeBackend()
+        backend.front = "com.example.hello"
+        backend.holdsFront = true
+        let recorder = DeviceFlowRecorder()
+        async let started: Void = recorder.start(udid: "emulator-5554", backend: backend)
+        try await eventually("start reads the app in front") { backend.frontWaiter != nil }
+        let general = DeviceScreenPoint(x: 201.0 / 402, y: 346.0 / 874)
+        recorder.gesture("emulator-5554", from: general, to: general)
+        backend.frontWaiter?.resume()
+        await started
+        let flow = try #require(recorder.stop("emulator-5554"))
+        #expect(flow.appID == "com.example.hello")
+        #expect(flow.steps.first == .launchApp(nil))
+        #expect(flow.steps.count == 2)
     }
 }

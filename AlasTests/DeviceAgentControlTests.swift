@@ -839,7 +839,13 @@ extension DeviceAgentControlTests {
         }
         func isInstalled(_ id: String, appID: String) async -> Bool { appID != "com.example.gone" }
         var front: String?
-        func frontApp(_ id: String) async -> String? { front }
+        /// Set to hold `frontApp` until the test resumes it.
+        var holdsFront = false
+        var frontWaiter: CheckedContinuation<Void, Never>?
+        func frontApp(_ id: String) async -> String? {
+            if holdsFront { await withCheckedContinuation { frontWaiter = $0 } }
+            return front
+        }
         func display(_ id: String) async throws -> SimulatorDisplaySettings {
             SimulatorDisplaySettings(appearance: .unknown, textSize: .unknown, increaseContrast: .unknown)
         }
@@ -1041,6 +1047,17 @@ extension DeviceAgentControlTests {
         let reply = try Self.reply(await control.perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s"))
         #expect(reply["passed"] as? Bool == false)
         #expect(android.snapshotCount == 3)
+    }
+
+    /// An Android snapshot takes about 2 s: the user can take over while the step reads one.
+    @Test func aTakeoverDuringAStepsSnapshotStopsItBeforeTheTap() async throws {
+        let android = FakeBackend()
+        let control = bothPlatforms(android)
+        android.onSnapshot = { control.takeOver(udid: "emulator-5554") }
+        let file = try Self.flowFile("---\n- tapOn: General\n")
+        let reply = try Self.reply(await control.perform(.runFlow(udid: "emulator-5554", path: file.path), sessionID: "s"))
+        #expect(reply["reason"] as? String == "The user took over.")
+        #expect(android.fakeInput.touches.isEmpty)
     }
 
     @Test func aFlowStopsWhenTheUserTakesOver() async throws {

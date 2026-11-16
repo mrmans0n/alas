@@ -75,18 +75,29 @@ final class DevicePaneModel {
     @ObservationIgnored private var noticeTasks: [String: Task<Void, Never>] = [:]
 
     /// Pastes the Mac clipboard's text into the simulator's focused field.
-    func paste(_ text: String?, udid: String, pasteboard: DevicePasteboard) async {
-        guard let text, !text.isEmpty else { return show("The clipboard has no text to paste.", udid: udid) }
-        guard text.utf8.count <= 1_000_000 else { return show("That text is too long to paste.", udid: udid) }
+    /// Whether the text went in.
+    @discardableResult
+    func paste(_ text: String?, udid: String, pasteboard: DevicePasteboard) async -> Bool {
+        guard let text, !text.isEmpty else {
+            show("The clipboard has no text to paste.", udid: udid)
+            return false
+        }
+        guard text.utf8.count <= 1_000_000 else {
+            show("That text is too long to paste.", udid: udid)
+            return false
+        }
         do {
             let paste = try await pasteboard.open(udid: udid, keepText: false)
             do { try await pasteboard.paste(text, in: paste) } catch {
                 await pasteboard.close(paste)
-                return show("Couldn't paste: \(error.localizedDescription)", udid: udid)
+                show("Couldn't paste: \(error.localizedDescription)", udid: udid)
+                return false
             }
             await pasteboard.close(paste)
+            return true
         } catch {
             show("Couldn't paste: \(error.localizedDescription)", udid: udid)
+            return false
         }
     }
 

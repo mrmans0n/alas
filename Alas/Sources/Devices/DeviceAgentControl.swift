@@ -592,6 +592,9 @@ final class DeviceAgentControl {
             do {
                 let snapshot = try await takeSnapshot(udid)
                 snapshotFailure = nil
+                // The user can take over while a snapshot is read (about 2 s on Android).
+                if Task.isCancelled { return .failure(Failure(message: "The call was cancelled.")) }
+                if userDriving(udid) { return .failure(Failure(message: "The user took over.")) }
                 switch (DeviceFlow.find(selector, in: snapshot), visible) {
                 case (let element?, true): return .success((snapshot, element))
                 case (nil, false): return .success(nil)

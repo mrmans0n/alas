@@ -62,9 +62,10 @@ final class DeviceFlowRecorder {
         let snapshot = try? await backend.snapshot(udid, generation: 0)
         // Stopped, and maybe started again, meanwhile.
         guard recordings[udid]?.token == recording.token else { return }
-        if let app, recordings[udid]?.flow.steps.isEmpty == true {
+        // Input that came meanwhile follows the launch.
+        if let app {
             recordings[udid]?.flow.appID = app
-            recordings[udid]?.flow.steps = [.launchApp(nil)]
+            recordings[udid]?.flow.steps.insert(.launchApp(nil), at: 0)
         }
         if recordings[udid]?.snapshot == nil { recordings[udid]?.snapshot = snapshot }
     }
@@ -106,6 +107,14 @@ final class DeviceFlowRecorder {
         }
         recordings[udid] = recording
         // Typing can change the screen too, as search suggestions do.
+        refreshSnapshot(udid)
+    }
+
+    /// Text the user pasted onto the device, typed back as is.
+    func pasted(_ udid: String, _ text: String) {
+        guard recordings[udid] != nil else { return }
+        recordings[udid]?.flushScroll()
+        recordings[udid]?.typed += text
         refreshSnapshot(udid)
     }
 

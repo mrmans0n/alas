@@ -52,7 +52,11 @@ struct DevicesTabView: View {
                 notice: model.notices[device.udid],
                 onPaste: {
                     let text = NSPasteboard.general.string(forType: .string)
-                    Task { await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard) }
+                    Task {
+                        if await model.paste(text, udid: device.udid, pasteboard: state.devicePasteboard), let text {
+                            state.deviceFlowRecorder.pasted(device.udid, text)
+                        }
+                    }
                 },
                 onCopy: { Task { await model.copy(udid: device.udid, pasteboard: state.devicePasteboard) } },
                 accessibilityOverlay: model.accessibilityOverlays.contains(device.udid),

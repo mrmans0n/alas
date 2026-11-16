@@ -112,6 +112,7 @@ struct AndroidDeviceStage: View {
             return pane.show("The clipboard has no text to paste.", serial: device.serial)
         }
         client.paste(udid: device.serial, text: text)
+        flowRecorder.pasted(device.serial, text)
     }
 
     private func copy() {
