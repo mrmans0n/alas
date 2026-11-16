@@ -177,7 +177,9 @@ final class DeviceAgentControl {
         defer { if let inputTurn { endInputTurn(udid, inputTurn) } }
         let backend: any DeviceBackend
         var device: AgentDevice
-        switch await locate(udid) {
+        // device_open of an AVD that already runs answers with its emulator.
+        let byAlias = if case .open = command { true } else { false }
+        switch await locate(udid, acceptingAlias: byAlias) {
         case .failure(let refusal): return refusal.response
         case .success(let found): (backend, device) = (found.backend, found.device)
         }
@@ -420,20 +422,23 @@ final class DeviceAgentControl {
     }
 
     /// Finds `udid` in the backend its shape suggests first (a UUID is a
-    /// simulator), then the others, and remembers where it was.
-    private func locate(_ udid: String) async -> Result<(backend: any DeviceBackend, device: AgentDevice), Refusal> {
+    /// simulator), then the others, and remembers where it was. A device found
+    /// by its alias is refused unless `acceptingAlias`.
+    private func locate(
+        _ udid: String, acceptingAlias: Bool = false
+    ) async -> Result<(backend: any DeviceBackend, device: AgentDevice), Refusal> {
         let preferred: AgentDevice.Platform = AgentDevice.isSimulatorID(udid) ? .ios : .android
         let ordered = backends.filter { $0.platform == preferred } + backends.filter { $0.platform != preferred }
         var failure: (any Error)?
         for backend in ordered {
             do {
                 if let device = try await backend.devices().first(where: { $0.id == udid || $0.alias == udid }) {
-                    if device.id != udid {
+                    if device.id != udid, !acceptingAlias {
                         return .failure(Refusal(response: .error(
                             "device_not_found: \(udid) is running as \(device.id); use that udid."
                         )))
                     }
-                    routes[udid] = backend.platform
+                    routes[device.id] = backend.platform
                     return .success((backend, device))
                 }
             } catch {

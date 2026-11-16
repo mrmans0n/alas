@@ -98,8 +98,10 @@ location and logs.
 - **list.** Ready devices by serial (`booted`); AVDs that aren't running as
   `avd:<name>` (`shutdown`); unauthorized and offline phones with that
   state, refused by the other tools (`device_not_ready`).
-- **open.** Boots an AVD headless and returns its serial in `udid`, with
-  a note to use it from then on.
+- **open.** Boots an AVD headless and returns its serial in `udid`, to use
+  from then on. Opening the `avd:` id of an AVD that already runs answers
+  with its serial too; the other tools refuse that id with
+  `device_not_found: avd:<name> is running as <serial>; use that udid.`
 - **snapshot.** `uiautomator dump`, parsed in AlasCore into
   `DeviceSnapshot`:
   - role from the class's last component, lowercased and spaced

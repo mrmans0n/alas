@@ -879,6 +879,13 @@ extension DeviceAgentControlTests {
         #expect(parts.joined().contains(#""udid":"emulator-5556""#))
         let stale = await control.perform(.snapshot(udid: "avd:Pixel_9", query: nil, limit: 200), sessionID: "s")
         #expect(error(stale) == "device_not_found: avd:Pixel_9 is running as emulator-5556; use that udid.")
+        // Opening it again is how an agent finds its serial: no error.
+        let again = await control.perform(.open(udid: "avd:Pixel_9"), sessionID: "s")
+        guard case .text(let againParts) = again else {
+            Issue.record("\(again)")
+            return
+        }
+        #expect(againParts.joined().contains(#""udid":"emulator-5556""#))
     }
 
     @Test(arguments: [

@@ -131,30 +131,31 @@ waiting.
 
 ## Agents
 
-Agents can drive the same simulators. Turn on **Settings › Computer Use ›
-Let agents use iOS simulators**. Agent sessions in a worktree then get these
-tools from the built-in `alas` MCP server:
+Agents can drive the same simulators and Android devices. Turn on
+**Settings › Computer Use › Let agents use simulators and Android devices**.
+Agent sessions in a worktree then get these tools from the built-in `alas`
+MCP server:
 
 | Tool | What it does |
 |---|---|
-| `device_list` | Lists the iOS simulators and whether each is booted. |
-| `device_open` | Boots a simulator if needed and shows it in the Devices tab of the agent's worktree. |
+| `device_list` | Lists the iOS simulators and Android devices, with their platform and whether each is booted. |
+| `device_open` | Boots a simulator or an Android AVD if needed and shows it in the Devices tab of the agent's worktree. |
 | `device_snapshot` | Reads the screen's accessibility elements, with refs such as `s2e3` and frames in points. |
 | `device_screenshot` | Returns a PNG of the screen, at most 1280 px on the long edge. |
 | `device_tap` | Taps a ref from the latest snapshot, or x/y pixels in the latest screenshot. |
 | `device_swipe` | Swipes in a direction, or between two screenshot points. |
 | `device_type` | Types text: ASCII as key presses, `\n` as Return; words with accents, emoji or other characters are pasted. |
-| `device_button` | Presses Home, Lock, Siri, the side button, or opens the app switcher. |
-| `device_install` | Installs a built `.app` on a booted simulator and returns its bundle ID. |
+| `device_button` | Presses Home, Lock, the side button or the app switcher; Siri on iOS; Back and the volume buttons on Android. |
+| `device_install` | Installs a built `.app` on a simulator, or an `.apk` on an Android device, and returns its bundle ID or package. |
 | `device_launch` | Launches an installed app, ending a running copy first. |
-| `device_set_appearance` | Sets light or dark appearance, the text size and Increase Contrast, and returns what the simulator reports. |
-| `device_set_accessibility` | Turns VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look on or off, and returns what the simulator reports. |
+| `device_set_appearance` | Sets light or dark appearance, the text size and Increase Contrast, and returns what the device reports. |
+| `device_set_accessibility` | Turns VoiceOver, Reduce Motion, Button Shapes, Reduce Transparency, a color filter and the Liquid Glass look on or off, and returns what the simulator reports. iOS only. |
 | `device_set_permission` | Grants, revokes or resets a privacy permission for an installed app. |
 | `device_set_location` | Sets or clears the simulated location. |
-| `device_push` | Sends a push notification to an installed app. |
+| `device_push` | Sends a push notification to an installed app. iOS only. |
 | `device_open_url` | Opens a web page or a deep link. |
 | `device_logs` | Reads an app's recent logs and crash reports, by default the app in front. |
-| `device_clipboard` | Reads the simulator's pasteboard, or sets it. |
+| `device_clipboard` | Reads the device's clipboard, or sets it. |
 | `device_rotate` | Turns the device, and returns the device and interface orientations. |
 | `device_record` | Starts or stops a screen recording; stop returns the video's path. |
 
@@ -165,7 +166,18 @@ changed completely, as after navigating. Refs of elements still on screen
 keep working. On iOS's keyboard, typing relabels keys, so typing usually
 returns the whole screen.
 
-While an agent works on a simulator, a pill on its screen says who is driving
+On Android, devices are named by their serial (`emulator-5554`), and an AVD
+that isn't running by `avd:<name>`: `device_open` boots it and answers with
+the serial to use from then on. Snapshot frames are in dp. Text sizes map to
+Android's font scale and Increase Contrast to its high-contrast text;
+permissions map to Android's runtime permissions, and those Android lacks
+answer `device_unsupported`, as do `device_push` and
+`device_set_accessibility`. The location is set through Android's test
+location provider, so it works on phones too. Reading an Android screen takes
+about 2 seconds, so actions that return what changed take that long too;
+pass `diff: false` to skip it.
+
+While an agent works on a device, a pill on its screen says who is driving
 and the screen ignores your clicks and keys. Take over to use it yourself. An
 agent's call made while you drive waits for you to hand the simulator back,
 for up to 50 seconds, and the pill says the agent is waiting; after that the

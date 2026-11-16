@@ -73,13 +73,17 @@ final class AndroidBackend: DeviceBackend {
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
         let control = try control()
         let density = try await density(id, control: control)
-        let dump = try await Process.runData(
-            control.sdk.adb, args: ["-s", id, "exec-out", "uiautomator", "dump", "/dev/tty"], timeout: 20
-        )
-        guard dump.exitCode == 0 else {
-            throw DeviceToolError(message: "device_unavailable: uiautomator failed: \(dump.stderr)")
+        // uiautomator can't read a window still coming up; one retry covers an app that just launched.
+        for attempt in 0..<2 {
+            let dump = try await Process.runData(
+                control.sdk.adb, args: ["-s", id, "exec-out", "uiautomator", "dump", "/dev/tty"], timeout: 20
+            )
+            if dump.exitCode == 0, let snapshot = try? AndroidUIDump.parse(dump.stdout, density: density, generation: generation) {
+                return snapshot
+            }
+            if attempt == 0 { try? await Task.sleep(for: .milliseconds(500)) }
         }
-        return try AndroidUIDump.parse(dump.stdout, density: density, generation: generation)
+        throw DeviceToolError(message: "device_unavailable: Android didn't describe its screen. Try again in a moment.")
     }
 
     private func density(_ id: String, control: AndroidControl) async throws -> Double {
