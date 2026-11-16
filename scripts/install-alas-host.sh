@@ -28,10 +28,15 @@ esac
 for tool in curl tar git; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing"
 done
+# ldconfig lives in sbin, which a user's PATH often leaves out. Without it,
+# skip the check rather than report libraries missing that may be there.
+libs="$(PATH="$PATH:/usr/sbin:/sbin" ldconfig -p 2>/dev/null || true)"
 missing=""
-for lib in libcurl.so.4 libsqlite3.so.0 libz.so.1; do
-  ldconfig -p 2>/dev/null | grep -q "$lib" || missing="$missing $lib"
-done
+if [ -n "$libs" ]; then
+  for lib in libcurl.so.4 libsqlite3.so.0 libz.so.1; do
+    echo "$libs" | grep -q "$lib" || missing="$missing $lib"
+  done
+fi
 [ -z "$missing" ] || fail "missing$missing; on Debian or Ubuntu: sudo apt install libcurl4 libsqlite3-0 zlib1g"
 
 work="$(mktemp -d)"
