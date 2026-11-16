@@ -24,13 +24,11 @@ enum RepoDisplay {
         }
     }
 
-    static func status(_ entry: RemoteWorktreeEntry) -> (label: String, isDirty: Bool) {
-        if entry.isRunning { return ("running", false) }
-        guard let s = entry.summary else { return ("clean", false) }
-        if !s.metricsAvailable { return ("changes unavailable", false) }
-        if s.conflictCount > 0 { return ("\(s.conflictCount) conflict\(s.conflictCount == 1 ? "" : "s")", true) }
-        if s.changedFileCount > 0 { return ("\(s.changedFileCount) file\(s.changedFileCount == 1 ? "" : "s")", true) }
-        return ("clean", false)
+    /// Line counts kept short enough to share a row: 1,284 reads as 1.3k.
+    static func shortCount(_ n: Int) -> String {
+        guard n >= 1000 else { return "\(n)" }
+        let k = (Double(n) / 100).rounded() / 10
+        return k == k.rounded() ? "\(Int(k))k" : "\(k)k"
     }
 
     /// `updatedAt` is Unix seconds.
@@ -62,100 +60,129 @@ enum RepoDisplay {
 
 struct RepoTile: View {
     let name: String
+    var size: CGFloat = 28
 
     var body: some View {
         Text(RepoDisplay.initials(name))
-            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .font(.system(size: size * 0.43, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
-            .frame(width: 28, height: 28)
-            .background(RepoDisplay.tileColor(name), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(width: size, height: size)
+            .background(RepoDisplay.tileColor(name), in: RoundedRectangle(cornerRadius: size * 0.29, style: .continuous))
             .accessibilityHidden(true)
     }
 }
 
-/// One worktree: branch, status line, diff stats, and its open sessions as
-/// tappable sub-rows. `open` reports the tapped session.
+/// One worktree, read like a row of the Mac sidebar: the branch with its
+/// prefix faint, then what needs you (or what runs), the session it opens and
+/// its line counts. A tap opens that session; the others are a long press away.
 struct WorktreeRow: View {
     let entry: RemoteWorktreeEntry
-    /// The session shown beside the list, where there is one (iPad).
-    var selectedSessionId: String? = nil
+    /// The worktree holds the session shown beside the list (iPad).
+    var isSelected = false
     let open: (RemoteSessionSummary) -> Void
 
     var body: some View {
-        let status = RepoDisplay.status(entry)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(entry.summary?.branch ?? entry.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                if entry.needsAttention {
-                    Circle().fill(.orange).frame(width: 8, height: 8)
-                        .accessibilityLabel("Needs attention")
-                }
-                Spacer(minLength: 8)
-                if let s = entry.summary, s.addedLines + s.deletedLines > 0 {
-                    HStack(spacing: 6) {
-                        Text("+\(s.addedLines)").foregroundStyle(.green)
-                        Text("\u{2212}\(s.deletedLines)").foregroundStyle(.red)
+        let lead = entry.leadSession
+        Button { if let lead { open(lead) } } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Circle().fill(dotColor).frame(width: 8, height: 8).padding(.top, 7)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline) {
+                        branchName
+                        Spacer(minLength: 6)
+                        if let lead {
+                            Text(RepoDisplay.relativeTime(lead.updatedAt))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                    .font(.caption.monospacedDigit().weight(.medium))
+                    detailLine(lead)
                 }
             }
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(entry.isRunning ? Color.blue : status.isDirty ? Color.orange : Color.secondary.opacity(0.4))
-                    .frame(width: 6, height: 6)
-                Text(status.label)
-                    .font(.subheadline)
-                    .foregroundStyle(entry.isRunning ? Color.blue : .secondary)
-            }
-            .padding(.leading, 22)
-            ForEach(entry.activeSessions, id: \.id) { session in
-                Button { open(session) } label: { SessionLine(session: session, isSelected: session.id == selectedSessionId) }
-                    .buttonStyle(.plain)
-            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 6)
-    }
-}
-
-private struct SessionLine: View {
-    let session: RemoteSessionSummary
-    var isSelected = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bubble.left.fill")
-                .font(.caption)
-                .foregroundStyle(tint)
-            Text(session.title)
-                .font(.subheadline)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(RepoDisplay.relativeTime(session.updatedAt))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.quaternary.opacity(0.5)),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .buttonStyle(.plain)
+        .disabled(lead == nil)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.18) : nil)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .padding(.leading, 22)
-        .contentShape(Rectangle())
+        .contextMenu {
+            if entry.activeSessions.count > 1 {
+                ForEach(entry.activeSessions, id: \.id) { session in
+                    Button(session.title) { open(session) }
+                }
+            }
+        }
     }
 
-    private var tint: Color {
-        switch session.status {
-        case "idle": .secondary
-        case "awaitingPermission", "awaitingInput": .orange
-        default: .blue
+    private var branch: String { entry.summary?.branch ?? entry.title }
+
+    /// The whole name when it fits, else the part after the last slash,
+    /// which is where branches differ.
+    private var branchName: some View {
+        let name = branch
+        let cut = name.lastIndex(of: "/").map { name.index(after: $0) } ?? name.startIndex
+        let leaf = String(name[cut...])
+        return ViewThatFits(in: .horizontal) {
+            (Text(name[..<cut]).foregroundStyle(.secondary) + Text(leaf).fontWeight(.semibold))
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            Text(leaf).fontWeight(.semibold).lineLimit(1).truncationMode(.middle)
         }
+        .accessibilityLabel(name)
+    }
+
+    private func detailLine(_ lead: RemoteSessionSummary?) -> some View {
+        HStack(spacing: 6) {
+            if let note = note(lead) {
+                Text(note.text)
+                    .fontWeight(note.leads ? .semibold : .regular)
+                    .foregroundStyle(note.color)
+                    .lineLimit(1).fixedSize()
+                Text("·").foregroundStyle(.tertiary).accessibilityHidden(true)
+            }
+            Text(lead?.title ?? statusText)
+                .foregroundStyle(.secondary).lineLimit(1)
+            if entry.activeSessions.count > 1 {
+                Text("+\(entry.activeSessions.count - 1)")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                    .accessibilityLabel("\(entry.activeSessions.count - 1) more sessions")
+            }
+            Spacer(minLength: 6)
+            if let s = entry.summary, s.addedLines + s.deletedLines > 0 {
+                HStack(spacing: 4) {
+                    Text("+\(RepoDisplay.shortCount(s.addedLines))").foregroundStyle(.green)
+                    Text("\u{2212}\(RepoDisplay.shortCount(s.deletedLines))").foregroundStyle(.red)
+                }
+                .fixedSize()
+            }
+        }
+        .font(.footnote.monospacedDigit())
+    }
+
+    private func note(_ lead: RemoteSessionSummary?) -> (text: String, color: Color, leads: Bool)? {
+        if let s = entry.summary, s.conflictCount > 0 {
+            return ("\(s.conflictCount) conflict\(s.conflictCount == 1 ? "" : "s")", .red, true)
+        }
+        switch lead?.status {
+        case "awaitingPermission": return ("Needs approval", .orange, true)
+        case "awaitingInput": return ("Waiting for you", .orange, true)
+        case "idle", nil: return nil
+        default: return ("Working", .blue, false)
+        }
+    }
+
+    /// Shown when the worktree has no session to name.
+    private var statusText: String {
+        guard let s = entry.summary else { return "No sessions" }
+        if !s.metricsAvailable { return "Changes unavailable" }
+        return s.changedFileCount > 0 ? "\(s.changedFileCount) file\(s.changedFileCount == 1 ? "" : "s") changed" : "Clean"
+    }
+
+    private var dotColor: Color {
+        if entry.needsAttention { return .orange }
+        if entry.isRunning { return .blue }
+        return Color.secondary.opacity(entry.isDirty ? 0.8 : 0.35)
     }
 }
