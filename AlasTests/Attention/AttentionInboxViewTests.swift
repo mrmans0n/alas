@@ -1,4 +1,5 @@
 import AppKit
+import AlasCore
 import SwiftUI
 import Testing
 @testable import Alas
@@ -26,6 +27,123 @@ struct AttentionInboxViewTests {
             dismissed: c.dismissed.map { ["s": $0] } ?? [:]
         )
         #expect(reminders == (c.reminds ? [HostUpdateReminder(serverId: "s", name: "mini", hostVersion: c.version)] : []))
+    }
+
+    @Test func disconnectedHostUpdateThatNeverReturnsReportsRecoveryInsteadOfSuccess() async {
+        let host = UpdateHostChannel()
+        var now = ContinuousClock.now
+        var waits = 0
+        let message = await PeerHostUpdate.perform(
+            channel: host.channel,
+            reconnectedChannel: { host.channel },
+            restartTimeout: .seconds(2),
+            sleep: { duration in
+                waits += 1
+                now += duration
+            },
+            now: { now }
+        )
+        #expect(message == PeerHostUpdate.reconnectTimeoutMessage)
+        #expect(waits > 0)
+        #expect(host.requests == [.updateHost])
+    }
+
+    @Test func disconnectedHostUpdateWaitsForAUsableReplacementChannel() async {
+        let host = UpdateHostChannel()
+        let replacement = UpdateHostChannel()
+        var current = host.channel
+        var waits = 0
+        let message = await PeerHostUpdate.perform(
+            channel: host.channel,
+            reconnectedChannel: { current },
+            sleep: { _ in
+                waits += 1
+                current = replacement.channel
+                await current.connect()
+            }
+        )
+        #expect(message == nil)
+        #expect(waits == 1)
+        #expect(replacement.channel.state != nil)
+        #expect(replacement.channel.isSubscribed)
+    }
+
+    @Test func disconnectedHostUpdateDoesNotAcceptAnUnsubscribedReplacement() async {
+        let host = UpdateHostChannel()
+        let replacement = UpdateHostChannel(subscribes: false)
+        await replacement.channel.connect()
+        var now = ContinuousClock.now
+        let message = await PeerHostUpdate.perform(
+            channel: host.channel,
+            reconnectedChannel: { replacement.channel },
+            restartTimeout: .seconds(1),
+            sleep: { now += $0 },
+            now: { now }
+        )
+        #expect(replacement.channel.state != nil)
+        #expect(!replacement.channel.isSubscribed)
+        #expect(message == PeerHostUpdate.reconnectTimeoutMessage)
+    }
+
+    @Test func noOpHostUpdateDoesNotWaitForARestart() async {
+        let host = UpdateHostChannel(updateResponse: .done)
+        let message = await PeerHostUpdate.perform(
+            channel: host.channel,
+            reconnectedChannel: {
+                Issue.record("A no-op update must not wait for reconnection")
+                return nil
+            },
+            sleep: { _ in Issue.record("A no-op update must not sleep") }
+        )
+        #expect(message == nil)
+    }
+
+    @Test func hostUpdateFailureIsNotHiddenByAReconnection() async {
+        let host = UpdateHostChannel(updateResponse: .failure(error: .failed(message: "Homebrew failed")))
+        let message = await PeerHostUpdate.perform(
+            channel: host.channel,
+            reconnectedChannel: {
+                Issue.record("An update error must be returned without waiting")
+                return nil
+            }
+        )
+        #expect(message == "Homebrew failed")
+    }
+
+    @MainActor
+    private final class UpdateHostChannel {
+        let updateResponse: HostResponse?
+        let subscribes: Bool
+        var requests: [HostRequest] = []
+        lazy var channel: PeerHostChannel = PeerHostChannel { [weak self] message in
+            guard let self else { return }
+            requests.append(message.request)
+            let response: HostResponse
+            switch message.request {
+            case .updateHost:
+                guard let updateResponse else {
+                    channel.disconnect()
+                    return
+                }
+                response = updateResponse
+            case .snapshot:
+                response = .snapshot(snapshot: HostSnapshot(
+                    cursor: HostCursor(generation: UUID(), sequence: 0),
+                    projects: [], worktrees: [], workspaceCheckouts: [], runs: [], sessions: []
+                ))
+            case .subscribeAccepting:
+                response = subscribes ? .subscribed : .failure(error: .failed(message: "Subscription failed"))
+            default:
+                Issue.record("Unexpected host request: \(message.request)")
+                return
+            }
+            channel.receive(.response(id: message.id, result: response))
+        }
+
+        init(updateResponse: HostResponse? = nil, subscribes: Bool = true) {
+            self.updateResponse = updateResponse
+            self.subscribes = subscribes
+        }
     }
 
     @Test func livePeerAttentionAddsOnceToBadgeAndInboxWithoutChangingLocalRows() {

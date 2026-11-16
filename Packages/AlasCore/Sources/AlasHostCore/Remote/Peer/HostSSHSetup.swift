@@ -244,10 +244,10 @@ public struct HostSSHSetup: Sendable {
         case .existing(let path):
             return path
         case .brewUpgrade(let cask):
-            return try await brew("upgrade --cask \(SSHCommand.shellQuote(cask))")
+            return try await brew("upgrade --cask \(SSHCommand.shellQuote(cask))", standalone: cask == "alas-host")
         case .brewInstall:
             do {
-                return try await brew("install --cask mrmans0n/tap/alas-host")
+                return try await brew("install --cask mrmans0n/tap/alas-host", standalone: true)
             } catch let failure as Failure where !failure.connectionFailed && probe.arch == Self.bundleArch {
                 progress("Homebrew failed; copying alas-host from this app")
                 do {
@@ -265,14 +265,20 @@ public struct HostSSHSetup: Sendable {
         }
     }
 
-    private func brew(_ arguments: String) async throws -> String {
+    private func brew(_ arguments: String, standalone: Bool) async throws -> String {
         // No cleanup: on its 30-day schedule it would delete old versions and
         // caches of everything on a Mac that only asked for a host.
+        // Homebrew still verifies the cask's SHA256. Only the standalone host
+        // has quarantine removed after verifying its signed executables.
         // brew's chatter goes to stderr so a failure shows it and stdout is the path.
+        let prepare = standalone
+            ? "/bin/sh -c \(SSHCommand.shellQuote(HostSelfUpdate.prepareStandaloneInstallScript)) sh \"$h\" || exit $?\n"
+            : ""
         let result = try await step(
             "Install",
-            "HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1 brew \(arguments) 1>&2 || exit $?\n"
-                + "\(Self.locateHost)\n[ -n \"$h\" ] && echo \"$h\"",
+            "HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_ASK=1 brew \(arguments) 1>&2 || exit $?\n"
+                + "\(Self.locateHost)\n[ -n \"$h\" ] || exit 1\n"
+                + prepare + "echo \"$h\"",
             timeout: 900
         )
         guard let path = result.stdout.split(separator: "\n").last.map(String.init), !path.isEmpty else {

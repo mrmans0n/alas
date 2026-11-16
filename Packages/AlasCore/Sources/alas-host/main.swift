@@ -515,6 +515,15 @@ func stop() {
         exit(0)
     }
 }
+let selfUpdateLifecycle = HostSelfUpdate.Lifecycle(
+    wasReplaced: executableWasReplaced,
+    restart: {
+        #if os(macOS)
+        try await HostSelfUpdate.restartAfterExit(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
+        #endif
+    },
+    stop: stop
+)
 var stopSources: [any DispatchSourceProtocol] = []
 for signalNumber in [SIGINT, SIGTERM] {
     signal(signalNumber, SIG_IGN)
@@ -526,34 +535,32 @@ for signalNumber in [SIGINT, SIGTERM] {
 #if canImport(Darwin)
 if executableFD >= 0 {
     let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: executableFD, eventMask: [.delete, .rename, .revoke], queue: .main)
-    source.setEventHandler { MainActor.assumeIsolated { stop() } }
+    source.setEventHandler { MainActor.assumeIsolated { selfUpdateLifecycle.executableChanged() } }
     source.resume()
     stopSources.append(source)
     // Replaced between the check after the lock and now.
-    if executableWasReplaced() { stop() }
+    selfUpdateLifecycle.executableChanged()
 }
 #else
 // No vnode events here: watch the executable's folder and check whether the file was swapped.
-// `stop` captures top-level state, so it isn't Sendable; the handler runs on the main queue.
-nonisolated(unsafe) let stopIfReplaced: () -> Void = { if executableWasReplaced() { stop() } }
+// The handler runs on the main queue, where the update lifecycle lives.
+nonisolated(unsafe) let stopIfReplaced: () -> Void = { selfUpdateLifecycle.executableChanged() }
 let executableWatch = executablePath.flatMap { path in
     FileEventStream(
         paths: [URL(fileURLWithPath: path).deletingLastPathComponent().path], fileEvents: true, latency: 0.2,
         recursive: false, queue: .main
     ) { _ in MainActor.assumeIsolated { stopIfReplaced() } }
 }
-if executableFD >= 0, executableWasReplaced() { stop() }
+if executableFD >= 0 { selfUpdateLifecycle.executableChanged() }
 #endif
 
 // Only as the launch agent, which starts the upgraded host again.
 if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePath: executablePath) {
     host.selfUpdate = {
-        try await HostSelfUpdate.upgrade(cask: cask)
-        // The file watch stops the host once the upgrade replaced it; this
-        // covers an upgrade it missed, a second later so the answer goes out.
-        // Already up to date, nothing was replaced and the host keeps serving.
-        if executableWasReplaced() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { stop() } }
+        try await selfUpdateLifecycle.install {
+            try await HostSelfUpdate.upgrade(
+                cask: cask, executable: URL(fileURLWithPath: CommandLine.arguments[0])
+            )
         }
     }
 }
@@ -561,9 +568,8 @@ if waitsForLock, let executablePath, let cask = HostSelfUpdate.cask(executablePa
 // A host unpacked from the Linux tarball updates itself from the latest release.
 if waitsForLock, let executablePath, let root = HostSelfUpdate.linuxInstallRoot(executablePath: executablePath) {
     host.selfUpdate = {
-        try await HostSelfUpdate.upgradeLinuxInstall(root: root)
-        if executableWasReplaced() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { stop() } }
+        try await selfUpdateLifecycle.install {
+            try await HostSelfUpdate.upgradeLinuxInstall(root: root)
         }
     }
 }
