@@ -21,7 +21,8 @@ public enum AndroidUIDump {
             let id = nonEmpty(node["resource-id"])
             let isControl = node["clickable"] == "true" || node["checkable"] == "true"
                 || (node["class"] ?? "").hasSuffix("EditText")
-            guard label != nil || id != nil || isControl else { continue }
+            // Android gives containers ids too, so an id alone doesn't make an element worth a ref.
+            guard label != nil || isControl else { continue }
             elements.append(DeviceElement(
                 ref: "s\(generation)e\(elements.count + 1)", role: role(ofClass: node["class"] ?? ""),
                 label: label, value: nil, id: id,

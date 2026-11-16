@@ -1205,6 +1205,7 @@
 		9E25EAFA8A87990B61E1113A /* ACPUpstreamReferenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 163D378BCA43555D00D1C1AD /* ACPUpstreamReferenceDetector.swift */; };
 		9E302329243407946D47DC91 /* BranchPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFD4C762D8323B78934ECE7 /* BranchPicker.swift */; };
 		9E349701BA73BBCCCBB135B3 /* DraftCommitTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */; };
+		9E376B8E27255908BEF1DF1C /* AndroidBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C11E5A14C49BFACFCA91DBA /* AndroidBackend.swift */; };
 		9E4B32E154B18BD2285F0D34 /* CommitDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF18448EDA0DCC8B171F11D /* CommitDiffView.swift */; };
 		9E890302990A7709343D11F6 /* RightPaneToolbarModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 911C47748187EEA25C56E1C9 /* RightPaneToolbarModelTests.swift */; };
 		9ED684E261871342BA6DFAC9 /* MergeWordDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */; };
@@ -2516,6 +2517,7 @@
 		3B7BE659F7E386D15047C374 /* WorktreeCreateFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCreateFetchTests.swift; sourceTree = "<group>"; };
 		3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilderTests.swift; sourceTree = "<group>"; };
 		3C06990EACEFA71B084E1EAE /* RepoMCPTrustBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoMCPTrustBanner.swift; sourceTree = "<group>"; };
+		3C11E5A14C49BFACFCA91DBA /* AndroidBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidBackend.swift; sourceTree = "<group>"; };
 		3C1D134CB4D4CEDED993FB10 /* InAppNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppNotificationTests.swift; sourceTree = "<group>"; };
 		3C860C82F92CF8B7CC58FF4D /* BlockedNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedNudgeBanner.swift; sourceTree = "<group>"; };
 		3C9032BA9542C617A09EF848 /* HoverWindowControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverWindowControllerTests.swift; sourceTree = "<group>"; };
@@ -5085,6 +5087,7 @@
 			isa = PBXGroup;
 			children = (
 				209613BEDEF9952514F04AEA /* AndroidActions.swift */,
+				3C11E5A14C49BFACFCA91DBA /* AndroidBackend.swift */,
 				D64CA2894081C4686BE93991 /* AndroidDeviceStage.swift */,
 				4B67613262F84679154AA321 /* AndroidPaneModel.swift */,
 				07BEB9398D7472A496CB9454 /* AndroidScreenRecording.swift */,
@@ -7904,6 +7907,7 @@
 				214A48509F96D0B6613A1D1D /* AlasSlider.swift in Sources */,
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
 				F74E98EEF023D500F1D8E4EB /* AndroidActions.swift in Sources */,
+				9E376B8E27255908BEF1DF1C /* AndroidBackend.swift in Sources */,
 				541E84CB6C4B4286AF2258FB /* AndroidDeviceStage.swift in Sources */,
 				092489FC78AD039330903551 /* AndroidPaneModel.swift in Sources */,
 				20C7C12538764EB3F08998E6 /* AndroidScreenRecording.swift in Sources */,

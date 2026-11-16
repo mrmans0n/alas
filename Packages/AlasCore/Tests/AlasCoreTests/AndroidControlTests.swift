@@ -124,6 +124,16 @@ struct AndroidControlTests {
         #expect(abs(snapshot.elements[0].x - 189.0 * 160 / 420) < 0.001)
     }
 
+    /// Android gives containers ids; a node with nothing to name and no action is noise.
+    @Test func aContainerWithOnlyAnIDIsLeftOut() throws {
+        let xml = Data(#"""
+        <hierarchy rotation="0"><node class="android.widget.FrameLayout" text="" content-desc="" resource-id="" clickable="false" bounds="[0,0][1080,2400]">
+        <node class="android.widget.ScrollView" text="" content-desc="" resource-id="p:id/content" clickable="false" bounds="[0,0][1080,2400]" />
+        </node></hierarchy>
+        """#.utf8)
+        #expect(try AndroidUIDump.parse(xml, density: 420, generation: 1).elements.isEmpty)
+    }
+
     @Test func aPasswordFieldsTextIsLeftOut() throws {
         let snapshot = try AndroidUIDump.parse(Self.dump, density: 420, generation: 1)
         #expect(!snapshot.json(query: nil, limit: 200).contains("hunter2"))
@@ -173,5 +183,23 @@ struct AndroidControlTests {
     @Test(arguments: [("8CA9B1E8-EE67-49E5-846F-293450990F76", true), ("emulator-5554", false), ("avd:Pixel_9", false)])
     func simulatorIDsAreUUIDs(id: String, isSimulator: Bool) {
         #expect(AgentDevice.isSimulatorID(id) == isSimulator)
+    }
+
+    @Test func javaCrashesAreReadForTheirPackageOnly() {
+        let lines = AndroidLogcat.parse("""
+        11-16 10:01:02.100  4242  4242 E AndroidRuntime: FATAL EXCEPTION: main
+        11-16 10:01:02.100  4242  4242 E AndroidRuntime: Process: com.example.hello, PID: 4242
+        11-16 10:01:02.100  4242  4242 E AndroidRuntime: java.lang.IllegalStateException: boom
+        11-16 10:01:02.100  4242  4242 E AndroidRuntime: \tat com.example.hello.Main.onCreate(Main.kt:12)
+        11-16 10:01:02.100  4242  4242 E AndroidRuntime: \tat android.app.Activity.performCreate(Activity.java:9000)
+        11-16 10:05:00.000  5000  5000 E AndroidRuntime: FATAL EXCEPTION: main
+        11-16 10:05:00.000  5000  5000 E AndroidRuntime: Process: com.other, PID: 5000
+        11-16 10:05:00.000  5000  5000 E AndroidRuntime: java.lang.RuntimeException: other
+        """, year: 2026)
+        let crashes = AndroidLogcat.crashes(lines, package: "com.example.hello")
+        #expect(crashes == [AndroidCrash(
+            time: "2026-11-16 10:01:02.100", exception: "java.lang.IllegalStateException: boom",
+            frames: ["com.example.hello.Main.onCreate(Main.kt:12)", "android.app.Activity.performCreate(Activity.java:9000)"]
+        )])
     }
 }

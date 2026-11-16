@@ -85,3 +85,47 @@ public enum AndroidLogcat {
         return record.split(separator: "/").first.map(String.init)
     }
 }
+
+/// A Java crash from `logcat -b crash`.
+public struct AndroidCrash: Equatable, Sendable {
+    public let time: String
+    public let exception: String
+    /// The stack's first frames, without "at".
+    public let frames: [String]
+
+    public init(time: String, exception: String, frames: [String]) {
+        self.time = time
+        self.exception = exception
+        self.frames = frames
+    }
+
+    /// Shaped like an iOS crash report in device_logs' reply.
+    public var json: [String: Any] {
+        ["time": time, "exception": exception, "frames": frames, "report": ""]
+    }
+}
+
+extension AndroidLogcat {
+    /// AndroidRuntime's FATAL EXCEPTION blocks for `package`, with up to 10 frames each.
+    public static func crashes(_ lines: [SimulatorLogLine], package: String) -> [AndroidCrash] {
+        let runtime = lines.filter { $0.process == "AndroidRuntime" }
+        var crashes: [AndroidCrash] = []
+        var index = 0
+        while index < runtime.count {
+            defer { index += 1 }
+            guard runtime[index].message.hasPrefix("FATAL EXCEPTION"), index + 2 < runtime.count,
+                  runtime[index + 1].message.hasPrefix("Process: \(package),") else { continue }
+            let exception = runtime[index + 2].message
+            var frames: [String] = []
+            var next = index + 3
+            while next < runtime.count, frames.count < 10 {
+                let text = runtime[next].message.trimmingCharacters(in: .whitespaces)
+                guard text.hasPrefix("at ") else { break }
+                frames.append(String(text.dropFirst(3)))
+                next += 1
+            }
+            crashes.append(AndroidCrash(time: runtime[index].time, exception: exception, frames: frames))
+        }
+        return crashes
+    }
+}

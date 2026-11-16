@@ -59,6 +59,11 @@ final class SimulatorBackend: DeviceBackend {
         return id
     }
 
+    /// AlasSimService takes input before the first frame.
+    func ready(_ id: String) async -> Bool {
+        true
+    }
+
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot {
         try DeviceSnapshot.parse(try await input.describe(udid: id), generation: generation)
     }

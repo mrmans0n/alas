@@ -107,7 +107,8 @@ location and logs.
   - label from `text`, else `content-desc` (a password field's text is
     left out); id from `resource-id`;
   - frames in dp; `isControl` for clickable, checkable or editable nodes;
-  - nodes with nothing to name and no action are skipped, as on iOS.
+  - nodes with no label and no action are skipped, even with an id:
+    Android gives layout containers resource-ids.
   Settle and diff work unchanged.
 - **screenshot, tap, swipe.** Through the stream, as on iOS. Coordinates are
   the latest screenshot's pixels.

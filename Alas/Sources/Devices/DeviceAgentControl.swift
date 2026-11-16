@@ -210,6 +210,13 @@ final class DeviceAgentControl {
         // The device's own id: after device_open of an AVD, its emulator's.
         renewLease(device.id)
         leased = device.id
+        let needsStream = switch command {
+        case .tap, .swipe, .type, .button, .screenshot, .rotate, .clipboard: true
+        default: false
+        }
+        if needsStream, await !backend.ready(device.id) {
+            return .error("device_unavailable: The screen of \(device.name) didn't start. Try again in a moment.")
+        }
 
         if let inputTurn {
             await waitForInputTurn(udid, inputTurn)

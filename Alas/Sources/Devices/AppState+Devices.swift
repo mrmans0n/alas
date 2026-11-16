@@ -16,7 +16,7 @@ extension AppState {
     private func showDevice(_ udid: String, in worktreeID: String?) {
         Task { await devicePane.refresh() }
         guard let worktreeID, let pane = rightPaneStore.activeState(worktreeId: worktreeID) else { return }
-        pane.devicesSelection = .simulator(udid)
+        pane.devicesSelection = AgentDevice.isSimulatorID(udid) ? .simulator(udid) : .android(udid)
         pane.activeTab = .device
         if !config.rightPaneVisible {
             config.rightPaneVisible = true

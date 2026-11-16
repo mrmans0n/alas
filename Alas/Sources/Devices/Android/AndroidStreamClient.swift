@@ -6,7 +6,7 @@ import Observation
 /// with its frames fanned out to the screens showing it.
 @MainActor
 @Observable
-final class AndroidStreamClient: DeviceScreenSource {
+final class AndroidStreamClient: DeviceScreenSource, DeviceInput {
     private struct Screen {
         let onFrame: @MainActor (DeviceFrame) -> Void
         let onStop: @MainActor (String) -> Void
@@ -111,17 +111,37 @@ final class AndroidStreamClient: DeviceScreenSource {
 
     /// Puts `text` on the device's clipboard and pastes it into the focused field.
     func paste(udid: String, text: String) {
+        setClipboard(udid: udid, text: text, paste: true)
+    }
+
+    /// Sets the device's clipboard; `paste` also pastes it into the focused field.
+    func setClipboard(udid: String, text: String, paste: Bool) {
         clipboardSequence += 1
-        sessions[udid]?.send(ScrcpyControl.setClipboard(sequence: clipboardSequence, text: text, paste: true))
+        sessions[udid]?.send(ScrcpyControl.setClipboard(sequence: clipboardSequence, text: text, paste: paste))
     }
 
     /// Copies the device's selection; nil when nothing came back in 2 s.
     func copy(udid: String) async -> String? {
-        await sessions[udid]?.copyClipboard()
+        await sessions[udid]?.copyClipboard(copy: true)
+    }
+
+    /// The device's clipboard as it is; nil when it didn't answer in 2 s.
+    func readClipboard(udid: String) async -> String? {
+        await sessions[udid]?.copyClipboard(copy: false)
     }
 
     func lastFrame(udid: String) -> DeviceFrame? {
         lastFrames[udid]
+    }
+
+    /// Android snapshots come from `uiautomator` through `AndroidBackend`.
+    func describe(udid: String) async throws -> Data {
+        throw DeviceToolError(message: "device_unavailable: Android describes its screen through adb.")
+    }
+
+    /// Android rotates through `AndroidBackend` and the window manager.
+    func rotate(udid: String, to orientation: DeviceScreenOrientation) async throws {
+        throw DeviceToolError(message: "device_rotate_failed: Android rotates through adb.")
     }
 
     private func start(_ serial: String) {

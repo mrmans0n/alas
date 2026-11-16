@@ -27,6 +27,8 @@ protocol DeviceBackend: AnyObject {
     func devices() async throws -> [AgentDevice]
     /// Boots `id` and returns the id to use from then on.
     func boot(_ id: String) async throws -> String
+    /// Waits until `id` takes input (its stream is up); false if it never does.
+    func ready(_ id: String) async -> Bool
     func snapshot(_ id: String, generation: Int) async throws -> DeviceSnapshot
     /// False when the platform has no such button.
     func press(_ id: String, _ button: DeviceCommand.Button) -> Bool
