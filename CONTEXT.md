@@ -17,7 +17,7 @@ A Project on a Machine connected to a primary local Project with the same git or
 _Avoid_: Remote project, host setup
 
 **Run On**:
-The choice, made when creating a worktree, of the Project's location (this Mac or a Machine) the worktree is created in. An explicit choice never falls back to another location.
+The choice, made when creating a worktree, of the Project's location (this Mac or a Machine) the worktree is created in. An explicit choice never falls back to another location. A Machine creates from what is on origin, so its base must be pushed first.
 _Avoid_: Target, environment
 
 **Space**:

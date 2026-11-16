@@ -5066,6 +5066,8 @@ final class AppState {
         request.destinationAlreadyPrepared = destinationAlreadyPrepared
         request.runsStartupScripts = runStartup
         request.fetchesBaseFirst = config.worktrees.fetchRemoteBeforeCreate
+        // A machine's linked checkout; a standalone SSH project creates as it always has.
+        request.createsFromFetchedOrigin = project.host != nil && project.linkedProjectId != nil
         request.namesBranchFromFirstPrompt = namesBranchFromFirstPrompt
         request.ggWorktreeMode = ggWorktreeMode
         request.issueAttachment = issueAttachment

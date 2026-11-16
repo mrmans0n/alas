@@ -520,14 +520,31 @@ project; 2d moves settings to the primary and adds Reconnect.
   Settings › Machines. The field shows only when there is more than This Mac.
 - `CONTEXT.md`: Run On.
 
-## PR 3b: `feat(remote): push the base before creating on a machine` (outline)
+## PR 3b: `feat(remote): push the base before creating on a machine`
 
-- **Pushed-base check.** Add a pure `BasePushState` decision. Add one
-  real-git integration test that uses a template repository with a bare
-  origin, covering pushed, ahead, and never pushed. Add the "Push <b> and
-  continue" button, reusing the push in `CommitPublishOperations`.
-- **`WorktreeCreateRequest.createsFromFetchedOrigin`.** `finishCreate`
-  always fetches, then creates from `origin/<b>`.
+**Files:** `Packages/AlasCore/Sources/AlasPlatform/Git/GitService+BasePush.swift`
+(new), `AlasCoreContext+WorktreeCreation.swift`, `AppState.swift`,
+`NewWorktreeDialog.swift`, tests in `AlasTests/WorktreeCreateFetchTests.swift`.
+
+- **`BasePushState`** (`.pushed`, `.notOnOrigin`, `.ahead(commits:)`) with
+  `notice(base:)`: "`<b>` isn't on origin" / "`<b>` has N commits that aren't
+  on origin".
+- **`GitService.basePushState(repoPath:base:)`**, run in the local primary: a
+  remote-tracking base (via `remoteForFetch`) is pushed; otherwise
+  `refs/remotes/origin/<b>` must exist and `rev-list --count origin/<b>..<b>`
+  must be 0.
+- **`GitService.pushBase(repoPath:base:)`**: `git push -u origin <b>`, never
+  forced; failures throw `pushFailureMessage`.
+- **`WorktreeCreateRequest.createsFromFetchedOrigin`**: `finishCreate` always
+  fetches and creates from `origin/<b>` (a remote-tracking base is fetched from
+  its own remote and used as is). `AppState.createWorktree` sets it when the
+  target project has a host.
+- **Dialog:** Create on a machine checks the base first; an unpushed base shows
+  the notice with **Push `<b>` and continue**, which pushes and re-runs Create.
+  A rejected push shows git's message and the dialog stays open.
+- **Tests:** `aBaseIsPushedOnceOriginHasEveryCommit` (pushed, ahead, never
+  pushed, remote-tracking, then `pushBase`) and
+  `aFetchedOriginCreationStartsFromOriginsBase`.
 
 ## PR 4: `feat(remote): set up a machine on first use` (outline)
 

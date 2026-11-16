@@ -52,6 +52,9 @@ struct NewWorktreeDialog: View {
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
     @State private var createErrorMessage: String?
+    /// A machine's create stopped on a base origin doesn't have yet.
+    @State private var unpushedBase: UnpushedBase?
+    @State private var isPushingBase = false
     @State private var issueState = NewWorktreeIssueState()
     @State private var issueSheetPresentation: AttachIssuePresentation?
     @State private var issueDrivenProjectChangeID: String?
@@ -189,6 +192,16 @@ struct NewWorktreeDialog: View {
                             launchAgentChip
                         }
                         Spacer(minLength: 0)
+                    }
+                }
+                if let unpushed = unpushedBase, unpushed.matches(projectId: projectId, host: runOnHost, base: base) {
+                    HStack(spacing: 8) {
+                        Text(unpushed.notice).font(scale.metaFont).foregroundColor(theme.color("warn"))
+                        Spacer(minLength: 0)
+                        AlasButton(title: "Push \(unpushed.base) and continue", style: .normal, compact: true) {
+                            pushBaseAndCreate(unpushed)
+                        }
+                        .disabled(isPushingBase)
                     }
                 }
                 if let createErrorMessage {
@@ -802,9 +815,21 @@ struct NewWorktreeDialog: View {
         // Read now: the dialog stays editable while the create runs.
         let primaryId = projectId
         let chosenHost = runOnHost
+        let chosenBase = base
         cancelNameSuggestion()
         createTask?.cancel()
         createTask = Task { @MainActor in
+            // A machine only sees what is on origin; checked in the local primary.
+            if chosenHost != nil, let primary = state.worktreeProjects.first(where: { $0.id == primaryId }) {
+                let pushState = try? await GitService().basePushState(repoPath: URL(fileURLWithPath: primary.path), base: chosenBase)
+                // Create only what was checked: the dialog stays editable meanwhile.
+                guard !Task.isCancelled, presented, base == chosenBase, targetProject?.id == project.id else { return }
+                if let notice = pushState?.notice(base: chosenBase) {
+                    unpushedBase = UnpushedBase(projectId: primaryId, host: chosenHost, base: chosenBase, notice: notice)
+                    return
+                }
+            }
+            unpushedBase = nil
             if namesBranchFromFirstPrompt {
                 // The picker's branch list loads asynchronously and may be
                 // stale; recheck against Git so a collision picks another
@@ -816,7 +841,7 @@ struct NewWorktreeDialog: View {
                 )
                 // The dialog stays editable meanwhile, so every input below is
                 // read after this point, from the same state.
-                guard !Task.isCancelled, presented, targetProject?.id == project.id else { return }
+                guard !Task.isCancelled, presented, base == chosenBase, targetProject?.id == project.id else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }
@@ -845,7 +870,7 @@ struct NewWorktreeDialog: View {
             let dest = URL(fileURLWithPath: renderedPath)
             let id = await state.createWorktree(
                 projectId: project.id,
-                base: base,
+                base: chosenBase,
                 branch: createdBranch,
                 destination: dest,
                 runStartup: runStartup,
@@ -866,6 +891,26 @@ struct NewWorktreeDialog: View {
             )
             createErrorMessage = nil
             presented = false
+        }
+    }
+
+    /// Pushes the base with `git push -u origin <base>`, never forced, then
+    /// continues the create. A rejection shows git's message and keeps the dialog open.
+    private func pushBaseAndCreate(_ unpushed: UnpushedBase) {
+        guard let primary = state.worktreeProjects.first(where: { $0.id == unpushed.projectId }) else { return }
+        isPushingBase = true
+        createErrorMessage = nil
+        Task { @MainActor in
+            defer { isPushingBase = false }
+            do {
+                try await GitService().pushBase(repoPath: URL(fileURLWithPath: primary.path), base: unpushed.base)
+            } catch {
+                createErrorMessage = error.localizedDescription
+                return
+            }
+            guard presented, unpushed.matches(projectId: projectId, host: runOnHost, base: base) else { return }
+            unpushedBase = nil
+            create()
         }
     }
 
@@ -1382,5 +1427,18 @@ struct NewWorktreeDialog: View {
         }
         let open = projectOpenAfterCreate ?? true
         return (open, mode, intended)
+    }
+}
+
+/// The base a machine's create stopped on, kept only while the dialog still
+/// targets the same repo, machine and base.
+private struct UnpushedBase {
+    let projectId: String
+    let host: String?
+    let base: String
+    let notice: String
+
+    func matches(projectId: String, host: String?, base: String) -> Bool {
+        self.projectId == projectId && self.host == host && self.base == base
     }
 }
