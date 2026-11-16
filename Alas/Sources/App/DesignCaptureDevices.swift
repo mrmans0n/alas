@@ -213,7 +213,7 @@ enum DesignCaptureDevices {
         }
         return VStack(spacing: 0) {
             HStack(spacing: 6) {
-                DevicesSwitcher(state: resolved, onSelect: { _ in })
+                DevicesSwitcher(state: resolved, onSelect: { _ in }, onBoot: { _ in })
                 Spacer(minLength: 0)
                 if let device {
                     DevicesActions(

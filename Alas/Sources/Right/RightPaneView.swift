@@ -304,7 +304,18 @@ struct RightPaneView: View {
     private func devicesSwitcher(rps: RightPaneState) -> some View {
         DevicesSwitcher(
             state: state.devicesTabState(worktree: worktree, selection: rps.devicesSelection),
-            onSelect: { rps.devicesSelection = $0 }
+            onSelect: { rps.devicesSelection = $0 },
+            onBoot: { target in
+                switch target {
+                case .simulator(let udid):
+                    guard let device = state.devicePane.devices?.first(where: { $0.udid == udid }) else { return }
+                    Task { await state.devicePane.boot(device) }
+                case .android(let id) where id.hasPrefix("avd:"):
+                    Task { await state.androidPane.boot(avd: String(id.dropFirst(4))) }
+                default:
+                    break
+                }
+            }
         )
     }
 

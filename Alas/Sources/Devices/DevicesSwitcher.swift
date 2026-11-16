@@ -1,37 +1,23 @@
 import AlasCore
 import SwiftUI
 
-/// The Devices tab's toolbar chip: the selected device, and a menu of the
-/// Mac's simulators and this worktree's VMs.
+/// The Devices tab's toolbar chip: the selected device and its state. It
+/// opens a popover listing running devices first, then the Mac's simulators
+/// by runtime, Android devices and this worktree's VMs.
 struct DevicesSwitcher: View {
     let state: DevicesTabState
     let onSelect: (DevicesTarget) -> Void
+    /// Boots a shut-down simulator or AVD; it is selected first.
+    let onBoot: (DevicesTarget) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.designScale) private var scale
     @State private var hovering = false
+    @State private var showsPopover = false
 
     var body: some View {
-        let selected = (state.simulatorRows + state.vmRows).first { $0.target == state.selected }
-        Menu {
-            Section("Simulators") {
-                if let note = state.simulatorsNote {
-                    Text(note)
-                }
-                ForEach(state.simulatorRows) { item($0) }
-            }
-            if !state.androidRows.isEmpty || state.androidNote != nil {
-                Section("Android") {
-                    if let note = state.androidNote {
-                        Text(note)
-                    }
-                    ForEach(state.androidRows) { item($0) }
-                }
-            }
-            if !state.vmRows.isEmpty {
-                Section("This worktree's VMs") {
-                    ForEach(state.vmRows) { item($0) }
-                }
-            }
+        let selected = state.selectedRow
+        Button {
+            showsPopover.toggle()
         } label: {
             HStack(spacing: 6) {
                 Circle()
@@ -40,8 +26,8 @@ struct DevicesSwitcher: View {
                 Text(selected?.title ?? "Devices")
                     .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
-                if let detail = selected?.detail {
-                    Text(detail)
+                if let status = selected?.status, !status.isEmpty {
+                    Text(status)
                         .font(scale.meta.font)
                         .foregroundStyle(theme.color("fg-dim"))
                 }
@@ -55,19 +41,27 @@ struct DevicesSwitcher: View {
             .background(hovering ? theme.color("bg-3") : .clear, in: Capsule())
             .contentShape(Capsule())
         }
-        .menuStyle(.button)
         .buttonStyle(.toolbarControl)
-        .menuIndicator(.hidden)
         .fixedSize()
         .onHover { hovering = $0 }
         .help("Choose a device")
         .accessibilityIdentifier("devices-switcher")
-    }
-
-    private func item(_ row: DevicesTabState.Row) -> some View {
-        Toggle(isOn: Binding(get: { row.target == state.selected }, set: { _ in onSelect(row.target) })) {
-            Text(row.title)
-            Text(row.detail)
+        .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+            DevicesSwitcherPanel(
+                state: state,
+                onSelect: { target in
+                    onSelect(target)
+                    showsPopover = false
+                },
+                onBoot: { target in
+                    onSelect(target)
+                    onBoot(target)
+                    showsPopover = false
+                },
+                onClose: { showsPopover = false }
+            )
+            .environment(\.theme, theme)
+            .environment(\.designScale, scale)
         }
     }
 
@@ -77,6 +71,232 @@ struct DevicesSwitcher: View {
         case .busy: "warn"
         case .idle: "fg-faint"
         }
+    }
+
+    static func glyph(_ platform: DevicesPlatform) -> String {
+        switch platform {
+        case .ios: "iphone"
+        case .android: "candybarphone"
+        case .vm(.macOS): "macwindow"
+        case .vm(.linux): "terminal"
+        }
+    }
+}
+
+/// The switcher's popover: a filter field over the sectioned device list,
+/// with arrow-key navigation and an inline Boot on shut-down rows. Modeled on
+/// `ACPSelectChip`'s dropdown.
+private struct DevicesSwitcherPanel: View {
+    let state: DevicesTabState
+    let onSelect: (DevicesTarget) -> Void
+    let onBoot: (DevicesTarget) -> Void
+    let onClose: () -> Void
+
+    @Environment(\.theme) private var theme
+    @Environment(\.designScale) private var scale
+    @State private var query = ""
+    @State private var showsOlderRuntimes = false
+    /// An index into the flattened rows of every section.
+    @State private var highlight = 0
+    /// Bumps only on keyboard navigation, so hovering a row tints it without
+    /// scrolling the list under the cursor.
+    @State private var keyboardScrollTick = 0
+    @FocusState private var filterFocused: Bool
+
+    var body: some View {
+        let listing = state.switcherListing(query: query, showsOlderRuntimes: showsOlderRuntimes)
+        let rows = listing.sections.flatMap(\.rows)
+        let offsets = Self.offsets(listing.sections)
+        VStack(spacing: 0) {
+            filterBar
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(listing.sections.enumerated()), id: \.element.id) { sectionIndex, section in
+                            sectionView(section, firstIndex: offsets[sectionIndex])
+                        }
+                        if listing.sections.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Text("No matches")
+                                .font(scale.metaFont)
+                                .foregroundStyle(theme.color("fg-faint"))
+                                .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
+                        }
+                        if listing.foldedRuntimeCount > 0 {
+                            olderRuntimesButton(count: listing.foldedRuntimeCount)
+                        }
+                    }
+                    .padding(.vertical, scale.space[1])
+                    .padding(.horizontal, scale.space[1])
+                }
+                .onChange(of: keyboardScrollTick) { _, _ in
+                    guard rows.indices.contains(highlight) else { return }
+                    withAnimation(.easeOut(duration: 0.10)) {
+                        proxy.scrollTo(rows[highlight].id, anchor: .center)
+                    }
+                }
+            }
+        }
+        .frame(width: 300)
+        .frame(maxHeight: 360)
+        .background(theme.color("bg-1"))
+        .onKeyPress { press in
+            switch press.key {
+            case .upArrow:
+                highlight = max(0, highlight - 1)
+                keyboardScrollTick &+= 1
+                return .handled
+            case .downArrow:
+                highlight = min(max(0, rows.count - 1), highlight + 1)
+                keyboardScrollTick &+= 1
+                return .handled
+            case .return:
+                if rows.indices.contains(highlight) {
+                    onSelect(rows[highlight].target)
+                }
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+        .onExitCommand(perform: onClose)
+        .onAppear {
+            filterFocused = true
+            // Start at the selected device, so arrows move from where the user is.
+            if let index = rows.firstIndex(where: { $0.target == state.selected }) {
+                highlight = index
+                keyboardScrollTick &+= 1
+            }
+        }
+    }
+
+    /// Each section's first index into the flattened rows.
+    private static func offsets(_ sections: [DevicesSwitcherSection]) -> [Int] {
+        var next = 0
+        return sections.map { section in
+            defer { next += section.rows.count }
+            return next
+        }
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(scale.metaFont)
+                .foregroundStyle(theme.color("fg-faint"))
+            TextField("Filter devices", text: $query)
+                .textFieldStyle(.plain)
+                .font(scale.metaFont)
+                .focused($filterFocused)
+                .onChange(of: query) { _, _ in highlight = 0 }
+        }
+        .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[2])
+        .background(theme.color("bg-0").opacity(0.6))
+    }
+
+    @ViewBuilder
+    private func sectionView(_ section: DevicesSwitcherSection, firstIndex: Int) -> some View {
+        Text(section.title)
+            .font(scale.captionFont)
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, scale.space[2])
+            .padding(.top, scale.space[2])
+            .padding(.bottom, 2)
+        if let note = section.note {
+            Text(note)
+                .font(scale.caption.font(weight: .regular))
+                .foregroundStyle(theme.color("fg-dim"))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, 2)
+        }
+        ForEach(Array(section.rows.enumerated()), id: \.element.id) { offset, row in
+            rowView(row, index: firstIndex + offset, running: section.kind == .running)
+                // Data-based id, so filtering doesn't freeze LazyVStack rows.
+                .id(row.id)
+        }
+    }
+
+    /// The text after a row's name: the runtime for a running device that is
+    /// simply booted, otherwise its state.
+    private static func trailing(_ row: DevicesTabState.Row, running: Bool) -> String {
+        running && row.tone != .busy ? row.detail : row.status
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: DevicesTabState.Row, index: Int, running: Bool) -> some View {
+        let isSelected = row.target == state.selected
+        let isHighlighted = index == highlight
+        let showsBoot = isHighlighted && row.canBoot
+        HStack(spacing: 0) {
+            Button { onSelect(row.target) } label: {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(theme.color(DevicesSwitcher.colorToken(row.tone)))
+                        .frame(width: 8, height: 8)
+                    Image(systemName: DevicesSwitcher.glyph(row.platform))
+                        .font(scale.glyphFont)
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .frame(width: 14)
+                    Text(row.title)
+                        .font(scale.body.font(weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(theme.color("fg"))
+                        .layoutPriority(1)
+                    Spacer(minLength: 8)
+                    if !showsBoot {
+                        Text(Self.trailing(row, running: running))
+                            .font(scale.caption.font(weight: .regular))
+                            .foregroundStyle(theme.color("fg-dim"))
+                    }
+                }
+                .lineLimit(1)
+                .padding(.leading, scale.space[2])
+                .padding(.trailing, showsBoot ? 6 : scale.space[2])
+                .frame(height: 26)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if showsBoot {
+                Button { onBoot(row.target) } label: {
+                    Text("Boot")
+                        .font(scale.caption.font(weight: .semibold))
+                        .foregroundStyle(theme.color("accent"))
+                        .padding(.horizontal, scale.space[2])
+                        .frame(height: 18)
+                        .background(theme.color("accent").opacity(0.15), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.toolbarControl)
+                .help("Boot \(row.title)")
+                .padding(.trailing, scale.space[2])
+            }
+        }
+        .background(rowBackground(isHighlighted: isHighlighted, isSelected: isSelected))
+        .clipShape(RoundedRectangle(cornerRadius: scale.radius.small))
+        .onHover { hovering in
+            if hovering { highlight = index }
+        }
+    }
+
+    private func olderRuntimesButton(count: Int) -> some View {
+        Button {
+            showsOlderRuntimes = true
+        } label: {
+            Text("Show \(count) older runtime\(count == 1 ? "" : "s")")
+                .font(scale.caption.font(weight: .medium))
+                .foregroundStyle(theme.color("accent"))
+                .padding(.horizontal, scale.space[2])
+                .padding(.vertical, scale.space[2])
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func rowBackground(isHighlighted: Bool, isSelected: Bool) -> Color {
+        if isHighlighted { return theme.color("accent").opacity(0.15) }
+        if isSelected { return theme.color("accent").opacity(0.07) }
+        return .clear
     }
 }
 
