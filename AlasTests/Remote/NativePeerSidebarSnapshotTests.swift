@@ -150,6 +150,23 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos[1].worktrees.flatMap(\.sessions).map(\.id) == ["b:s2"])
     }
 
+    @Test func aMachineCheckoutFoldsIntoItsLocalProjectsRepo() {
+        let sessions = [
+            worktreeRow("s1", project: "alas", worktreeId: "w1", updatedAt: 20, projectId: "local"),
+            worktreeRow("s2", project: "alas-mini", worktreeId: "w2", updatedAt: 10, projectId: "mini"),
+        ]
+        let projects = [
+            RemoteProjectOption(id: "local", name: "alas"),
+            RemoteProjectOption(id: "mini", name: "alas-mini", linkedProjectId: "local"),
+        ]
+
+        let repos = NativePeerRepoGroup.build(sessions: sessions, projects: projects)
+
+        #expect(repos.map(\.projectId) == ["local"])
+        #expect(repos[0].name == "alas")
+        #expect(repos[0].worktrees.flatMap(\.sessions).map(\.id) == ["b:s1", "b:s2"])
+    }
+
     private func console(
         _ id: String, project: String?, worktreeId: String?, branch: String? = nil, isMain: Bool? = nil
     ) -> PeerConsoleSummary {
