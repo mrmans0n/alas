@@ -92,6 +92,10 @@ final class DeviceFlowRecorder {
             case "\r", "\n":
                 recording.flush()
                 recording.flow.steps.append(.pressKey(.enter))
+            case "\t":
+                // Moves focus to the next field; replay types it as the Tab key.
+                recording.flushScroll()
+                recording.typed.append(character)
             case "\u{7F}", "\u{8}":
                 if !recording.typed.isEmpty { recording.typed.removeLast() }
             default:

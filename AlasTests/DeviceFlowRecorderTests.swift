@@ -14,7 +14,8 @@ struct DeviceFlowRecorderTests {
         let general = DeviceScreenPoint(x: 201.0 / 402, y: 346.0 / 874)
         recorder.gesture("emulator-5554", from: general, to: general)
         recorder.typed("emulator-5554", "hi\u{7F}o\u{F700}\r")
-        recorder.typed("emulator-5554", "more")
+        // Tab moves to the next field, so it stays in the text.
+        recorder.typed("emulator-5554", "mo\tre")
         // Pasted text is typed as is: its newline is text, not the Enter key.
         recorder.pasted("emulator-5554", " pass\nword")
         recorder.pressed("emulator-5554", .back)
@@ -28,7 +29,7 @@ struct DeviceFlowRecorderTests {
         let flow = try #require(recorder.stop("emulator-5554"))
         #expect(flow.appID == "com.example.hello")
         #expect(flow.steps == [
-            .launchApp(nil), .tapOn(.text("General")), .inputText("ho"), .pressKey(.enter), .inputText("more pass\nword"),
+            .launchApp(nil), .tapOn(.text("General")), .inputText("ho"), .pressKey(.enter), .inputText("mo\tre pass\nword"),
             .pressKey(.back), .swipe(.up), .inputText("end"), .swipe(.up), .pressKey(.home), .swipe(.left),
         ])
         #expect(!recorder.isRecording("emulator-5554"))
