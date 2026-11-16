@@ -4,6 +4,7 @@ struct ACPCodexHooksReviewView: View {
     @Environment(\.designScale) private var scale
     @ObservedObject var coordinator: ACPCodexHooksReviewCoordinator
     @Environment(\.theme) private var theme
+    @State private var listHeight: Double = 0
 
     var body: some View {
         if let presentation = coordinator.presentation {
@@ -12,13 +13,15 @@ struct ACPCodexHooksReviewView: View {
                 introduction(presentation)
                 if let snapshot = presentation.snapshot {
                     // A ScrollView takes all the height it is offered, which left a
-                    // tall empty gap under short lists. Show the list at its own
-                    // height and only scroll once it outgrows the cap.
-                    ViewThatFits(in: .vertical) {
+                    // tall empty gap under short lists. Size it to the measured list,
+                    // capped, keeping one list instance so expanded rows stay open
+                    // when the list grows past the cap.
+                    ScrollView {
                         hookList(snapshot, presentation: presentation)
-                        ScrollView { hookList(snapshot, presentation: presentation) }
+                            .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { listHeight = $0 }
                     }
-                    .frame(maxHeight: 280)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(height: min(listHeight, 280))
                     .disabled(presentation.isBusy)
                 }
                 if let error = presentation.error {
