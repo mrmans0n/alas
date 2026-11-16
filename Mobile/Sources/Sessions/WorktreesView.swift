@@ -86,26 +86,38 @@ struct WorktreesView: View {
         let visible = scoped.map {
             HostGroup(host: $0, sections: RemoteSessionDirectory.filter($0.sections, by: filter, query: query))
         }.filter { !$0.sections.isEmpty }
-        if sizeClass == .regular {
-            NavigationSplitView {
-                directory(hosts: hosts, all: all, counts: counts, visible: visible)
-            } detail: {
-                // Its own stack, for the diffs and files a session pushes.
-                NavigationStack {
-                    if let selected {
-                        TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
-                    } else {
-                        ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
-                                               description: Text("Choose a session from the list."))
+        Group {
+            if sizeClass == .regular {
+                NavigationSplitView {
+                    directory(hosts: hosts, all: all, counts: counts, visible: visible)
+                } detail: {
+                    // Its own stack, for the diffs and files a session pushes.
+                    NavigationStack {
+                        if let selected {
+                            TranscriptScreen(hostID: selected.hostID, sessionId: selected.sessionId).id(selected)
+                        } else {
+                            ContentUnavailableView("No session selected", systemImage: "bubble.left.and.bubble.right",
+                                                   description: Text("Choose a session from the list."))
+                        }
                     }
                 }
+            } else {
+                NavigationStack(path: $path) {
+                    directory(hosts: hosts, all: all, counts: counts, visible: visible)
+                        .navigationDestination(for: SessionRoute.self) { route in
+                            TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
+                        }
+                }
             }
-        } else {
-            NavigationStack(path: $path) {
-                directory(hosts: hosts, all: all, counts: counts, visible: visible)
-                    .navigationDestination(for: SessionRoute.self) { route in
-                        TranscriptScreen(hostID: route.hostID, sessionId: route.sessionId)
-                    }
+        }
+        // Split View resizes swap the hierarchy; the open session moves with it.
+        .onChange(of: sizeClass) { _, size in
+            if size == .regular {
+                if let open = path.last { selected = open }
+                path = []
+            } else if let open = selected {
+                path = [open]
+                selected = nil
             }
         }
     }
