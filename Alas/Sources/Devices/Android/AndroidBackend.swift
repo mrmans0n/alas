@@ -289,6 +289,14 @@ final class AndroidBackend: DeviceBackend {
         }
     }
 
+    func slim(_ id: String) async throws -> SimulatorSlimState {
+        throw DeviceToolError.unsupported("device_set_slim")
+    }
+
+    func setSlim(_ id: String, on: Bool) async throws -> SimulatorSlimState {
+        throw DeviceToolError.unsupported("device_set_slim")
+    }
+
     func setPermission(_ id: String, appID: String, service: SimulatorPrivacyService, action: SimulatorPrivacyAction) async throws {
         guard let permissions = AndroidPermissions.permissions(for: service) else {
             throw DeviceToolError(message: "device_unsupported: \(service.rawValue) has no Android permission.")

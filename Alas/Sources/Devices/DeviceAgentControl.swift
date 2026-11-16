@@ -164,7 +164,7 @@ final class DeviceAgentControl {
         let isInput = switch command {
         case .tap, .swipe, .type, .button, .install, .launch,
              .setAppearance, .setAccessibility, .setPermission, .setLocation, .push, .openURL, .clipboard, .rotate,
-             .setNetwork, .clearData: true
+             .setNetwork, .clearData, .setSlim: true
         case .list, .open, .snapshot, .screenshot, .logs, .record: false
         }
         var inputTurn: UUID?
@@ -344,6 +344,20 @@ final class DeviceAgentControl {
             return await settingsCall {
                 try await backend.clearData(udid, appID: bundleID)
                 return .text([Self.json(["ok": true])])
+            }
+        case .setSlim(_, let on):
+            do {
+                return .text([Self.json(try await backend.setSlim(udid, on: on).json)])
+            } catch SimulatorSlimError.notInstalled {
+                return .error(
+                    "device_simslim_missing: simslim isn't installed. Ask the user to install it from the simulator's settings in the Devices tab, or to run \(SimulatorSlim.installCommand)."
+                )
+            } catch SimulatorSlimError.failed(let reason) {
+                return .error("device_slim_failed: \(reason)")
+            } catch let error as DeviceToolError {
+                return .error(error.message)
+            } catch {
+                return .error("device_slim_failed: \(error.localizedDescription)")
             }
         case .setPermission(_, let bundleID, let service, let action):
             guard await backend.isInstalled(udid, appID: bundleID) else { return Self.notInstalled(bundleID, on: device) }

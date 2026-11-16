@@ -81,7 +81,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "vm_run", "vm_status",
         "device_list", "device_open", "device_snapshot", "device_screenshot",
         "device_tap", "device_swipe", "device_type", "device_button", "device_install", "device_launch",
-        "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data",
+        "device_set_appearance", "device_set_accessibility", "device_set_network", "device_clear_data", "device_set_slim",
         "device_set_permission", "device_set_location",
         "device_push", "device_open_url", "device_logs", "device_clipboard", "device_rotate", "device_record",
     ]
@@ -355,7 +355,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                             + "device_set_appearance, device_set_accessibility, device_set_permission, device_set_location, device_push and device_open_url. "
                             + "Read the app's logs and crash reports with device_logs. "
                             + "device_type types any text; read or set the device's clipboard with device_clipboard. "
-                            + "device_push and device_set_accessibility are iOS only; device_set_network and device_clear_data are Android only. "
+                            + "To run several simulators at once, slim each with device_set_slim first; it cuts a simulator's memory about 4x. "
+                            + "device_push, device_set_accessibility and device_set_slim are iOS only; device_set_network and device_clear_data are Android only. "
                             + "Rotate with device_rotate and record the screen with device_record. "
                             + "device_disabled means the user hasn't let agents use simulators and Android devices; ask them instead of retrying.")
                     }

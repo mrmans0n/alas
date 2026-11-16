@@ -172,6 +172,24 @@ struct DeviceAgentControlTests {
             if let voiceOver = change.voiceOver { accessibilityRead.voiceOver = .value(voiceOver) }
             return accessibilityRead
         }
+        /// nil: simslim isn't installed.
+        var slimState: SimulatorSlimState? = SimulatorSlimState(
+            servicesOff: 0, services: 173, persistent: true, memoryBytes: 3_865_470_566, processes: 254
+        )
+        var slimFailure: SimulatorSlimError?
+        func slim(udid: String) async throws -> SimulatorSlimState {
+            guard let slimState else { throw SimulatorSlimError.notInstalled }
+            return slimState
+        }
+        func setSlim(udid: String, on: Bool) async throws -> SimulatorSlimState {
+            calls.append("slim \(on)")
+            if let slimFailure { throw slimFailure }
+            guard var state = slimState else { throw SimulatorSlimError.notInstalled }
+            state.servicesOff = on ? 149 : 0
+            state.memoryBytes = on ? 998_579_814 : 3_865_470_566
+            slimState = state
+            return state
+        }
     }
 
     private func control(
@@ -263,6 +281,27 @@ struct DeviceAgentControlTests {
         let missing = await control.perform(.launch(udid: "on", bundleID: "com.example.gone", diff: false), sessionID: "s")
         #expect(error(missing) == "device_app_not_installed: com.example.gone isn't installed on iPhone.")
         #expect(installs.calls.isEmpty)
+    }
+
+    @Test func aSimulatorSlimsAndReportsWhatItHolds() async {
+        let settings = FakeSettings()
+        let response = await control(FakeInput(), settings: settings).perform(.setSlim(udid: "on", on: true), sessionID: "s")
+        #expect(response == .text([#"{"memory_mb":952,"persistent":true,"services":173,"services_off":149,"slim":true}"#]))
+        #expect(settings.calls == ["slim true"])
+    }
+
+    @Test(arguments: [
+        (nil as SimulatorSlimError?,
+         "device_simslim_missing: simslim isn't installed. Ask the user to install it from the simulator's settings in the Devices tab, or to run brew install mobai-app/tap/simslim."),
+        (.failed("simulator must be booted to read its state (it is Shutdown)"),
+         "device_slim_failed: simulator must be booted to read its state (it is Shutdown)"),
+    ])
+    func aSlimFailureSaysWhatToDo(failure: SimulatorSlimError?, message: String) async {
+        let settings = FakeSettings()
+        settings.slimState = nil
+        settings.slimFailure = failure
+        let response = await control(FakeInput(), settings: settings).perform(.setSlim(udid: "on", on: true), sessionID: "s")
+        #expect(error(response) == message)
     }
 
     private func error(_ response: AlasCLIResponse) -> String? {
@@ -838,6 +877,10 @@ extension DeviceAgentControlTests {
             return network
         }
         func clearData(_ id: String, appID: String) async throws { cleared.append(appID) }
+        func slim(_ id: String) async throws -> SimulatorSlimState { throw DeviceToolError.unsupported("device_set_slim") }
+        func setSlim(_ id: String, on: Bool) async throws -> SimulatorSlimState {
+            throw DeviceToolError.unsupported("device_set_slim")
+        }
         func openURL(_ id: String, _ url: String) async throws {}
         func setDisplay(
             _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?
@@ -917,6 +960,7 @@ extension DeviceAgentControlTests {
          "device_unsupported: The siri button isn't available on android."),
         (.button(udid: "on", name: .back, includeScreenshot: false, diff: false),
          "device_unsupported: The back button isn't available on ios."),
+        (.setSlim(udid: "emulator-5554", on: true), "device_unsupported: device_set_slim isn't available on Android."),
     ])
     func whatAPlatformLacksIsUnsupported(command: DeviceCommand, message: String) async {
         #expect(error(await bothPlatforms(FakeBackend()).perform(command, sessionID: "s")) == message)

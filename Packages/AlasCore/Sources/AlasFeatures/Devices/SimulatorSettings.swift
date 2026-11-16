@@ -196,14 +196,20 @@ public protocol SimulatorSettingsControl: Sendable {
     func accessibility(udid: String) async throws -> SimulatorAccessibility
     /// Sets each setting `change` names, then reads all of them back.
     func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility
+    /// simslim's state of a booted simulator; `SimulatorSlimError.notInstalled` without simslim.
+    func slim(udid: String) async throws -> SimulatorSlimState
+    func setSlim(udid: String, on: Bool) async throws -> SimulatorSlimState
 }
 
 public struct LiveSimulatorSettings: SimulatorSettingsControl {
     /// serve-sim's `sim-ax-settings`, built for the simulator; the app bundles it.
     public let accessibilityHelper: URL?
+    /// The simslim binary, looked up on each use so installing it while Alas runs works.
+    public let simslim: @Sendable () -> String?
 
-    public init(accessibilityHelper: URL? = nil) {
+    public init(accessibilityHelper: URL? = nil, simslim: @escaping @Sendable () -> String? = { nil }) {
         self.accessibilityHelper = accessibilityHelper
+        self.simslim = simslim
     }
 
     public func display(udid: String) async throws -> SimulatorDisplaySettings {
@@ -243,6 +249,19 @@ public struct LiveSimulatorSettings: SimulatorSettingsControl {
 
     public func isInstalled(udid: String, bundleID: String) async -> Bool {
         await SimulatorControl.isInstalled(udid: udid, bundleID: bundleID)
+    }
+
+    public func slim(udid: String) async throws -> SimulatorSlimState {
+        try await SimulatorSlim.state(simslim: try simslimPath(), udid: udid)
+    }
+
+    public func setSlim(udid: String, on: Bool) async throws -> SimulatorSlimState {
+        try await SimulatorSlim.set(simslim: try simslimPath(), udid: udid, on: on)
+    }
+
+    private func simslimPath() throws -> String {
+        guard let path = simslim() else { throw SimulatorSlimError.notInstalled }
+        return path
     }
 
     public func accessibility(udid: String) async throws -> SimulatorAccessibility {

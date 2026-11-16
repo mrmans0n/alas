@@ -521,6 +521,11 @@ pub enum DeviceCommand {
         udid: String,
         bundle_id: String,
     },
+    /// iOS only.
+    SetSlim {
+        udid: String,
+        on: bool,
+    },
     /// At least one is set.
     SetAccessibility {
         udid: String,
@@ -642,6 +647,7 @@ impl DeviceCommand {
             | DeviceCommand::SetAccessibility { .. }
             | DeviceCommand::SetNetwork { .. }
             | DeviceCommand::ClearData { .. }
+            | DeviceCommand::SetSlim { .. }
             | DeviceCommand::SetPermission { .. }
             | DeviceCommand::SetLocation { .. }
             | DeviceCommand::Push { .. }
@@ -1364,6 +1370,9 @@ fn device_request(command: &DeviceCommand) -> Request {
             "device_clear_data",
             json!({ "udid": udid, "bundle_id": bundle_id }),
         ),
+        DeviceCommand::SetSlim { udid, on } => {
+            ("device_set_slim", json!({ "udid": udid, "on": on }))
+        }
         DeviceCommand::SetAccessibility {
             udid,
             voiceover,

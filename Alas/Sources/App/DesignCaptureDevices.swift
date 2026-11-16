@@ -107,6 +107,10 @@ enum DesignCaptureDevices {
         func setAccessibility(udid: String, _ change: SimulatorAccessibilityChange) async throws -> SimulatorAccessibility {
             Self.accessibility
         }
+        private static let slimState = SimulatorSlimState(
+            servicesOff: 149, services: 173, persistent: true, memoryBytes: 998_579_814, processes: 76)
+        func slim(udid: String) async throws -> SimulatorSlimState { Self.slimState }
+        func setSlim(udid: String, on: Bool) async throws -> SimulatorSlimState { Self.slimState }
     }
 
     private struct FakeLogs: SimulatorLogsControl {
