@@ -88,6 +88,17 @@ struct DeviceFlowTests {
         #expect(DeviceFlow.element(at: point, in: Self.snapshot)?.ref == ref)
     }
 
+    @Test(arguments: [
+        (DeviceScreenPoint(x: 0.5, y: 0.5), DeviceScreenPoint(x: 0.52, y: 0.51), nil as DeviceFlow.Direction?), // a tap
+        (.init(x: 0.5, y: 0.8), .init(x: 0.45, y: 0.3), .up),
+        (.init(x: 0.5, y: 0.3), .init(x: 0.5, y: 0.4), .down),
+        (.init(x: 0.9, y: 0.5), .init(x: 0.2, y: 0.6), .left),
+        (.init(x: 0.2, y: 0.5), .init(x: 0.9, y: 0.45), .right),
+    ])
+    func aDragIsASwipeAlongItsLongerAxis(from: DeviceScreenPoint, to: DeviceScreenPoint, direction: DeviceFlow.Direction?) {
+        #expect(DeviceFlow.swipeDirection(from: from, to: to) == direction)
+    }
+
     @Test func theRecorderNamesByLabelThenIDThenPoint() {
         let labelled = Self.snapshot.elements[1]
         let idOnly = DeviceElement(ref: "e", role: "button", label: nil, value: nil, id: "go", x: 0, y: 0, width: 1, height: 1, enabled: true)

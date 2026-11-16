@@ -8,6 +8,8 @@ struct AndroidActions: View {
     let pane: AndroidPaneModel
     let control: DeviceAgentControl
     let recorder: DeviceRecorder
+    let flowRecorder: DeviceFlowRecorder
+    let worktree: URL
     let onOpenLogs: () -> Void
     let onShutDown: () -> Void
     @Environment(\.theme) private var theme
@@ -36,6 +38,10 @@ struct AndroidActions: View {
                         DeviceSettingsPopover(udid: device.serial, backend: backend, control: control)
                     }
                 }
+            DeviceFlowButtons(
+                udid: device.serial, backend: control.backend(for: .android), control: control, recorder: flowRecorder,
+                worktree: worktree, enabled: VMDriver.allowsViewInput(control.driver(udid: device.serial))
+            )
             recordButton
             ToolbarBtn(icon: "camera", tooltip: "Save screenshot to Desktop") { Task { await saveScreenshot() } }
             if device.isEmulator {

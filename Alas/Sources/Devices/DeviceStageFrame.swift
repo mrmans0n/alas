@@ -145,6 +145,8 @@ struct DeviceDriverPill: View {
     /// The first session whose call waits for the user to hand back.
     let waiting: String?
     let agentName: (String) -> String
+    /// The flow running on the device, shown instead of who drives.
+    var flow: DeviceAgentControl.FlowProgress?
     /// Grows for a moment after a click an agent's driving blocked.
     let pulse: Bool
     let onTakeOver: () -> Void
@@ -173,7 +175,7 @@ struct DeviceDriverPill: View {
             switch driver {
             case .agent(let sessionID, _, _):
                 Circle().fill(theme.color(DevicesSwitcher.colorToken(.busy))).frame(width: 6, height: 6)
-                Text("\(agentName(sessionID)) is driving")
+                Text(flow.map { "Running \($0.name) · step \($0.step) of \($0.total)" } ?? "\(agentName(sessionID)) is driving")
                     .foregroundStyle(theme.color("fg"))
                     .fixedSize()
             case .user, .idle:

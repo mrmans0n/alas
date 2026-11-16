@@ -833,6 +833,8 @@ extension DeviceAgentControlTests {
             return 7
         }
         func isInstalled(_ id: String, appID: String) async -> Bool { appID != "com.example.gone" }
+        var front: String?
+        func frontApp(_ id: String) async -> String? { front }
         func display(_ id: String) async throws -> SimulatorDisplaySettings {
             SimulatorDisplaySettings(appearance: .unknown, textSize: .unknown, increaseContrast: .unknown)
         }

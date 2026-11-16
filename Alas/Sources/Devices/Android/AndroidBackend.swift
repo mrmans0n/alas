@@ -313,6 +313,12 @@ final class AndroidBackend: DeviceBackend {
         }
     }
 
+    func frontApp(_ id: String) async -> String? {
+        guard let control = try? control(),
+              let activities = try? await control.adb(id, ["shell", "dumpsys", "activity", "activities"]) else { return nil }
+        return AndroidLogcat.frontmostPackage(activities)
+    }
+
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {
         stopRoute(id)
         let control = try control()

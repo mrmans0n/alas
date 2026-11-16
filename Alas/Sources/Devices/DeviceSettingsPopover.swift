@@ -1,9 +1,11 @@
 import AlasCore
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The selected device's settings: display, accessibility (iOS), network
 /// (Android), an app's permissions and notifications (iOS) or data (Android),
-/// location and URLs. Reads its values each time it opens. Changes take the
+/// location, routes and URLs. Reads its values each time it opens. Changes take the
 /// device's input turn, so they never land in the middle of an agent's call.
 struct DeviceSettingsPopover: View {
     let udid: String
@@ -28,6 +30,8 @@ struct DeviceSettingsPopover: View {
     @State private var longitude = ""
     @State private var url = ""
     @State private var deviceMessage: String?
+    /// For a GPX file's route, in km/h.
+    @State private var gpxSpeed = "30"
 
     private static let places: [(name: String, location: SimulatorLocation)] = [
         ("Apple Park", .init(latitude: 37.3349, longitude: -122.0090)),
@@ -382,6 +386,29 @@ struct DeviceSettingsPopover: View {
         }
         .controlSize(.small)
         HStack(spacing: 6) {
+            Menu("Route") {
+                ForEach(DeviceRoute.presets, id: \.name) { route in
+                    Button("\(route.name) · \(Int((route.speed * 3.6).rounded())) km/h") { startRoute(route) }
+                }
+                Divider()
+                Button("GPX File…", action: chooseGPX)
+            }
+            .fixedSize()
+            TextField("km/h", text: $gpxSpeed).frame(width: 44)
+            Text("km/h for GPX").foregroundStyle(theme.color("fg-dim"))
+        }
+        .controlSize(.small)
+        // Each second while a route plays.
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            if let progress = backend.routeProgress(udid) {
+                HStack(spacing: 6) {
+                    note(Self.describe(progress), tone: "fg-dim")
+                    Spacer(minLength: 0)
+                    Button("Stop") { setLocation(nil) }.controlSize(.small)
+                }
+            }
+        }
+        HStack(spacing: 6) {
             TextField("URL or deep link", text: $url)
                 .onSubmit(openURL)
             Button("Open", action: openURL).controlSize(.small)
@@ -397,6 +424,41 @@ struct DeviceSettingsPopover: View {
             } catch {
                 deviceMessage = error.localizedDescription
             }
+        }
+    }
+
+    static func describe(_ progress: DeviceRouteProgress) -> String {
+        guard let travelled = progress.travelled else { return "Following \(progress.name)" }
+        return String(format: "Following %@ · %.1f of %.1f km", progress.name, travelled / 1000, progress.length / 1000)
+    }
+
+    private func startRoute(_ route: DeviceRoute) {
+        mutate(report: { deviceMessage = $0 }) {
+            do {
+                try await backend.startRoute(udid, route)
+                deviceMessage = nil
+            } catch {
+                deviceMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func chooseGPX() {
+        guard let speed = Double(gpxSpeed), (1...500).contains(speed) else {
+            deviceMessage = "The speed goes from 1 to 500 km/h."
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "gpx") ?? .xml]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        do {
+            let route = try DeviceRoute.gpx(
+                String(contentsOf: file, encoding: .utf8), name: file.deletingPathExtension().lastPathComponent, speedKmh: speed
+            )
+            startRoute(route)
+        } catch {
+            deviceMessage = error.localizedDescription
         }
     }
 

@@ -177,6 +177,10 @@ final class SimulatorBackend: DeviceBackend {
         try await settings.setPermission(udid: id, bundleID: appID, service: service, action: action)
     }
 
+    func frontApp(_ id: String) async -> String? {
+        await logControl.frontmostApp(udid: id)
+    }
+
     func setLocation(_ id: String, _ location: SimulatorLocation?) async throws {
         try await settings.setLocation(udid: id, location)
         playing[id] = nil

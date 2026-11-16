@@ -752,6 +752,8 @@ final class AppState {
         ],
         recorder: deviceRecorder
     )
+    /// Flows you record on devices from the Devices tab.
+    @ObservationIgnored let deviceFlowRecorder = DeviceFlowRecorder()
     /// Screen recordings of simulators, yours and agents'. Made on first use,
     /// which also deletes agents' recordings older than a week.
     @ObservationIgnored lazy var deviceRecorder: DeviceRecorder = {

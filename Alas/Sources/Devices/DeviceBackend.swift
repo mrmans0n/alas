@@ -51,6 +51,8 @@ protocol DeviceBackend: AnyObject {
     /// The launched app's pid; `DeviceAppNotInstalled` when it isn't there.
     func launch(_ id: String, appID: String) async throws -> Int
     func isInstalled(_ id: String, appID: String) async -> Bool
+    /// The app in front, or nil when the home screen is.
+    func frontApp(_ id: String) async -> String?
     func openURL(_ id: String, _ url: String) async throws
     func setDisplay(
         _ id: String, appearance: SimulatorAppearance?, textSize: SimulatorTextSize?, increaseContrast: Bool?

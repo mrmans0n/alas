@@ -30,6 +30,10 @@ struct DeviceScreenView: NSViewRepresentable {
     var onHover: ((CGPoint?) -> Void)?
     /// The user finished a click, drag or key press on the simulator.
     var onUserInput: () -> Void = {}
+    /// A finished click or drag, from and to upright 0…1 points, for recording a flow.
+    var onGesture: ((DeviceScreenPoint, DeviceScreenPoint) -> Void)?
+    /// The characters of a key press sent to the device, for recording a flow.
+    var onText: ((String) -> Void)?
 
     func makeNSView(context: Context) -> DeviceScreenNSView {
         let view = DeviceScreenNSView()
@@ -43,6 +47,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onOrientation = onOrientation
         view.onHover = onHover
         view.onUserInput = onUserInput
+        view.onGesture = onGesture
+        view.onText = onText
         view.allowsInput = allowsInput
         view.attach(udid: udid, client: client)
         return view
@@ -59,6 +65,8 @@ struct DeviceScreenView: NSViewRepresentable {
         view.onOrientation = onOrientation
         view.onHover = onHover
         view.onUserInput = onUserInput
+        view.onGesture = onGesture
+        view.onText = onText
         view.allowsInput = allowsInput
         if view.udid != udid { view.attach(udid: udid, client: client) }
     }
@@ -89,6 +97,10 @@ final class DeviceScreenNSView: NSView {
     var onOrientation: (DeviceScreenOrientation) -> Void = { _ in }
     var onHover: ((CGPoint?) -> Void)?
     var onUserInput: () -> Void = {}
+    var onGesture: ((DeviceScreenPoint, DeviceScreenPoint) -> Void)?
+    var onText: ((String) -> Void)?
+    /// Where the current click started, upright.
+    private var gestureStart: DeviceScreenPoint?
     /// Turning input off lifts anything still held, so the agent starts from a clean state.
     var allowsInput = true {
         didSet { if oldValue, !allowsInput { releaseHeldInput() } }
@@ -249,6 +261,7 @@ final class DeviceScreenNSView: NSView {
         window?.makeFirstResponder(self)
         let point = location(event)
         guard let touch = geometry.normalized(x: point.x, y: point.y) else { return }
+        gestureStart = geometry.uprightClamped(x: point.x, y: point.y)
         send("begin", touch)
     }
 
@@ -263,6 +276,8 @@ final class DeviceScreenNSView: NSView {
         guard let last = lastTouch else { return }
         let point = location(event)
         send("end", geometry.clamped(x: point.x, y: point.y) ?? last)
+        if let start = gestureStart, let end = geometry.uprightClamped(x: point.x, y: point.y) { onGesture?(start, end) }
+        gestureStart = nil
         onUserInput()
     }
 
@@ -312,6 +327,7 @@ final class DeviceScreenNSView: NSView {
         // Repeats come back nil: a simulator repeats a held key itself; others are told.
         if let key = heldKeys.keyDown(event.keyCode, command: false) {
             sendKey(key)
+            if let characters = event.characters { onText?(characters) }
         } else if event.isARepeat, let udid, let usage = HIDKeyboardUsage.usage(forKeyCode: event.keyCode) {
             client?.keyRepeat(udid: udid, usage: usage)
         }

@@ -276,6 +276,16 @@ public struct DeviceFlow: Equatable, Sendable {
         }
     }
 
+    /// How a recording names a drag from `from` to `to` (0…1 of the upright
+    /// screen): nil for one shorter than 5% of the screen, a tap; otherwise a
+    /// swipe along its longer axis.
+    public static func swipeDirection(from: DeviceScreenPoint, to: DeviceScreenPoint) -> Direction? {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        guard (dx * dx + dy * dy).squareRoot() >= 0.05 else { return nil }
+        return abs(dx) > abs(dy) ? (dx < 0 ? .left : .right) : (dy < 0 ? .up : .down)
+    }
+
     /// The smallest element with a label or id under `point` (0…1 of the upright screen), for recording a tap.
     public static func element(at point: DeviceScreenPoint, in snapshot: DeviceSnapshot) -> DeviceElement? {
         let x = point.x * snapshot.screenWidth
