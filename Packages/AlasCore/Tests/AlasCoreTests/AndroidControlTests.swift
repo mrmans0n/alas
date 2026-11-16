@@ -101,4 +101,77 @@ struct AndroidControlTests {
         let devices = try await control.devices(known: ["emulator-5554": known])
         #expect(devices.first?.avdName == "Medium_Phone")
     }
+
+    static let dump = Data(#"""
+    <?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">
+    <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="p" content-desc="" checkable="false" clickable="false" enabled="true" password="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="Network &amp; internet" resource-id="android:id/title" class="android.widget.TextView" package="p" content-desc="" checkable="false" clickable="false" enabled="true" password="false" bounds="[189,420][651,483]" />
+    <node index="1" text="" resource-id="p:id/save" class="android.widget.Button" package="p" content-desc="Save" checkable="false" clickable="true" enabled="false" password="false" bounds="[0,525][1080,630]" />
+    <node index="2" text="hunter2" resource-id="p:id/pw" class="android.widget.EditText" package="p" content-desc="" checkable="false" clickable="true" enabled="true" password="true" bounds="[42,700][1038,826]" />
+    <node index="3" text="" resource-id="" class="android.widget.ImageButton" package="p" content-desc="" checkable="false" clickable="true" enabled="true" password="false" bounds="[0,900][126,1026]" />
+    </node></hierarchy>UI hierchary dumped to: /dev/tty
+    """#.utf8)
+
+    @Test func aUIDumpBecomesASnapshotInDP() throws {
+        let snapshot = try AndroidUIDump.parse(Self.dump, density: 420, generation: 3)
+        #expect(abs(snapshot.screenWidth - 1080.0 * 160 / 420) < 0.001)
+        #expect(snapshot.elements.map(\.ref) == ["s3e1", "s3e2", "s3e3", "s3e4"])
+        #expect(snapshot.elements.map(\.role) == ["text view", "button", "edit text", "image button"])
+        #expect(snapshot.elements.map(\.label) == ["Network & internet", "Save", nil, nil])
+        #expect(snapshot.elements.map(\.id) == ["android:id/title", "p:id/save", "p:id/pw", nil])
+        #expect(snapshot.elements.map(\.isControl) == [false, true, true, true])
+        #expect(snapshot.elements[1].enabled == false)
+        #expect(abs(snapshot.elements[0].x - 189.0 * 160 / 420) < 0.001)
+    }
+
+    @Test func aPasswordFieldsTextIsLeftOut() throws {
+        let snapshot = try AndroidUIDump.parse(Self.dump, density: 420, generation: 1)
+        #expect(!snapshot.json(query: nil, limit: 200).contains("hunter2"))
+    }
+
+    @Test(arguments: [("1.0", SimulatorReadBack.value(SimulatorTextSize.large)), ("2.0", .value(.accessibilityExtraExtraExtraLarge)),
+                      ("1.15", .unknown), ("nonsense", .unknown)])
+    func fontScaleReadsBackThroughTheTable(scale: String, size: SimulatorReadBack<SimulatorTextSize>) {
+        #expect(AndroidFontScale.textSize(for: scale) == size)
+    }
+
+    @Test func everyTextSizeHasItsOwnScale() {
+        let scales = SimulatorTextSize.allCases.map(AndroidFontScale.scale(for:))
+        #expect(Set(scales).count == SimulatorTextSize.allCases.count)
+        #expect(AndroidFontScale.scale(for: .large) == 1.0)
+    }
+
+    @Test(arguments: [
+        (SimulatorPrivacyService.microphone, ["android.permission.RECORD_AUDIO"] as [String]?),
+        (.location, ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]),
+        (.siri, nil), (.photosAdd, nil),
+    ])
+    func privacyServicesMapToRuntimePermissions(service: SimulatorPrivacyService, permissions: [String]?) {
+        #expect(AndroidPermissions.permissions(for: service) == permissions)
+    }
+
+    @Test func logcatLinesParseWithTheirLevel() {
+        let lines = AndroidLogcat.parse("""
+        --------- beginning of main
+        11-16 09:39:53.715  9147  9294 D PrefCtrl: Could not find
+        11-16 09:39:54.465  9147  9294 E Binder  : failed: code 1
+        """, year: 2026)
+        #expect(lines.map(\.level) == ["Debug", "Error"])
+        #expect(lines.map(\.pid) == [9147, 9147])
+        #expect(lines[1].process == "Binder")
+        #expect(lines[1].message == "failed: code 1")
+        #expect(lines[0].time == "2026-11-16 09:39:53.715")
+    }
+
+    @Test func theFrontAppComesFromTheResumedActivity() {
+        #expect(AndroidLogcat.frontmostPackage(
+            "  topResumedActivity=ActivityRecord{1 u0 com.android.settings/.homepage.SettingsHomepageActivity t7}"
+        ) == "com.android.settings")
+        #expect(AndroidLogcat.frontmostPackage("nothing") == nil)
+    }
+
+    @Test(arguments: [("8CA9B1E8-EE67-49E5-846F-293450990F76", true), ("emulator-5554", false), ("avd:Pixel_9", false)])
+    func simulatorIDsAreUUIDs(id: String, isSimulator: Bool) {
+        #expect(AgentDevice.isSimulatorID(id) == isSimulator)
+    }
 }
