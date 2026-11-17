@@ -22,7 +22,7 @@ enum MarkdownBlock: Equatable {
     case image(source: String, alt: String)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
-        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })  // cmark's line endings only, so line numbers match
         return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
 

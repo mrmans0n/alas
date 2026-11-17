@@ -159,10 +159,12 @@ struct AgentMarkdown: View {
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
                 case .list(let entries):
+                    let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
+                        .max { $0.count < $1.count } ?? ""
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                ListMarker(marker: entry.marker)
+                                ListMarker(marker: entry.marker, widest: widest)
                                 Text(entry.text)
                             }
                             // One element per item, so VoiceOver reads a task's state and text once.
@@ -192,11 +194,13 @@ struct AgentMarkdown: View {
 
 private struct ListMarker: View {
     let marker: ListEntry.Marker
+    /// The longest number in the list; a hidden copy sizes the column, so it scales with Dynamic Type.
+    let widest: String
 
     var body: some View {
         switch marker {
         case .bullet: Text("\u{2022}").frame(minWidth: 12)
-        case .number(let n): Text(n).monospacedDigit().frame(minWidth: 18, alignment: .trailing)
+        case .number(let n): Text(widest).hidden().overlay(alignment: .trailing) { Text(n) }.monospacedDigit()
         case .task(let checked):
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .foregroundStyle(checked ? Color.accentColor : .secondary)
