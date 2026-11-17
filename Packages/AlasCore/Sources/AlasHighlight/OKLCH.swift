@@ -36,7 +36,7 @@ public struct OKLCH: Equatable, Sendable {
     }
 
     /// Convert OKLCH → clipped linear sRGB components. Reference: https://bottosson.github.io/posts/oklab/
-    public func linearSRGB() -> (r: Double, g: Double, b: Double, a: Double) {
+    public func linearSRGB() -> (red: Double, green: Double, blue: Double, alpha: Double) {
         let hr = h * .pi / 180.0
         let a_ = c * cos(hr)
         let b_ = c * sin(hr)

@@ -45,7 +45,7 @@ enum RepoDisplay {
 
     private static func oklch(l: Double, c: Double, hue: Double) -> Color {
         let rgb = OKLCH(l: l, c: c, h: hue).linearSRGB()
-        return Color(.sRGBLinear, red: rgb.r, green: rgb.g, blue: rgb.b)
+        return Color(.sRGBLinear, red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 }
 
