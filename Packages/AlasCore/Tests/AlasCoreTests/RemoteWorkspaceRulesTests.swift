@@ -86,12 +86,18 @@ struct RemoteWorkspaceRulesTests {
     func accessMessageTexts(reason: RemoteFileAccessReason, message: String?, size: Int?, expected: String) {
         #expect(RemoteChangesRules.accessMessage(reason, message: message, byteSize: size) == expected)
     }
+
     @Test(arguments: [
         ("foo.swift:12", RemoteTranscriptLink.file("foo.swift")),
+        ("foo.swift:3:7", .file("foo.swift")),
         ("/wt/a/b.md.", .file("b.md")),
         ("file:///wt/a/c.txt", .file("c.txt")),
         ("https://x.y", .system),
         ("/other/z", .discard),
+        ("/wt/a-evil/x", .discard),
+        ("src/%2e%2e/%2e%2e/etc/passwd", .discard),
+        ("mailto:a@b.c", .system),
+        ("/wt/a//etc/passwd", .file("etc/passwd")),
     ])
     func transcriptLinkRoutes(link: String, expected: RemoteTranscriptLink) throws {
         #expect(RemoteTranscriptLink.route(try #require(URL(string: link)), worktreeRoot: "/wt/a") == expected)

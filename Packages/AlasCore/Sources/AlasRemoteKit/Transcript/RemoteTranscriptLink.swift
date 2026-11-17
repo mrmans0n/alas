@@ -38,9 +38,11 @@ public enum RemoteTranscriptLink: Equatable, Sendable {
                 return .discard
             }
             path.removeFirst(root.count)
+            // `root//x` names `root/x`, as a standardized file URL would.
+            while path.hasPrefix("/") { path.removeFirst() }
         }
         while path.hasPrefix("./") { path.removeFirst(2) }
-        guard !path.isEmpty, !path.split(separator: "/").contains("..") else { return .discard }
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return .discard }
         return .file(path)
     }
 
