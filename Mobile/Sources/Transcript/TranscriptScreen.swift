@@ -72,6 +72,16 @@ struct TranscriptScreen: View {
     private func content(_ session: TranscriptSession, _ workspace: SessionWorkspace) -> some View {
         let available = modes(session)
         return TranscriptContent(session: session)
+            // A file link opens in the file viewer; one outside the worktree opens nothing.
+            .environment(\.openURL, OpenURLAction { url in
+                switch RemoteTranscriptLink.route(url, worktreeRoot: session.worktreeRoot) {
+                case .file(let path):
+                    workspace.openFile(path, by: screenID)
+                    return .handled
+                case .system: return .systemAction
+                case .discard: return .discarded
+                }
+            })
             // Kept alive under the other tabs so the scroll position survives a switch.
             .opacity(mode == .transcript ? 1 : 0)
             .allowsHitTesting(mode == .transcript)

@@ -84,7 +84,7 @@ struct TranscriptRowView: View {
             }
             .card()
         case .planDocument(let doc):
-            titleCaption("Plan", doc.markdown ?? doc.planId)
+            if let display = doc.display { planDocument(display) }
         case .visualAid(let aid):
             if let session {
                 // Keyed by visual, so a reused cell never hands one visual's page or state to another.
@@ -115,6 +115,28 @@ struct TranscriptRowView: View {
             .font(.caption.monospacedDigit())
             if let diff = item.fileEditDiff {
                 DiffHunksView(diff: diff, spans: item.fileEditSpans, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+            }
+        }
+        .card()
+    }
+
+    /// The plan in full, like the Mac's plan card. The host strips a file plan's path from the document
+    /// and sends it only in the row's text, as "Plan file: <path>".
+    private func planDocument(_ display: ACPPlanDocument.Display) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Plan", systemImage: "doc.text")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+            if let markdown = display.markdown {
+                AgentMarkdown(id: item.id, text: markdown, session: session)
+            }
+            if display.showsFile {
+                let path = display.filePath
+                    ?? item.message.text.map { $0.hasPrefix("Plan file: ") ? String($0.dropFirst(11)) : $0 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Plan file").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Text(path ?? "Unavailable").font(.caption.monospaced()).textSelection(.enabled)
+                }
             }
         }
         .card()

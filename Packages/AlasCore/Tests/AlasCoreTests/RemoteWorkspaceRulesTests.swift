@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AlasRemoteKit
 
@@ -84,5 +85,15 @@ struct RemoteWorkspaceRulesTests {
     ] as [(RemoteFileAccessReason, String?, Int?, String)])
     func accessMessageTexts(reason: RemoteFileAccessReason, message: String?, size: Int?, expected: String) {
         #expect(RemoteChangesRules.accessMessage(reason, message: message, byteSize: size) == expected)
+    }
+    @Test(arguments: [
+        ("foo.swift:12", RemoteTranscriptLink.file("foo.swift")),
+        ("/wt/a/b.md.", .file("b.md")),
+        ("file:///wt/a/c.txt", .file("c.txt")),
+        ("https://x.y", .system),
+        ("/other/z", .discard),
+    ])
+    func transcriptLinkRoutes(link: String, expected: RemoteTranscriptLink) throws {
+        #expect(RemoteTranscriptLink.route(try #require(URL(string: link)), worktreeRoot: "/wt/a") == expected)
     }
 }
