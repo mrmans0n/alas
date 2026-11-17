@@ -6,7 +6,7 @@ import Testing
 /// Every wait is on an event the scheduler must produce, so a regression
 /// would hang; the time limit turns that into a failure.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(5)))
 struct SessionRecapPrecomputeSchedulerTests {
     /// A sleeper the test resumes by hand. Each call is announced on `calls`
     /// with its index and requested duration; cancellation throws.

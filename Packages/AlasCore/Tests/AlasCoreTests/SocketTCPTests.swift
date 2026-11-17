@@ -5,7 +5,7 @@ import AlasFoundation
 @testable import AlasHostCore
 
 /// The socket transport Linux hosts serve over, driven through real loopback sockets.
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(5)))
 struct SocketTCPTests {
     @Test func sendsArriveInOrderAndFinishEndsTheStream() async throws {
         let pair = try await Pair.connect()

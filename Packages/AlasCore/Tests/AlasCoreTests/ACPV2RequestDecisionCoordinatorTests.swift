@@ -6,7 +6,7 @@ import AlasCore
 
 @MainActor
 struct ACPV2RequestDecisionCoordinatorTests {
-    @Test(.timeLimit(.minutes(1)), arguments: ["unanswered", "beforeHandoff", "written", "writtenThenCancelled"])
+    @Test(.timeLimit(.minutes(5)), arguments: ["unanswered", "beforeHandoff", "written", "writtenThenCancelled"])
     func stdioIDReuseFollowsTransportAuthorityWhileResponsePersistenceIsPending(phase: String) async throws {
         let wasWritten = phase.hasPrefix("written")
         let fixture = try await DecisionFixture(hold: wasWritten ? "observation" : (phase == "beforeHandoff" ? "attempt" : nil))

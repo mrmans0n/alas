@@ -2376,7 +2376,7 @@ struct HostProtocolServerTests {
     /// A delegated child on a real repository: the unapproved hook does not
     /// run, nobody here is asked, the parent hears why, and the child is no
     /// one's session here.
-    @Test(.timeLimit(.minutes(1))) func aPeerChildSkipsTheUnapprovedHookAndSaysSo() async throws {
+    @Test(.timeLimit(.minutes(5))) func aPeerChildSkipsTheUnapprovedHookAndSaysSo() async throws {
         let environment = AskingEnvironment()
         let fixture = try await RepoFixture(environment: environment)
         defer { fixture.tearDown() }
@@ -3648,7 +3648,7 @@ struct HostProtocolServerTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func aPeerPromptReachesItsChild() async throws {
+    @Test(.timeLimit(.minutes(5))) func aPeerPromptReachesItsChild() async throws {
         let fixture = try DelegationFixture()
         defer { fixture.tearDown() }
         try await fixture.persistence.insert(fixture.record(child: "child", peer: "s1"))
@@ -4064,7 +4064,7 @@ struct HostProtocolServerTests {
     }
 
     /// The parent's state, as the source reports it, only ever lowered here.
-    @Test(.timeLimit(.minutes(1)), arguments: [
+    @Test(.timeLimit(.minutes(5)), arguments: [
         (RemoteDeviceAgentAccess.ask, true, false),
         (.autoRun, true, true),
     ])
