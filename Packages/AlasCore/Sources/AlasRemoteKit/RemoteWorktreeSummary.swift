@@ -23,6 +23,10 @@ public struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     /// The local project a Machine's checkout is listed under; nil for a
     /// project of its own, and from a host before linked projects.
     public var linkedProjectId: String? = nil
+    /// The repository's identity, `host/owner/repo` from its git origin, so a
+    /// client can group one repository's checkouts across machines. Nil for a
+    /// folder, a repository without an origin, and an older host.
+    public var repositoryKey: String? = nil
 
     public init(projectName: String, worktreeName: String, branch: String, path: String, metricsAvailable: Bool, comparisonRef: String?, commitCount: Int, changedFileCount: Int, addedLines: Int, deletedLines: Int, conflictCount: Int, isMain: Bool? = nil, createdAt: Double? = nil, lastActivity: Double? = nil, isFolder: Bool? = nil) {
         self.projectName = projectName

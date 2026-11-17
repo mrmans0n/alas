@@ -145,6 +145,41 @@ import Testing
         )
     }
 
+    /// One session per checkout: (machine, project id, repository key, updatedAt).
+    private func projectGroups(_ checkouts: [(Int, String, String?, Int64)]) -> [RemoteSessionCatalog.ProjectGroup] {
+        let sources = Dictionary(grouping: checkouts, by: \.0).map { machine, rows in
+            source(machine, serverId: "mac\(machine)", sessions: rows.map { _, project, key, at in
+                var summary = wt(project.uppercased(), "\(project)-\(machine)", path: "/r/\(project)")
+                summary.repositoryKey = key
+                return session("\(project)-\(machine)", project: project, worktreeId: project, at: at, worktree: summary)
+            })
+        }
+        return RemoteSessionCatalog.projects(from: RemoteSessionCatalog.hosts(from: sources))
+    }
+
+    @Test func oneRepositoryMergesAcrossMachinesNewestFirst() throws {
+        let groups = projectGroups([
+            (1, "alas", "github.com/o/alas", 5),
+            (1, "site", "github.com/o/site", 1),
+            (2, "alas", "github.com/o/alas", 9),
+        ])
+        #expect(groups.map(\.title) == ["ALAS", "SITE"])
+        let alas = try #require(groups.first)
+        #expect(alas.id == "repo:github.com/o/alas")
+        #expect(alas.rows.map(\.worktree.title) == ["alas-2", "alas-1"])
+        #expect(alas.hostIDs == [.server("mac2"), .server("mac1")])
+    }
+
+    @Test(arguments: [
+        // A folder, or a host too old to send keys.
+        ([(1, "notes", nil), (2, "notes", nil)], 2),
+        // Two clones on machine 1 are not guessed between; machine 2's stays whole.
+        ([(1, "alas", "k"), (1, "fork", "k"), (2, "alas", "k")], 3),
+    ] as [([(Int, String, String?)], Int)])
+    func projectsItCannotTellApartStayWithTheirMachine(checkouts: [(Int, String, String?)], expected: Int) {
+        #expect(projectGroups(checkouts.map { ($0.0, $0.1, $0.2, 1) }).count == expected)
+    }
+
     @Test func federatedCopiesAppearOnceUnderEachOwningHost() throws {
         let sources = (1...3).map { gateway in
             source(gateway, serverId: "mac\(gateway)", sessions: (1...3).map { owner in
