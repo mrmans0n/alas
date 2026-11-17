@@ -21,7 +21,7 @@ struct GGStackModelsTests {
           {"position": 2, "sha": "bbbbbbb", "title": "feat: stack section UI",
            "gg_id": "id-2", "gg_parent": "id-1", "pr_number": 840, "pr_state": "open",
            "approved": true, "ci_status": "running", "is_current": false,
-           "in_merge_train": false, "merge_train_position": null},
+           "in_merge_train": true, "merge_train_position": 1, "auto_merge": true},
           {"position": 3, "sha": "ccccccc", "title": "feat: sidebar badge",
            "gg_id": "id-3", "gg_parent": "id-2", "pr_number": null, "pr_state": null,
            "approved": false, "ci_status": null, "is_current": true,
@@ -48,6 +48,8 @@ struct GGStackModelsTests {
         #expect(first.id == "id-1")
         #expect(stack.entries[2].prState == nil)
         #expect(stack.entries[2].isCurrent)
+        // gg before `auto_merge` omits it: nothing is queued as far as Alas knows.
+        #expect(stack.entries.map(\.autoMerge) == [false, true, false])
     }
 
     @Test func nonStackResponseDecodesWithNilStack() throws {
@@ -94,7 +96,7 @@ struct GGStackModelsTests {
             currentPosition: 2, behindBase: nil,
             entries: [
                 GGStackEntry(position: 1, sha: "oldaaaa", title: "old", ggId: "id-1", prNumber: 10, prState: .merged, approved: true, ciStatus: .success),
-                GGStackEntry(position: 2, sha: "oldbbbb", title: "old", prNumber: 20, prState: .open, ciStatus: .running, isCurrent: true),
+                GGStackEntry(position: 2, sha: "oldbbbb", title: "old", prNumber: 20, prState: .open, ciStatus: .running, isCurrent: true, autoMerge: true),
             ]
         )
 
@@ -104,6 +106,7 @@ struct GGStackModelsTests {
         #expect(merged.entries.map(\.prState) == [.merged, .open])
         #expect(merged.entries[0].approved)
         #expect(merged.entries[1].ciStatus == .running)
+        #expect(merged.entries.map(\.autoMerge) == [false, true])
     }
 
     @Test func localStackMatchesLegacyRemoteMetadataBySHA() {

@@ -311,6 +311,10 @@ public protocol CodeHostProvider: Sendable {
     /// Returns `nil` for a repository that is not a fork.
     func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote?
 
+    /// How the repository merges review requests into `baseBranch` (a branch
+    /// name, without a remote prefix). Throws when the forge can't tell.
+    func mergeSettings(remote: CodeHostRemote, baseBranch: String, cwd: URL) async throws -> CodeHostMergeSettings
+
     /// Lowercased logins that reviewed the request's current head: a review
     /// or approval on `request.headSHA`, or timestamped evidence (a top-level
     /// comment, a reaction, a dated approval) created after both the head
@@ -545,6 +549,10 @@ extension CodeHostProvider {
     /// only ever used as an enhancement to it.
     public func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
         nil
+    }
+
+    public func mergeSettings(remote: CodeHostRemote, baseBranch: String, cwd: URL) async throws -> CodeHostMergeSettings {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 
     // Throwing for the same reason as `mergedReviewRequests`: an empty set

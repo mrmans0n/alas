@@ -512,6 +512,7 @@ public struct GGService: Sendable {
                 && sync?.stdout.contains("--until") == true
                 && sync?.stdout.contains("--draft") == true,
             landJSONL: land?.exitCode == 0 && land?.stdout.contains("--jsonl") == true,
+            landRebaseIfNeeded: land?.exitCode == 0 && land?.stdout.contains("--rebase-if-needed") == true,
             localStackSnapshot: ls?.exitCode == 0
                 && ls?.stdout.contains("--no-refresh") == true
         )
@@ -762,8 +763,9 @@ public struct GGService: Sendable {
 
     /// Lands ready entries (bottom-up). `until` lands up to a target
     /// (position/GG-ID/SHA); nil lands all currently-approved entries.
-    public func land(worktreePath: String, until: String?) async throws -> GGLandResult {
-        let args: [String] = until.map { ["land", "--until", $0, "--json", "--no-clean"] } ?? ["land", "--all", "--json", "--no-clean"]
+    public func land(worktreePath: String, until: String?, strategy: GGLandMergeStrategy = .squashAndRebase) async throws -> GGLandResult {
+        let scope = until.map { ["--until", $0] } ?? ["--all"]
+        let args = ["land"] + scope + ["--json", "--no-clean"] + strategy.landArguments
         let result = try await runChecked(args: args, worktreePath: worktreePath)
         do {
             return try GGLandResult.decode(fromJSON: Data(result.stdout.utf8))
@@ -776,14 +778,14 @@ public struct GGService: Sendable {
         // decode) and anything else still propagate.
     }
 
-    public func landStream(worktreePath: String, until: String) -> GGLandStream {
+    public func landStream(worktreePath: String, until: String, strategy: GGLandMergeStrategy = .squashAndRebase) -> GGLandStream {
         let interruption = GGStreamingCancellation()
         let events = AsyncThrowingStream { continuation in
             let producer = Task {
                 var validator = GGLandStreamValidator()
                 do {
                     for try await line in runner.runStreaming(
-                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"],
+                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"] + strategy.landArguments,
                         cwd: URL(fileURLWithPath: worktreePath),
                         timeout: nil,
                         interruption: interruption

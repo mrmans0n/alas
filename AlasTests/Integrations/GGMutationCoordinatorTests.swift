@@ -65,6 +65,7 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
+        landStrategy: GGLandMergeStrategy,
         onSyncEvent: (GGSyncEvent) -> Void,
         onLandEvent: (GGLandEvent) -> Bool
     ) async throws -> GGMutationExecutionResult {
@@ -880,6 +881,32 @@ struct GGMutationCoordinatorTests {
             _ = try await harness.coordinator.prepare(.drop(target: "change-1"))
         }
         #expect(harness.service.requests.isEmpty)
+    }
+
+    /// Pushing a branch with a queued merge cancels it on the forge: GitLab
+    /// aborts a merge train's auto-add, and gg's wait never sees the merge.
+    @Test(arguments: [GGMutationRequest.sync, .rebase(target: nil), .syncUntil(target: nil, draft: false)])
+    func pushingMutationsWaitForAQueuedMergeToSettle(request: GGMutationRequest) async throws {
+        func entries(bottom: GGPRState) -> [GGStackEntry] {
+            [
+                GGStackEntry(position: 1, sha: "a", title: "Queued", ggId: "change-1", prNumber: 7, prState: bottom, autoMerge: true),
+                GGStackEntry(position: 2, sha: "b", title: "Head", ggId: "change-2", prNumber: 8, prState: .open, isCurrent: true),
+            ]
+        }
+        // Each apply loads the next snapshot: queued first, then merged.
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "b", entries: entries(bottom: .open)),
+            stack(head: "b", entries: entries(bottom: .merged)),
+        ])
+
+        await #expect(throws: GGMutationError.queuedMerge) {
+            try await harness.coordinator.apply(request, confirmedAgainst: nil)
+        }
+        #expect(harness.service.requests.isEmpty)
+
+        // Once it merged, gg may still report the flag; it no longer matters.
+        try await harness.coordinator.apply(request, confirmedAgainst: nil)
+        #expect(harness.service.requests == [request])
     }
 
     @Test func pausedOperationBlocksMutationsButAllowsRecoveryActions() async throws {

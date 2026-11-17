@@ -662,6 +662,7 @@ final class RightPaneState: GGSplitCommitServicing {
             actionState: ggActionState,
             syncJSONLCapability: { [weak self] in self?.ggCapabilities().syncJSONL ?? false },
             landJSONLCapability: { [weak self] in self?.ggCapabilities().landJSONL ?? false },
+            landRebaseIfNeededCapability: { [weak self] in self?.ggCapabilities().landRebaseIfNeeded ?? false },
             mutationGate: ggProjectMutationGate,
             projectID: worktree.projectId,
             context: GGMutationContext(
@@ -706,6 +707,9 @@ final class RightPaneState: GGSplitCommitServicing {
                 resolveCommitSHA: { [weak self] sha in
                     guard let self else { throw GGMutationError.staleConfirmation }
                     return try await self.git.resolveRevision(at: self.worktree.path, ref: sha)
+                },
+                loadLandMergeSettings: { [worktreePath = worktree.path.path] base in
+                    await GGLandMergeStrategy.loadMergeSettings(worktreePath: worktreePath, base: base)
                 }
             )
         )

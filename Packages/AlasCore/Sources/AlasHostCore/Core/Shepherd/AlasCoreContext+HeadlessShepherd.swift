@@ -112,7 +112,8 @@ extension AlasCoreContext {
                     worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
                 ) ?? .declined
             },
-            servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false }
+            servesWorktree: { [weak self] in self?.servesShepherdWorktree($0) ?? false },
+            loadStackWithForgeState: { path in try await GGService().currentStack(worktreePath: path.path) }
         )
     }
 
@@ -293,7 +294,10 @@ extension AlasCoreContext {
                 currentBranch: { nil },
                 // gg's stream is validated as it is read; nothing on the
                 // host shows its progress.
-                publishLandEvent: { _ in true }
+                publishLandEvent: { _ in true },
+                loadLandMergeSettings: { base in
+                    await GGLandMergeStrategy.loadMergeSettings(worktreePath: path.path, base: base)
+                }
             )
         )
         guard let operation = coordinator.startApplying(request, confirmedAgainst: expected) else {
