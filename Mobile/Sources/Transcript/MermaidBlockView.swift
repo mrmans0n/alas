@@ -126,6 +126,7 @@ enum MermaidRenderer {
         guard scale >= 1 else { return .failed }
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
+        format.preferredRange = .standard
         // The renderer paints the theme background itself. UIKit's context is already top-left
         // origin, so the Mac's flip is not needed here.
         return .image(UIGraphicsImageRenderer(size: bounds.size, format: format).image { context in
