@@ -120,7 +120,7 @@ final class SpikeTranscriptModel {
     var canLoadOlder: Bool { !older.isEmpty }
 
     init(totalCount: Int, windowSize: Int = 200) {
-        let all = SpikeTranscriptGenerator.messages(count: totalCount, seed: 1).map(TranscriptItem.init(message:))
+        let all = SpikeTranscriptGenerator.messages(count: totalCount, seed: 1).map { TranscriptItem(message: $0) }
         let split = max(0, all.count - windowSize)
         older = Array(all[..<split])
         rows = Array(all[split...])

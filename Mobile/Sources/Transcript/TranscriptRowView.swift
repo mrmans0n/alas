@@ -11,6 +11,10 @@ struct TranscriptRowView: View {
     let toggle: () -> Void
     /// A group header's "Show earlier".
     var showAll: () -> Void = {}
+    /// Whether a part of this row, such as one diff, shows all its lines, and its "Show all". The
+    /// transcript keeps them with its expanded rows, so the cell re-measures and survives reuse.
+    var showsAll: (String) -> Bool = { _ in false }
+    var showAllPart: (String) -> Void = { _ in }
 
     var body: some View {
         content
@@ -64,7 +68,11 @@ struct TranscriptRowView: View {
                 .lineLimit(isExpanded ? nil : 2)
                 .onTapGesture(perform: toggle)
         case .toolCall(let call):
-            toolCall(call)
+            if let display = item.toolCall {
+                ToolCallCard(item: item, call: call, display: display, isExpanded: isExpanded, toggle: toggle,
+                             session: session, showsAll: { showsAll("section:\($0)") },
+                             showAll: { showAllPart("section:\($0)") })
+            }
         case .fileEdit(let edit):
             fileEdit(edit)
         case .plan(let items):
@@ -95,29 +103,6 @@ struct TranscriptRowView: View {
             .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
     }
 
-    private func toolCall(_ call: ACPToolCall) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: Self.toolIcon(call.kind)).foregroundStyle(.secondary)
-                Text(call.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                Spacer(minLength: 0)
-                Self.toolStatus(call.status)
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.tertiary)
-            }
-            if isExpanded {
-                Text(call.content).font(.system(.footnote, design: .monospaced))
-                // Indexed before filtering, so an asset keeps its position as the key of its inline data.
-                ForEach(Array(call.assets.enumerated()).filter { Self.isImage($0.element) }, id: \.offset) { index, asset in
-                    TranscriptImage(id: "\(item.id):asset:\(index)", source: asset.uri ?? "", data: asset.data,
-                                    label: Self.label(asset), session: session)
-                }
-            }
-        }
-        .card()
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
-    }
-
     private func fileEdit(_ edit: ACPFileEdit) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -128,7 +113,9 @@ struct TranscriptRowView: View {
                 Text("\u{2212}\(edit.removed)").foregroundStyle(.red)
             }
             .font(.caption.monospacedDigit())
-            Text(Self.diffPreview(edit)).font(.system(.footnote, design: .monospaced))
+            if let diff = item.fileEditDiff {
+                DiffHunksView(diff: diff, maxLines: showsAll("diff") ? .max : 40) { showAllPart("diff") }
+            }
         }
         .card()
     }
@@ -141,51 +128,6 @@ struct TranscriptRowView: View {
         .card()
     }
 
-    /// First 12 changed lines, removals then additions.
-    private static func diffPreview(_ edit: ACPFileEdit) -> AttributedString {
-        let removed = (edit.oldText ?? "").split(separator: "\n", omittingEmptySubsequences: false).map { ("\u{2212} ", Color.red, $0) }
-        let added = edit.newText.split(separator: "\n", omittingEmptySubsequences: false).map { ("+ ", Color.green, $0) }
-        var out = AttributedString()
-        for (i, (sign, color, line)) in (removed + added).prefix(12).enumerated() {
-            var a = AttributedString((i > 0 ? "\n" : "") + sign + line)
-            a.foregroundColor = color
-            out += a
-        }
-        return out
-    }
-
-    /// An icon reads faster than the status word; running ones spin.
-    @ViewBuilder private static func toolStatus(_ status: String) -> some View {
-        switch status {
-        case "completed":
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Completed")
-        case "failed":
-            Image(systemName: "xmark.circle.fill").foregroundStyle(.red).accessibilityLabel("Failed")
-        case "pending", "in_progress":
-            ProgressView().controlSize(.mini).accessibilityLabel("Running")
-        default:
-            Text(status).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    /// As the Mac's `looksLikeImage`: the kind, an image mime type, or an image file extension.
-    private static func isImage(_ asset: ACPToolCallAsset) -> Bool {
-        if asset.kind == .image || asset.mimeType?.lowercased().hasPrefix("image/") == true { return true }
-        let candidate = [asset.uri, asset.name].compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty }
-        guard let candidate else { return false }
-        let ext = URL(fileURLWithPath: candidate).pathExtension.lowercased()
-        return ["png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp"].contains(ext)
-    }
-
-    /// The name, else the uri's last path component; never a data uri, which can run to megabytes.
-    private static func label(_ asset: ACPToolCallAsset) -> String {
-        if let name = asset.name, !name.isEmpty { return name }
-        guard let uri = asset.uri, !uri.isEmpty, !uri.lowercased().hasPrefix("data:") else { return "Image" }
-        let url = URL(string: uri).flatMap { $0.scheme == nil ? nil : $0 } ?? URL(fileURLWithPath: uri)
-        return url.lastPathComponent.isEmpty ? "Image" : url.lastPathComponent
-    }
-
     private static func planIcon(_ status: String) -> String {
         switch status {
         case "completed": "checkmark.circle.fill"
@@ -193,20 +135,9 @@ struct TranscriptRowView: View {
         default: "circle"
         }
     }
-
-    private static func toolIcon(_ kind: String?) -> String {
-        switch kind {
-        case "execute": "terminal"
-        case "read": "doc.text"
-        case "edit": "pencil"
-        case "search": "magnifyingglass"
-        case "fetch": "network"
-        default: "wrench.and.screwdriver"
-        }
-    }
 }
 
-private extension View {
+extension View {
     func card() -> some View {
         padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
