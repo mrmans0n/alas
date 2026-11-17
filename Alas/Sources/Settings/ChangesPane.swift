@@ -5,7 +5,7 @@ struct ChangesPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
-    @State private var ggInstall = GGInstallController()
+    @State private var ggInstall = HomebrewInstallController.gg()
 
     var body: some View {
         ScrollView {

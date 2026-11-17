@@ -26,9 +26,26 @@ extension AppState {
 }
 
 extension LiveSimulatorSettings {
-    /// Settings with the app's bundled accessibility helper.
+    /// Settings with the app's bundled accessibility helper, and the user's simslim.
     static var bundled: LiveSimulatorSettings {
-        LiveSimulatorSettings(accessibilityHelper: Bundle.main.resourceURL?
-            .appendingPathComponent("sim-ax-settings/alas-sim-ax-settings"))
+        LiveSimulatorSettings(
+            accessibilityHelper: Bundle.main.resourceURL?.appendingPathComponent("sim-ax-settings/alas-sim-ax-settings"),
+            simslim: {
+                // Homebrew or `go install`; a GUI app's PATH has neither.
+                AgentPath.resolveExecutable(
+                    named: "simslim", base: ProcessInfo.processInfo.environment["PATH"],
+                    wellKnown: AgentPath.wellKnownDirectories + ["~/go/bin"]
+                )
+            }
+        )
+    }
+}
+
+extension HomebrewInstallController {
+    /// The simulator settings' "Install simslim…".
+    static func simslim() -> HomebrewInstallController {
+        HomebrewInstallController(formula: SimulatorSlim.formula, tool: "simslim") {
+            LiveSimulatorSettings.bundled.simslim() != nil
+        }
     }
 }
