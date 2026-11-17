@@ -14,13 +14,15 @@ pack_src="${srcroot}/ThirdParty/treesitter-pack"
 rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
 rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
 # Resolved once so the fingerprint and the actual cargo invocation below
-# can't drift apart by each applying the `:-15.0` default independently.
+# can't drift apart by each applying a default independently: `:-15.0` for
+# macOS here, `:-26.0` for IPHONEOS_DEPLOYMENT_TARGET in the iOS branch below.
 macos_deployment_target="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 deployment_env="MACOSX_DEPLOYMENT_TARGET"
 deployment_target="${macos_deployment_target}"
 
 # The phone builds arm64 only (device and Apple-silicon simulator), so iOS
 # gets one slice per platform and never takes the universal/lipo path.
+# ALAS_TS_PACK_TARGET_ARCH is ignored for iOS platforms.
 case "${PLATFORM_NAME:-}" in
     iphoneos|iphonesimulator)
         target_arch="${PLATFORM_NAME}-arm64"

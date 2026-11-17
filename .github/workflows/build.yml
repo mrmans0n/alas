@@ -152,6 +152,65 @@ jobs:
       - name: Test the push relay
         run: node --test 'relay/test/*.test.js'
 
+      - name: Compute prebuilt tools cache key inputs
+        # Same pin-file pattern as .ghostty-pin: the fingerprint inputs the
+        # build scripts consult but hashFiles can't reach (submodule HEADs,
+        # the zig binary) get dumped into a small file we can hash.
+        # The zig *binary content* hash (not `zig version`) matters because
+        # build-zmx.sh hashes the binary into its fingerprint — a Homebrew
+        # bottle rebuild with an unchanged version string must still change
+        # the key. Helper's rust toolchain is pinned inside its script, so
+        # the script hash covers it.
+        run: |
+          git -C ThirdParty/zmx rev-parse HEAD > .tools-pin
+          {
+            git -C ThirdParty/fff rev-parse HEAD
+            git rev-parse HEAD:AlasHelper
+            git rev-parse HEAD:AlasCLI
+            git rev-parse HEAD:ThirdParty/treesitter-pack
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/fetch-cua-driver.sh scripts/build-treesitter-pack.sh
+            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig"
+          } >> .tools-pin
+          cat .tools-pin
+
+      - name: Restore prebuilt tools cache
+        # zmx / fff / Alas Helper / Alas CLI artifacts combined in one entry — each is
+        # a few MB, and only install outputs + fingerprint markers are
+        # cached (no zig/cargo intermediates). The key is an optimization
+        # hint only: each script re-validates restored artifacts against its
+        # own fingerprint (submodule SHA + dirt + arch + toolchain + script
+        # hash), so a stale restore-keys fallback can never ship a wrong
+        # binary — the changed component rebuilds while the rest fast-path.
+        # zmx's macOS slice fast-paths off the *host* cache
+        # (~/Library/Caches/Alas/zmx), not the worktree output, hence that
+        # path; the Linux slices and fff/helper check worktree markers.
+        id: tools-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/Library/Caches/Alas/zmx
+            .build/zmx/linux-*/install
+            .build/zmx/linux-*/fingerprint
+            .build/fff/*/install
+            .build/fff/*/fingerprint
+            .build/fff/include
+            .build/treesitter-pack/*/install
+            .build/treesitter-pack/*/fingerprint
+            .build/treesitter-pack/include
+            .build/alas-helper/*/release/alas-helper
+            .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
+            .build/alas-vm-guest-linux/*/release/alas-vm-guest-linux
+            .build/alas-vm-guest-linux/fingerprint
+            .build/cua-driver/current
+            .build/cua-driver/*/cua-driver
+            .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
+            .build/cua-driver/fingerprint
+          key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
+          restore-keys: |
+            tools-${{ runner.os }}-arm64-
+
       - name: Build the iOS app
         # Also compiles AlasRemoteKit for iOS: an iOS-breaking change in the
         # shared module fails fast.
@@ -261,65 +320,6 @@ jobs:
         with:
           path: ~/Library/Caches/Alas/GhosttyKit/arm64
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
-
-      - name: Compute prebuilt tools cache key inputs
-        # Same pin-file pattern as .ghostty-pin: the fingerprint inputs the
-        # build scripts consult but hashFiles can't reach (submodule HEADs,
-        # the zig binary) get dumped into a small file we can hash.
-        # The zig *binary content* hash (not `zig version`) matters because
-        # build-zmx.sh hashes the binary into its fingerprint — a Homebrew
-        # bottle rebuild with an unchanged version string must still change
-        # the key. Helper's rust toolchain is pinned inside its script, so
-        # the script hash covers it.
-        run: |
-          git -C ThirdParty/zmx rev-parse HEAD > .tools-pin
-          {
-            git -C ThirdParty/fff rev-parse HEAD
-            git rev-parse HEAD:AlasHelper
-            git rev-parse HEAD:AlasCLI
-            git rev-parse HEAD:ThirdParty/treesitter-pack
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/fetch-cua-driver.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig"
-          } >> .tools-pin
-          cat .tools-pin
-
-      - name: Restore prebuilt tools cache
-        # zmx / fff / Alas Helper / Alas CLI artifacts combined in one entry — each is
-        # a few MB, and only install outputs + fingerprint markers are
-        # cached (no zig/cargo intermediates). The key is an optimization
-        # hint only: each script re-validates restored artifacts against its
-        # own fingerprint (submodule SHA + dirt + arch + toolchain + script
-        # hash), so a stale restore-keys fallback can never ship a wrong
-        # binary — the changed component rebuilds while the rest fast-path.
-        # zmx's macOS slice fast-paths off the *host* cache
-        # (~/Library/Caches/Alas/zmx), not the worktree output, hence that
-        # path; the Linux slices and fff/helper check worktree markers.
-        id: tools-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/Library/Caches/Alas/zmx
-            .build/zmx/linux-*/install
-            .build/zmx/linux-*/fingerprint
-            .build/fff/*/install
-            .build/fff/*/fingerprint
-            .build/fff/include
-            .build/treesitter-pack/*/install
-            .build/treesitter-pack/*/fingerprint
-            .build/treesitter-pack/include
-            .build/alas-helper/*/release/alas-helper
-            .build/alas-helper/fingerprint
-            .build/alas-cli/*/release/alas
-            .build/alas-cli/fingerprint
-            .build/alas-vm-guest-linux/*/release/alas-vm-guest-linux
-            .build/alas-vm-guest-linux/fingerprint
-            .build/cua-driver/current
-            .build/cua-driver/*/cua-driver
-            .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
-            .build/cua-driver/fingerprint
-          key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
-          restore-keys: |
-            tools-${{ runner.os }}-arm64-
 
       - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI + Linux guest helper
         # These normally run as pre-build script phases *inside* xcodebuild,
