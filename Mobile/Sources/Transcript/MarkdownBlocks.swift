@@ -20,6 +20,8 @@ enum MarkdownBlock: Equatable {
     case table(header: [AttributedString], rows: [[AttributedString]])
     /// `![alt](source)` on its own line; inside other text an image reads as its alt text.
     case image(source: String, alt: String)
+    /// A closed ```` ```mermaid ```` fence, drawn as a diagram.
+    case mermaid(source: String)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })  // cmark's line endings only, so line numbers match
@@ -36,8 +38,14 @@ enum MarkdownBlock: Equatable {
             }
         case let h as Heading: .heading(h.level, inline(h))
         case let c as CodeBlock:
-            // As on the Mac, a fence still streaming stays plain: re-highlighting it per delta is too slow.
-            .code(language: c.language, chunks: highlighted(c.code, language: isClosed(c, lines: lines) ? c.language : nil))
+            // As on the Mac, a fence still streaming stays plain: re-highlighting or drawing it per delta is too slow.
+            if !isClosed(c, lines: lines) {
+                .code(language: c.language, chunks: highlighted(c.code, language: nil))
+            } else if MermaidFence.isMermaid(language: c.language) {
+                .mermaid(source: c.code)
+            } else {
+                .code(language: c.language, chunks: highlighted(c.code, language: c.language))
+            }
         case let l as ListItemContainer: .list(entries(l, depth: 0, lines: lines))
         case let q as BlockQuote: .quote(inline(q))
         case let t as Markdown.Table:

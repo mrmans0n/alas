@@ -158,6 +158,7 @@ struct AgentMarkdown: View {
                 case .paragraph(let s): Text(s)
                 case .heading(let level, let s): Text(s).font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 case .code(let language, let chunks): CodeBlockView(language: language, chunks: chunks)
+                case .mermaid(let source): MermaidBlockView(source: source)
                 case .list(let entries):
                     let widest = entries.compactMap { if case .number(let n) = $0.marker { n } else { nil } }
                         .max { $0.count < $1.count } ?? ""
