@@ -1,9 +1,5 @@
 import Foundation
 import SwiftTreeSitter
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 public struct EditorTextEdit: Sendable, Equatable {
     public let location: Int

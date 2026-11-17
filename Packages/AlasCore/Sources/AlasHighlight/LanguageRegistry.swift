@@ -1,9 +1,5 @@
 import Foundation
 import SwiftTreeSitter
-import AlasFoundation
-import AlasModel
-import AlasPlatform
-import AlasFeatures
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the matching
 /// `highlights.scm` `Query`. `Language` and `Query` are immutable after
