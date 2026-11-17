@@ -2,6 +2,24 @@ import AlasRemoteKit
 import Observation
 import UIKit
 
+/// What a tool-call card draws, resolved once per message change rather than per render.
+struct ToolCallDisplay: Equatable {
+    let presentation: ACPToolCallPresentation
+    let target: String?
+    /// Set only once the call finished.
+    let duration: String?
+    let sections: [ACPToolCallDiffSection]
+    let showsContent: Bool
+
+    init(_ call: ACPToolCall, worktreeRoot: String?) {
+        presentation = ACPToolCallPresentation.resolve(call)
+        target = ACPToolCallPresentation.target(for: call, label: presentation.label)
+        duration = call.executionDuration.map { ACPToolCallDurationFormatter.string(for: $0) }
+        sections = ACPToolCallPresentation.diffSections(call.diffs, status: call.status, worktreeRoot: worktreeRoot)
+        showsContent = ACPToolCallPresentation.showsContent(call.content, alongside: call.diffs)
+    }
+}
+
 /// One transcript row as the scroller shows it: a message, keyed by its `stableId`, or the header
 /// of a folded activity group, keyed by the group's id. The scroller reconfigures a row when it changes.
 struct TranscriptItem: Identifiable, Equatable {
@@ -17,16 +35,22 @@ struct TranscriptItem: Identifiable, Equatable {
     let message: RemoteWireMessage
     /// Decoded once per message change, so a fold does not decode every tool call again.
     let foldItem: ACPTranscriptFoldItem
+    /// Set only for tool-call rows.
+    let toolCall: ToolCallDisplay?
+    /// Set only for file-edit rows.
+    let fileEditDiff: ParsedDiff?
     /// Shown inside an expanded group.
     var isGroupMember = false
 
-    init(message: RemoteWireMessage) {
+    init(message: RemoteWireMessage, worktreeRoot: String? = nil) {
         id = message.stableId
         kind = .message
         let row = RemoteTranscriptRow(message: message)
         self.row = row
         self.message = message
         foldItem = RemoteTranscriptFold.item(for: message, row: row)
+        toolCall = if case .toolCall(let call) = row { ToolCallDisplay(call, worktreeRoot: worktreeRoot) } else { nil }
+        fileEditDiff = if case .fileEdit(let edit) = row { LineDiff.parsedDiff(old: edit.oldText, new: edit.newText) } else { nil }
     }
 
     init(header kind: Kind, id: String, first: TranscriptItem) {
@@ -35,6 +59,8 @@ struct TranscriptItem: Identifiable, Equatable {
         row = first.row
         message = first.message
         foldItem = first.foldItem
+        toolCall = first.toolCall
+        fileEditDiff = first.fileEditDiff
     }
 }
 
@@ -130,6 +156,8 @@ final class TranscriptSession {
     @ObservationIgnored private var shownFold: FoldKey?
     /// The message items of the last fold by `stableId`, reused while their message is unchanged.
     @ObservationIgnored private var messageItems: [String: TranscriptItem] = [:]
+    /// The session's worktree path, so tool-call diffs show paths relative to it.
+    @ObservationIgnored private(set) var worktreeRoot: String?
 
     private struct FoldKey: Equatable {
         let messages: UInt64
@@ -717,6 +745,12 @@ final class TranscriptSession {
     /// Copies what the screen reads out of the sync state, refolding `items` only when the rows,
     /// the turn's activity or a group's expansion changed, and reusing every item whose message did not.
     private func publish() {
+        // The worktree comes with the hub's session list, which can land after the first frames.
+        if let root = summary?.worktree?.path, root != worktreeRoot {
+            worktreeRoot = root
+            messageItems = [:]
+            shownFold = nil
+        }
         let fold = FoldKey(messages: state.messagesGeneration, expansion: seeds.generation,
                            isTurnActive: state.streamingState != "idle")
         if fold != shownFold {
@@ -762,7 +796,7 @@ final class TranscriptSession {
         let messages = state.messages
         let base = messages.map { message in
             if let old = messageItems[message.stableId], old.message == message { return old }
-            return TranscriptItem(message: message)
+            return TranscriptItem(message: message, worktreeRoot: worktreeRoot)
         }
         messageItems = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
         let foldItems = base.map(\.foldItem)
