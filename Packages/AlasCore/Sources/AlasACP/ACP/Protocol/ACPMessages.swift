@@ -30,14 +30,16 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
     /// opaque tool call, exactly as before.
     ///
     /// The wire format an agent answers with is the agent's choice, keyed on
-    /// how it classifies the client. claude-agent-acp >= 0.90 sends the
-    /// revised RFD form (`subagent_update`, `session_message`) to non-AIR
-    /// clients and the earlier draft (`subagent_spawned`,
-    /// `subagent_state_update`) only to clients that send
+    /// how it classifies the client. claude-agent-acp >= 0.90 and codex-acp
+    /// >= 2.7.0 send the revised RFD form (`subagent_update`,
+    /// `session_message`) to non-AIR clients and the earlier draft
+    /// (`subagent_spawned`, `subagent_state_update`) only to clients that send
     /// `_meta.jetbrains.air`. Alas stays non-AIR on purpose — that marker
     /// changes adapter behaviour well beyond subagents — and decodes both
-    /// forms (see `ACPSessionUpdateFrame`). Later ACP features negotiated the
-    /// same way should be checked against that classification first.
+    /// forms (see `ACPSessionUpdateFrame`). The RFD defines no agent-side
+    /// capability, so Alas does not wait for one: a standard agent answers
+    /// with the updates alone. Later ACP features negotiated the same way
+    /// should be checked against that classification first.
     public let subagents: EmptyObject?
     /// Standard Markdown and file plans (`plan_update`/`plan_removed`). `{}`
     /// opts in; Codex stops sending a plan as agent message text once it
@@ -605,23 +607,18 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         /// Agent-side `_meta`. Only the keys Alas acts on are modelled;
         /// everything else is ignored rather than failing the handshake.
         public struct Meta: Decodable, Equatable, Sendable {
-            public let openCodeChildSessionUpdates: Bool
             public let goal: ACPGoalCapability?
 
-            public init(openCodeChildSessionUpdates: Bool = false, goal: ACPGoalCapability? = nil) {
-                self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
+            public init(goal: ACPGoalCapability? = nil) {
                 self.goal = goal
             }
 
             public enum CodingKeys: String, CodingKey, Sendable {
-                case openCodeChildSessionUpdates = "opencode/child-session-updates"
                 case goal
             }
 
             public init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
-                let flag = try? c.decodeIfPresent(Bool.self, forKey: .openCodeChildSessionUpdates)
-                openCodeChildSessionUpdates = (flag ?? nil) ?? false
                 goal = (try? c.decodeIfPresent(ACPGoalCapability.self, forKey: .goal)) ?? nil
             }
         }
@@ -633,24 +630,19 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let fork: EmptyObject?
         public let delete: EmptyObject?
         public let close: EmptyObject?
-        /// Native child sessions (`subagent_spawned` + child-scoped
-        /// `session/update`), advertised by claude-agent-acp and codex-acp.
-        public let subagents: EmptyObject?
 
         public init(
             list: EmptyObject? = nil,
             resume: EmptyObject? = nil,
             fork: EmptyObject? = nil,
             delete: EmptyObject? = nil,
-            close: EmptyObject? = nil,
-            subagents: EmptyObject? = nil
+            close: EmptyObject? = nil
         ) {
             self.list = list
             self.resume = resume
             self.fork = fork
             self.delete = delete
             self.close = close
-            self.subagents = subagents
         }
 
         public var supportsList: Bool { list != nil }
@@ -658,7 +650,6 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public var supportsFork: Bool { fork != nil }
         public var supportsDelete: Bool { delete != nil }
         public var supportsClose: Bool { close != nil }
-        public var supportsSubagents: Bool { subagents != nil }
     }
     public struct ACPPromptCapabilities: Codable, Equatable, Sendable {
         public let image: Bool

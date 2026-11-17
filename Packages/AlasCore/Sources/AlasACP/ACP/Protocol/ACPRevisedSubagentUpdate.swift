@@ -6,8 +6,8 @@ import AlasFeatures
 import AlasCode
 
 /// The revised native subagent form of ACP RFD 1992, sent by
-/// claude-agent-acp >= 0.90 to every non-AIR client that declares
-/// `clientCapabilities.subagents`.
+/// claude-agent-acp >= 0.90 and codex-acp >= 2.7.0 to every non-AIR client
+/// that declares `clientCapabilities.subagents`.
 ///
 /// It replaces the earlier draft's `subagent_spawned` / `subagent_state_update`
 /// with one patch-shaped `subagent_update` on the parent, and delivers the
@@ -30,6 +30,9 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
     public struct SubagentUpdate: Equatable, Sendable {
         public let sessionId: String
         public let title: Patch<String>
+        /// claude-agent-acp sends a short task summary. codex-acp >= 2.7.0
+        /// sends the child's Codex role instead, which `ACPSession` does not
+        /// show as the task (see `ACPSubagentSpawn.carriesTask(from:)`).
         public let description: Patch<String>
         /// Present — `null` and `{}` included — it replaces the whole set,
         /// so an empty one revokes Cancel.
