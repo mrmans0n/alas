@@ -104,7 +104,7 @@ final class HostHub {
     }
 
     func pair(origins: [String], code: String) async throws(RemotePairingError) {
-        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: "Alas for iOS", client: "ios")
+        let result = try await pairingClient.pair(origins: origins, code: code, deviceName: RemotePairingClient.iosDeviceName, client: "ios")
         var allOrigins = [result.origin]
         for origin in origins where !allOrigins.contains(origin) {
             allOrigins.append(origin)
