@@ -26,6 +26,8 @@ struct DevicesSwitcher: View {
                 Text(selected?.title ?? "Devices")
                     .font(scale.meta.font(weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
+                    // The status truncates first when the pane is narrow.
+                    .layoutPriority(1)
                 if let status = selected?.status, !status.isEmpty {
                     Text(status)
                         .font(scale.meta.font)
@@ -42,7 +44,9 @@ struct DevicesSwitcher: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.toolbarControl)
-        .fixedSize()
+        // Not horizontally fixed: next to the fixed-size device actions a
+        // full-width chip overflows a narrow pane, so it truncates instead.
+        .fixedSize(horizontal: false, vertical: true)
         .onHover { hovering = $0 }
         .help("Choose a device")
         .accessibilityIdentifier("devices-switcher")

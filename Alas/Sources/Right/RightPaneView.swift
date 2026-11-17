@@ -241,6 +241,12 @@ struct RightPaneView: View {
                     tabContent(rps: rps, panel: panel)
                         .scrollIndicators(.hidden)
                 }
+                // Takes only what the rail leaves: a body whose content
+                // can't shrink (the Devices toolbar's fixed-size actions)
+                // would otherwise widen the row and push the rail out of
+                // the window.
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .clipped()
                 // The rail stays put at the window edge; the body keeps
                 // its last frame on removal and slides under the rail
                 // while the center grows over its other side.
