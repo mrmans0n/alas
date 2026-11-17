@@ -9,6 +9,11 @@ public enum DevicesTarget: Hashable, Sendable {
     case android(String)
 }
 
+/// Which kind of device a switcher row is.
+public enum DevicesPlatform: Hashable, Sendable {
+    case ios, android, vm(VMGuestOS)
+}
+
 /// Where a worktree's VM stands, as the Devices tab lists it.
 public enum VMDeviceStatus: Equatable, Sendable {
     case notCreated, stopped, starting, running, pausing
@@ -71,6 +76,11 @@ public struct DevicesTabState: Equatable, Sendable {
         public let title: String
         public let detail: String
         public let tone: Tone
+        public let platform: DevicesPlatform
+        /// The state in words: "Booted", "Claude driving", "Stopped".
+        public let status: String
+        /// A simulator or AVD that is shut down and can be started from the row.
+        public let canBoot: Bool
         public var id: DevicesTarget { target }
     }
 
@@ -98,6 +108,11 @@ public struct DevicesTabState: Equatable, Sendable {
     public let vmRows: [Row]
     public let stage: Stage
 
+    /// The row for `selected`, as the switcher's chip shows it.
+    public var selectedRow: Row? {
+        (simulatorRows + androidRows + vmRows).first { $0.target == selected }
+    }
+
     private static let guests: [VMGuestOS] = [.macOS, .linux]
 
     /// `vms` holds this worktree's VMs, empty where worktree VMs aren't
@@ -111,8 +126,13 @@ public struct DevicesTabState: Equatable, Sendable {
         selection: DevicesTarget?,
         bootingUDIDs: Set<String>,
         agentDriving: Set<DevicesTarget>,
-        android: AndroidListing? = nil
+        android: AndroidListing? = nil,
+        agentNames: [DevicesTarget: String] = [:]
     ) -> DevicesTabState {
+        func agentStatus(_ target: DevicesTarget) -> String? {
+            guard agentDriving.contains(target) else { return nil }
+            return agentNames[target].map { "\($0) driving" } ?? "Agent driving"
+        }
         // A simctl error is a finished list with nothing in it.
         let listed = listError == nil ? simulators : []
         func simulatorStage(_ device: SimulatorDevice) -> SimulatorStage {
@@ -124,7 +144,18 @@ public struct DevicesTabState: Equatable, Sendable {
             let stage = simulatorStage(device)
             let tone: Tone = agentDriving.contains(.simulator(device.udid)) || stage == .booting ? .busy
                 : stage == .booted ? .live : .idle
-            return Row(target: .simulator(device.udid), title: device.name, detail: device.runtimeName, tone: tone)
+            let target = DevicesTarget.simulator(device.udid)
+            let driven = agentStatus(target)
+            let stageText: String = switch stage {
+            case .booted: "Booted"
+            case .booting: "Booting"
+            case .shutDown: "Shut down"
+            }
+            let status = driven ?? stageText
+            return Row(
+                target: target, title: device.name, detail: device.runtimeName, tone: tone,
+                platform: .ios, status: status, canBoot: driven == nil && stage == .shutDown
+            )
         }
         let vmRows = guests.compactMap { guest -> Row? in
             guard let status = vms[guest] else { return nil }
@@ -133,16 +164,24 @@ public struct DevicesTabState: Equatable, Sendable {
             case .running: agentDriving.contains(.vm(guest)) ? .busy : .live
             case .notCreated, .stopped, .paused, .runningElsewhere: .idle
             }
-            return Row(target: .vm(guest), title: title(of: guest), detail: detail(of: status), tone: tone)
+            return Row(
+                target: .vm(guest), title: title(of: guest), detail: detail(of: status), tone: tone,
+                platform: .vm(guest), status: agentStatus(.vm(guest)) ?? detail(of: status), canBoot: false
+            )
         }
 
         let androidEntries = Self.androidEntries(android)
         let androidRows = androidEntries.map { entry in
-            Row(
-                target: .android(entry.target.id), title: entry.target.title,
-                detail: Self.detail(of: entry.stage, device: entry.target.device),
-                tone: agentDriving.contains(.android(entry.target.id)) || entry.stage == .booting ? .busy
-                    : entry.stage == .ready ? .live : .idle
+            let target = DevicesTarget.android(entry.target.id)
+            let driven = agentStatus(target)
+            let detail = Self.detail(of: entry.stage, device: entry.target.device)
+            return Row(
+                target: target, title: entry.target.title, detail: detail,
+                tone: agentDriving.contains(target) || entry.stage == .booting ? .busy
+                    : entry.stage == .ready ? .live : .idle,
+                platform: .android,
+                status: driven ?? (entry.stage == .ready ? "Booted" : detail),
+                canBoot: driven == nil && entry.stage == .shutDown
             )
         }
         let chosen = choose(selection: selection, simulators: listed, vms: vms, android: androidEntries)

@@ -84,12 +84,13 @@ the progress sheet, or to `whats-new` for the What's New card with a bundled pic
 the real updater over a `/bin/sh` script that exits with the app, and the What's New "seen"
 version is never written. Sheets are composited like the editor popups.
 
-Set `ALAS_CAPTURE_CENTER` to `devices`, `devices-empty` or `devices-settings` to capture galleries of the Devices
+Set `ALAS_CAPTURE_CENTER` to `devices`, `devices-empty`, `devices-settings` or `devices-switcher` to capture galleries of the Devices
 tab (`DesignCaptureDevices`): a simulator an agent drives, one you drive with an agent waiting and a failed app
 install, a running and a paused VM; the empty states (loading, no Xcode, no simulators, shut down, booting, VM not set
 up); and the simulator settings popover. They run the tab's own views over scripted devices and an in-memory
 `DeviceAgentControl`; a simulator's screen is a painted placeholder and nothing talks to `simctl`, the simulator
-service or a VM. The switcher menu itself cannot be shown open.
+service or a VM. `devices-switcher` shows the switcher's popover open: as it opens, filtered, and hovering a
+shut-down simulator.
 
 Set `ALAS_CAPTURE_CENTER` to `run-report` (a failed run's report tab with a scripted on-device failure brief),
 `web-preview` (the web preview on a demo page served from this Mac's loopback), `computer-use-badge` (the badge in

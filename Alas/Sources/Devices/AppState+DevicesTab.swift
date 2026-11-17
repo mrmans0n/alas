@@ -39,24 +39,32 @@ extension AppState {
         let guests: [VMGuestOS] = canOpenVirtualMachine(in: worktree) ? [.macOS, .linux] : []
         var vms: [VMGuestOS: VMDeviceStatus] = [:]
         var driving: Set<DevicesTarget> = []
+        var agentNames: [DevicesTarget: String] = [:]
         for guest in guests {
             vms[guest] = vmDeviceStatus(worktreeID: worktree.id, guest: guest)
-            if case .agent = vmDriver(recordID: VMIdentity.recordID(worktree: worktree.id, guest: guest)) {
+            if case .agent(let sessionID, _, _) = vmDriver(recordID: VMIdentity.recordID(worktree: worktree.id, guest: guest)) {
                 driving.insert(.vm(guest))
+                agentNames[.vm(guest)] = computerUseAgentName(sessionID)
             }
         }
         for device in devicePane.devices ?? [] {
-            if case .agent = deviceControl.driver(udid: device.udid) { driving.insert(.simulator(device.udid)) }
+            if case .agent(let sessionID, _, _) = deviceControl.driver(udid: device.udid) {
+                driving.insert(.simulator(device.udid))
+                agentNames[.simulator(device.udid)] = computerUseAgentName(sessionID)
+            }
         }
         for device in androidPane.devices ?? [] {
-            if case .agent = deviceControl.driver(udid: device.serial) { driving.insert(.android(device.serial)) }
+            if case .agent(let sessionID, _, _) = deviceControl.driver(udid: device.serial) {
+                driving.insert(.android(device.serial))
+                agentNames[.android(device.serial)] = computerUseAgentName(sessionID)
+            }
         }
         let noTools = devicePane.simulatorToolsFound == false
         return .resolve(
             simulators: devicePane.simulatorToolsFound == nil ? nil : devicePane.devices,
             listError: noTools ? "Install Xcode to use iOS simulators." : devicePane.listError,
             vms: vms, selection: selection, bootingUDIDs: devicePane.bootingUDIDs, agentDriving: driving,
-            android: androidPane.listing
+            android: androidPane.listing, agentNames: agentNames
         )
     }
 }
