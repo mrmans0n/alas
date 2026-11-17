@@ -49,7 +49,7 @@ struct TerminalsList: View {
                 ProgressView()
             } else if mine.isEmpty {
                 ContentUnavailableView("No terminals", systemImage: "terminal",
-                                       description: Text("Start one to run commands in this worktree on the Mac."))
+                                       description: Text("Start one to run commands in this worktree on its machine."))
             }
         }
         .navigationTitle("Terminals")
