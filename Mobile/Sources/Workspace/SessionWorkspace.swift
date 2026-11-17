@@ -284,7 +284,7 @@ final class SessionWorkspace {
     private func hostRequest(_ make: (Int) -> OpaqueHostMessage) async -> String? {
         // A send while the link is down goes nowhere, and the reply would never come.
         guard hub.state(of: hostID) == .online else {
-            let name = hub.hosts.first { $0.id == hostID }?.name ?? "the Mac"
+            let name = hub.hosts.first { $0.id == hostID }?.name ?? "the machine"
             return "Not connected to \(name). Try again once it's back online."
         }
         let id = hub.nextHostRequestId()
@@ -294,7 +294,7 @@ final class SessionWorkspace {
         // ponytail: a fixed wait; a push to a slow remote that outlasts it reads as lost.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(120))
-            self?.finishHostRequest(id, .failure(RemoteGitFailure("The Mac didn't answer. Check the session there.")))
+            self?.finishHostRequest(id, .failure(RemoteGitFailure("The machine didn't answer. Check the session there.")))
         }
         let result = await withCheckedContinuation { hostWaiters[id] = $0 }
         if case .failure(let failure) = result { return failure.message }

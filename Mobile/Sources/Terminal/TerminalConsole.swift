@@ -214,8 +214,8 @@ final class TerminalConsole {
         case .detached: "Detached."
         case .unavailable: "This terminal is no longer available."
         case .targetExited, .terminated: "The terminal ended."
-        case .restartRequired: "Restart this terminal on the Mac to view it."
-        case .unauthorized: "This Mac doesn't share terminals with this phone. Pair it again from the Mac."
+        case .restartRequired: "Restart this terminal on its machine to view it."
+        case .unauthorized: "This machine doesn't share terminals with this phone. Pair it again from that machine."
         case .limitReached: "Too many terminals are open. Close one and try again."
         case .protocolError, .localOverflow, .unknown: "The connection to this terminal was lost."
         }

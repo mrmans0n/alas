@@ -16,8 +16,8 @@ struct NewSessionSheet: View {
         NavigationStack {
             Group {
                 if model.hostID == nil {
-                    ContentUnavailableView("No Mac online", systemImage: "laptopcomputer.slash",
-                                           description: Text("Connect to a Mac to start a session."))
+                    ContentUnavailableView("No machine online", systemImage: "laptopcomputer.slash",
+                                           description: Text("Connect to a machine to start a session."))
                 } else {
                     form
                 }
@@ -65,7 +65,7 @@ struct NewSessionSheet: View {
             // Also when the chosen Mac dropped while another is online, so the user can move to that one.
             if hosts.count > 1 || (!hosts.isEmpty && !hosts.contains { $0.id == model.hostID }) {
                 Section {
-                    Picker("Mac", selection: Binding(get: { model.hostID }, set: { model.select(host: $0) })) {
+                    Picker("Machine", selection: Binding(get: { model.hostID }, set: { model.select(host: $0) })) {
                         ForEach(hosts) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }

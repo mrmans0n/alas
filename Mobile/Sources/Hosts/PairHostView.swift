@@ -73,7 +73,7 @@ struct PairHostView: View {
                     }
                 }
             }
-            .navigationTitle("Pair a Mac")
+            .navigationTitle("Pair a machine")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -215,9 +215,9 @@ struct PairHostView: View {
                 guard !Task.isCancelled else { return }
                 if error == .codeRejected { onRejected() }
                 self.error = switch error {
-                case .codeRejected: "That code was wrong or has expired. Make a new one on your Mac."
-                case .originNotAllowed: "This Mac doesn't accept connections from this address."
-                case .unreachable: "Couldn't reach your Mac. Check that you're on the same network or tailnet."
+                case .codeRejected: "That code was wrong or has expired. Make a new one on your machine."
+                case .originNotAllowed: "This machine doesn't accept connections from this address."
+                case .unreachable: "Couldn't reach your machine. Check that you're on the same network or tailnet."
                 }
             }
         }
