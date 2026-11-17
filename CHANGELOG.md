@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Show iPhone worktrees as attention-first rows that match the Mac sidebar (#2565).
 - Slim iOS simulators with simslim while keeping Store and web services available (#2562).
 - Filter the device switcher, see running devices first, and boot devices in place (#2567).
 - Join the iPhone TestFlight beta from Remote settings (#2560).
@@ -25,6 +26,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- Keep the older-runtimes toggle beside the iOS groups it expands (#2569).
 - Serve terminals to phones paired before device-kind negotiation was added (#2566).
 - Let wide visual aids scroll horizontally on iPhone and iPad (#2563).
 - Show newly created mobile sessions before the next host refresh (#2564).
@@ -36,6 +38,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🏗️ Internal
 
+- Run ForkWatch stress tests off the cooperative pool (#2568).
 - Repair process and device-flow replay flakes in CI (#2561).
 - Support Swift Crypto 5 (#2555).
 - Update Fastlane to 2.242.0 (#2553).
