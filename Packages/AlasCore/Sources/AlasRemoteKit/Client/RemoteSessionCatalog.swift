@@ -76,7 +76,7 @@ public enum RemoteSessionCatalog {
                 let report = Report(source: source, session: session, nativeID: nativeID, isDirect: serverId == nil)
                 if let current = reports[owner]?[nativeID], !report.isPreferred(to: current) { continue }
                 reports[owner, default: [:]][nativeID] = report
-                if names[owner] == nil { names[owner] = session.serverName ?? "Mac" }
+                if names[owner] == nil { names[owner] = session.serverName ?? "Machine" }
             }
         }
         return names.map { owner, name in

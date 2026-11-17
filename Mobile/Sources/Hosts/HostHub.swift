@@ -109,7 +109,7 @@ final class HostHub {
         for origin in origins where !allOrigins.contains(origin) {
             allOrigins.append(origin)
         }
-        let name = result.name ?? URL(string: result.origin)?.host() ?? "Mac"
+        let name = result.name ?? URL(string: result.origin)?.host() ?? "Machine"
         let host: PairedHost
         // Pairing again with a Mac already on the list refreshes its record
         // instead of adding a second one, so screens holding its id keep it.

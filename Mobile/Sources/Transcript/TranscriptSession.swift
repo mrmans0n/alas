@@ -211,7 +211,7 @@ final class TranscriptSession {
     }
 
     var hostName: String {
-        hub.hosts.first { $0.id == hostID }?.name ?? "your Mac"
+        hub.hosts.first { $0.id == hostID }?.name ?? "your machine"
     }
 
     var hostState: PhoneConnection.State {

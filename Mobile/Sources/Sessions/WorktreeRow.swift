@@ -77,6 +77,8 @@ struct RepoTile: View {
 /// its line counts. A tap opens that session; the others are a long press away.
 struct WorktreeRow: View {
     let entry: RemoteWorktreeEntry
+    /// The machine holding it, named when its list mixes machines.
+    var machine: String? = nil
     /// The worktree holds the session shown beside the list (iPad).
     var isSelected = false
     let open: (RemoteSessionSummary) -> Void
@@ -90,6 +92,16 @@ struct WorktreeRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline) {
                         branchName
+                        if let machine {
+                            Text(machine)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                                .layoutPriority(-1)
+                                .accessibilityLabel("on \(machine)")
+                        }
                         Spacer(minLength: 6)
                         if let lead {
                             Text(RepoDisplay.relativeTime(lead.updatedAt))

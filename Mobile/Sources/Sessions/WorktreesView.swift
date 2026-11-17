@@ -1,13 +1,26 @@
 import AlasRemoteKit
 import SwiftUI
 
+/// How the list groups worktrees once more than one machine is paired.
+enum WorktreeGrouping: String, CaseIterable {
+    /// Machine, then its projects: the machine's own sidebar.
+    case machine
+    /// Project, merging one repository's worktrees from every machine.
+    case project
+}
+
 /// List choices shared by the Worktrees and Search tabs.
 @MainActor @Observable
 final class WorktreesModel {
+    private static let groupingKey = "worktreesGrouping"
+
     var query = ""
     var filter = RemoteSessionFilter.all
     var selectedHost: RemoteSessionCatalog.HostID?
     var collapsedHosts: Set<RemoteSessionCatalog.HostID> = []
+    var grouping = UserDefaults.standard.string(forKey: groupingKey).flatMap(WorktreeGrouping.init) ?? .machine {
+        didSet { UserDefaults.standard.set(grouping.rawValue, forKey: Self.groupingKey) }
+    }
 }
 
 /// Where a tapped session lives: enough to resolve it from the hub later.
@@ -16,7 +29,8 @@ struct SessionRoute: Hashable {
     let sessionId: String
 }
 
-/// Sessions grouped by their owning Mac, then repo and worktree.
+/// Sessions grouped by their owning machine, then repo and worktree, or by
+/// project across machines.
 struct WorktreesView: View {
     let hub: HostHub
     @Bindable var model: WorktreesModel
@@ -54,18 +68,29 @@ struct WorktreesView: View {
         var id: RemoteSessionCatalog.HostID { host.id }
     }
 
+    /// What the list shows, under the grouping in effect.
+    private enum Listing {
+        case machines([HostGroup])
+        case projects([RemoteSessionCatalog.ProjectGroup], hosts: [RemoteSessionCatalog.HostID: RemoteSessionCatalog.Host])
+
+        var isEmpty: Bool {
+            switch self {
+            case .machines(let groups): groups.isEmpty
+            case .projects(let groups, _): groups.isEmpty
+            }
+        }
+    }
+
     private var allHosts: [RemoteSessionCatalog.Host] {
         RemoteSessionCatalog.hosts(from: hub.sessionSources)
     }
 
     var body: some View {
         let hosts = allHosts
+        // One machine has nothing to merge; its list reads the same either way.
         let scoped = hosts.filter { model.selectedHost == nil || $0.id == model.selectedHost }
         let all = scoped.flatMap(\.sections)
-        let counts = RemoteSessionDirectory.counts(all)
-        let visible = scoped.map {
-            HostGroup(host: $0, sections: RemoteSessionDirectory.filter($0.sections, by: filter, query: query))
-        }.filter { !$0.sections.isEmpty }
+        let (counts, visible) = listing(scoped, grouping: hosts.count > 1 ? model.grouping : .machine)
         Group {
             if sizeClass == .regular {
                 NavigationSplitView {
@@ -102,6 +127,24 @@ struct WorktreesView: View {
         }
     }
 
+    /// The scoped machines' worktrees under `grouping`, with the filter
+    /// counts that grouping reports.
+    private func listing(_ scoped: [RemoteSessionCatalog.Host],
+                         grouping: WorktreeGrouping) -> ([RemoteSessionFilter: Int], Listing) {
+        switch grouping {
+        case .project:
+            let projects = RemoteSessionCatalog.projects(from: scoped)
+            return (RemoteSessionDirectory.counts(projects),
+                    .projects(RemoteSessionDirectory.filter(projects, by: filter, query: query),
+                              hosts: Dictionary(uniqueKeysWithValues: scoped.map { ($0.id, $0) })))
+        case .machine:
+            let sections = scoped.flatMap(\.sections)
+            return (RemoteSessionDirectory.counts(sections), .machines(scoped.map {
+                HostGroup(host: $0, sections: RemoteSessionDirectory.filter($0.sections, by: filter, query: query))
+            }.filter { !$0.sections.isEmpty }))
+        }
+    }
+
     private func open(_ route: SessionRoute) {
         if sizeClass == .regular {
             selected = route
@@ -113,19 +156,19 @@ struct WorktreesView: View {
 
     @ViewBuilder
     private func directory(hosts: [RemoteSessionCatalog.Host], all: [RemoteRepoSection],
-                           counts: [RemoteSessionFilter: Int], visible: [HostGroup]) -> some View {
+                           counts: [RemoteSessionFilter: Int], visible: Listing) -> some View {
             Group {
                 if hub.hosts.isEmpty {
                     ContentUnavailableView {
-                        Label("No Macs paired", systemImage: "laptopcomputer")
+                        Label("No machines paired", systemImage: "laptopcomputer")
                     } description: {
-                        Text("Pair a Mac to see its worktrees and sessions here.")
+                        Text("Pair a machine running Alas to see its worktrees and sessions here.")
                     } actions: {
-                        Button("Pair a Mac", action: onPairMac).buttonStyle(.borderedProminent)
+                        Button("Pair a machine", action: onPairMac).buttonStyle(.borderedProminent)
                     }
                 } else if all.isEmpty {
                     ContentUnavailableView("No sessions", systemImage: "folder",
-                                           description: Text("Open sessions on your Macs will show here."))
+                                           description: Text("Open sessions on your machines will show here."))
                 } else if visible.isEmpty {
                     if query.trimmingCharacters(in: .whitespaces).isEmpty {
                         ContentUnavailableView(filter == .running ? "No running worktrees" : "No worktrees with changes",
@@ -134,7 +177,10 @@ struct WorktreesView: View {
                         ContentUnavailableView.search(text: query)
                     }
                 } else {
-                    list(visible)
+                    switch visible {
+                    case .machines(let groups): list(groups)
+                    case .projects(let groups, let hosts): projectList(groups, hosts: hosts)
+                    }
                 }
             }
             .navigationTitle(title)
@@ -142,7 +188,7 @@ struct WorktreesView: View {
             .toolbar {
                 if hosts.count > 1 {
                     ToolbarItem(placement: .topBarLeading) {
-                        hostPicker(hosts)
+                        listOptions(hosts)
                     }
                 }
                 if !hub.hosts.isEmpty {
@@ -206,18 +252,56 @@ struct WorktreesView: View {
         .contentMargins(.bottom, 56, for: .scrollContent)
     }
 
+    private func projectList(_ groups: [RemoteSessionCatalog.ProjectGroup],
+                             hosts: [RemoteSessionCatalog.HostID: RemoteSessionCatalog.Host]) -> some View {
+        List {
+            ForEach(groups) { group in
+                // A project on one machine names it once, in its header; one
+                // on several names each row's.
+                let spansMachines = group.hostIDs.count > 1
+                Section {
+                    ForEach(RemoteSessionDirectory.attentionFirst(group.rows)) { row in
+                        let host = hosts[row.hostID]
+                        WorktreeRow(entry: row.worktree,
+                                    machine: spansMachines ? row.hostName : nil,
+                                    isSelected: host.flatMap { selectedSessionID(in: row.worktree, on: $0) } != nil) { session in
+                            guard let target = host?.route(for: session.id) else { return }
+                            open(SessionRoute(hostID: target.hostID, sessionId: target.sessionId))
+                        }
+                    }
+                } header: {
+                    repoHeader(group.title, count: group.rows.count,
+                               detail: spansMachines ? "\(group.hostIDs.count) machines" : group.rows.first?.hostName)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .contentMargins(.bottom, 56, for: .scrollContent)
+    }
+
     private func repoHeader(_ section: RemoteRepoSection) -> some View {
+        repoHeader(section.title, count: section.worktrees.count, detail: nil)
+    }
+
+    private func repoHeader(_ title: String, count: Int, detail: String?) -> some View {
         HStack(spacing: 8) {
-            RepoTile(name: section.title, size: 22)
-            Text(section.title)
+            RepoTile(name: title, size: 22)
+            Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Text("\(section.worktrees.count)")
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text("·").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+            }
+            Text("\(count)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("\(section.worktrees.count) worktrees")
+                .accessibilityLabel("\(count) worktrees")
         }
         .textCase(nil)
         .accessibilityElement(children: .combine)
@@ -250,22 +334,29 @@ struct WorktreesView: View {
         .textCase(nil)
     }
 
-    private func hostPicker(_ hosts: [RemoteSessionCatalog.Host]) -> some View {
-        Menu {
-            Picker("Host", selection: $model.selectedHost) {
-                Text("All hosts").tag(RemoteSessionCatalog.HostID?.none)
+    /// How to group, and which machines to show.
+    private func listOptions(_ hosts: [RemoteSessionCatalog.Host]) -> some View {
+        let shown = hosts.first { $0.id == model.selectedHost }?.name ?? "All machines"
+        return Menu {
+            Picker("Group by", selection: $model.grouping) {
+                Label("Machine", systemImage: "desktopcomputer").tag(WorktreeGrouping.machine)
+                Label("Project", systemImage: "folder").tag(WorktreeGrouping.project)
+            }
+            .pickerStyle(.inline)
+            Picker("Show", selection: $model.selectedHost) {
+                Text("All machines").tag(RemoteSessionCatalog.HostID?.none)
                 ForEach(hosts) { host in
                     Text(host.name).tag(Optional(host.id))
                 }
             }
+            .pickerStyle(.inline)
         } label: {
-            Label(hosts.first { $0.id == model.selectedHost }?.name ?? "All hosts",
-                  systemImage: "line.3.horizontal.decrease")
+            Label(shown, systemImage: "line.3.horizontal.decrease")
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
         }
-        .accessibilityLabel("Filter by host")
-        .accessibilityValue(hosts.first { $0.id == model.selectedHost }?.name ?? "All hosts")
+        .accessibilityLabel("List options")
+        .accessibilityValue("Grouped by \(model.grouping == .machine ? "machine" : "project"), \(shown)")
     }
 
     private func selectedSessionID(in entry: RemoteWorktreeEntry, on host: RemoteSessionCatalog.Host) -> String? {

@@ -44,11 +44,11 @@ struct PeersView: View {
             .overlay {
                 if hub.hosts.isEmpty {
                     ContentUnavailableView {
-                        Label("No Macs yet", systemImage: "laptopcomputer")
+                        Label("No machines yet", systemImage: "laptopcomputer")
                     } description: {
-                        Text("Pair a Mac running Alas to see its worktrees and sessions here.")
+                        Text("Pair a machine running Alas to see its worktrees and sessions here.")
                     } actions: {
-                        Button("Pair a Mac") { pairRequest = PairRequest() }
+                        Button("Pair a machine") { pairRequest = PairRequest() }
                             .buttonStyle(.borderedProminent)
                     }
                 }
@@ -57,20 +57,20 @@ struct PeersView: View {
             .navigationSubtitle(summary)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Pair a Mac", systemImage: "plus") { pairRequest = PairRequest() }
+                    Button("Pair a machine", systemImage: "plus") { pairRequest = PairRequest() }
                 }
             }
             .sheet(item: $pairRequest) { request in
                 PairHostView(hub: hub, prefilledOrigins: request.origins)
             }
             .confirmationDialog(
-                "Forget \(forgetting?.name ?? "this Mac")?",
+                "Forget \(forgetting?.name ?? "this machine")?",
                 isPresented: Binding { forgetting != nil } set: { if !$0 { forgetting = nil } },
                 titleVisibility: .visible, presenting: forgetting
             ) { host in
                 Button("Forget", role: .destructive) { hub.forget(host.id) }
             } message: { _ in
-                Text("You'll need to pair again from the Mac.")
+                Text("You'll need to pair again from that machine.")
             }
         }
     }
@@ -156,8 +156,8 @@ extension PhoneConnection.State {
         case .offline: "Offline"
         case .unauthorized: "No longer paired"
         case .incompatible: "Needs a newer Alas"
-        case .identityMismatch: "A different Mac answered"
-        case .identityUnproven: "Couldn't verify this Mac"
+        case .identityMismatch: "A different machine answered"
+        case .identityUnproven: "Couldn't verify this machine"
         }
     }
 }
