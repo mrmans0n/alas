@@ -126,6 +126,9 @@ struct DevicesSwitcherPanel: View {
         let rows = listing.sections.flatMap(\.rows)
         let current = rows.firstIndex { $0.target == highlight } ?? 0
         let highlighted = rows.indices.contains(current) ? rows[current].target : nil
+        let lastRuntime = listing.sections.last {
+            if case .runtime = $0.kind { true } else { false }
+        }?.id
         VStack(spacing: 0) {
             filterBar
             Divider()
@@ -134,6 +137,10 @@ struct DevicesSwitcherPanel: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(listing.sections) { section in
                             sectionView(section, highlighted: highlighted)
+                            // Right under the simulators it unfolds, not below Android and VMs.
+                            if listing.foldedRuntimeCount > 0, section.id == lastRuntime {
+                                olderRuntimesButton(count: listing.foldedRuntimeCount)
+                            }
                         }
                         if listing.sections.isEmpty {
                             // Empty without a query: the simulator list is still loading.
@@ -141,9 +148,6 @@ struct DevicesSwitcherPanel: View {
                                 .font(scale.metaFont)
                                 .foregroundStyle(theme.color("fg-faint"))
                                 .padding(.horizontal, scale.space[3]).padding(.vertical, scale.space[3])
-                        }
-                        if listing.foldedRuntimeCount > 0 {
-                            olderRuntimesButton(count: listing.foldedRuntimeCount)
                         }
                     }
                     .padding(.vertical, scale.space[1])
