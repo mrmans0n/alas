@@ -16,7 +16,11 @@ public enum HighlightChunks {
         }
         // Spans sorted by start only ever move the first candidate run forward: linear overall.
         var first = 0
-        for span in spans.sorted(by: { $0.range.location < $1.range.location }) {
+        // Stable, so overlapping spans keep the highlighter's paint order.
+        let sorted = spans.enumerated().sorted {
+            ($0.element.range.location, $0.offset) < ($1.element.range.location, $1.offset)
+        }.map(\.element)
+        for span in sorted {
             let lower = span.range.location, upper = NSMaxRange(span.range)
             while first + 1 < chunks.count, chunks[first + 1].start <= lower {
                 first += 1

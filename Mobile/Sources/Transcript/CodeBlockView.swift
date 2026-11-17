@@ -71,7 +71,10 @@ struct ThemeTokens {
         var out = AttributedString(chunk.text)
         out.foregroundColor = colors["fg"]
         for span in chunk.spans {
-            if let color = span.capture.themeToken.flatMap({ colors[$0] }), let range = Range(span.range, in: out) {
+            // Every span paints, so a plain capture nested in a coloured one (a string's
+            // interpolated name) returns to the foreground, as on the Mac.
+            if let color = span.capture.themeToken.flatMap({ colors[$0] }) ?? colors["fg"],
+               let range = Range(span.range, in: out) {
                 out[range].foregroundColor = color
             }
         }
