@@ -1,3 +1,4 @@
+import AlasHighlight
 import Testing
 import SwiftUI
 @testable import Alas

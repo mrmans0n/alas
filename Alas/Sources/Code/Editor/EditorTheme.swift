@@ -1,3 +1,4 @@
+import AlasHighlight
 import AppKit
 import SwiftUI
 
@@ -60,18 +61,7 @@ struct EditorTheme {
                 return palette.fg
             }
         }
-        switch capture {
-        case .keyword:                       return nsColor("syntax-keyword")
-        case .type:                          return nsColor("syntax-type")
-        case .function:                      return nsColor("syntax-function")
-        case .string:                        return nsColor("add")
-        case .number:                        return nsColor("mod")
-        case .comment:                       return nsColor("fg-faint")
-        case .attribute, .constant:          return nsColor("syntax-keyword")
-        case .variable, .parameter, .property,
-             .operator, .punctuation, .plain:
-            return defaultFG
-        }
+        return capture.themeToken.map(nsColor) ?? defaultFG
     }
 
     /// A theme token as an sRGB drawing color; see `NSColor.drawingColor(_:)`.

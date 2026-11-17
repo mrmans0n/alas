@@ -14,17 +14,32 @@ pack_src="${srcroot}/ThirdParty/treesitter-pack"
 rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
 rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
 # Resolved once so the fingerprint and the actual cargo invocation below
-# can't drift apart by each applying the `:-15.0` default independently.
+# can't drift apart by each applying a default independently: `:-15.0` for
+# macOS here, `:-26.0` for IPHONEOS_DEPLOYMENT_TARGET in the iOS branch below.
 macos_deployment_target="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
+deployment_env="MACOSX_DEPLOYMENT_TARGET"
+deployment_target="${macos_deployment_target}"
 
-if [ -z "${ALAS_TS_PACK_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    case "${ARCHS:-}" in
-        arm64|x86_64) target_arch="${ARCHS}" ;;
-        *) target_arch="universal" ;;
-    esac
-else
-    target_arch="${ALAS_TS_PACK_TARGET_ARCH:-${CURRENT_ARCH:-$(uname -m)}}"
-fi
+# The phone builds arm64 only (device and Apple-silicon simulator), so iOS
+# gets one slice per platform and never takes the universal/lipo path.
+# ALAS_TS_PACK_TARGET_ARCH is ignored for iOS platforms.
+case "${PLATFORM_NAME:-}" in
+    iphoneos|iphonesimulator)
+        target_arch="${PLATFORM_NAME}-arm64"
+        deployment_env="IPHONEOS_DEPLOYMENT_TARGET"
+        deployment_target="${IPHONEOS_DEPLOYMENT_TARGET:-26.0}"
+        ;;
+    *)
+        if [ -z "${ALAS_TS_PACK_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
+            case "${ARCHS:-}" in
+                arm64|x86_64) target_arch="${ARCHS}" ;;
+                *) target_arch="universal" ;;
+            esac
+        else
+            target_arch="${ALAS_TS_PACK_TARGET_ARCH:-${CURRENT_ARCH:-$(uname -m)}}"
+        fi
+        ;;
+esac
 
 build_root="${srcroot}/.build/treesitter-pack/${target_arch}"
 install_root="${build_root}/install"
@@ -46,7 +61,8 @@ die() {
 # tracked in-repo, so hashing its files directly is both simpler and
 # stricter than a git SHA — an uncommitted edit to lib.rs invalidates the
 # artifact too. Paths are relativized so the same content fingerprints
-# identically across worktrees. MACOSX_DEPLOYMENT_TARGET is included
+# identically across worktrees. The deployment target (MACOSX_ or
+# IPHONEOS_DEPLOYMENT_TARGET) is included
 # because it's passed to cargo below and directly affects the compiled C
 # objects' minimum OS target — an archive cached under one value must not
 # be reused after that value changes.
@@ -62,7 +78,7 @@ pack_id="$(
     ) | shasum -a 256 | awk '{print $1}'
 )"
 script_id="$(shasum -a 256 "${script_path}" 2>/dev/null | awk '{print $1}')"
-fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n' "${pack_id}" "${target_arch}" "${rust_toolchain}" "${macos_deployment_target}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n' "${pack_id}" "${target_arch}" "${rust_toolchain}" "${deployment_target}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
 
 # The installed header/modulemap live in a *shared* location — the header is
 # genuinely arch-independent C, so publishing per-arch copies would just be
@@ -141,6 +157,8 @@ command -v "${rustup_bin}" >/dev/null 2>&1 || die "rustup not found"
 case "${target_arch}" in
     arm64) cargo_target="aarch64-apple-darwin" ;;
     x86_64) cargo_target="x86_64-apple-darwin" ;;
+    iphoneos-arm64) cargo_target="aarch64-apple-ios" ;;
+    iphonesimulator-arm64) cargo_target="aarch64-apple-ios-sim" ;;
     *) die "unsupported target_arch '${target_arch}'" ;;
 esac
 
@@ -161,7 +179,7 @@ fi
 
 (
     cd "${pack_src}"
-    MACOSX_DEPLOYMENT_TARGET="${macos_deployment_target}" \
+    env "${deployment_env}=${deployment_target}" \
         RUSTC="${rustc_bin}" "${cargo_bin}" build \
             --release \
             --locked \

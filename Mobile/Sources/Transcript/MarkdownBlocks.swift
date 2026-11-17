@@ -1,13 +1,20 @@
+import AlasHighlight
 import Foundation
-import SwiftUI
 import Markdown
+import SwiftUI
+
+struct CodeChunk: Equatable {
+    let text: String
+    /// Rebased to `text`; coloured at draw time so a light/dark switch never re-highlights.
+    let spans: [HighlightSpan]
+}
 
 enum MarkdownBlock: Equatable {
     case paragraph(AttributedString)
     case heading(Int, AttributedString)
     /// Split into runs of `codeChunkLines` lines so a long listing lays out and draws as many
     /// small texts instead of one view thousands of points tall.
-    case code(language: String?, chunks: [String])
+    case code(language: String?, chunks: [CodeChunk])
     case list([AttributedString])
     case quote(AttributedString)
     case table([[String]])
@@ -15,10 +22,11 @@ enum MarkdownBlock: Equatable {
     case image(source: String, alt: String)
 
     static func parse(_ text: String) -> [MarkdownBlock] {
-        Document(parsing: text).children.compactMap(block)
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        return Document(parsing: text).children.compactMap { block($0, lines: lines) }
     }
 
-    private static func block(_ markup: Markup) -> MarkdownBlock? {
+    private static func block(_ markup: Markup, lines: [Substring]) -> MarkdownBlock? {
         switch markup {
         case let p as Paragraph:
             if p.childCount == 1, let image = p.child(at: 0) as? Markdown.Image {
@@ -27,7 +35,9 @@ enum MarkdownBlock: Equatable {
                 .paragraph(inline(p))
             }
         case let h as Heading: .heading(h.level, inline(h))
-        case let c as CodeBlock: .code(language: c.language, chunks: chunked(c.code.trimmingCharacters(in: .newlines)))
+        case let c as CodeBlock:
+            // As on the Mac, a fence still streaming stays plain: re-highlighting it per delta is too slow.
+            .code(language: c.language, chunks: highlighted(c.code, language: isClosed(c, lines: lines) ? c.language : nil))
         case let l as UnorderedList: .list(l.listItems.map { inline($0) })
         case let l as OrderedList: .list(l.listItems.map { inline($0) })
         case let q as BlockQuote: .quote(inline(q))
@@ -39,11 +49,21 @@ enum MarkdownBlock: Equatable {
 
     static let codeChunkLines = 100
 
-    private static func chunked(_ code: String) -> [String] {
-        let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
-        return stride(from: 0, to: lines.count, by: codeChunkLines).map {
-            lines[$0 ..< min($0 + codeChunkLines, lines.count)].joined(separator: "\n")
-        }
+    private static func isClosed(_ block: CodeBlock, lines: [Substring]) -> Bool {
+        guard let range = block.range, !lines.isEmpty else { return true }
+        let first = min(max(range.lowerBound.line - 1, 0), lines.count - 1)
+        let last = min(max(range.upperBound.line - 1, first), lines.count - 1)
+        return CodeFence.isClosed(Array(lines[first ... last]))
+    }
+
+    /// Highlights the whole block once, then splits it, so a construct spanning a chunk
+    /// boundary (a block comment, a multi-line string) still colours on both sides.
+    private static func highlighted(_ code: String, language: String?) -> [CodeChunk] {
+        let source = code.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .newlines)
+        let spans = ACPCodeLanguage.highlighterExtension(for: language)
+            .map { TreeSitterHighlighter.highlight(source: source, fileExtension: $0) } ?? []
+        return HighlightChunks.split(source: source, spans: spans, linesPerChunk: codeChunkLines)
+            .map { CodeChunk(text: $0.text, spans: $0.spans) }
     }
 
     /// Flattens a block's inline descendants (paragraphs inside list items and quotes join with a newline).
